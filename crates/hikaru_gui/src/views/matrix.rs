@@ -747,6 +747,7 @@ fn render_clip_editor_track_view(
                 slot,
                 elapsed_frames,
                 sample_rate,
+                bpm as f32, // <--- Castear de f64 a f32 acá
             );
         });
 }

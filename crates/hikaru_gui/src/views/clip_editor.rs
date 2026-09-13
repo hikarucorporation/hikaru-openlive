@@ -1,5 +1,5 @@
 // crates/hikaru_gui/src/views/clip_editor.rs
-use egui::{Color32, Frame, Pos2, Rect, Sense, Stroke, Ui};
+use egui::{Align2, Color32, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui};
 use crate::views::matrix::MatrixClip;
 use crate::views::waveform;
 
@@ -8,8 +8,9 @@ pub fn show(
     clip: &mut MatrixClip,
     elapsed_frames: Option<u64>,
     sample_rate: u32,
+    bpm: f32, // Recibimos el BPM del proyecto
 ) {
-    // 1. Decodificación limpia soportando 16-bit, 24/32-bit e i32/f32
+    // 1. Decodificación PCM limpia (soportando 16-bit, 24/32-bit float e int)
     if clip.pcm_data.is_empty() && clip.path.exists() {
         if let Ok(mut reader) = hound::WavReader::open(&clip.path) {
             let spec = reader.spec();
@@ -21,21 +22,16 @@ pub fn show(
                     reader.into_samples::<f32>().filter_map(Result::ok).collect()
                 }
                 hound::SampleFormat::Int => {
-                    if bits <= 16 {
-                        let max_val = i16::MAX as f32;
-                        reader
-                            .into_samples::<i16>()
-                            .filter_map(Result::ok)
-                            .map(|s| s as f32 / max_val)
-                            .collect()
+                    let max_val = if bits <= 16 {
+                        i16::MAX as f32
                     } else {
-                        let max_val = i32::MAX as f32;
-                        reader
-                            .into_samples::<i32>()
-                            .filter_map(Result::ok)
-                            .map(|s| s as f32 / max_val)
-                            .collect()
-                    }
+                        (1 << (bits - 1)) as f32
+                    };
+                    reader
+                        .into_samples::<i32>()
+                        .filter_map(Result::ok)
+                        .map(|s| s as f32 / max_val)
+                        .collect()
                 }
             };
             
@@ -86,7 +82,74 @@ pub fn show(
                 // LAYER 1: Background Canvas
                 ui.painter().rect_filled(rect, 4.0_f32, Color32::from_rgb(12, 12, 15));
 
-                // LAYER 2: Time Selection / Loop Region Background
+                // LAYER 2: Timeline Bar & Beat Grid
+                let current_bpm = if bpm > 0.0 { bpm } else { 120.0 };
+                let sec_per_beat = 60.0 / current_bpm as f64;
+                let sec_per_bar = sec_per_beat * 4.0; // Asumiendo 4/4
+                let total_bars = (clip.duration_secs / sec_per_bar).ceil() as usize;
+
+                // Margen superior para la regla de compases (ruler header)
+                let ruler_height = 18.0_f32;
+                let ruler_rect = Rect::from_min_max(
+                    rect.min,
+                    Pos2::new(rect.max.x, rect.min.y + ruler_height),
+                );
+                let wave_rect = Rect::from_min_max(
+                    Pos2::new(rect.min.x, rect.min.y + ruler_height),
+                    rect.max,
+                );
+
+                // Fondo de la regla de compases
+                ui.painter().rect_filled(ruler_rect, 0.0_f32, Color32::from_rgb(22, 22, 28));
+                ui.painter().line_segment(
+                    [Pos2::new(rect.min.x, ruler_rect.max.y), Pos2::new(rect.max.x, ruler_rect.max.y)],
+                    Stroke::new(1.0_f32, Color32::from_gray(50)),
+                );
+
+                if clip.duration_secs > 0.0 {
+                    for bar in 0..=total_bars {
+                        let bar_time = bar as f64 * sec_per_bar;
+                        if bar_time > clip.duration_secs {
+                            break;
+                        }
+
+                        let norm_x = (bar_time / clip.duration_secs) as f32;
+                        let x_pos = rect.min.x + (norm_x * rect.width());
+
+                        // Línea principal de Compás (Bar Line)
+                        ui.painter().line_segment(
+                            [Pos2::new(x_pos, rect.min.y), Pos2::new(x_pos, rect.max.y)],
+                            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 40)),
+                        );
+
+                        // Número de compás en la regla
+                        ui.painter().text(
+                            Pos2::new(x_pos + 4.0, rect.min.y + 2.0),
+                            Align2::LEFT_TOP,
+                            format!("{}", bar + 1),
+                            FontId::proportional(10.0),
+                            Color32::from_gray(180),
+                        );
+
+                        // Subdivisiones por Tiempos (Beats 2, 3, 4)
+                        for beat in 1..4 {
+                            let beat_time = bar_time + (beat as f64 * sec_per_beat);
+                            if beat_time >= clip.duration_secs {
+                                break;
+                            }
+
+                            let beat_norm_x = (beat_time / clip.duration_secs) as f32;
+                            let beat_x_pos = rect.min.x + (beat_norm_x * rect.width());
+
+                            ui.painter().line_segment(
+                                [Pos2::new(beat_x_pos, wave_rect.min.y), Pos2::new(beat_x_pos, wave_rect.max.y)],
+                                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 12)),
+                            );
+                        }
+                    }
+                }
+
+                // LAYER 3: Time Selection / Loop Region Background
                 if total_frames > 0 && clip.loop_end > clip.loop_start {
                     let start_norm = clip.loop_start as f32 / total_frames as f32;
                     let end_norm = clip.loop_end as f32 / total_frames as f32;
@@ -95,28 +158,19 @@ pub fn show(
                     let sel_x_max = rect.min.x + (end_norm * rect.width());
 
                     let sel_rect = Rect::from_min_max(
-                        Pos2::new(sel_x_min, rect.min.y),
-                        Pos2::new(sel_x_max, rect.max.y),
+                        Pos2::new(sel_x_min, wave_rect.min.y),
+                        Pos2::new(sel_x_max, wave_rect.max.y),
                     );
 
-                    // Sombra traslúcida azul para el fondo seleccionado
-                    ui.painter().rect_filled(sel_rect, 0.0_f32, Color32::from_rgba_unmultiplied(0, 120, 255, 50));
+                    ui.painter().rect_filled(sel_rect, 0.0_f32, Color32::from_rgba_unmultiplied(0, 120, 255, 45));
                 }
 
-                // LAYER 3: Waveform
+                // LAYER 4: Waveform (Renderizado sobre el wave_rect excluyendo la regla)
                 if !clip.pcm_data.is_empty() {
-                    waveform::draw_waveform(ui, rect, &clip.pcm_data, Color32::from_rgb(0, 200, 255));
-                } else {
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "No se pudo decodificar el archivo de audio",
-                        egui::FontId::proportional(12.0_f32),
-                        Color32::from_rgb(255, 100, 100),
-                    );
+                    waveform::draw_waveform(ui, wave_rect, &clip.pcm_data, Color32::from_rgb(0, 200, 255));
                 }
 
-                // LAYER 4: Time Selection Borders & Handles
+                // LAYER 5: Time Selection Borders
                 if total_frames > 0 && clip.loop_end > clip.loop_start {
                     let start_norm = clip.loop_start as f32 / total_frames as f32;
                     let end_norm = clip.loop_end as f32 / total_frames as f32;
@@ -124,7 +178,6 @@ pub fn show(
                     let sel_x_min = rect.min.x + (start_norm * rect.width());
                     let sel_x_max = rect.min.x + (end_norm * rect.width());
 
-                    // Bordes de inicio (verde) y fin (rojo)
                     ui.painter().line_segment(
                         [Pos2::new(sel_x_min, rect.min.y), Pos2::new(sel_x_min, rect.max.y)],
                         Stroke::new(2.0_f32, Color32::from_rgb(0, 255, 200)),
@@ -135,7 +188,7 @@ pub fn show(
                     );
                 }
 
-                // Manejo de Drag para Time Selection interactivo
+                // Drag básico
                 if response.dragged() {
                     if let Some(pointer_pos) = response.interact_pointer_pos() {
                         let press_pos = ui.input(|i| i.pointer.press_origin()).unwrap_or(pointer_pos);
@@ -151,7 +204,7 @@ pub fn show(
                     }
                 }
 
-                // LAYER 5: Playhead Local
+                // LAYER 6: Playhead Local
                 if let Some(frames) = elapsed_frames {
                     if total_frames > 0 {
                         let local_frame = frames % total_frames;
@@ -165,7 +218,7 @@ pub fn show(
                     }
                 }
 
-                // Outer Border
+                // Borde contenedor
                 ui.painter().rect_stroke(rect, 4.0_f32, Stroke::new(1.0_f32, Color32::from_gray(50)));
             }
         });
