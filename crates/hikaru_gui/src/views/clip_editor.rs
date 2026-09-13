@@ -1,7 +1,45 @@
 // crates/hikaru_gui/src/views/clip_editor.rs
-use egui::{Align2, Color32, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui};
+use egui::{Align2, Color32, ComboBox, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui};
 use crate::views::matrix::MatrixClip;
 use crate::views::waveform;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SnapValue {
+    None,
+    Bar1,
+    Beat1_2,
+    Beat1_4,
+    Beat1_8,
+    Beat1_16,
+}
+
+impl SnapValue {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SnapValue::None => "Off (Free)",
+            SnapValue::Bar1 => "1 Bar",
+            SnapValue::Beat1_2 => "1/2 Beat",
+            SnapValue::Beat1_4 => "1/4 Beat",
+            SnapValue::Beat1_8 => "1/8 Beat",
+            SnapValue::Beat1_16 => "1/16 Beat",
+        }
+    }
+
+    /// Retorna la duración en segundos del intervalo de cuantización según el BPM actual
+    pub fn interval_secs(&self, bpm: f32) -> f64 {
+        let current_bpm = if bpm > 0.0 { bpm as f64 } else { 120.0 };
+        let sec_per_beat = 60.0 / current_bpm;
+
+        match self {
+            SnapValue::None => 0.0,
+            SnapValue::Bar1 => sec_per_beat * 4.0,
+            SnapValue::Beat1_2 => sec_per_beat * 2.0,
+            SnapValue::Beat1_4 => sec_per_beat,
+            SnapValue::Beat1_8 => sec_per_beat / 2.0,
+            SnapValue::Beat1_16 => sec_per_beat / 4.0,
+        }
+    }
+}
 
 pub fn show(
     ui: &mut Ui,
@@ -10,9 +48,9 @@ pub fn show(
     sample_rate: u32,
     bpm: f32, // Recibimos el BPM del proyecto
 ) {
-    // 1. Decodificación PCM limpia (soportando 16-bit, 24/32-bit float e int)
+    // 1. Decodificación PCM limpia
     if clip.pcm_data.is_empty() && clip.path.exists() {
-        if let Ok(mut reader) = hound::WavReader::open(&clip.path) {
+        if let Ok(reader) = hound::WavReader::open(&clip.path) {
             let spec = reader.spec();
             let channels = spec.channels as usize;
             let bits = spec.bits_per_sample;
@@ -51,6 +89,10 @@ pub fn show(
         }
     }
 
+    // Usamos la memoria del ID de egui para retener el modo Snap seleccionado
+    let snap_id = ui.make_persistent_id("clip_editor_snap_grid");
+    let mut current_snap: SnapValue = ui.data_mut(|d| d.get_temp(snap_id).unwrap_or(SnapValue::Beat1_4));
+
     Frame::none()
         .fill(Color32::from_rgb(18, 18, 22))
         .stroke(Stroke::new(1.0_f32, Color32::from_gray(45)))
@@ -63,6 +105,22 @@ pub fn show(
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.toggle_value(&mut clip.loop_enabled, "🔁 Loop");
+
+                    ui.add_space(8.0);
+
+                    // Selector de Snap / Cuantización
+                    ComboBox::from_id_source("snap_combo_box")
+                        .selected_text(format!("🧲 Snap: {}", current_snap.label()))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut current_snap, SnapValue::None, SnapValue::None.label());
+                            ui.selectable_value(&mut current_snap, SnapValue::Bar1, SnapValue::Bar1.label());
+                            ui.selectable_value(&mut current_snap, SnapValue::Beat1_2, SnapValue::Beat1_2.label());
+                            ui.selectable_value(&mut current_snap, SnapValue::Beat1_4, SnapValue::Beat1_4.label());
+                            ui.selectable_value(&mut current_snap, SnapValue::Beat1_8, SnapValue::Beat1_8.label());
+                            ui.selectable_value(&mut current_snap, SnapValue::Beat1_16, SnapValue::Beat1_16.label());
+                        });
+                    
+                    ui.data_mut(|d| d.insert_temp(snap_id, current_snap));
                 });
             });
 
@@ -83,12 +141,11 @@ pub fn show(
                 ui.painter().rect_filled(rect, 4.0_f32, Color32::from_rgb(12, 12, 15));
 
                 // LAYER 2: Timeline Bar & Beat Grid
-                let current_bpm = if bpm > 0.0 { bpm } else { 120.0 };
-                let sec_per_beat = 60.0 / current_bpm as f64;
-                let sec_per_bar = sec_per_beat * 4.0; // Asumiendo 4/4
+                let current_bpm = if bpm > 0.0 { bpm as f64 } else { 120.0 };
+                let sec_per_beat = 60.0 / current_bpm;
+                let sec_per_bar = sec_per_beat * 4.0;
                 let total_bars = (clip.duration_secs / sec_per_bar).ceil() as usize;
 
-                // Margen superior para la regla de compases (ruler header)
                 let ruler_height = 18.0_f32;
                 let ruler_rect = Rect::from_min_max(
                     rect.min,
@@ -122,7 +179,7 @@ pub fn show(
                             Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 40)),
                         );
 
-                        // Número de compás en la regla
+                        // Número de compás
                         ui.painter().text(
                             Pos2::new(x_pos + 4.0, rect.min.y + 2.0),
                             Align2::LEFT_TOP,
@@ -165,7 +222,7 @@ pub fn show(
                     ui.painter().rect_filled(sel_rect, 0.0_f32, Color32::from_rgba_unmultiplied(0, 120, 255, 45));
                 }
 
-                // LAYER 4: Waveform (Renderizado sobre el wave_rect excluyendo la regla)
+                // LAYER 4: Waveform
                 if !clip.pcm_data.is_empty() {
                     waveform::draw_waveform(ui, wave_rect, &clip.pcm_data, Color32::from_rgb(0, 200, 255));
                 }
@@ -188,7 +245,7 @@ pub fn show(
                     );
                 }
 
-                // Drag básico
+                // Drag con Snap to Grid
                 if response.dragged() {
                     if let Some(pointer_pos) = response.interact_pointer_pos() {
                         let press_pos = ui.input(|i| i.pointer.press_origin()).unwrap_or(pointer_pos);
@@ -196,8 +253,19 @@ pub fn show(
                         let x_min = press_pos.x.min(pointer_pos.x).clamp(rect.min.x, rect.max.x);
                         let x_max = press_pos.x.max(pointer_pos.x).clamp(rect.min.x, rect.max.x);
 
-                        let norm_start = ((x_min - rect.min.x) / rect.width()) as f64;
-                        let norm_end = ((x_max - rect.min.x) / rect.width()) as f64;
+                        let mut time_start = ((x_min - rect.min.x) / rect.width()) as f64 * clip.duration_secs;
+                        let mut time_end = ((x_max - rect.min.x) / rect.width()) as f64 * clip.duration_secs;
+
+                        // Aplicar Snap to Grid si está activo
+                        let snap_step = current_snap.interval_secs(bpm);
+                        if snap_step > 0.0 {
+                            time_start = (time_start / snap_step).round() * snap_step;
+                            time_end = (time_end / snap_step).round() * snap_step;
+                        }
+
+                        // Convertir tiempo a frames
+                        let norm_start = (time_start / clip.duration_secs).clamp(0.0, 1.0);
+                        let norm_end = (time_end / clip.duration_secs).clamp(0.0, 1.0);
 
                         clip.loop_start = (norm_start * total_frames as f64) as u64;
                         clip.loop_end = (norm_end * total_frames as f64) as u64;
