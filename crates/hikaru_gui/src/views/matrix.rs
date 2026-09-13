@@ -31,6 +31,7 @@ pub struct MatrixClip {
     pub name: String,
     pub path: PathBuf,
     pub duration_secs: f64,
+    pub pcm_data: Vec<f32>, // <--- ¡Guardamos los samples acá!
     pub local_state: PlaylistState,
     pub local_track: Track,
     pub local_bar: f32,
@@ -798,6 +799,7 @@ fn load_clip_into_slot(
             name: name.clone(),
             path,
             duration_secs: 0.0,
+            pcm_data: Vec::new(),
             local_state,
             local_track: Track::new(0, name, false),
             local_bar: 1.0,

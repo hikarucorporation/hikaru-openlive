@@ -277,7 +277,7 @@ pub fn show(
             ui.horizontal(|ui| {
                 ui.allocate_ui(vec2(scene_label_width, 240.0), |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new("MASTER").small().strong().color(Color32::LIGHT_BLUE));
+                        // ui.label(RichText::new("MASTER").small().strong().color(Color32::LIGHT_BLUE));
                         
                         let _old_pan = master_track.pan;
                         if custom_pan_slider(ui, &mut master_track.pan).changed() {
@@ -409,6 +409,7 @@ fn load_clip_into_arranger_slot(
             name: name.clone(),
             path,
             duration_secs: 0.0,
+            pcm_data: Vec::new(),
             local_state,
             local_track: mixer::Track::new(0, name, false),
             local_bar: 1.0,
