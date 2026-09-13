@@ -25,7 +25,6 @@ impl SnapValue {
         }
     }
 
-    /// Retorna la duración en segundos del intervalo de cuantización según el BPM actual
     pub fn interval_secs(&self, bpm: f32) -> f64 {
         let current_bpm = if bpm > 0.0 { bpm as f64 } else { 120.0 };
         let sec_per_beat = 60.0 / current_bpm;
@@ -46,7 +45,7 @@ pub fn show(
     clip: &mut MatrixClip,
     elapsed_frames: Option<u64>,
     sample_rate: u32,
-    bpm: f32, // Recibimos el BPM del proyecto
+    bpm: f32,
 ) {
     // 1. Decodificación PCM limpia
     if clip.pcm_data.is_empty() && clip.path.exists() {
@@ -89,7 +88,6 @@ pub fn show(
         }
     }
 
-    // Usamos la memoria del ID de egui para retener el modo Snap seleccionado
     let snap_id = ui.make_persistent_id("clip_editor_snap_grid");
     let mut current_snap: SnapValue = ui.data_mut(|d| d.get_temp(snap_id).unwrap_or(SnapValue::Beat1_4));
 
@@ -98,7 +96,7 @@ pub fn show(
         .stroke(Stroke::new(1.0_f32, Color32::from_gray(45)))
         .inner_margin(6.0)
         .show(ui, |ui| {
-            // Header del Clip Editor
+            // Header
             ui.horizontal(|ui| {
                 ui.label(format!("🎵 {}", clip.name));
                 ui.weak(format!("({:.2}s)", clip.duration_secs));
@@ -108,7 +106,6 @@ pub fn show(
 
                     ui.add_space(8.0);
 
-                    // Selector de Snap / Cuantización
                     ComboBox::from_id_source("snap_combo_box")
                         .selected_text(format!("🧲 Snap: {}", current_snap.label()))
                         .show_ui(ui, |ui| {
@@ -132,19 +129,28 @@ pub fn show(
             if ui.is_rect_visible(rect) {
                 let total_frames = (clip.duration_secs * sample_rate as f64) as u64;
 
-                // Auto-inicializar el loop al total del audio si loop_end es 0
-                if clip.loop_end == 0 && total_frames > 0 {
-                    clip.loop_end = total_frames;
+                // Sanitización estricta de límites del loop anti-crash
+                if total_frames > 0 {
+                    if clip.loop_end == 0 || clip.loop_end > total_frames {
+                        clip.loop_end = total_frames;
+                    }
+                    if clip.loop_start >= clip.loop_end {
+                        clip.loop_start = clip.loop_end.saturating_sub(sample_rate as u64 / 4); // Mínimo 250ms
+                    }
                 }
 
-                // LAYER 1: Background Canvas
+                // LAYER 1: Canvas Background
                 ui.painter().rect_filled(rect, 4.0_f32, Color32::from_rgb(12, 12, 15));
 
-                // LAYER 2: Timeline Bar & Beat Grid
+                // LAYER 2: Grid y Ruler
                 let current_bpm = if bpm > 0.0 { bpm as f64 } else { 120.0 };
                 let sec_per_beat = 60.0 / current_bpm;
                 let sec_per_bar = sec_per_beat * 4.0;
-                let total_bars = (clip.duration_secs / sec_per_bar).ceil() as usize;
+                let total_bars = if clip.duration_secs > 0.0 {
+                    (clip.duration_secs / sec_per_bar).ceil() as usize
+                } else {
+                    0
+                };
 
                 let ruler_height = 18.0_f32;
                 let ruler_rect = Rect::from_min_max(
@@ -156,7 +162,6 @@ pub fn show(
                     rect.max,
                 );
 
-                // Fondo de la regla de compases
                 ui.painter().rect_filled(ruler_rect, 0.0_f32, Color32::from_rgb(22, 22, 28));
                 ui.painter().line_segment(
                     [Pos2::new(rect.min.x, ruler_rect.max.y), Pos2::new(rect.max.x, ruler_rect.max.y)],
@@ -166,20 +171,16 @@ pub fn show(
                 if clip.duration_secs > 0.0 {
                     for bar in 0..=total_bars {
                         let bar_time = bar as f64 * sec_per_bar;
-                        if bar_time > clip.duration_secs {
-                            break;
-                        }
+                        if bar_time > clip.duration_secs { break; }
 
                         let norm_x = (bar_time / clip.duration_secs) as f32;
                         let x_pos = rect.min.x + (norm_x * rect.width());
 
-                        // Línea principal de Compás (Bar Line)
                         ui.painter().line_segment(
                             [Pos2::new(x_pos, rect.min.y), Pos2::new(x_pos, rect.max.y)],
                             Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 40)),
                         );
 
-                        // Número de compás
                         ui.painter().text(
                             Pos2::new(x_pos + 4.0, rect.min.y + 2.0),
                             Align2::LEFT_TOP,
@@ -188,12 +189,9 @@ pub fn show(
                             Color32::from_gray(180),
                         );
 
-                        // Subdivisiones por Tiempos (Beats 2, 3, 4)
                         for beat in 1..4 {
                             let beat_time = bar_time + (beat as f64 * sec_per_beat);
-                            if beat_time >= clip.duration_secs {
-                                break;
-                            }
+                            if beat_time >= clip.duration_secs { break; }
 
                             let beat_norm_x = (beat_time / clip.duration_secs) as f32;
                             let beat_x_pos = rect.min.x + (beat_norm_x * rect.width());
@@ -206,87 +204,153 @@ pub fn show(
                     }
                 }
 
-                // LAYER 3: Time Selection / Loop Region Background
-                if total_frames > 0 && clip.loop_end > clip.loop_start {
-                    let start_norm = clip.loop_start as f32 / total_frames as f32;
-                    let end_norm = clip.loop_end as f32 / total_frames as f32;
+                // LAYER 3: Active Selection Region Background
+                let (sel_x_min, sel_x_max) = if total_frames > 0 && clip.loop_end > clip.loop_start {
+                    let start_norm = (clip.loop_start as f32 / total_frames as f32).clamp(0.0, 1.0);
+                    let end_norm = (clip.loop_end as f32 / total_frames as f32).clamp(0.0, 1.0);
 
-                    let sel_x_min = rect.min.x + (start_norm * rect.width());
-                    let sel_x_max = rect.min.x + (end_norm * rect.width());
+                    let min_x = rect.min.x + (start_norm * rect.width());
+                    let max_x = rect.min.x + (end_norm * rect.width());
 
                     let sel_rect = Rect::from_min_max(
-                        Pos2::new(sel_x_min, wave_rect.min.y),
-                        Pos2::new(sel_x_max, wave_rect.max.y),
+                        Pos2::new(min_x, wave_rect.min.y),
+                        Pos2::new(max_x, wave_rect.max.y),
                     );
 
                     ui.painter().rect_filled(sel_rect, 0.0_f32, Color32::from_rgba_unmultiplied(0, 120, 255, 45));
-                }
+                    (min_x, max_x)
+                } else {
+                    (rect.min.x, rect.max.x)
+                };
 
                 // LAYER 4: Waveform
                 if !clip.pcm_data.is_empty() {
                     waveform::draw_waveform(ui, wave_rect, &clip.pcm_data, Color32::from_rgb(0, 200, 255));
                 }
 
-                // LAYER 5: Time Selection Borders
-                if total_frames > 0 && clip.loop_end > clip.loop_start {
-                    let start_norm = clip.loop_start as f32 / total_frames as f32;
-                    let end_norm = clip.loop_end as f32 / total_frames as f32;
+                // LAYER 5: Independent Interactive Bracket Handles
+                if total_frames > 0 {
+                    let handle_width = 14.0_f32;
+                    let handle_height = wave_rect.height();
 
-                    let sel_x_min = rect.min.x + (start_norm * rect.width());
-                    let sel_x_max = rect.min.x + (end_norm * rect.width());
+                    let min_frame_gap = (sample_rate as u64 / 10).max(1024);
+                    let snap_step = current_snap.interval_secs(bpm);
+
+                    let calc_snapped_frame = |x_pos: f32| -> u64 {
+                        if rect.width() <= 0.0 || clip.duration_secs <= 0.0 {
+                            return 0;
+                        }
+                        let norm_x = ((x_pos - rect.min.x) / rect.width()).clamp(0.0, 1.0) as f64;
+                        let mut time_secs = norm_x * clip.duration_secs;
+
+                        if snap_step > 0.0 {
+                            time_secs = (time_secs / snap_step).round() * snap_step;
+                        }
+
+                        let norm_snapped = (time_secs / clip.duration_secs).clamp(0.0, 1.0);
+                        (norm_snapped * total_frames as f64) as u64
+                    };
+
+                    // 1. Bracket Izquierdo (`[`)
+                    let start_rect = Rect::from_center_size(
+                        Pos2::new(sel_x_min, wave_rect.center().y),
+                        egui::vec2(handle_width, handle_height),
+                    );
+                    let start_response = ui.put(
+                        start_rect,
+                        egui::Button::new("")
+                            .fill(Color32::from_rgb(0, 255, 200))
+                            .sense(Sense::drag()),
+                    );
 
                     ui.painter().line_segment(
                         [Pos2::new(sel_x_min, rect.min.y), Pos2::new(sel_x_min, rect.max.y)],
                         Stroke::new(2.0_f32, Color32::from_rgb(0, 255, 200)),
                     );
+                    ui.painter().text(
+                        start_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "[",
+                        FontId::proportional(14.0),
+                        Color32::BLACK,
+                    );
+
+                    if start_response.dragged() {
+                        if let Some(pointer_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                            let new_start = calc_snapped_frame(pointer_pos.x);
+                            clip.loop_start = if new_start + min_frame_gap <= clip.loop_end {
+                                new_start
+                            } else {
+                                clip.loop_end.saturating_sub(min_frame_gap)
+                            };
+                        }
+                    }
+
+                    // 2. Bracket Derecho (`]`)
+                    let end_rect = Rect::from_center_size(
+                        Pos2::new(sel_x_max, wave_rect.center().y),
+                        egui::vec2(handle_width, handle_height),
+                    );
+                    let end_response = ui.put(
+                        end_rect,
+                        egui::Button::new("")
+                            .fill(Color32::from_rgb(255, 80, 80))
+                            .sense(Sense::drag()),
+                    );
+
                     ui.painter().line_segment(
                         [Pos2::new(sel_x_max, rect.min.y), Pos2::new(sel_x_max, rect.max.y)],
                         Stroke::new(2.0_f32, Color32::from_rgb(255, 80, 80)),
                     );
-                }
+                    ui.painter().text(
+                        end_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "]",
+                        FontId::proportional(14.0),
+                        Color32::BLACK,
+                    );
 
-                // Drag con Snap to Grid
-                if response.dragged() {
-                    if let Some(pointer_pos) = response.interact_pointer_pos() {
-                        let press_pos = ui.input(|i| i.pointer.press_origin()).unwrap_or(pointer_pos);
-                        
-                        let x_min = press_pos.x.min(pointer_pos.x).clamp(rect.min.x, rect.max.x);
-                        let x_max = press_pos.x.max(pointer_pos.x).clamp(rect.min.x, rect.max.x);
-
-                        let mut time_start = ((x_min - rect.min.x) / rect.width()) as f64 * clip.duration_secs;
-                        let mut time_end = ((x_max - rect.min.x) / rect.width()) as f64 * clip.duration_secs;
-
-                        // Aplicar Snap to Grid si está activo
-                        let snap_step = current_snap.interval_secs(bpm);
-                        if snap_step > 0.0 {
-                            time_start = (time_start / snap_step).round() * snap_step;
-                            time_end = (time_end / snap_step).round() * snap_step;
+                    if end_response.dragged() {
+                        if let Some(pointer_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                            let new_end = calc_snapped_frame(pointer_pos.x);
+                            clip.loop_end = if new_end >= clip.loop_start + min_frame_gap {
+                                new_end
+                            } else {
+                                (clip.loop_start + min_frame_gap).min(total_frames)
+                            };
                         }
-
-                        // Convertir tiempo a frames
-                        let norm_start = (time_start / clip.duration_secs).clamp(0.0, 1.0);
-                        let norm_end = (time_end / clip.duration_secs).clamp(0.0, 1.0);
-
-                        clip.loop_start = (norm_start * total_frames as f64) as u64;
-                        clip.loop_end = (norm_end * total_frames as f64) as u64;
                     }
                 }
 
-                // LAYER 6: Playhead Local
+                // LAYER 6: Playhead con Anti-Zero Division Guard
                 if let Some(frames) = elapsed_frames {
                     if total_frames > 0 {
-                        let local_frame = frames % total_frames;
-                        let progress = local_frame as f32 / total_frames as f32;
+                        let active_start = clip.loop_start.min(total_frames);
+                        let active_end = if clip.loop_end > active_start {
+                            clip.loop_end.min(total_frames)
+                        } else {
+                            total_frames
+                        };
+                        
+                        // Guard de división por cero
+                        let loop_length = active_end.saturating_sub(active_start).max(1);
+
+                        let current_frame = if clip.loop_enabled {
+                            active_start + (frames % loop_length)
+                        } else {
+                            frames % total_frames
+                        };
+
+                        let progress = (current_frame as f32 / total_frames as f32).clamp(0.0, 1.0);
                         let playhead_x = rect.min.x + (progress * rect.width());
 
                         ui.painter().line_segment(
                             [Pos2::new(playhead_x, rect.min.y), Pos2::new(playhead_x, rect.max.y)],
-                            Stroke::new(2.0_f32, Color32::from_rgb(255, 255, 255)),
+                            Stroke::new(2.0_f32, Color32::WHITE),
                         );
                     }
                 }
 
-                // Borde contenedor
                 ui.painter().rect_stroke(rect, 4.0_f32, Stroke::new(1.0_f32, Color32::from_gray(50)));
             }
         });
