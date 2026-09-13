@@ -741,14 +741,34 @@ fn render_clip_editor_track_view(
                 ui.ctx().request_repaint();
             }
 
-            // Llamar al nuevo editor modularizado limpio
+            // 1. Guardar snapshot inicial de los puntos de loop
+            let prev_start = slot.loop_start;
+            let prev_end = slot.loop_end;
+            let prev_enabled = slot.loop_enabled;
+
+            // 2. Renderizar el editor en egui (mutará 'slot' si el usuario arrastra corchetes o presiona Loop)
             clip_editor::show(
                 ui,
                 slot,
                 elapsed_frames,
                 sample_rate,
-                bpm as f32, // <--- Castear de f64 a f32 acá
+                bpm as f32,
             );
+
+            // 3. Si hubo algún cambio, enviamos el comando en segundos a audio_proxy
+            if prev_start != slot.loop_start || prev_end != slot.loop_end || prev_enabled != slot.loop_enabled {
+                let current_sample_rate = sample_rate.max(1) as f32;
+                let loop_start_secs = slot.loop_start as f32 / current_sample_rate;
+                let loop_end_secs = slot.loop_end as f32 / current_sample_rate;
+
+                audio_proxy.send(GuiCommand::SetClipLoop {
+                    track_idx,
+                    scene_idx,
+                    loop_start_secs,
+                    loop_end_secs,
+                    enabled: slot.loop_enabled,
+                });
+            }
         });
 }
 

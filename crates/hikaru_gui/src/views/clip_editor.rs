@@ -355,3 +355,35 @@ pub fn show(
             }
         });
 }
+
+pub fn get_next_sample(clip: &MatrixClip, playhead_frame: u64) -> f32 {
+    if clip.pcm_data.is_empty() {
+        return 0.0;
+    }
+
+    let total_frames = clip.pcm_data.len() as u64;
+
+    if clip.loop_enabled {
+        // 1. Sanitización de límites dentro del audio thread
+        let start = clip.loop_start.min(total_frames);
+        let end = if clip.loop_end > start && clip.loop_end <= total_frames {
+            clip.loop_end
+        } else {
+            total_frames
+        };
+
+        let loop_length = end.saturating_sub(start).max(1);
+
+        // 2. Mapeo del playhead relativo al intervalo [loop_start, loop_end]
+        let relative_frame = start + (playhead_frame % loop_length);
+        
+        clip.pcm_data.get(relative_frame as usize).copied().unwrap_or(0.0)
+    } else {
+        // Reproducción lineal estándar (si supera la duración total, frena/silencia)
+        if playhead_frame < total_frames {
+            clip.pcm_data[playhead_frame as usize]
+        } else {
+            0.0
+        }
+    }
+}
