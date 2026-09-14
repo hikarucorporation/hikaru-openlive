@@ -153,10 +153,9 @@ impl AudioClipInstance {
             let loop_start = self.clip_loop_start.min(natural);
             let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
             let loop_len = loop_end.saturating_sub(loop_start).max(1);
-            if elapsed < loop_end {
-                return Some(elapsed as usize);
-            }
-            return Some((loop_start + ((elapsed - loop_start) % loop_len)) as usize);
+            
+            // Fuerza a que la lectura inicie directamente en loop_start
+            return Some((loop_start + (elapsed % loop_len)) as usize);
         }
 
         let emission_len = self.emission_len_frames();
@@ -714,11 +713,7 @@ impl<'a> AudioEngine<'a> {
                         }
 
                         let relative_frame = if has_loop {
-                            if elapsed < clip.clip_loop_end.min(natural) {
-                                elapsed as usize
-                            } else {
-                                (loop_start + ((elapsed - loop_start) % loop_len)) as usize
-                            }
+                            (loop_start + (elapsed % loop_len)) as usize
                         } else {
                             elapsed as usize
                         };
