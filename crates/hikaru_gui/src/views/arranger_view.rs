@@ -318,8 +318,9 @@ pub fn show(
 
                             ui.add_space(4.0);
 
-                            let _old_vol = track.volume;
-                            if custom_volume_fader(ui, &mut track.volume).dragged() {
+                            let old_vol = track.volume;
+                            let vol_res = custom_volume_fader(ui, &mut track.volume);
+                            if vol_res.dragged() || vol_res.clicked() || track.volume != old_vol {
                                 if let Some(meta) = matrix_state.tracks.get_mut(idx) {
                                     meta.volume = track.volume;
                                 }
@@ -517,7 +518,8 @@ fn custom_pan_slider(ui: &mut Ui, pan_val: &mut f32) -> Response {
 // Helper: Custom Volume Vertical Fader
 fn custom_volume_fader(ui: &mut Ui, volume_val: &mut f32) -> Response {
     let desired_size = vec2(30.0, 160.0);
-    let (rect, response) = ui.allocate_at_least(desired_size, Sense::drag());
+    // Sense::click_and_drag() para registrar el doble click
+    let (rect, response) = ui.allocate_at_least(desired_size, Sense::click_and_drag());
 
     let thumb_width = 45.0;
     let thumb_height = 18.0;
@@ -526,7 +528,10 @@ fn custom_volume_fader(ui: &mut Ui, volume_val: &mut f32) -> Response {
     let min_y = rect.min.y + half_thumb;
     let max_y = rect.max.y - half_thumb;
 
-    if response.dragged() {
+    // Reset a 1.0 (0 dB) al hacer doble click
+    if response.double_clicked() {
+        *volume_val = 0.75; // <--- Cambiar 1.0 por 0.5
+    } else if response.dragged() || response.clicked() {
         if let Some(pointer_pos) = response.interact_pointer_pos() {
             let normalized = (1.0 - ((pointer_pos.y - min_y) / (max_y - min_y))).clamp(0.0, 1.0);
             *volume_val = normalized;
