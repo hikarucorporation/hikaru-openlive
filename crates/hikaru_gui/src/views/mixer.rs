@@ -1,6 +1,6 @@
 /*
  * Hikaru OpenStudio - Pro Dynamic Mixer (Standard Event Architecture)
- * License: AGPL-3.0-only
+ * License: AGPL-3.0-or-later
  */
 
 use egui::{Ui, Vec2, Color32, RichText, Stroke, Frame, Rect, Pos2, Sense, Button, ScrollArea, TextEdit, Align};
@@ -294,10 +294,47 @@ fn render_channel_strip(
                         track.pan_mode = if is_ms { PanMode::Stereo } else { PanMode::MidSide };
                     }
                     
-                    custom_knob(ui, &mut track.pan, -100.0..=100.0);
-                    
-                    let p_dv = ui.add(egui::DragValue::new(&mut track.pan).speed(0.5).clamp_range(-100.0..=100.0).fixed_decimals(0));
-                    if p_dv.double_clicked() { track.pan = 0.0; }
+                    // --- EN render_channel_strip() ---
+
+                    // Perilla de paneo adaptada al rango normalizado -1.0..=1.0
+                    custom_knob(ui, &mut track.pan, -1.0..=1.0);
+
+                    let p_dv = ui.add(
+                        egui::DragValue::new(&mut track.pan)
+                            .speed(0.01)
+                            .clamp_range(-1.0..=1.0)
+                            .fixed_decimals(2)
+                            .custom_formatter(|n, _| {
+                                let val = (n * 100.0).round() as i32;
+                                if val == 0 {
+                                    "C".to_string()
+                                } else if val < 0 {
+                                    format!("{}L", val.abs())
+                                } else {
+                                    format!("{}R", val)
+                                }
+                            })
+                            .custom_parser(|s| {
+                                let s = s.trim().to_uppercase();
+                                if s == "C" {
+                                    Some(0.0)
+                                } else if s.ends_with('L') {
+                                    s[..s.len() - 1].parse::<f64>().ok().map(|v| -v / 100.0)
+                                } else if s.ends_with('R') {
+                                    s[..s.len() - 1].parse::<f64>().ok().map(|v| v / 100.0)
+                                } else {
+                                    s.parse::<f64>().ok().map(|v| v / 100.0)
+                                }
+                            })
+                    );
+
+                    if p_dv.double_clicked() { 
+                        track.pan = 0.0; 
+                    }
+
+                    if p_dv.double_clicked() { 
+                        track.pan = 0.0; 
+                    }
 
                     ui.add_space(5.0);
 
@@ -366,19 +403,30 @@ fn render_channel_strip(
 // --- WIDGETS CUSTOM ---
 
 fn custom_knob(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
-    let (rect, response) = ui.allocate_at_least(Vec2::splat(28.0), Sense::click_and_drag());
-    
+    let size = Vec2::splat(28.0);
+    let (rect, response) = ui.allocate_at_least(size, Sense::click_and_drag());
+
+    let min = *range.start();
+    let max = *range.end();
+    let span = max - min;
+
     if response.double_clicked() {
         *value = 0.0;
     } else if response.dragged() {
-        let delta = response.drag_delta().x - response.drag_delta().y; 
-        *value = (*value + delta * 0.5).clamp(*range.start(), *range.end());
+        let delta = response.drag_delta().x - response.drag_delta().y;
+        let change = (delta / 150.0) * span;
+        *value = (*value + change).clamp(min, max);
     }
 
     let painter = ui.painter();
     painter.circle_filled(rect.center(), 10.0, Color32::from_gray(15));
-    let angle = ((*value - *range.start()) / (*range.end() - *range.start()) - 0.5) * (PI * 1.5); 
-    painter.line_segment([rect.center() + Vec2::new(angle.sin(), -angle.cos()) * 4.0, rect.center() + Vec2::new(angle.sin(), -angle.cos()) * 9.0], Stroke::new(2.0_f32, Color32::from_rgb(255, 110, 0)));
+
+    let normalized = ((*value - min) / span).clamp(0.0, 1.0);
+    let angle = (normalized - 0.5) * (PI * 1.5);
+
+    let handle_pos = rect.center() + Vec2::new(angle.sin(), -angle.cos()) * 9.0;
+    let center_pos = rect.center() + Vec2::new(angle.sin(), -angle.cos()) * 4.0;
+    painter.line_segment([center_pos, handle_pos], Stroke::new(2.0_f32, Color32::from_rgb(255, 110, 0)));
 }
 
 fn custom_v_fader(ui: &mut Ui, value: &mut f32, size: Vec2) {

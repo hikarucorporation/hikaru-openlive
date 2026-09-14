@@ -29,8 +29,9 @@ pub fn show_window(ctx: &Context, state: &mut AppState, proxy: &AudioProxy) {
                             }
                             
                             // Pan
-                            if ui.add(egui::Slider::new(&mut track.pan, -1.0..=1.0).show_value(false)).changed() {
-                                proxy.send(GuiCommand::SetTrackPan { track_idx: idx, pan: track.pan });
+                            // REEMPLAZALO POR ESTO:
+                            if ui.add(egui::Slider::new(&mut track.pan, -100.0..=100.0).show_value(false)).changed() {
+                                proxy.send(GuiCommand::SetTrackPan { track_idx: idx, pan: track.pan / 100.0 });
                             }
 
                             if ui.selectable_label(track.is_muted, "M").clicked() {

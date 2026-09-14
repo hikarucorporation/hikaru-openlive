@@ -304,8 +304,9 @@ pub fn show(
                 for (idx, track) in audio_tracks.iter_mut().enumerate() {
                     ui.allocate_ui(vec2(track_width, 240.0), |ui| {
                         ui.vertical_centered(|ui| {
-                            let _old_pan = track.pan;
-                            if custom_pan_slider(ui, &mut track.pan).dragged() {
+                            let old_pan = track.pan;
+                            let pan_res = custom_pan_slider(ui, &mut track.pan);
+                            if pan_res.dragged() || pan_res.clicked() || track.pan != old_pan {
                                 if let Some(meta) = matrix_state.tracks.get_mut(idx) {
                                     meta.pan = track.pan;
                                 }
@@ -430,10 +431,10 @@ fn load_clip_into_arranger_slot(
     });
 }
 
-// Helper: Custom Pan Slider
+// Helper: Custom Pan Slider con formato -100 a 100 / L / R / 0
 fn custom_pan_slider(ui: &mut Ui, pan_val: &mut f32) -> Response {
     let desired_size = vec2(90.0, 20.0);
-    let (rect, response) = ui.allocate_at_least(desired_size, Sense::drag());
+    let (rect, response) = ui.allocate_at_least(desired_size, Sense::click_and_drag());
 
     let thumb_width = 12.0;
     let half_thumb = thumb_width / 2.0;
@@ -441,10 +442,13 @@ fn custom_pan_slider(ui: &mut Ui, pan_val: &mut f32) -> Response {
     let min_x = rect.min.x + half_thumb;
     let max_x = rect.max.x - half_thumb;
 
-    if response.dragged() {
+    // Reset con doble click
+    if response.double_clicked() {
+        *pan_val = 0.0;
+    } else if response.dragged() || response.clicked() {
         if let Some(pointer_pos) = response.interact_pointer_pos() {
             let normalized = ((pointer_pos.x - min_x) / (max_x - min_x)).clamp(0.0, 1.0);
-            *pan_val = (normalized * 2.0) - 1.0; // Normalizado de -1.0 a 1.0
+            *pan_val = (normalized * 2.0) - 1.0;
         }
     }
 
@@ -459,7 +463,7 @@ fn custom_pan_slider(ui: &mut Ui, pan_val: &mut f32) -> Response {
         );
         painter.rect_filled(rail_rect, 1.0, Color32::from_rgb(45, 45, 45));
 
-        let current_norm = (*pan_val + 1.0) / 2.0;
+        let current_norm = ((*pan_val).clamp(-1.0, 1.0) + 1.0) / 2.0;
         let thumb_x = min_x + (current_norm * (max_x - min_x));
 
         if (thumb_x - center_x).abs() > 0.5 {
@@ -489,6 +493,22 @@ fn custom_pan_slider(ui: &mut Ui, pan_val: &mut f32) -> Response {
 
         painter.rect_filled(thumb_rect, 0.0, thumb_color);
         painter.rect_stroke(thumb_rect, 0.0, Stroke::new(1.0_f32, Color32::BLACK));
+
+        // --- ETIQUETA DE TEXTO -100 A 100 / L / R ---
+        let pan_int = (*pan_val * 100.0).round() as i32;
+        let pan_text = match pan_int {
+            0 => "C".to_string(),
+            val if val < 0 => format!("L{}", val.abs()),
+            val => format!("R{}", val),
+        };
+
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            pan_text,
+            FontId::proportional(9.0),
+            Color32::WHITE,
+        );
     }
 
     response
