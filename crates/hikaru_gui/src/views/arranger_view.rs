@@ -4,6 +4,7 @@
 // crates/hikaru_gui/src/views/arranger_view.rs
 
 use egui::*;
+use egui::epaint::PathShape;
 use crate::views::mixer;
 use hikaru_transport::TransportPosition;
 use crate::audio_proxy::{AudioProxy, GuiCommand};
@@ -33,8 +34,6 @@ pub fn show(
     // -------------------------------------------------------------
     // 1. SCROLL HORIZONTAL GLOBAL (Forzado al fondo de la vista)
     // -------------------------------------------------------------
-    // Con .auto_shrink([false, false]) hacemos que el ScrollArea ocupe todo 
-    // el espacio vertical disponible, enviando el scrollbar al piso de la UI.
     ScrollArea::horizontal()
         .id_source("arranger_h_scroll")
         .auto_shrink([false, false])
@@ -77,8 +76,6 @@ pub fn show(
                 // -------------------------------------------------------------
                 // 2. GRILLA DE ESCENAS (Scroll Vertical Independiente)
                 // -------------------------------------------------------------
-                // Calculamos dinámicamente el alto para dejar exactamente 250px
-                // al pie para la sección de los faders sin empujar la UI.
                 let available_h = ui.available_height();
                 let grid_height = (available_h - 250.0).max(80.0);
 
@@ -179,11 +176,6 @@ pub fn show(
                                         }
                                     });
 
-                                    if response.clicked() && track_idx < matrix_state.grid.len() {
-                                        matrix_state.selected_slot = Some((track_idx, scene_idx));
-                                        matrix::trigger_pad(matrix_state, audio_proxy, track_idx, scene_idx);
-                                    }
-
                                     // Arrastrar y soltar samples
                                     if ui.rect_contains_pointer(slot_rect) {
                                         ui.output_mut(|o| o.cursor_icon = CursorIcon::PointingHand);
@@ -225,36 +217,31 @@ pub fn show(
                                     if ui.is_rect_visible(slot_rect) {
                                         let painter = ui.painter();
 
-                                        let (fill_color, mut border_color, clip_name, is_playing) = match slot_state {
+                                        let (fill_color, mut border_color, display_text) = match slot_state {
                                             SlotState::Playing => (
                                                 Color32::from_rgb(35, 135, 60),
                                                 Color32::GREEN,
                                                 if text_label.is_empty() { "Clip".into() } else { text_label },
-                                                true,
                                             ),
                                             SlotState::QueuedToPlay => (
                                                 Color32::from_rgb(120, 100, 30),
                                                 Color32::YELLOW,
                                                 if text_label.is_empty() { "Clip".into() } else { text_label },
-                                                false,
                                             ),
                                             SlotState::Stopped => (
                                                 Color32::from_rgb(45, 55, 75),
                                                 Color32::from_rgb(90, 130, 190),
                                                 text_label,
-                                                false,
                                             ),
                                             SlotState::QueuedToStop => (
                                                 Color32::from_rgb(130, 45, 45),
                                                 Color32::RED,
                                                 "Stop".into(),
-                                                false,
                                             ),
                                             SlotState::Empty => (
                                                 if response.hovered() { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 25) },
                                                 Color32::from_gray(40),
                                                 "".into(),
-                                                false,
                                             ),
                                         };
 
@@ -270,59 +257,71 @@ pub fn show(
                                             Stroke::new(if is_selected { 2.0_f32 } else { 1.0_f32 }, border_color),
                                         );
 
-                                        // --- BOTÓN DENTRO DEL PAD (PLAY / STOP) ---
+                                        // --- BOTÓN DE PLAY / STOP DE CADA SLOT ---
                                         let btn_size = Vec2::new(18.0, 18.0);
                                         let btn_rect = Rect::from_center_size(
                                             pos2(slot_rect.min.x + 14.0, slot_rect.center().y),
                                             btn_size,
                                         );
-
                                         let btn_hovered = ui.rect_contains_pointer(btn_rect);
 
                                         if has_clip {
-                                            // Renderizar botón dentro del clip slot
-                                            let btn_bg = if btn_hovered { Color32::from_rgb(80, 80, 90) } else { Color32::from_rgb(40, 40, 50) };
-                                            painter.rect_filled(btn_rect, 3.0, btn_bg);
-
-                                            let icon = if is_playing { "⏹" } else { "▶" };
-                                            painter.text(
-                                                btn_rect.center(),
-                                                Align2::CENTER_CENTER,
-                                                icon,
-                                                FontId::proportional(10.0),
-                                                if is_playing { Color32::GREEN } else { Color32::WHITE },
-                                            );
-                                        } else if response.hovered() {
-                                            // Si el slot está vacío y pasamos el mouse, dibujamos un stop de pista
-                                            let btn_bg = if btn_hovered { Color32::from_rgb(100, 40, 40) } else { Color32::from_rgb(50, 30, 30) };
-                                            painter.rect_filled(btn_rect, 3.0, btn_bg);
-                                            painter.text(
-                                                btn_rect.center(),
-                                                Align2::CENTER_CENTER,
-                                                "⏹",
-                                                FontId::proportional(9.0),
-                                                Color32::LIGHT_RED,
-                                            );
-                                        }
-
-                                        // --- TEXTO DEL CLIP ---
-                                        if !clip_name.is_empty() {
-                                            let display_text = if clip_name.len() > 10 {
-                                                format!("{}...", &clip_name[..8])
+                                            // Dibujar ícono de PLAY (Triángulo)
+                                            let play_color = if btn_hovered { Color32::WHITE } else { Color32::LIGHT_GRAY };
+                                            let p1 = pos2(btn_rect.min.x + 5.0, btn_rect.min.y + 4.0);
+                                            let p2 = pos2(btn_rect.min.x + 5.0, btn_rect.max.y - 4.0);
+                                            let p3 = pos2(btn_rect.max.x - 4.0, btn_rect.center().y);
+                                            
+                                            painter.add(PathShape::convex_polygon(
+                                                vec![p1, p2, p3],
+                                                play_color,
+                                                Stroke::NONE,
+                                            ));
+                                        } else {
+                                            // Dibujar botón de STOP (Cuadrado tipo Bitwig)
+                                            let stop_fill = if btn_hovered {
+                                                Color32::from_rgb(180, 50, 50)
                                             } else {
-                                                clip_name
+                                                Color32::from_rgb(50, 50, 60)
                                             };
-
-                                            // Offset a la derecha para no pisar el botón
-                                            let text_pos = pos2(slot_rect.min.x + 28.0, slot_rect.center().y);
-                                            painter.text(
-                                                text_pos,
-                                                Align2::LEFT_CENTER,
-                                                display_text,
-                                                FontId::proportional(9.0),
-                                                Color32::WHITE,
+                                            
+                                            painter.rect_filled(btn_rect, 2.0, stop_fill);
+                                            painter.rect_stroke(
+                                                btn_rect,
+                                                2.0,
+                                                Stroke::new(1.0_f32, Color32::from_gray(90)),
                                             );
+                                            
+                                            let inner_stop = Rect::from_center_size(btn_rect.center(), vec2(6.0, 6.0));
+                                            painter.rect_filled(inner_stop, 1.0, Color32::WHITE);
                                         }
+
+                                        // --- MANEJO DE CLICS EN EL SLOT ---
+                                        if response.clicked() && track_idx < matrix_state.grid.len() {
+                                            matrix_state.selected_slot = Some((track_idx, scene_idx));
+                                            
+                                            if !has_clip && btn_hovered {
+                                                // Enviar orden de parada directamente al audio proxy
+                                                audio_proxy.send(GuiCommand::StopTrack { track_idx });
+                                                
+                                                // Marcar la celda actual como detenida
+                                                if let Some(slot) = matrix_state.grid.get_mut(track_idx).and_then(|row| row.get_mut(scene_idx)) {
+                                                    slot.state = SlotState::Stopped;
+                                                }
+                                            } else {
+                                                matrix::trigger_pad(matrix_state, audio_proxy, track_idx, scene_idx);
+                                            }
+                                        }
+
+                                        // Texto del nombre del clip
+                                        let text_pos = pos2(slot_rect.min.x + 28.0, slot_rect.center().y);
+                                        painter.text(
+                                            text_pos,
+                                            Align2::LEFT_CENTER,
+                                            display_text,
+                                            FontId::proportional(9.0),
+                                            Color32::WHITE,
+                                        );
                                     }
 
                                     ui.add_space(2.0);

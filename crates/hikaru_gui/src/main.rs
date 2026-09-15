@@ -219,6 +219,11 @@ fn main() -> Result<(), eframe::Error> {
                         engine.trigger_clip(track_idx, scene_idx);
                     }
                 }
+                GuiCommand::StopTrack { track_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.stop_track(track_idx);
+                    }
+                }
                 GuiCommand::SetClipLoop { track_idx, scene_idx, loop_start_secs, loop_end_secs, enabled } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_clip_loop(track_idx, scene_idx, loop_start_secs, loop_end_secs, enabled);

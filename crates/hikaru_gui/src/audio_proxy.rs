@@ -68,6 +68,9 @@ pub enum GuiCommand {
         track_idx: usize,
         scene_idx: usize
     },
+    StopTrack {
+        track_idx: usize,
+    },
     /// Puntos de loop del clip individual (Session Matrix / OPENLIVE),
     /// independientes del transporte global.
     SetClipLoop {
