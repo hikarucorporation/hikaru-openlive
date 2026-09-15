@@ -508,7 +508,7 @@ pub fn show(
                                     });
 
                                 for scene_idx in 0..state.scenes.len() {
-                                    render_pad(ui, state, clipboard, dragged_sample, audio_proxy, track_idx, scene_idx, bpm);
+                                    render_pad(ui, state, clipboard, dragged_sample, audio_proxy, track_idx, scene_idx, bpm, sample_rate, engine_handle);
                                 }
 
                                 ui.end_row();
@@ -623,6 +623,8 @@ fn render_pad(
     track_idx: usize,
     scene_idx: usize,
     bpm: f64,
+    sample_rate: u32,
+    engine_handle: Option<&Arc<Mutex<AudioEngine<'static>>>>,
 ) {
     let slot = &state.grid[track_idx][scene_idx];
     let is_selected = state.selected_slot == Some((track_idx, scene_idx));
@@ -674,11 +676,43 @@ fn render_pad(
                 _ => Color32::from_rgba_unmultiplied(120, 160, 220, 180),
             };
 
-            // ✂️ Recortamos el dibujo al área exacta del pad (con un ligero margen opcional)
-            let inner_rect = rect.shrink(2.0); // Le da 2px de margen interno para no pisar el borde
+            let inner_rect = rect.shrink(2.0);
             let clipped_painter = ui.painter().with_clip_rect(inner_rect);
             
             draw_mini_waveform(&clipped_painter, inner_rect, &clip.pcm_data, wave_color);
+
+            // 📍 DIBUJAR MINI-PLAYHEAD SI ESTÁ EN REPRODUCCIÓN
+            if slot.state == SlotState::Playing {
+                let elapsed_frames = engine_handle.and_then(|handle| {
+                    handle.try_lock().ok()?.voice_elapsed_frames(track_idx, scene_idx)
+                });
+
+                if let Some(frames) = elapsed_frames {
+                    let total_samples = clip.pcm_data.len() as f64;
+                    if total_samples > 0.0 {
+                        let play_progress = if clip.has_valid_clip_loop() {
+                            let loop_len = clip.loop_length_ticks() as f64;
+                            if loop_len > 0.0 {
+                                ((frames as f64 % loop_len) / loop_len) as f32
+                            } else {
+                                (frames as f32 / total_samples as f32).clamp(0.0, 1.0)
+                            }
+                        } else {
+                            (frames as f32 / total_samples as f32).clamp(0.0, 1.0)
+                        };
+
+                        let playhead_x = inner_rect.min.x + (inner_rect.width() * play_progress);
+
+                        clipped_painter.line_segment(
+                            [
+                                egui::pos2(playhead_x, inner_rect.min.y),
+                                egui::pos2(playhead_x, inner_rect.max.y),
+                            ],
+                            Stroke::new(1.5, Color32::WHITE),
+                        );
+                    }
+                }
+            }
         }
 
         let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
