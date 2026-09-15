@@ -29,7 +29,7 @@ pub fn show(
     let clip_slot_height = 28.0;
     let scenes_count = matrix_state.scenes.len();
 
-    let (master_track, mut audio_tracks) = tracks.split_first_mut().unwrap();
+    let (master_track, audio_tracks) = tracks.split_first_mut().unwrap();
 
     // -------------------------------------------------------------
     // 1. SCROLL HORIZONTAL GLOBAL (Forzado al fondo de la vista)
@@ -217,7 +217,7 @@ pub fn show(
                                     if ui.is_rect_visible(slot_rect) {
                                         let painter = ui.painter();
 
-                                        let (fill_color, mut border_color, display_text) = if !has_clip {
+                                        let (fill_color, border_color, display_text) = if !has_clip {
                                             // Si NO tiene clip (está vacío), mantener neutro gris oscuro sin importar si el estado es Stopped
                                             (
                                                 if response.hovered() { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 25) },
@@ -262,6 +262,44 @@ pub fn show(
                                             2.0,
                                             Stroke::new(if is_selected { 2.0_f32 } else { 1.0_f32 }, border_color),
                                         );
+
+                                        // DIBUJAR MINI-PLAYHEAD
+                                        if slot_state == SlotState::Playing {
+                                            // 1. Obtener la duración total o las muestras del clip actual en la grilla
+                                            let progress_norm = matrix_state.grid
+                                                .get(track_idx)
+                                                .and_then(|row| row.get(scene_idx))
+                                                .and_then(|slot| slot.clip.as_ref())
+                                                .map(|clip| {
+                                                    // Usar el getter .0() del struct SampleRate en lugar del atributo directo .0
+                                                    let sample_rate_f64 = _transport.sample_rate.get() as f64;
+
+                                                    let current_time_secs = if sample_rate_f64 > 0.0 {
+                                                        _transport.sample_count as f64 / sample_rate_f64
+                                                    } else {
+                                                        0.0
+                                                    };
+
+                                                    // Calcular el progreso dinámico (0.0..=1.0)
+                                                    if clip.duration_secs > 0.0 {
+                                                        ((current_time_secs % clip.duration_secs) / clip.duration_secs) as f32
+                                                    } else {
+                                                        0.0_f32
+                                                    }
+                                                })
+                                                .unwrap_or(0.0_f32);
+
+                                            // 2. Proyectar la línea vertical a lo largo del ancho del pad
+                                            let playhead_x = slot_rect.min.x + (slot_rect.width() * progress_norm.clamp(0.0, 1.0));
+                                            
+                                            painter.line_segment(
+                                                [
+                                                    pos2(playhead_x, slot_rect.min.y + 2.0),
+                                                    pos2(playhead_x, slot_rect.max.y - 2.0),
+                                                ],
+                                                Stroke::new(1.5_f32, Color32::from_rgb(255, 255, 250)),
+                                            );
+                                        }
 
                                         // 2. BOTÓN CENTRAL (Play / Stop)
                                         let btn_size = Vec2::new(18.0, 18.0);
@@ -647,3 +685,18 @@ fn custom_volume_fader(ui: &mut Ui, volume_val: &mut f32) -> Response {
 
     response
 }
+
+// 3.5. DIBUJAR MINI-PLAYHEAD
+/*
+if slot_state == SlotState::Playing {
+    // Si tienes el progreso normalizado (0.0 a 1.0) desde el transport o clip state:
+    // Por ejemplo, usando una variable progress_norm (0.0..=1.0)
+    let playhead_x = slot_rect.min.x + (slot_rect.width() * progress_norm.clamp(0.0, 1.0));
+    
+    // Dibujar línea vertical brillante (blanca o verde Neón)
+    painter.line_segment(
+        [pos2(playhead_x, slot_rect.min.y + 2.0), pos2(playhead_x, slot_rect.max.y - 2.0)],
+        Stroke::new(1.5, Color32::from_rgb(255, 255, 250)),
+    );
+}
+*/

@@ -1,6 +1,7 @@
 // crates/hikaru_gui/src/views/clip_editor.rs
 use egui::{Align2, Color32, ComboBox, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui};
-use crate::views::matrix::MatrixClip;
+use std::path::PathBuf;
+use crate::views::matrix::{MatrixClip, MatrixSlot, SessionMatrixState};
 use crate::views::waveform;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,7 +125,7 @@ pub fn show(
             ui.separator();
 
             let available_size = ui.available_size();
-            let (rect, response) = ui.allocate_exact_size(available_size, Sense::click_and_drag());
+            let (rect, _response) = ui.allocate_exact_size(available_size, Sense::click_and_drag());
 
             if ui.is_rect_visible(rect) {
                 let total_frames = (clip.duration_secs * sample_rate as f64) as u64;
@@ -332,7 +333,6 @@ pub fn show(
                             total_frames
                         };
                         
-                        // Guard de división por cero
                         let loop_length = active_end.saturating_sub(active_start).max(1);
 
                         let current_frame = if clip.loop_enabled {
@@ -368,7 +368,6 @@ pub fn get_next_sample(clip: &MatrixClip, playhead_frame: u64) -> f32 {
         let end = clip.loop_end.min(total_frames);
         let loop_length = end.saturating_sub(start).max(1);
 
-        // Mapeo directo al rango [loop_start, loop_end] desde el frame 0
         let relative_frame = start + (playhead_frame % loop_length);
         
         clip.pcm_data.get(relative_frame as usize).copied().unwrap_or(0.0)
@@ -379,4 +378,132 @@ pub fn get_next_sample(clip: &MatrixClip, playhead_frame: u64) -> f32 {
             0.0
         }
     }
+}
+
+// ============================================================================
+// FUNCIONES PÚBLICAS REQUERIDAS POR LA VISTA MATRIX Y OTROS MÓDULOS
+// ============================================================================
+
+/// Renderiza la vista detallada del Clip Editor para el slot actualmente seleccionado.
+pub fn render_clip_editor_track_view(
+    ui: &mut Ui,
+    state: &mut SessionMatrixState,
+    dragged_sample: &mut Option<PathBuf>,
+    bpm: f64,
+    sample_rate: u32,
+    transport_sample_count: u64,
+    _ppqn: u64,
+    _global_loop_enabled: bool,
+    _global_loop_start_ticks: u64,
+    _global_loop_end_ticks: u64,
+) {
+    if let Some((track_idx, scene_idx)) = state.selected_slot {
+        // Carga vía Drag & Drop directamente en la matriz
+        if let Some(path) = dragged_sample.take() {
+            load_clip_into_slot(state, track_idx, scene_idx, path, bpm);
+            return;
+        }
+
+        // Acceso al clip activo dentro de la matriz (MatrixSlot -> Option<MatrixClip>)
+        let mut clip_to_show = None;
+
+        if track_idx < state.grid.len() && scene_idx < state.grid[track_idx].len() {
+            clip_to_show = state.grid[track_idx][scene_idx].clip.as_mut();
+        }
+
+        if let Some(clip) = clip_to_show {
+            show(ui, clip, None, sample_rate, bpm as f32);
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.heading("El slot seleccionado está vacío. Arrastrá un archivo de audio aquí.");
+            });
+        }
+    } else {
+        ui.centered_and_justified(|ui| {
+            ui.label("Seleccioná un clip en la Session Matrix para editarlo.");
+        });
+    }
+}
+
+/// Carga un archivo de audio como clip dentro del slot especificado sincronizando la Matrix.
+pub fn load_clip_into_slot(
+    state: &mut SessionMatrixState,
+    track_idx: usize,
+    scene_idx: usize,
+    sample_path: PathBuf,
+    _bpm: f64,
+) {
+    let file_name = sample_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Audio Clip")
+        .to_string();
+
+    let mut clip = MatrixClip {
+        id: track_idx * 1000 + scene_idx,
+        name: file_name.clone(),
+        path: sample_path,
+        duration_secs: 0.0,
+        loop_enabled: true,
+        loop_start: 0,
+        loop_end: 0,
+        pcm_data: Vec::new(),
+        local_track: crate::views::mixer::Track::new(track_idx, format!("Track {}", track_idx + 1), false),
+        local_bar: 0.0,
+        local_state: crate::views::playlist::PlaylistState::default(),
+    };
+
+    // Precarga de samples PCM y límites de loop
+    if let Ok(reader) = hound::WavReader::open(&clip.path) {
+        let spec = reader.spec();
+        let channels = spec.channels as usize;
+        let bits = spec.bits_per_sample;
+
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => {
+                reader.into_samples::<f32>().filter_map(Result::ok).collect()
+            }
+            hound::SampleFormat::Int => {
+                let max_val = if bits <= 16 {
+                    i16::MAX as f32
+                } else {
+                    (1 << (bits - 1)) as f32
+                };
+                reader
+                    .into_samples::<i32>()
+                    .filter_map(Result::ok)
+                    .map(|s| s as f32 / max_val)
+                    .collect()
+            }
+        };
+
+        if !samples.is_empty() {
+            let total_frames = samples.len() / channels.max(1);
+            clip.duration_secs = total_frames as f64 / spec.sample_rate as f64;
+            clip.loop_end = total_frames as u64;
+
+            if channels > 1 {
+                clip.pcm_data = samples
+                    .chunks(channels)
+                    .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
+                    .collect();
+            } else {
+                clip.pcm_data = samples;
+            }
+        }
+    }
+
+    // Asegurar que las dimensiones de la grilla acomoden el slot
+    if track_idx >= state.grid.len() {
+        state.grid.resize(track_idx + 1, Vec::new());
+    }
+    if scene_idx >= state.grid[track_idx].len() {
+        state.grid[track_idx].resize_with(scene_idx + 1, || MatrixSlot {
+            clip: None,
+            state: crate::views::matrix::SlotState::Stopped,
+        });
+    }
+
+    // Asignar el clip al slot de la grilla principal
+    state.grid[track_idx][scene_idx].clip = Some(clip);
 }
