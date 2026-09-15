@@ -139,11 +139,18 @@ pub fn show(
                                     );
 
                                     let is_selected = matrix_state.selected_slot == Some((track_idx, scene_idx));
-                                    let has_clip = matrix_state
-                                        .grid
-                                        .get(track_idx)
-                                        .and_then(|row| row.get(scene_idx))
-                                        .map_or(false, |slot| slot.clip.is_some());
+                                    
+                                    // --- EXTRAER DATOS SIN MANTENER EL BORROW ACTIVO ---
+                                    let (has_clip, slot_state, text_label) = {
+                                        let slot = matrix_state.grid.get(track_idx).and_then(|row| row.get(scene_idx));
+                                        let has_clip = slot.map_or(false, |s| s.clip.is_some());
+                                        let state = slot.map(|s| s.state.clone()).unwrap_or(SlotState::Empty);
+                                        let label = slot
+                                            .and_then(|s| s.clip.as_ref())
+                                            .map(|c| c.name.clone())
+                                            .unwrap_or_default();
+                                        (has_clip, state, label)
+                                    };
 
                                     // --- MENÚ CONTEXTUAL ---
                                     response.context_menu(|ui| {
@@ -217,43 +224,45 @@ pub fn show(
 
                                     if ui.is_rect_visible(slot_rect) {
                                         let painter = ui.painter();
-                                        let slot_info = matrix_state.grid.get(track_idx).and_then(|row| row.get(scene_idx));
 
-                                        let (fill_color, mut border_color, text_label) = match slot_info {
-                                            Some(slot) => match &slot.state {
-                                                SlotState::Playing => (
-                                                    Color32::from_rgb(35, 135, 60),
-                                                    Color32::GREEN,
-                                                    slot.clip.as_ref().map(|c| format!("▶ {}", c.name)).unwrap_or_else(|| "▶ Clip".into()),
-                                                ),
-                                                SlotState::QueuedToPlay => (
-                                                    Color32::from_rgb(120, 100, 30),
-                                                    Color32::YELLOW,
-                                                    slot.clip.as_ref().map(|c| format!("⌛ {}", c.name)).unwrap_or_else(|| "⌛ Clip".into()),
-                                                ),
-                                                SlotState::Stopped => (
-                                                    Color32::from_rgb(45, 55, 75),
-                                                    Color32::from_rgb(90, 130, 190),
-                                                    slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| "[ Empty ]".into()),
-                                                ),
-                                                SlotState::QueuedToStop => (
-                                                    Color32::from_rgb(130, 45, 45),
-                                                    Color32::RED,
-                                                    "⏹ Stop".into(),
-                                                ),
-                                                SlotState::Empty => (
-                                                    if response.hovered() { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 25) },
-                                                    Color32::from_gray(40),
-                                                    "".into(),
-                                                ),
-                                            },
-                                            None => (Color32::from_rgb(25, 25, 25), Color32::from_gray(40), "".into()),
+                                        let (fill_color, mut border_color, clip_name, is_playing) = match slot_state {
+                                            SlotState::Playing => (
+                                                Color32::from_rgb(35, 135, 60),
+                                                Color32::GREEN,
+                                                if text_label.is_empty() { "Clip".into() } else { text_label },
+                                                true,
+                                            ),
+                                            SlotState::QueuedToPlay => (
+                                                Color32::from_rgb(120, 100, 30),
+                                                Color32::YELLOW,
+                                                if text_label.is_empty() { "Clip".into() } else { text_label },
+                                                false,
+                                            ),
+                                            SlotState::Stopped => (
+                                                Color32::from_rgb(45, 55, 75),
+                                                Color32::from_rgb(90, 130, 190),
+                                                text_label,
+                                                false,
+                                            ),
+                                            SlotState::QueuedToStop => (
+                                                Color32::from_rgb(130, 45, 45),
+                                                Color32::RED,
+                                                "Stop".into(),
+                                                false,
+                                            ),
+                                            SlotState::Empty => (
+                                                if response.hovered() { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 25) },
+                                                Color32::from_gray(40),
+                                                "".into(),
+                                                false,
+                                            ),
                                         };
 
                                         if is_selected {
                                             border_color = Color32::WHITE;
                                         }
 
+                                        // Fondo y borde del slot
                                         painter.rect_filled(slot_rect, 2.0, fill_color);
                                         painter.rect_stroke(
                                             slot_rect,
@@ -261,16 +270,54 @@ pub fn show(
                                             Stroke::new(if is_selected { 2.0_f32 } else { 1.0_f32 }, border_color),
                                         );
 
-                                        if !text_label.is_empty() {
-                                            let display_text = if text_label.len() > 14 {
-                                                format!("{}...", &text_label[..11])
+                                        // --- BOTÓN DENTRO DEL PAD (PLAY / STOP) ---
+                                        let btn_size = Vec2::new(18.0, 18.0);
+                                        let btn_rect = Rect::from_center_size(
+                                            pos2(slot_rect.min.x + 14.0, slot_rect.center().y),
+                                            btn_size,
+                                        );
+
+                                        let btn_hovered = ui.rect_contains_pointer(btn_rect);
+
+                                        if has_clip {
+                                            // Renderizar botón dentro del clip slot
+                                            let btn_bg = if btn_hovered { Color32::from_rgb(80, 80, 90) } else { Color32::from_rgb(40, 40, 50) };
+                                            painter.rect_filled(btn_rect, 3.0, btn_bg);
+
+                                            let icon = if is_playing { "⏹" } else { "▶" };
+                                            painter.text(
+                                                btn_rect.center(),
+                                                Align2::CENTER_CENTER,
+                                                icon,
+                                                FontId::proportional(10.0),
+                                                if is_playing { Color32::GREEN } else { Color32::WHITE },
+                                            );
+                                        } else if response.hovered() {
+                                            // Si el slot está vacío y pasamos el mouse, dibujamos un stop de pista
+                                            let btn_bg = if btn_hovered { Color32::from_rgb(100, 40, 40) } else { Color32::from_rgb(50, 30, 30) };
+                                            painter.rect_filled(btn_rect, 3.0, btn_bg);
+                                            painter.text(
+                                                btn_rect.center(),
+                                                Align2::CENTER_CENTER,
+                                                "⏹",
+                                                FontId::proportional(9.0),
+                                                Color32::LIGHT_RED,
+                                            );
+                                        }
+
+                                        // --- TEXTO DEL CLIP ---
+                                        if !clip_name.is_empty() {
+                                            let display_text = if clip_name.len() > 10 {
+                                                format!("{}...", &clip_name[..8])
                                             } else {
-                                                text_label
+                                                clip_name
                                             };
 
+                                            // Offset a la derecha para no pisar el botón
+                                            let text_pos = pos2(slot_rect.min.x + 28.0, slot_rect.center().y);
                                             painter.text(
-                                                slot_rect.center(),
-                                                Align2::CENTER_CENTER,
+                                                text_pos,
+                                                Align2::LEFT_CENTER,
                                                 display_text,
                                                 FontId::proportional(9.0),
                                                 Color32::WHITE,
