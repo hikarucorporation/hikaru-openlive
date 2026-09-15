@@ -581,28 +581,34 @@ fn render_pad(
     let is_selected = state.selected_slot == Some((track_idx, scene_idx));
     let has_clip = slot.clip.is_some();
 
-    let (bg_color, mut border_color, text) = match &slot.state {
-        SlotState::Empty => (Color32::from_gray(25), Color32::from_gray(40), "".to_string()),
-        SlotState::Stopped => (
-            Color32::from_rgb(45, 55, 75),
-            Color32::from_rgb(90, 130, 190),
-            slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
-        ),
-        SlotState::QueuedToPlay => (
-            Color32::from_rgb(120, 100, 30),
-            Color32::YELLOW,
-            format!("⌛ {}", slot.clip.as_ref().map(|c| &c.name).unwrap_or(&"".into())),
-        ),
-        SlotState::Playing => (
-            Color32::from_rgb(35, 135, 60),
-            Color32::GREEN,
-            format!("▶ {}", slot.clip.as_ref().map(|c| &c.name).unwrap_or(&"".into())),
-        ),
-        SlotState::QueuedToStop => (
-            Color32::from_rgb(130, 45, 45),
-            Color32::RED,
-            "⏹ Stop".to_string(),
-        ),
+    let (bg_color, mut border_color, text) = if !has_clip {
+        // Si NO hay clip cargado en el slot, renderizar neutro independientemente de si el estado es Stopped
+        (Color32::from_gray(25), Color32::from_gray(40), "".to_string())
+    } else {
+        // Si SÍ tiene clip, aplicar el color correspondiente según la reproducción
+        match &slot.state {
+            SlotState::Stopped => (
+                Color32::from_rgb(45, 55, 75),
+                Color32::from_rgb(90, 130, 190),
+                slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
+            ),
+            SlotState::QueuedToPlay => (
+                Color32::from_rgb(120, 100, 30),
+                Color32::YELLOW,
+                format!("⌛ {}", slot.clip.as_ref().map(|c| &c.name).unwrap_or(&"".into())),
+            ),
+            SlotState::Playing => (
+                Color32::from_rgb(35, 135, 60),
+                Color32::GREEN,
+                format!("▶ {}", slot.clip.as_ref().map(|c| &c.name).unwrap_or(&"".into())),
+            ),
+            SlotState::QueuedToStop => (
+                Color32::from_rgb(130, 45, 45),
+                Color32::RED,
+                "⏹ Stop".to_string(),
+            ),
+            SlotState::Empty => (Color32::from_gray(25), Color32::from_gray(40), "".to_string()),
+        }
     };
 
     if is_selected {
