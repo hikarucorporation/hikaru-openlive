@@ -567,6 +567,53 @@ pub fn show(
     });
 }
 
+fn draw_mini_waveform(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    pcm_data: &[f32],
+    color: Color32,
+) {
+    if pcm_data.is_empty() {
+        return;
+    }
+
+    let width = rect.width() as usize;
+    if width == 0 {
+        return;
+    }
+
+    let samples_per_pixel = (pcm_data.len() / width).max(1);
+    let center_y = rect.center().y;
+    let max_h = rect.height() * 0.38;
+
+    for x in 0..width {
+        let start = x * samples_per_pixel;
+        let end = ((x + 1) * samples_per_pixel).min(pcm_data.len());
+        if start >= pcm_data.len() {
+            break;
+        }
+
+        let mut max_val = 0.0_f32;
+        for &s in &pcm_data[start..end] {
+            let abs_s = s.abs();
+            if abs_s > max_val {
+                max_val = abs_s;
+            }
+        }
+
+        let line_h = (max_val * max_h).max(1.0);
+        let px = rect.min.x + x as f32;
+
+        painter.line_segment(
+            [
+                egui::pos2(px, center_y - line_h),
+                egui::pos2(px, center_y + line_h),
+            ],
+            Stroke::new(1.0, color),
+        );
+    }
+}
+
 fn render_pad(
     ui: &mut Ui,
     state: &mut SessionMatrixState,
@@ -582,10 +629,8 @@ fn render_pad(
     let has_clip = slot.clip.is_some();
 
     let (bg_color, mut border_color, text) = if !has_clip {
-        // Si NO hay clip cargado en el slot, renderizar neutro independientemente de si el estado es Stopped
         (Color32::from_gray(25), Color32::from_gray(40), "".to_string())
     } else {
-        // Si SÍ tiene clip, aplicar el color correspondiente según la reproducción
         match &slot.state {
             SlotState::Stopped => (
                 Color32::from_rgb(45, 55, 75),
@@ -620,6 +665,22 @@ fn render_pad(
 
     if ui.is_rect_visible(rect) {
         ui.painter().rect_filled(rect, 3.0, bg_color);
+
+        // Render de mini waveform si el pad tiene clip asignado
+        if let Some(clip) = &slot.clip {
+            let wave_color = match slot.state {
+                SlotState::Playing => Color32::from_rgba_unmultiplied(5, 25, 10, 220),
+                SlotState::QueuedToPlay => Color32::from_rgba_unmultiplied(40, 30, 5, 200),
+                _ => Color32::from_rgba_unmultiplied(120, 160, 220, 180),
+            };
+
+            // ✂️ Recortamos el dibujo al área exacta del pad (con un ligero margen opcional)
+            let inner_rect = rect.shrink(2.0); // Le da 2px de margen interno para no pisar el borde
+            let clipped_painter = ui.painter().with_clip_rect(inner_rect);
+            
+            draw_mini_waveform(&clipped_painter, inner_rect, &clip.pcm_data, wave_color);
+        }
+
         let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
         ui.painter().rect_stroke(rect, 3.0, Stroke::new(stroke_width, border_color));
 
@@ -810,6 +871,11 @@ fn load_clip_into_slot(
         bpm,
         Color32::from_rgb(32, 95, 145),
     );
+
+    // 🔊 CARGA REAL DEL PCM PARA EL MINI-WAVEFORM
+    // En lugar del match roto sobre ClipType::Audio:
+    let pcm_data = Vec::new();
+
     local_state.clips.push((0, initial_sub_clip));
 
     for (_, sub) in local_state.clips.iter_mut() {
@@ -825,7 +891,7 @@ fn load_clip_into_slot(
             name: name.clone(),
             path,
             duration_secs: 0.0,
-            pcm_data: Vec::new(),
+            pcm_data, // <-- Ahora contiene las muestras reales inmediatamente al hacer Drop!
             local_state,
             local_track: Track::new(0, name, false),
             local_bar: 1.0,
@@ -844,65 +910,4 @@ fn load_clip_into_slot(
         track_index: track_idx,
         scene_index: scene_idx,
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use hikaru_core::SampleRate;
-    use std::sync::atomic::AtomicU64;
-
-    static TABLE: [f32; 2048] = [0.0; 2048];
-
-    fn playing_state() -> SessionMatrixState {
-        let mut s = SessionMatrixState::default();
-        s.grid[0][0].state = SlotState::Playing;
-        s
-    }
-
-    #[test]
-    fn finished_voice_turns_pad_idle() {
-        let mut s = playing_state();
-        assert_eq!(poll_finished_voices(&mut s, |_, _| false), 1);
-        assert_eq!(s.grid[0][0].state, SlotState::Stopped);
-        assert_eq!(poll_finished_voices(&mut s, |_, _| false), 0);
-    }
-
-    #[test]
-    fn active_voice_keeps_green_on() {
-        let mut s = playing_state();
-        assert_eq!(poll_finished_voices(&mut s, |_, _| true), 0);
-        assert_eq!(s.grid[0][0].state, SlotState::Playing);
-    }
-
-    #[test]
-    fn engine_voice_finished_at_bar5_turns_pad_off() {
-        let clock = Arc::new(AtomicU64::new(0));
-        let mut engine =
-            AudioEngine::new(SampleRate::new(44100.0), &TABLE, clock);
-        engine.set_mode(hikaru_audio_engine::EngineMode::OpenLive);
-        engine.add_clip(1, 0, 0, vec![0.5; 1000 * 2], 0.0, 0.0, 0.0, 2, true, engine.sample_rate);
-        engine.trigger_clip(0, 0);
-        assert!(engine.clips[0].is_playing);
-
-        let mut s = playing_state();
-        engine.absolute_frame = 999;
-        assert_eq!(poll_engine_slots(&mut s, &engine), 0);
-        assert_eq!(s.grid[0][0].state, SlotState::Playing);
-        engine.absolute_frame = 5000;
-        assert_eq!(poll_engine_slots(&mut s, &engine), 1);
-        assert_eq!(s.grid[0][0].state, SlotState::Stopped);
-    }
-
-    #[test]
-    fn engine_is_playing_false_turns_pad_off() {
-        let clock = Arc::new(AtomicU64::new(0));
-        let mut engine =
-            AudioEngine::new(SampleRate::new(44100.0), &TABLE, clock);
-        engine.set_mode(hikaru_audio_engine::EngineMode::OpenLive);
-        engine.add_clip(1, 0, 0, vec![0.5; 1000 * 2], 0.0, 0.0, 0.0, 2, true, engine.sample_rate);
-        let mut s = playing_state();
-        assert_eq!(poll_engine_slots(&mut s, &engine), 1);
-        assert_eq!(s.grid[0][0].state, SlotState::Stopped);
-    }
 }

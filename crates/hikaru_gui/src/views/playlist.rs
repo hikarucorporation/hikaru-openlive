@@ -1,5 +1,5 @@
 /*
- * Hikaru OpenStudio - Playlist / Arrangement View
+ * Hikaru OpenStudio - Playlist / Timeline View
  * License: AGPL-3.0-later
  */
 
