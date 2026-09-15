@@ -6,7 +6,7 @@
 use crate::views::clip_editor;
 
 use egui::{
-    Align2, Button, Color32, CursorIcon, Grid, Frame, RichText, ScrollArea, Sense, Stroke, Ui, Vec2
+    Align2, Button, Color32, CursorIcon, Frame, Grid, RichText, ScrollArea, Sense, Stroke, Ui, Vec2
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,27 +31,23 @@ pub struct MatrixClip {
     pub name: String,
     pub path: PathBuf,
     pub duration_secs: f64,
-    pub pcm_data: Vec<f32>, // <--- ¡Guardamos los samples acá!
+    pub pcm_data: Vec<f32>,
     pub local_state: PlaylistState,
     pub local_track: Track,
     pub local_bar: f32,
-    /// Punto de loop inicial del clip individual (en ticks).
-    /// Lo determina el loopeo visual de la regla (Shift+Drag) sobre el
-    /// clip seleccionado. Independiente del transporte global.
+    /// Punto de loop inicial del clip individual (en muestras/frames o ticks).
     pub loop_start: u64,
-    /// Punto de loop final del clip individual (en ticks).
+    /// Punto de loop final del clip individual (en muestras/frames o ticks).
     pub loop_end: u64,
     /// Si el loop individual del clip está habilitado.
     pub loop_enabled: bool,
 }
 
 impl MatrixClip {
-    /// Longitud del loop individual en ticks (0 si es inválido).
     pub fn loop_length_ticks(&self) -> u64 {
         self.loop_end.saturating_sub(self.loop_start)
     }
 
-    /// Indica si el clip tiene región de loop individual válida.
     pub fn has_valid_clip_loop(&self) -> bool {
         self.loop_enabled && self.loop_end > self.loop_start
     }
@@ -94,6 +90,7 @@ pub struct SessionMatrixState {
     pub selected_slot: Option<(usize, usize)>,
     pub editor_height: f32,
     pub editor_zoom_x: f32,
+    pub show_editor: bool,
 }
 
 impl Default for SessionMatrixState {
@@ -127,6 +124,7 @@ impl Default for SessionMatrixState {
             selected_slot: None,
             editor_height: 220.0,
             editor_zoom_x: 0.04,
+            show_editor: true,
         }
     }
 }
@@ -280,16 +278,9 @@ pub(crate) fn trigger_pad(state: &mut SessionMatrixState, audio_proxy: &AudioPro
                 scene_idx,
             });
         }
-        SlotState::Playing => {
+        SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop => {
             state.grid[track_idx][scene_idx].state = SlotState::Stopped;
 
-            audio_proxy.send(GuiCommand::TriggerClip {
-                track_idx,
-                scene_idx,
-            });
-        }
-        SlotState::QueuedToPlay | SlotState::QueuedToStop => {
-            state.grid[track_idx][scene_idx].state = SlotState::Stopped;
             audio_proxy.send(GuiCommand::TriggerClip {
                 track_idx,
                 scene_idx,
@@ -317,7 +308,6 @@ pub(crate) fn trigger_scene(state: &mut SessionMatrixState, audio_proxy: &AudioP
     audio_proxy.send(GuiCommand::TriggerScene { scene_idx });
 }
 
-/// Recorre los slots reproduciéndose y apaga el estado si la voz fue finalizada.
 pub fn poll_finished_voices<F>(state: &mut SessionMatrixState, is_active: F) -> usize 
 where
     F: Fn(usize, usize) -> bool,
@@ -336,9 +326,6 @@ where
     deactivated
 }
 
-/// Polling directo contra el `AudioEngine`: lee las voces inactivas del
-/// engine sobre el reloj LINEAL (`voice_active`, sin wrap del loop global)
-/// y apaga los slots correspondientes.
 pub fn poll_engine_slots(state: &mut SessionMatrixState, engine: &AudioEngine) -> usize {
     poll_finished_voices(state, |track_idx, scene_idx| {
         engine.voice_active(track_idx, scene_idx)
@@ -371,6 +358,7 @@ pub fn show(
             ui.ctx().request_repaint();
         }
     }
+
     ui.horizontal(|ui| {
         ui.heading("SESSION MATRIX");
         ui.add_space(20.0);
@@ -409,158 +397,173 @@ pub fn show(
     ui.add_space(6.0);
 
     ui.vertical(|ui| {
-        let remaining_height = ui.available_height() - state.editor_height - 10.0;
+        let remaining_height = if state.show_editor {
+            let editor_h = state.editor_height + 10.0;
+            (ui.available_height() - editor_h).max(100.0)
+        } else {
+            ui.available_height()
+        };
 
-        ui.allocate_ui(Vec2::new(ui.available_width(), remaining_height.max(100.0)), |ui| {
-            ScrollArea::both().show(ui, |ui| {
-                Grid::new("bitwig_clip_launcher_grid")
-                    .spacing(Vec2::new(4.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.label("");
-
-                        for scene_idx in 0..state.scenes.len() {
-                            let scene_name = &state.scenes[scene_idx].name;
-                            let scene_btn = Button::new(format!("▶ {}", scene_name))
-                                .fill(Color32::from_rgb(45, 45, 55))
-                                .min_size(Vec2::new(110.0, 28.0));
-
-                            if ui.add(scene_btn).clicked() {
-                                trigger_scene(state, audio_proxy, scene_idx);
-                            }
-                        }
-
-                        if ui.button("➕").on_hover_text("Añadir nueva Escena").clicked() {
-                            state.add_scene();
-                        }
-
-                        ui.end_row();
-
-                        for track_idx in 0..state.tracks.len() {
-                            Frame::none()
-                                .fill(Color32::from_rgb(28, 28, 32))
-                                .stroke(Stroke::new(1.0_f32, Color32::from_gray(45)))
-                                .inner_margin(4.0)
-                                .show(ui, |ui| {
-                                    ui.set_min_size(Vec2::new(126.0, 50.0));
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            let text_width = 70.0_f32;
-                                            ui.add(
-                                                egui::TextEdit::singleline(&mut state.tracks[track_idx].name)
-                                                    .text_color(Color32::WHITE)
-                                                    .font(egui::FontId::proportional(11.0))
-                                                    .frame(false)
-                                                    .desired_width(text_width),
-                                            );
-
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                let solo_btn_text = if state.tracks[track_idx].soloed {
-                                                    RichText::new("S").strong().color(Color32::from_rgb(255, 200, 0))
-                                                } else {
-                                                    RichText::new("S").color(Color32::from_gray(160))
-                                                };
-                                                if ui.toggle_value(&mut state.tracks[track_idx].soloed, solo_btn_text).clicked() {
-                                                    audio_proxy.send(GuiCommand::SetTrackSolo {
-                                                        track_idx,
-                                                        solo: state.tracks[track_idx].soloed,
-                                                    });
-                                                }
-
-                                                let mute_btn_text = if state.tracks[track_idx].muted {
-                                                    RichText::new("M").strong().color(Color32::from_rgb(255, 80, 80))
-                                                } else {
-                                                    RichText::new("M").color(Color32::from_gray(160))
-                                                };
-                                                if ui.toggle_value(&mut state.tracks[track_idx].muted, mute_btn_text).clicked() {
-                                                    audio_proxy.send(GuiCommand::SetTrackMute {
-                                                        track_idx,
-                                                        mute: state.tracks[track_idx].muted,
-                                                    });
-                                                }
-                                            });
-                                        });
-
-                                        ui.add_space(2.0);
-
-                                        ui.horizontal(|ui| {
-                                            playlist::knob_ui(ui, &mut state.tracks[track_idx].pan, 6.0);
-
-                                            let pan_text = if state.tracks[track_idx].pan < -1.0 {
-                                                format!("L{:.0}", state.tracks[track_idx].pan.abs())
-                                            } else if state.tracks[track_idx].pan > 1.0 {
-                                                format!("R{:.0}", state.tracks[track_idx].pan)
-                                            } else {
-                                                "C".to_string()
-                                            };
-                                            ui.label(RichText::new(pan_text).size(9.0).color(Color32::from_rgb(0, 255, 255)));
-
-                                            ui.add_space(2.0);
-
-                                            let slider_width = 38.0_f32;
-                                            playlist::custom_h_slider(ui, &mut state.tracks[track_idx].volume, slider_width);
-
-                                            let db_val = if state.tracks[track_idx].volume <= 0.0 {
-                                                -60.0
-                                            } else if state.tracks[track_idx].volume <= 0.75 {
-                                                -60.0 + (state.tracks[track_idx].volume / 0.75) * 60.0
-                                            } else {
-                                                ((state.tracks[track_idx].volume - 0.75) / 0.25) * 6.0
-                                            };
-                                            ui.label(RichText::new(format!("{:.1}dB", db_val)).size(8.5).weak());
-                                        });
-                                    });
-                                });
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), remaining_height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ScrollArea::both().show(ui, |ui| {
+                    Grid::new("bitwig_clip_launcher_grid")
+                        .spacing(Vec2::new(4.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.label("");
 
                             for scene_idx in 0..state.scenes.len() {
-                                render_pad(ui, state, clipboard, dragged_sample, audio_proxy, track_idx, scene_idx, bpm);
+                                let scene_name = &state.scenes[scene_idx].name;
+                                let scene_btn = Button::new(format!("▶ {}", scene_name))
+                                    .fill(Color32::from_rgb(45, 45, 55))
+                                    .min_size(Vec2::new(110.0, 28.0));
+
+                                if ui.add(scene_btn).clicked() {
+                                    trigger_scene(state, audio_proxy, scene_idx);
+                                }
+                            }
+
+                            if ui.button("➕").on_hover_text("Añadir nueva Escena").clicked() {
+                                state.add_scene();
                             }
 
                             ui.end_row();
-                        }
 
-                        if ui.button("➕ Añadir Pista").clicked() {
-                            state.add_track();
-                        }
-                        ui.end_row();
-                    });
-            });
-        });
+                            for track_idx in 0..state.tracks.len() {
+                                Frame::none()
+                                    .fill(Color32::from_rgb(28, 28, 32))
+                                    .stroke(Stroke::new(1.0_f32, Color32::from_gray(45)))
+                                    .inner_margin(4.0)
+                                    .show(ui, |ui| {
+                                        ui.set_min_size(Vec2::new(126.0, 50.0));
+                                        ui.vertical(|ui| {
+                                            ui.horizontal(|ui| {
+                                                let text_width = 70.0_f32;
+                                                ui.add(
+                                                    egui::TextEdit::singleline(&mut state.tracks[track_idx].name)
+                                                        .text_color(Color32::WHITE)
+                                                        .font(egui::FontId::proportional(11.0))
+                                                        .frame(false)
+                                                        .desired_width(text_width),
+                                                );
 
-        let (resizer_rect, resizer_response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), 6.0),
-            Sense::drag(),
+                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                    let solo_btn_text = if state.tracks[track_idx].soloed {
+                                                        RichText::new("S").strong().color(Color32::from_rgb(255, 200, 0))
+                                                    } else {
+                                                        RichText::new("S").color(Color32::from_gray(160))
+                                                    };
+                                                    if ui.toggle_value(&mut state.tracks[track_idx].soloed, solo_btn_text).clicked() {
+                                                        audio_proxy.send(GuiCommand::SetTrackSolo {
+                                                            track_idx,
+                                                            solo: state.tracks[track_idx].soloed,
+                                                        });
+                                                    }
+
+                                                    let mute_btn_text = if state.tracks[track_idx].muted {
+                                                        RichText::new("M").strong().color(Color32::from_rgb(255, 80, 80))
+                                                    } else {
+                                                        RichText::new("M").color(Color32::from_gray(160))
+                                                    };
+                                                    if ui.toggle_value(&mut state.tracks[track_idx].muted, mute_btn_text).clicked() {
+                                                        audio_proxy.send(GuiCommand::SetTrackMute {
+                                                            track_idx,
+                                                            mute: state.tracks[track_idx].muted,
+                                                        });
+                                                    }
+                                                });
+                                            });
+
+                                            ui.add_space(2.0);
+
+                                            ui.horizontal(|ui| {
+                                                playlist::knob_ui(ui, &mut state.tracks[track_idx].pan, 6.0);
+
+                                                let pan_text = if state.tracks[track_idx].pan < -1.0 {
+                                                    format!("L{:.0}", state.tracks[track_idx].pan.abs())
+                                                } else if state.tracks[track_idx].pan > 1.0 {
+                                                    format!("R{:.0}", state.tracks[track_idx].pan)
+                                                } else {
+                                                    "C".to_string()
+                                                };
+                                                ui.label(RichText::new(pan_text).size(9.0).color(Color32::from_rgb(0, 255, 255)));
+
+                                                ui.add_space(2.0);
+
+                                                let slider_width = 38.0_f32;
+                                                playlist::custom_h_slider(ui, &mut state.tracks[track_idx].volume, slider_width);
+
+                                                let db_val = if state.tracks[track_idx].volume <= 0.0 {
+                                                    -60.0
+                                                } else if state.tracks[track_idx].volume <= 0.75 {
+                                                    -60.0 + (state.tracks[track_idx].volume / 0.75) * 60.0
+                                                } else {
+                                                    ((state.tracks[track_idx].volume - 0.75) / 0.25) * 6.0
+                                                };
+                                                ui.label(RichText::new(format!("{:.1}dB", db_val)).size(8.5).weak());
+                                            });
+                                        });
+                                    });
+
+                                for scene_idx in 0..state.scenes.len() {
+                                    render_pad(ui, state, clipboard, dragged_sample, audio_proxy, track_idx, scene_idx, bpm);
+                                }
+
+                                ui.end_row();
+                            }
+
+                            if ui.button("➕ Añadir Pista").clicked() {
+                                state.add_track();
+                            }
+                            ui.end_row();
+                        });
+                });
+            },
         );
 
-        if resizer_response.hovered() || resizer_response.dragged() {
-            ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeVertical);
-        }
-
-        if resizer_response.dragged() {
-            let delta_y = resizer_response.drag_delta().y;
-            state.editor_height = (state.editor_height - delta_y).clamp(80.0, 500.0);
-        }
-
-        ui.painter().rect_filled(resizer_rect, 0.0, Color32::from_gray(35));
-        if resizer_response.hovered() || resizer_response.dragged() {
-            ui.painter().rect_filled(resizer_rect, 0.0, Color32::from_rgb(0, 255, 255));
-        }
-
-        ui.allocate_ui(Vec2::new(ui.available_width(), state.editor_height), |ui| {
-            render_clip_editor_track_view(
-                ui,
-                state,
-                dragged_sample,
-                audio_proxy,
-                bpm,
-                sample_rate,
-                transport_sample_count,
-                _ppqn,
-                global_loop_enabled,
-                global_loop_start_ticks,
-                global_loop_end_ticks,
-                engine_handle,
+        if state.show_editor {
+            let (resizer_rect, resizer_response) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), 6.0),
+                Sense::drag(),
             );
-        });
+
+            if resizer_response.hovered() || resizer_response.dragged() {
+                ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeVertical);
+            }
+
+            if resizer_response.dragged() {
+                let delta_y = resizer_response.drag_delta().y;
+                state.editor_height = (state.editor_height - delta_y).clamp(80.0, 500.0);
+            }
+
+            ui.painter().rect_filled(resizer_rect, 0.0, Color32::from_gray(35));
+            if resizer_response.hovered() || resizer_response.dragged() {
+                ui.painter().rect_filled(resizer_rect, 0.0, Color32::from_rgb(0, 255, 255));
+            }
+
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), state.editor_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    render_clip_editor_track_view(
+                        ui,
+                        state,
+                        dragged_sample,
+                        audio_proxy,
+                        bpm,
+                        sample_rate,
+                        transport_sample_count,
+                        _ppqn,
+                        global_loop_enabled,
+                        global_loop_start_ticks,
+                        global_loop_end_ticks,
+                        engine_handle,
+                    );
+                },
+            );
+        }
     });
 }
 
@@ -689,7 +692,7 @@ fn render_pad(
 fn render_clip_editor_track_view(
     ui: &mut Ui,
     state: &mut SessionMatrixState,
-    dragged_sample: &mut Option<PathBuf>,
+    _dragged_sample: &mut Option<PathBuf>,
     audio_proxy: &AudioProxy,
     bpm: f64,
     sample_rate: u32,
@@ -730,7 +733,6 @@ fn render_clip_editor_track_view(
                 return;
             };
 
-            // Consultar fotogramas transcurridos en tiempo real al motor de audio
             let elapsed_frames = (|| {
                 let handle = engine_handle?;
                 let engine = handle.try_lock().ok()?;
@@ -741,12 +743,10 @@ fn render_clip_editor_track_view(
                 ui.ctx().request_repaint();
             }
 
-            // 1. Guardar snapshot inicial de los puntos de loop
             let prev_start = slot.loop_start;
             let prev_end = slot.loop_end;
             let prev_enabled = slot.loop_enabled;
 
-            // 2. Renderizar el editor en egui (mutará 'slot' si el usuario arrastra corchetes o presiona Loop)
             clip_editor::show(
                 ui,
                 slot,
@@ -755,7 +755,6 @@ fn render_clip_editor_track_view(
                 bpm as f32,
             );
 
-            // 3. Si hubo algún cambio, enviamos el comando en segundos a audio_proxy
             if prev_start != slot.loop_start || prev_end != slot.loop_end || prev_enabled != slot.loop_enabled {
                 let current_sample_rate = sample_rate.max(1) as f32;
                 let loop_start_secs = slot.loop_start as f32 / current_sample_rate;

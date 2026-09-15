@@ -172,6 +172,7 @@ pub struct HikaruApp {
     pub show_about: bool,
     pub is_recording: bool,
     pub show_explorer: bool,
+    pub show_clip_editor: bool, // <--- Agregar esta línea
     pub explorer_state: explorer::FileExplorerState,
 
     pub audio_settings_state: audio_settings::AudioSettingsState,
@@ -252,6 +253,7 @@ impl HikaruApp {
             show_mixer: false,
             show_dsp_rack: false,
             show_about: false,
+            show_clip_editor: true, // <--- Agregar esta línea (por defecto visible)
 
             audio_settings_state: audio_settings::AudioSettingsState::default(),
             dragged_sample: None,
@@ -450,8 +452,43 @@ impl eframe::App for HikaruApp {
         });
 
         TopBottomPanel::bottom("footer_panel").resizable(false).show(ctx, |ui| {
-            footer::show(ui, self.cpu_usage);
+            footer::show(ui, self.cpu_usage, &mut self.matrix_state.show_editor);
         });
+
+        // Clip Editor Bottom Panel deshabilitado en app.rs para evitar renderizado doble
+        /*
+        if self.show_clip_editor {
+            TopBottomPanel::bottom("clip_editor_panel")
+                .resizable(true)
+                .default_height(220.0)
+                .show(ctx, |ui| {
+                    let track_idx = self.selected_track_index.saturating_sub(1);
+                    let slot_idx = self.selected_slot_index;
+
+                    if let Some(track_slots) = self.matrix_state.grid.get_mut(track_idx) {
+                        if let Some(slot) = track_slots.get_mut(slot_idx) {
+                            if let Some(ref mut clip) = slot.clip {
+                                let elapsed_frames = Some(self.transport.sample_count);
+                                let sample_rate = self.transport.sample_rate.get() as u32;
+                                let bpm = self.transport.bpm as f32;
+
+                                crate::views::clip_editor::show(
+                                    ui,
+                                    clip,
+                                    elapsed_frames,
+                                    sample_rate,
+                                    bpm,
+                                );
+                            } else {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label("No hay un clip cargado en la celda seleccionada.");
+                                });
+                            }
+                        }
+                    }
+                });
+        }
+        */
 
         CentralPanel::default().show(ctx, |ui| {
             let engine_handle = self.engine_handle.clone();
