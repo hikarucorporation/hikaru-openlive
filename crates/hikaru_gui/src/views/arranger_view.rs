@@ -217,39 +217,45 @@ pub fn show(
                                     if ui.is_rect_visible(slot_rect) {
                                         let painter = ui.painter();
 
-                                        let (fill_color, mut border_color, display_text) = match slot_state {
-                                            SlotState::Playing => (
-                                                Color32::from_rgb(35, 135, 60),
-                                                Color32::GREEN,
-                                                if text_label.is_empty() { "Clip".into() } else { text_label },
-                                            ),
-                                            SlotState::QueuedToPlay => (
-                                                Color32::from_rgb(120, 100, 30),
-                                                Color32::YELLOW,
-                                                if text_label.is_empty() { "Clip".into() } else { text_label },
-                                            ),
-                                            SlotState::Stopped => (
-                                                Color32::from_rgb(45, 55, 75),
-                                                Color32::from_rgb(90, 130, 190),
-                                                text_label,
-                                            ),
-                                            SlotState::QueuedToStop => (
-                                                Color32::from_rgb(130, 45, 45),
-                                                Color32::RED,
-                                                "Stop".into(),
-                                            ),
-                                            SlotState::Empty => (
+                                        let (fill_color, mut border_color, display_text) = if !has_clip {
+                                            // Si NO tiene clip (está vacío), mantener neutro gris oscuro sin importar si el estado es Stopped
+                                            (
                                                 if response.hovered() { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 25) },
                                                 Color32::from_gray(40),
                                                 "".into(),
-                                            ),
+                                            )
+                                        } else {
+                                            // Si SÍ tiene clip, colorear según el estado actual de reproducción
+                                            match slot_state {
+                                                SlotState::Playing => (
+                                                    Color32::from_rgb(35, 135, 60),
+                                                    Color32::GREEN,
+                                                    if text_label.is_empty() { "Clip".into() } else { text_label },
+                                                ),
+                                                SlotState::QueuedToPlay => (
+                                                    Color32::from_rgb(120, 100, 30),
+                                                    Color32::YELLOW,
+                                                    if text_label.is_empty() { "Clip".into() } else { text_label },
+                                                ),
+                                                SlotState::Stopped => (
+                                                    Color32::from_rgb(45, 55, 75),
+                                                    Color32::from_rgb(90, 130, 190),
+                                                    text_label,
+                                                ),
+                                                SlotState::QueuedToStop => (
+                                                    Color32::from_rgb(130, 45, 45),
+                                                    Color32::RED,
+                                                    "Stop".into(),
+                                                ),
+                                                SlotState::Empty => (
+                                                    if response.hovered() { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 25) },
+                                                    Color32::from_gray(40),
+                                                    "".into(),
+                                                ),
+                                            }
                                         };
 
-                                        if is_selected {
-                                            border_color = Color32::WHITE;
-                                        }
-
-                                        // Fondo y borde del slot
+                                        // 1. Fondo y borde del slot
                                         painter.rect_filled(slot_rect, 2.0, fill_color);
                                         painter.rect_stroke(
                                             slot_rect,
@@ -257,13 +263,17 @@ pub fn show(
                                             Stroke::new(if is_selected { 2.0_f32 } else { 1.0_f32 }, border_color),
                                         );
 
-                                        // --- BOTÓN DE PLAY / STOP DE CADA SLOT ---
+                                        // 2. BOTÓN CENTRAL (Play / Stop)
                                         let btn_size = Vec2::new(18.0, 18.0);
                                         let btn_rect = Rect::from_center_size(
                                             pos2(slot_rect.min.x + 14.0, slot_rect.center().y),
                                             btn_size,
                                         );
-                                        let btn_hovered = ui.rect_contains_pointer(btn_rect);
+
+                                        // Crear la respuesta interactiva única para el botón central
+                                        let btn_id = ui.make_persistent_id(format!("slot_btn_{}_{}", track_idx, scene_idx));
+                                        let btn_response = ui.interact(btn_rect, btn_id, Sense::click());
+                                        let btn_hovered = btn_response.hovered();
 
                                         if has_clip {
                                             // Dibujar ícono de PLAY (Triángulo)
@@ -296,24 +306,25 @@ pub fn show(
                                             painter.rect_filled(inner_stop, 1.0, Color32::WHITE);
                                         }
 
-                                        // --- MANEJO DE CLICS EN EL SLOT ---
-                                        if response.clicked() && track_idx < matrix_state.grid.len() {
-                                            matrix_state.selected_slot = Some((track_idx, scene_idx));
-                                            
-                                            if !has_clip && btn_hovered {
-                                                // Enviar orden de parada directamente al audio proxy
+                                        // 3. MANEJO DE CLICS (Evaluación estricta y excluyente)
+                                        if btn_response.clicked() && track_idx < matrix_state.grid.len() {
+                                            if !has_clip {
+                                                // Clic directo al botón de STOP -> Detiene sin alterar selected_slot
                                                 audio_proxy.send(GuiCommand::StopTrack { track_idx });
-                                                
-                                                // Marcar la celda actual como detenida
                                                 if let Some(slot) = matrix_state.grid.get_mut(track_idx).and_then(|row| row.get_mut(scene_idx)) {
                                                     slot.state = SlotState::Stopped;
                                                 }
                                             } else {
+                                                // Clic directo al botón de PLAY -> Selecciona y dispara el clip
+                                                matrix_state.selected_slot = Some((track_idx, scene_idx));
                                                 matrix::trigger_pad(matrix_state, audio_proxy, track_idx, scene_idx);
                                             }
+                                        } else if response.clicked() && track_idx < matrix_state.grid.len() {
+                                            // Clic en cualquier otro lugar del pad fuera del botón de Stop -> Solo selecciona
+                                            matrix_state.selected_slot = Some((track_idx, scene_idx));
                                         }
 
-                                        // Texto del nombre del clip
+                                        // 4. Texto del nombre del clip
                                         let text_pos = pos2(slot_rect.min.x + 28.0, slot_rect.center().y);
                                         painter.text(
                                             text_pos,
