@@ -50,7 +50,7 @@
 sudo apt update && sudo apt install -y build-essential pkg-config git libasound2-dev libx11-dev libgl1-mesa-dev
 
 # Clonar y ejecutar
-git clone [https://github.com/hikarucorporation/hikaru-openlive.git](https://github.com/hikarucorporation/hikaru-openlive.git)
+git clone https://github.com/hikarucorporation/hikaru-openlive.git
 cd hikaru-openlive
 cargo run --release -p hikaru_gui
 
