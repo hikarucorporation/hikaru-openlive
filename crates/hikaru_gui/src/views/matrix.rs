@@ -26,24 +26,45 @@ pub enum SlotState {
 }
 
 #[derive(Clone, Debug)]
+pub enum ClipData {
+    Audio {
+        pcm_data: Vec<f32>,
+    },
+    Midi {
+        notes: Vec<(u64, u8, u8, u32)>, // (start_tick, pitch, velocity, duration_ticks)
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct MatrixClip {
     pub id: usize,
     pub name: String,
     pub path: PathBuf,
     pub duration_secs: f64,
-    pub pcm_data: Vec<f32>,
+    pub content: ClipData,
     pub local_state: PlaylistState,
     pub local_track: Track,
     pub local_bar: f32,
-    /// Punto de loop inicial del clip individual (en muestras/frames o ticks).
     pub loop_start: u64,
-    /// Punto de loop final del clip individual (en muestras/frames o ticks).
     pub loop_end: u64,
-    /// Si el loop individual del clip está habilitado.
     pub loop_enabled: bool,
 }
 
 impl MatrixClip {
+    pub fn pcm_data(&self) -> &[f32] {
+        match &self.content {
+            ClipData::Audio { pcm_data } => pcm_data,
+            _ => &[],
+        }
+    }
+
+    pub fn pcm_data_mut(&mut self) -> Option<&mut Vec<f32>> {
+        match &mut self.content {
+            ClipData::Audio { pcm_data } => Some(pcm_data),
+            _ => None,
+        }
+    }
+
     pub fn loop_length_ticks(&self) -> u64 {
         self.loop_end.saturating_sub(self.loop_start)
     }
@@ -609,7 +630,7 @@ fn draw_mini_waveform(
                 egui::pos2(px, center_y - line_h),
                 egui::pos2(px, center_y + line_h),
             ],
-            Stroke::new(1.0, color),
+            Stroke::new(1.0_f32, color),
         );
     }
 }
@@ -623,7 +644,7 @@ fn render_pad(
     track_idx: usize,
     scene_idx: usize,
     bpm: f64,
-    sample_rate: u32,
+    _sample_rate: u32,
     engine_handle: Option<&Arc<Mutex<AudioEngine<'static>>>>,
 ) {
     let slot = &state.grid[track_idx][scene_idx];
@@ -668,28 +689,39 @@ fn render_pad(
     if ui.is_rect_visible(rect) {
         ui.painter().rect_filled(rect, 3.0, bg_color);
 
-        // Render de mini waveform si el pad tiene clip asignado
         if let Some(clip) = &slot.clip {
-            let wave_color = match slot.state {
-                SlotState::Playing => Color32::from_rgba_unmultiplied(5, 25, 10, 220),
-                SlotState::QueuedToPlay => Color32::from_rgba_unmultiplied(40, 30, 5, 200),
-                _ => Color32::from_rgba_unmultiplied(120, 160, 220, 180),
-            };
-
             let inner_rect = rect.shrink(2.0);
             let clipped_painter = ui.painter().with_clip_rect(inner_rect);
-            
-            draw_mini_waveform(&clipped_painter, inner_rect, &clip.pcm_data, wave_color);
 
-            // 📍 DIBUJAR MINI-PLAYHEAD SI ESTÁ EN REPRODUCCIÓN
+            match &clip.content {
+                ClipData::Audio { pcm_data } => {
+                    let wave_color = match slot.state {
+                        SlotState::Playing => Color32::from_rgba_unmultiplied(5, 25, 10, 220),
+                        SlotState::QueuedToPlay => Color32::from_rgba_unmultiplied(40, 30, 5, 200),
+                        _ => Color32::from_rgba_unmultiplied(120, 160, 220, 180),
+                    };
+                    draw_mini_waveform(&clipped_painter, inner_rect, pcm_data, wave_color);
+                }
+                ClipData::Midi { .. } => {
+                    clipped_painter.text(
+                        inner_rect.left_bottom() + egui::vec2(4.0, -4.0),
+                        Align2::LEFT_BOTTOM,
+                        "🎹 MIDI",
+                        egui::FontId::proportional(9.0),
+                        Color32::from_rgb(255, 180, 0),
+                    );
+                }
+            }
+
             if slot.state == SlotState::Playing {
                 let elapsed_frames = engine_handle.and_then(|handle| {
                     handle.try_lock().ok()?.voice_elapsed_frames(track_idx, scene_idx)
                 });
 
+                // ✅ CÓDIGO CORREGIDO:
                 if let Some(frames) = elapsed_frames {
-                    let total_samples = clip.pcm_data.len() as f64;
-                    if total_samples > 0.0 {
+                    let total_samples = clip.pcm_data().len();
+                    if total_samples > 0 {
                         let play_progress = if clip.has_valid_clip_loop() {
                             let loop_len = clip.loop_length_ticks() as f64;
                             if loop_len > 0.0 {
@@ -708,7 +740,7 @@ fn render_pad(
                                 egui::pos2(playhead_x, inner_rect.min.y),
                                 egui::pos2(playhead_x, inner_rect.max.y),
                             ],
-                            Stroke::new(1.5, Color32::WHITE),
+                            Stroke::new(1.5_f32, Color32::WHITE),
                         );
                     }
                 }
@@ -771,7 +803,7 @@ fn render_pad(
 
         if ui.input(|i| i.pointer.any_released()) {
             if let Some(sample_path) = dragged_sample.take() {
-                if crate::views::explorer::is_audio_file(&sample_path) {
+                if crate::views::explorer::is_supported_file(&sample_path) {
                     state.selected_slot = Some((track_idx, scene_idx));
                     load_clip_into_slot(state, audio_proxy, track_idx, scene_idx, sample_path, bpm);
                 }
@@ -781,7 +813,7 @@ fn render_pad(
         let dropped_files = ui.input(|i| i.raw.dropped_files.clone());
         if let Some(file) = dropped_files.first() {
             if let Some(path) = &file.path {
-                if crate::views::explorer::is_audio_file(path) {
+                if crate::views::explorer::is_supported_file(path) {
                     state.selected_slot = Some((track_idx, scene_idx));
                     load_clip_into_slot(state, audio_proxy, track_idx, scene_idx, path.clone(), bpm);
                 }
@@ -829,7 +861,7 @@ fn render_clip_editor_track_view(
                 });
                 ui.separator();
                 ui.centered_and_justified(|ui| {
-                    ui.label("Slot vacío. Arrastrá un sample para crear un Clip.");
+                    ui.label("Slot vacío. Arrastrá un sample o MIDI para crear un Clip.");
                 });
                 return;
             };
@@ -878,7 +910,7 @@ fn load_clip_into_slot(
     track_idx: usize,
     scene_idx: usize,
     path: PathBuf,
-    bpm: f64,
+    _bpm: f64,
 ) {
     let name = path
         .file_stem()
@@ -890,33 +922,16 @@ fn load_clip_into_slot(
     state.next_clip_id += 1;
 
     let path_str = path.to_string_lossy().to_string();
+    let is_midi = crate::views::explorer::is_midi_file(&path);
+
+    let content = if is_midi {
+        ClipData::Midi { notes: Vec::new() }
+    } else {
+        ClipData::Audio { pcm_data: Vec::new() }
+    };
 
     let mut local_state = PlaylistState::default();
     local_state.zoom_x = state.editor_zoom_x;
-
-    let sub_clip_id = local_state.next_clip_id;
-    local_state.next_clip_id += 1;
-    let initial_sub_clip = playlist::build_audio_clip(
-        sub_clip_id,
-        name.clone(),
-        &path,
-        0,
-        local_state.ppqn,
-        bpm,
-        Color32::from_rgb(32, 95, 145),
-    );
-
-    // 🔊 CARGA REAL DEL PCM PARA EL MINI-WAVEFORM
-    // En lugar del match roto sobre ClipType::Audio:
-    let pcm_data = Vec::new();
-
-    local_state.clips.push((0, initial_sub_clip));
-
-    for (_, sub) in local_state.clips.iter_mut() {
-        if let playlist::ClipType::Audio { sample_offset_ticks, .. } = &mut sub.clip_type {
-            *sample_offset_ticks = 0;
-        }
-    }
 
     state.grid[track_idx][scene_idx] = MatrixSlot {
         state: SlotState::Stopped,
@@ -925,7 +940,7 @@ fn load_clip_into_slot(
             name: name.clone(),
             path,
             duration_secs: 0.0,
-            pcm_data, // <-- Ahora contiene las muestras reales inmediatamente al hacer Drop!
+            content,
             local_state,
             local_track: Track::new(0, name, false),
             local_bar: 1.0,
@@ -935,6 +950,7 @@ fn load_clip_into_slot(
         }),
     };
 
+    // Reutilizamos GuiCommand::LoadClip de forma universal
     audio_proxy.send(GuiCommand::LoadClip {
         clip_id: new_id,
         path: path_str,

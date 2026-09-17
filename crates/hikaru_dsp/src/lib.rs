@@ -2,6 +2,9 @@
 
 pub mod synth;
 pub mod effects;
+pub mod plugin_node; // Nuevo módulo para wrappear VST3/CLAP en el DSP Rack
+
+pub use plugin_node::{DspPluginNode, PluginCategory};
 
 #[cfg(test)]
 mod tests {

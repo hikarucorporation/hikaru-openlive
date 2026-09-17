@@ -84,7 +84,7 @@ impl FileExplorerState {
     }
 
     pub fn load_waveform_peaks(&mut self, path: &PathBuf, target_bins: usize) {
-        if self.cached_path.as_ref() == Some(path) && !self.cached_waveform.is_empty() {
+        if is_midi_file(path) {
             return;
         }
 
@@ -223,7 +223,7 @@ pub fn show(
                                 let path = entry.path();
                                 if path.is_dir() {
                                     dirs.push(path);
-                                } else if is_audio_file(&path) {
+                                } else if is_supported_file(&path) {
                                     files.push(path);
                                 }
                             }
@@ -241,27 +241,41 @@ pub fn show(
                             for file in files {
                                 let file_name = file.file_name().unwrap_or_default().to_string_lossy();
                                 let is_selected = state.selected_file.as_ref() == Some(&file);
+                                let is_midi = is_midi_file(&file);
 
-                                let label_text = RichText::new(format!("🎵 {}", file_name))
-                                    .color(if is_selected { Color32::from_rgb(0, 220, 255) } else { Color32::WHITE });
+                                let icon = if is_midi { "🎹" } else { "🎵" };
+                                let label_text = RichText::new(format!("{} {}", icon, file_name))
+                                    .color(if is_selected {
+                                        if is_midi { Color32::from_rgb(255, 180, 0) } else { Color32::from_rgb(0, 220, 255) }
+                                    } else {
+                                        Color32::WHITE
+                                    });
 
                                 let response = ui.add_sized([ui.available_width(), 18.0], egui::SelectableLabel::new(is_selected, label_text));
 
                                 if response.clicked() {
                                     state.selected_file = Some(file.clone());
-                                    state.is_playing_preview = true;
-                                    state.preview_position = 0.0;
 
-                                    if let Some(detected_bpm) = parse_bpm_from_filename(&file_name) {
-                                        state.sample_bpm = detected_bpm;
+                                    if !is_midi {
+                                        // Preview de Audio normal
+                                        state.is_playing_preview = true;
+                                        state.preview_position = 0.0;
+
+                                        if let Some(detected_bpm) = parse_bpm_from_filename(&file_name) {
+                                            state.sample_bpm = detected_bpm;
+                                        }
+
+                                        audio_proxy.send(GuiCommand::SetPreviewVolume(state.preview_volume));
+                                        audio_proxy.send(GuiCommand::PreviewSample {
+                                            path: file.to_string_lossy().to_string(),
+                                            volume: state.preview_volume,
+                                            speed: state.current_speed(project_bpm),
+                                        });
+                                    } else {
+                                        // Si es MIDI, frenamos el preview de audio
+                                        state.is_playing_preview = false;
+                                        audio_proxy.send(GuiCommand::StopPreview);
                                     }
-
-                                    audio_proxy.send(GuiCommand::SetPreviewVolume(state.preview_volume));
-                                    audio_proxy.send(GuiCommand::PreviewSample {
-                                        path: file.to_string_lossy().to_string(),
-                                        volume: state.preview_volume,
-                                        speed: state.current_speed(project_bpm),
-                                    });
                                 }
 
                                 if response.drag_started() {
@@ -413,6 +427,10 @@ pub fn show(
     });
 }
 
+pub fn is_supported_file(path: &PathBuf) -> bool {
+    is_audio_file(path) || is_midi_file(path)
+}
+
 pub fn is_audio_file(path: &PathBuf) -> bool {
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
@@ -422,13 +440,35 @@ pub fn is_audio_file(path: &PathBuf) -> bool {
     }
 }
 
-fn parse_bpm_from_filename(name: &str) -> Option<f32> {
-    let lower = name.to_lowercase();
+pub fn is_midi_file(path: &PathBuf) -> bool {
+    if let Some(ext) = path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        matches!(ext_str.as_str(), "mid" | "midi")
+    } else {
+        false
+    }
+}
+
+pub fn parse_bpm_from_filename(filename: &str) -> Option<f32> {
+    let lower = filename.to_lowercase();
+    
+    // Busca patrones tipo "140bpm", "128 bpm", "95_bpm"
     if let Some(bpm_idx) = lower.find("bpm") {
-        let sub = &lower[..bpm_idx];
-        let parts: Vec<&str> = sub.split(|c: char| !c.is_numeric()).collect();
-        if let Some(last_num) = parts.into_iter().filter(|s| !s.is_empty()).last() {
-            return last_num.parse::<f32>().ok();
+        let prefix = &lower[..bpm_idx];
+        let digits: String = prefix
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '_' || *c == ' ')
+            .collect::<String>()
+            .chars()
+            .rev()
+            .filter(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+
+        if let Ok(bpm) = digits.parse::<f32>() {
+            if (40.0..=300.0).contains(&bpm) {
+                return Some(bpm);
+            }
         }
     }
     None

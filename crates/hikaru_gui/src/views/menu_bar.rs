@@ -107,8 +107,9 @@ pub fn show(ui: &mut Ui, app: &mut HikaruApp) {
             if ui.button("🎹 MIDI Devices...").clicked() {
                 ui.close_menu();
             }
-            if ui.button("🔌 VST3 / CLAP Plugin Paths...").clicked() {
-                ui.close_menu();
+            if ui.button("🔌 External VST3 / CLAP Plugin Settings...").clicked() {
+                app.plugin_settings_state.is_open = true; // <-- Asignar true y cerrar con punto y coma ';'
+                // ui.close_menu();
             }
             ui.separator();
             if ui.button("🎨 Interface & Themes").clicked() {

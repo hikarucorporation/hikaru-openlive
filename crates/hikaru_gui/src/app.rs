@@ -5,22 +5,23 @@
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
 
-use std::path::PathBuf;
-
+use raw_window_handle::HasWindowHandle;
 use egui::{CentralPanel, Color32, RichText, ScrollArea, TopBottomPanel, ViewportBuilder, ViewportId};
 use hikaru_audio_engine::AudioEngine;
 use hikaru_core::SampleRate;
 use hikaru_transport::{TransportPlaybackState, TransportPosition};
 
+// Importamos la API del plugin host para ventanas flotantes
+use hikaru_plugin_host::{spawn_floating_gui, PluginFormat, PluginInstance};
+
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::views::{
-    about, audio_settings, dsp_rack, explorer, footer, header, matrix, menu_bar, mixer, open_wavetable, playlist,
+    about, audio_settings, dsp_rack, explorer, external_plugins_settings, footer, header, matrix, menu_bar, mixer, open_wavetable, playlist,
 };
 
 /// Sincronización bidireccional Matrix ↔ Mixer.
-/// Detecta qué lado cambió (comparando con old_matrix / old_mixer)
-/// y propicia los cambios al otro lado + al engine.
 fn sync_matrix_mixer_bidirectional(
     live_tracks: &mut Vec<mixer::Track>,
     matrix_state: &mut matrix::SessionMatrixState,
@@ -28,20 +29,16 @@ fn sync_matrix_mixer_bidirectional(
     old_mixer: &[(f32, f32, bool, bool)],
     audio_proxy: &AudioProxy,
 ) {
-    // 1. Asegurar que MASTER existe en idx 0
     if live_tracks.is_empty() || !live_tracks[0].is_master {
         live_tracks.insert(0, mixer::Track::new(0, "MASTER".to_string(), true));
     }
     live_tracks[0].matrix_idx = None;
 
-    // 2. Sincronizar cantidad de tracks
     let matrix_len = matrix_state.tracks.len();
 
-    // Mixer tiene más tracks que matrix → quitar exceso
     while live_tracks.len() > matrix_len + 1 {
         live_tracks.pop();
     }
-    // Matrix tiene más tracks que mixer → agregar
     while live_tracks.len() < matrix_len + 1 {
         let idx = live_tracks.len() - 1;
         let mx = &matrix_state.tracks[idx];
@@ -54,7 +51,6 @@ fn sync_matrix_mixer_bidirectional(
         live_tracks.push(t);
     }
 
-    // 3. Sincronizar parámetros por track (matrix ↔ mixer → engine)
     for i in 0..matrix_len {
         let mixer_idx = i + 1;
         if mixer_idx >= live_tracks.len() { break; }
@@ -78,7 +74,6 @@ fn sync_matrix_mixer_bidirectional(
         t.name = mx_name;
         t.matrix_idx = Some(i);
 
-        // VOLUMEN: matrix cambió → mixer; mixer cambió → matrix + engine
         let matrix_changed = (mx_vol - old_mx_vol).abs() > f32::EPSILON;
         let mixer_changed = (t.volume - old_mix_vol).abs() > f32::EPSILON;
         if matrix_changed && !mixer_changed {
@@ -91,7 +86,6 @@ fn sync_matrix_mixer_bidirectional(
             });
         }
 
-        // PAN: matrix cambió → mixer; mixer cambió → matrix + engine
         let matrix_changed = (mx_pan - old_mx_pan).abs() > f32::EPSILON;
         let mixer_changed = (t.pan - old_mix_pan).abs() > f32::EPSILON;
         if matrix_changed && !mixer_changed {
@@ -104,7 +98,6 @@ fn sync_matrix_mixer_bidirectional(
             });
         }
 
-        // MUTE: matrix cambió → mixer + engine; mixer cambió → matrix + engine
         let matrix_changed = mx_muted != old_mx_mute;
         let mixer_changed = t.mute != old_mix_mute;
         if matrix_changed && !mixer_changed {
@@ -121,7 +114,6 @@ fn sync_matrix_mixer_bidirectional(
             });
         }
 
-        // SOLO: matrix cambió → mixer + engine; mixer cambió → matrix + engine
         let matrix_changed = mx_soloed != old_mx_solo;
         let mixer_changed = t.solo != old_mix_solo;
         if matrix_changed && !mixer_changed {
@@ -172,10 +164,13 @@ pub struct HikaruApp {
     pub show_about: bool,
     pub is_recording: bool,
     pub show_explorer: bool,
-    pub show_clip_editor: bool, // <--- Agregar esta línea
+    pub show_clip_editor: bool,
+    pub show_piano_roll: bool,
+    pub piano_roll_state: crate::views::piano_roll::PianoRollState,
     pub explorer_state: explorer::FileExplorerState,
 
     pub audio_settings_state: audio_settings::AudioSettingsState,
+    pub plugin_settings_state: external_plugins_settings::PluginSettingsState,
     pub playlist_state: playlist::PlaylistState,
     pub matrix_state: matrix::SessionMatrixState,
     pub matrix_clipboard: matrix::MatrixClipboard,
@@ -196,6 +191,9 @@ pub struct HikaruApp {
     pub smoothed_master_peak: f32,
 
     pub openlive_view: OpenLiveView,
+
+    /// Almacena las instancias activas de los plugins con ventana flotante nativa abierta
+    pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
 }
 
 impl HikaruApp {
@@ -253,9 +251,12 @@ impl HikaruApp {
             show_mixer: false,
             show_dsp_rack: false,
             show_about: false,
-            show_clip_editor: true, // <--- Agregar esta línea (por defecto visible)
+            show_clip_editor: true,
+            show_piano_roll: false,
+            piano_roll_state: crate::views::piano_roll::PianoRollState::default(),
 
             audio_settings_state: audio_settings::AudioSettingsState::default(),
+            plugin_settings_state: external_plugins_settings::PluginSettingsState::default(),
             dragged_sample: None,
 
             show_explorer: false,
@@ -282,6 +283,20 @@ impl HikaruApp {
             smoothed_track_peaks: [0.0; 16],
             smoothed_master_peak: 0.0,
             openlive_view: OpenLiveView::SessionMatrix,
+            active_external_plugins: Vec::new(),
+        }
+    }
+
+    /// Método para abrir la GUI flotante de un plugin independiente (ej. Vital)
+    pub fn open_plugin_floating_gui(&mut self, path: &Path, format: PluginFormat) {
+        match spawn_floating_gui(path, format) {
+            Ok(plugin_instance) => {
+                println!("[HikaruApp] Plugin cargado y lanzado en ventana flotante: {}", plugin_instance.get_name());
+                self.active_external_plugins.push(plugin_instance);
+            }
+            Err(err) => {
+                eprintln!("[HikaruApp] Error al abrir la GUI flotante del plugin: {}", err);
+            }
         }
     }
 
@@ -306,7 +321,7 @@ impl HikaruApp {
 }
 
 impl eframe::App for HikaruApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if !self.fonts_configured {
             setup_custom_fonts(ctx);
             self.fonts_configured = true;
@@ -452,43 +467,57 @@ impl eframe::App for HikaruApp {
         });
 
         TopBottomPanel::bottom("footer_panel").resizable(false).show(ctx, |ui| {
-            footer::show(ui, self.cpu_usage, &mut self.matrix_state.show_editor);
+            footer::show(
+                ui, 
+                self.cpu_usage, 
+                &mut self.matrix_state.show_editor, 
+                &mut self.show_piano_roll,
+            );
         });
 
-        // Clip Editor Bottom Panel deshabilitado en app.rs para evitar renderizado doble
-        /*
-        if self.show_clip_editor {
-            TopBottomPanel::bottom("clip_editor_panel")
+        if self.show_piano_roll {
+            if let Some((track_idx, scene_idx)) = self.matrix_state.selected_slot {
+                if let Some(slot) = self.matrix_state.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
+                    if let Some(clip) = &mut slot.clip {
+                        if let matrix::ClipData::Midi { notes } = &mut clip.content {
+                            self.piano_roll_state.notes = notes.iter().map(|&(start_tick, pitch, velocity, duration_ticks)| {
+                                crate::views::piano_roll::MidiNote {
+                                    pitch,
+                                    start_tick,
+                                    duration_ticks: duration_ticks as u64,
+                                    velocity,
+                                }
+                            }).collect();
+                        } else {
+                            self.piano_roll_state.notes.clear();
+                        }
+                    } else {
+                        self.piano_roll_state.notes.clear();
+                    }
+                }
+            } else {
+                self.piano_roll_state.notes.clear();
+            }
+
+            TopBottomPanel::bottom("piano_roll_panel")
                 .resizable(true)
-                .default_height(220.0)
+                .default_height(280.0)
                 .show(ctx, |ui| {
-                    let track_idx = self.selected_track_index.saturating_sub(1);
-                    let slot_idx = self.selected_slot_index;
+                    crate::views::piano_roll::show(ui, &mut self.piano_roll_state);
+                });
 
-                    if let Some(track_slots) = self.matrix_state.grid.get_mut(track_idx) {
-                        if let Some(slot) = track_slots.get_mut(slot_idx) {
-                            if let Some(ref mut clip) = slot.clip {
-                                let elapsed_frames = Some(self.transport.sample_count);
-                                let sample_rate = self.transport.sample_rate.get() as u32;
-                                let bpm = self.transport.bpm as f32;
-
-                                crate::views::clip_editor::show(
-                                    ui,
-                                    clip,
-                                    elapsed_frames,
-                                    sample_rate,
-                                    bpm,
-                                );
-                            } else {
-                                ui.centered_and_justified(|ui| {
-                                    ui.label("No hay un clip cargado en la celda seleccionada.");
-                                });
-                            }
+            if let Some((track_idx, scene_idx)) = self.matrix_state.selected_slot {
+                if let Some(slot) = self.matrix_state.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
+                    if let Some(clip) = &mut slot.clip {
+                        if let matrix::ClipData::Midi { notes } = &mut clip.content {
+                            *notes = self.piano_roll_state.notes.iter().map(|n| {
+                                (n.start_tick, n.pitch, n.velocity, n.duration_ticks as u32)
+                            }).collect();
                         }
                     }
-                });
+                }
+            }
         }
-        */
 
         CentralPanel::default().show(ctx, |ui| {
             let engine_handle = self.engine_handle.clone();
@@ -625,8 +654,8 @@ impl eframe::App for HikaruApp {
                     .with_title("Hikaru Mixer")
                     .with_inner_size([800.0, 450.0])
                     .with_min_inner_size([300.0, 250.0]),
-                |ctx, _class| {
-                    CentralPanel::default().show(ctx, |ui| {
+                |vp_ctx, _class| {
+                    CentralPanel::default().show(vp_ctx, |ui| {
                         let active_tracks = match self.mode {
                             AppMode::OpenLive => &mut self.live_tracks,
                             AppMode::OpenStudio => &mut self.studio_tracks,
@@ -669,8 +698,8 @@ impl eframe::App for HikaruApp {
                     .with_title("DSP FX Rack")
                     .with_inner_size([400.0, 500.0])
                     .with_min_inner_size([250.0, 250.0]),
-                |ctx, _class| {
-                    CentralPanel::default().show(ctx, |ui| {
+                |vp_ctx, _class| {
+                    CentralPanel::default().show(vp_ctx, |ui| {
                         let active_tracks = match self.mode {
                             AppMode::OpenLive => &mut self.live_tracks,
                             AppMode::OpenStudio => &mut self.studio_tracks,
@@ -703,12 +732,12 @@ impl eframe::App for HikaruApp {
                             .with_title(viewport_title)
                             .with_inner_size([750.0, 520.0])
                             .with_min_inner_size([350.0, 300.0]),
-                        |ctx, _class| {
-                            if ctx.input(|i| i.viewport().close_requested()) {
+                        |vp_ctx, _class| {
+                            if vp_ctx.input(|i| i.viewport().close_requested()) {
                                 slot.is_open = false;
                             }
 
-                            CentralPanel::default().show(ctx, |ui| {
+                            CentralPanel::default().show(vp_ctx, |ui| {
                                 open_wavetable::show(
                                     ui,
                                     &mut slot.wavetable_oscillators,
@@ -736,12 +765,12 @@ impl eframe::App for HikaruApp {
                     .with_title(about_title)
                     .with_inner_size([380.0, 300.0])
                     .with_resizable(false),
-                |ctx, _class| {
-                    if ctx.input(|i| i.viewport().close_requested()) {
+                |vp_ctx, _class| {
+                    if vp_ctx.input(|i| i.viewport().close_requested()) {
                         self.show_about = false;
                     }
 
-                    CentralPanel::default().show(ctx, |ui| {
+                    CentralPanel::default().show(vp_ctx, |ui| {
                         about::show(ui, self.mode);
                     });
                 },
@@ -755,13 +784,38 @@ impl eframe::App for HikaruApp {
                     .with_title("Audio Setup (JACK / ALSA / PipeWire)")
                     .with_inner_size([440.0, 320.0])
                     .with_resizable(false),
-                |ctx, _class| {
-                    if ctx.input(|i| i.viewport().close_requested()) {
+                |vp_ctx, _class| {
+                    if vp_ctx.input(|i| i.viewport().close_requested()) {
                         self.audio_settings_state.is_open = false;
                     }
 
-                    CentralPanel::default().show(ctx, |ui| {
+                    CentralPanel::default().show(vp_ctx, |ui| {
                         audio_settings::show(ui, &mut self.audio_settings_state);
+                    });
+                },
+            );
+        }
+
+        if self.plugin_settings_state.is_open {
+            let window_handle = frame.window_handle().ok().map(|h| h.as_raw());
+
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("hikaru_plugin_settings_viewport"),
+                ViewportBuilder::default()
+                    .with_title("VST3 / CLAP Plugin Settings")
+                    .with_inner_size([520.0, 380.0])
+                    .with_resizable(true),
+                |vp_ctx, _class| {
+                    if vp_ctx.input(|i| i.viewport().close_requested()) {
+                        self.plugin_settings_state.is_open = false;
+                    }
+
+                    CentralPanel::default().show(vp_ctx, |_ui| {
+                        external_plugins_settings::render(
+                            vp_ctx,
+                            &mut self.plugin_settings_state,
+                            window_handle,
+                        );
                     });
                 },
             );

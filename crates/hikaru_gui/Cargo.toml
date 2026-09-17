@@ -9,9 +9,13 @@ license = "AGPL-3.0-later"
 hikaru_core = { path = "../hikaru_core" }
 hikaru_audio_engine = { path = "../hikaru_audio_engine" }
 hikaru_transport = { path = "../hikaru_transport" }
+hikaru_plugin_host = { path = "../hikaru_plugin_host" }
 egui = "0.27.0"
 eframe = { version = "0.27.2", features = ["wgpu"] }
 hound = "3.5"
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
+raw-window-handle = "0.6.2"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+rfd = "0.15"

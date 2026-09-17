@@ -1,7 +1,7 @@
 // crates/hikaru_gui/src/views/clip_editor.rs
 use egui::{Align2, Color32, ComboBox, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui};
 use std::path::PathBuf;
-use crate::views::matrix::{MatrixClip, MatrixSlot, SessionMatrixState};
+use crate::views::matrix::{ClipData, MatrixClip, MatrixSlot, SessionMatrixState};
 use crate::views::waveform;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,7 +49,7 @@ pub fn show(
     bpm: f32,
 ) {
     // 1. Decodificación PCM limpia
-    if clip.pcm_data.is_empty() && clip.path.exists() {
+    if clip.pcm_data().is_empty() && clip.path.exists() {
         if let Ok(reader) = hound::WavReader::open(&clip.path) {
             let spec = reader.spec();
             let channels = spec.channels as usize;
@@ -77,13 +77,17 @@ pub fn show(
                 let total_frames = samples.len() / channels.max(1);
                 clip.duration_secs = total_frames as f64 / spec.sample_rate as f64;
                 
-                if channels > 1 {
-                    clip.pcm_data = samples
+                let processed_pcm = if channels > 1 {
+                    samples
                         .chunks(channels)
                         .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
-                        .collect();
+                        .collect()
                 } else {
-                    clip.pcm_data = samples;
+                    samples
+                };
+
+                if let Some(pcm) = clip.pcm_data_mut() {
+                    *pcm = processed_pcm;
                 }
             }
         }
@@ -225,8 +229,8 @@ pub fn show(
                 };
 
                 // LAYER 4: Waveform
-                if !clip.pcm_data.is_empty() {
-                    waveform::draw_waveform(ui, wave_rect, &clip.pcm_data, Color32::from_rgb(0, 200, 255));
+                if !clip.pcm_data().is_empty() {
+                    waveform::draw_waveform(ui, wave_rect, clip.pcm_data(), Color32::from_rgb(0, 200, 255));
                 }
 
                 // LAYER 5: Independent Interactive Bracket Handles
@@ -357,11 +361,12 @@ pub fn show(
 }
 
 pub fn get_next_sample(clip: &MatrixClip, playhead_frame: u64) -> f32 {
-    if clip.pcm_data.is_empty() {
+    let pcm = clip.pcm_data();
+    if pcm.is_empty() {
         return 0.0;
     }
 
-    let total_frames = clip.pcm_data.len() as u64;
+    let total_frames = pcm.len() as u64;
 
     if clip.has_valid_clip_loop() {
         let start = clip.loop_start.min(total_frames);
@@ -370,10 +375,10 @@ pub fn get_next_sample(clip: &MatrixClip, playhead_frame: u64) -> f32 {
 
         let relative_frame = start + (playhead_frame % loop_length);
         
-        clip.pcm_data.get(relative_frame as usize).copied().unwrap_or(0.0)
+        pcm.get(relative_frame as usize).copied().unwrap_or(0.0)
     } else {
         if playhead_frame < total_frames {
-            clip.pcm_data[playhead_frame as usize]
+            pcm[playhead_frame as usize]
         } else {
             0.0
         }
@@ -391,7 +396,7 @@ pub fn render_clip_editor_track_view(
     dragged_sample: &mut Option<PathBuf>,
     bpm: f64,
     sample_rate: u32,
-    transport_sample_count: u64,
+    _transport_sample_count: u64,
     _ppqn: u64,
     _global_loop_enabled: bool,
     _global_loop_start_ticks: u64,
@@ -447,7 +452,7 @@ pub fn load_clip_into_slot(
         loop_enabled: true,
         loop_start: 0,
         loop_end: 0,
-        pcm_data: Vec::new(),
+        content: ClipData::Audio { pcm_data: Vec::new() },
         local_track: crate::views::mixer::Track::new(track_idx, format!("Track {}", track_idx + 1), false),
         local_bar: 0.0,
         local_state: crate::views::playlist::PlaylistState::default(),
@@ -482,13 +487,17 @@ pub fn load_clip_into_slot(
             clip.duration_secs = total_frames as f64 / spec.sample_rate as f64;
             clip.loop_end = total_frames as u64;
 
-            if channels > 1 {
-                clip.pcm_data = samples
+            let processed_pcm = if channels > 1 {
+                samples
                     .chunks(channels)
                     .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
-                    .collect();
+                    .collect()
             } else {
-                clip.pcm_data = samples;
+                samples
+            };
+
+            if let Some(pcm) = clip.pcm_data_mut() {
+                *pcm = processed_pcm;
             }
         }
     }

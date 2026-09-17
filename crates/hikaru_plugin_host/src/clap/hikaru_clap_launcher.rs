@@ -1,35 +1,386 @@
+// Copyright (C) Hikaru Corporation - 2026
+// Hikaru Clap Launcher
+// GNU Lesser General Public License v3
 // crates/hikaru_plugin_host/src/clap/hikaru_clap_launcher.rs
 
 use crate::PluginInstance;
+use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, HostGuiImpl, PluginGui, Window};
+use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
+use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
+use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
+use clack_host::prelude::*;
 use hikaru_core::AudioBuffer;
+use raw_window_handle::RawWindowHandle;
 use std::path::Path;
+use std::sync::Mutex;
+
+#[cfg(target_os = "linux")]
+use crate::platform::linux::X11Connection;
+
+struct HikaruShared {
+    log_to_stdout: bool,
+}
+
+impl<'a> SharedHandler<'a> for HikaruShared {
+    fn request_restart(&self) {
+        eprintln!("[CLAP Host] Plugin request_restart");
+    }
+    fn request_process(&self) {}
+    fn request_callback(&self) {}
+}
+
+impl HostLogImpl for HikaruShared {
+    fn log(&self, severity: LogSeverity, message: &str) {
+        if self.log_to_stdout {
+            match severity {
+                LogSeverity::Info => println!("[CLAP Plugin] {}", message),
+                LogSeverity::Warning => eprintln!("[CLAP Plugin Warning] {}", message),
+                LogSeverity::Error => eprintln!("[CLAP Plugin Error] {}", message),
+                LogSeverity::Debug => eprintln!("[CLAP Plugin Debug] {}", message),
+                _ => eprintln!("[CLAP Plugin Log] {}", message),
+            }
+        }
+    }
+}
+
+impl HostGuiImpl for HikaruShared {
+    fn resize_hints_changed(&self) {}
+    fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
+        println!(
+            "[CLAP Host] Plugin requests resize to {}x{}",
+            new_size.width, new_size.height
+        );
+        Ok(())
+    }
+    fn request_show(&self) -> Result<(), HostError> {
+        println!("[CLAP Host] Plugin requests show");
+        Ok(())
+    }
+    fn request_hide(&self) -> Result<(), HostError> {
+        println!("[CLAP Host] Plugin requests hide");
+        Ok(())
+    }
+    fn closed(&self, was_destroyed: bool) {
+        println!(
+            "[CLAP Host] GUI closed (was_destroyed={})",
+            was_destroyed
+        );
+    }
+}
+
+struct HikaruMainThread<'a> {
+    #[allow(dead_code)]
+    shared: &'a HikaruShared,
+    timers: Mutex<Vec<TimerId>>,
+}
+
+impl<'a> MainThreadHandler<'a> for HikaruMainThread<'a> {}
+
+impl HostTimerImpl for HikaruMainThread<'_> {
+    fn register_timer(&self, period_ms: u32) -> Result<TimerId, HostError> {
+        let id = TimerId(period_ms);
+        if let Ok(mut timers) = self.timers.lock() {
+            timers.push(id);
+        }
+        println!("[CLAP Host] Timer registered: {}ms", period_ms);
+        Ok(id)
+    }
+
+    fn unregister_timer(&self, timer_id: TimerId) -> Result<(), HostError> {
+        if let Ok(mut timers) = self.timers.lock() {
+            timers.retain(|t| *t != timer_id);
+        }
+        println!("[CLAP Host] Timer unregistered: {:?}", timer_id);
+        Ok(())
+    }
+}
+
+impl HostPosixFdImpl for HikaruMainThread<'_> {
+    fn register_fd(&self, fd: std::os::unix::io::RawFd, flags: FdFlags) -> Result<(), HostError> {
+        println!("[CLAP Host] POSIX FD registered: fd={}, flags={:?}", fd, flags);
+        Ok(())
+    }
+
+    fn modify_fd(&self, fd: std::os::unix::io::RawFd, flags: FdFlags) -> Result<(), HostError> {
+        println!("[CLAP Host] POSIX FD modified: fd={}, flags={:?}", fd, flags);
+        Ok(())
+    }
+
+    fn unregister_fd(&self, fd: std::os::unix::io::RawFd) -> Result<(), HostError> {
+        println!("[CLAP Host] POSIX FD unregistered: fd={}", fd);
+        Ok(())
+    }
+}
+
+struct HikaruClapHost;
+
+impl HostHandlers for HikaruClapHost {
+    type Shared<'a> = HikaruShared;
+    type MainThread<'a> = HikaruMainThread<'a>;
+    type AudioProcessor<'a> = ();
+
+    fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
+        builder
+            .register::<HostLog>()
+            .register::<HostGui>()
+            .register::<HostTimer>()
+            .register::<HostPosixFd>();
+    }
+}
 
 pub struct ClapInstance {
     name: String,
-    // Instancia de clack_host::instance::PluginInstance
+    plugin: clack_host::plugin::PluginInstance<HikaruClapHost>,
+    gui: Option<PluginGui>,
+    window_attached: bool,
+    #[cfg(target_os = "linux")]
+    _x11_conn: Option<X11Connection>,
 }
+
+unsafe impl Send for ClapInstance {}
 
 impl ClapInstance {
     pub fn load(path: &Path) -> Result<Self, String> {
-        // Lógica de carga CLAP:
-        // 1. Cargar .so
-        // 2. Obtener la factory
-        // 3. Crear instancia
+        println!("[CLAP] Cargando '{}'...", path.display());
+
+        let entry = unsafe { PluginEntry::load(path) }
+            .map_err(|e| format!("[CLAP] Fallo al cargar entry: {}", e))?;
+
+        let plugin_factory = entry
+            .get_plugin_factory()
+            .ok_or("[CLAP] Entry no tiene plugin factory")?;
+
+        let plugin_count = plugin_factory.plugin_count();
+        if plugin_count == 0 {
+            return Err("[CLAP] Factory sin plugins".into());
+        }
+
+        let desc = plugin_factory
+            .plugin_descriptors()
+            .next()
+            .ok_or("[CLAP] Sin descriptor")?;
+
+        let plugin_id = desc.id().ok_or("[CLAP] Descriptor sin id")?;
+        let plugin_name = desc
+            .name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+
+        println!(
+            "[CLAP] Plugin: '{}' (id={})",
+            plugin_name,
+            plugin_id.to_string_lossy()
+        );
+
+        let host_info = HostInfo::new("Hikaru", "Hikaru Corporation", "https://hikaru.dev", "0.1.0")
+            .map_err(|e| format!("[CLAP] HostInfo: {}", e))?;
+
+        let plugin = clack_host::plugin::PluginInstance::<HikaruClapHost>::new(
+            |_| HikaruShared { log_to_stdout: true },
+            |shared| HikaruMainThread {
+                shared,
+                timers: Mutex::new(Vec::new()),
+            },
+            &entry,
+            plugin_id,
+            &host_info,
+        )
+        .map_err(|e| format!("[CLAP] Instantiation failed: {:?}", e))?;
+
+        println!("[CLAP] Plugin instanciado OK");
+
+        let shared_handle = plugin.plugin_shared_handle();
+
+        let gui = shared_handle.get_extension::<PluginGui>();
+
+        if gui.is_some() {
+            println!("[CLAP] GUI extension disponible para '{}'", plugin_name);
+        } else {
+            println!(
+                "[CLAP] '{}' no tiene GUI extension",
+                plugin_name
+            );
+        }
+
         Ok(Self {
-            name: path.file_name().unwrap().to_string_lossy().into(),
+            name: plugin_name,
+            plugin,
+            gui,
+            window_attached: false,
+            #[cfg(target_os = "linux")]
+            _x11_conn: None,
         })
     }
 }
 
 impl PluginInstance for ClapInstance {
-    fn process(&mut self, _buffer: &mut AudioBuffer) {
-        // Procesamiento CLAP con clack-host
+    fn process(&mut self, _buffer: &mut AudioBuffer) {}
+
+    fn show_gui_embedded(&mut self, handle: RawWindowHandle) {
+        let Some(gui) = &self.gui else {
+            eprintln!(
+                "[CLAP] '{}' sin GUI extension — no se puede embebir",
+                self.name
+            );
+            return;
+        };
+
+        let mut plugin_handle = self.plugin.plugin_handle();
+
+        // Step 1: Create the parent X11 window BEFORE gui.create() / gui.set_parent()
+        // The window must exist and be mapped when DPF's pugl realizes the view.
+        #[cfg(target_os = "linux")]
+        let (window_id, x11_conn) = {
+            match crate::platform::linux::get_or_create_x11_window(handle, 800, 600) {
+                Ok((wid, conn)) => (wid, conn),
+                Err(e) => {
+                    eprintln!("[CLAP] Failed to create X11 parent window: {}", e);
+                    return;
+                }
+            }
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        let window_id = match handle {
+            RawWindowHandle::Xlib(h) => h.window as u32,
+            RawWindowHandle::Xcb(h) => h.window.get().into(),
+            _ => {
+                eprintln!("[CLAP] Unsupported window handle: {:?}", handle);
+                return;
+            }
+        };
+
+        // Step 2: Create the GUI (DPF only allocates ClapUI object, no X11 yet)
+        let config = GuiConfiguration {
+            api_type: GuiApiType::X11,
+            is_floating: false,
+        };
+
+        if let Err(e) = gui.create(&mut plugin_handle, config) {
+            eprintln!("[CLAP] gui.create(embedded) failed: {:?}", e);
+
+            // Fallback: try floating mode (plugin creates own window)
+            let floating_config = GuiConfiguration {
+                api_type: GuiApiType::X11,
+                is_floating: true,
+            };
+
+            let _ = gui.destroy(&mut plugin_handle);
+            if let Err(e2) = gui.create(&mut plugin_handle, floating_config) {
+                eprintln!("[CLAP] gui.create(floating) also failed: {:?}", e2);
+                return;
+            }
+            println!("[CLAP] Usando modo flotante como fallback para '{}'", self.name);
+
+            // Show floating window
+            if let Err(e) = gui.show(&mut plugin_handle) {
+                eprintln!("[CLAP] gui.show(floating) failed: {:?}", e);
+                let _ = gui.destroy(&mut plugin_handle);
+                return;
+            }
+
+            self.window_attached = true;
+            println!("[CLAP] GUI '{}' abierta OK (flotante)", self.name);
+            return;
+        }
+
+        // Step 3: Set parent window — THIS is where DPF/pugl creates the X11 window
+        // The parent window must already exist and be mapped on the X server.
+        let parent_window = Window::from_x11_handle(window_id as std::ffi::c_ulong);
+
+        if let Err(e) = unsafe { gui.set_parent(&mut plugin_handle, parent_window) } {
+            eprintln!("[CLAP] gui.set_parent() failed: {:?}", e);
+            let _ = gui.destroy(&mut plugin_handle);
+            return;
+        }
+
+        println!(
+            "[CLAP] Parent window {} set for '{}'",
+            window_id, self.name
+        );
+
+        // Step 4: Show the GUI
+        if let Err(e) = gui.show(&mut plugin_handle) {
+            eprintln!("[CLAP] gui.show() failed: {:?}", e);
+            let _ = gui.destroy(&mut plugin_handle);
+            return;
+        }
+
+        self.window_attached = true;
+
+        // Store the X11 connection to keep the parent window alive
+        #[cfg(target_os = "linux")]
+        {
+            self._x11_conn = x11_conn;
+        }
+
+        println!("[CLAP] GUI '{}' abierta OK", self.name);
     }
 
-    fn show_gui(&mut self, _handle: raw_window_handle::RawWindowHandle) {
-        // CLAP tiene una extensión de GUI muy limpia
+    fn show_gui_floating(&mut self) -> Result<(), String> {
+        let Some(gui) = &self.gui else {
+            return Err(format!("[CLAP] '{}' sin GUI", self.name));
+        };
+
+        let mut plugin_handle = self.plugin.plugin_handle();
+
+        let config = GuiConfiguration {
+            api_type: GuiApiType::X11,
+            is_floating: true,
+        };
+
+        gui.create(&mut plugin_handle, config)
+            .map_err(|e| format!("[CLAP] gui.create(floating) failed: {:?}", e))?;
+
+        gui.show(&mut plugin_handle)
+            .map_err(|e| format!("[CLAP] gui.show(floating) failed: {:?}", e))?;
+
+        self.window_attached = true;
+        Ok(())
     }
 
-    fn hide_gui(&mut self) { /* ... */ }
-    fn get_name(&self) -> &str { &self.name }
+    fn hide_gui(&mut self) {
+        if self.window_attached {
+            if let Some(gui) = &self.gui {
+                let mut plugin_handle = self.plugin.plugin_handle();
+                let _ = gui.hide(&mut plugin_handle);
+                let _ = gui.destroy(&mut plugin_handle);
+            }
+            self.window_attached = false;
+            // Drop X11 connection (destroys the parent window)
+            #[cfg(target_os = "linux")]
+            {
+                self._x11_conn = None;
+            }
+        }
+    }
+
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_gui_size(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    fn resize_gui(&mut self, width: u32, height: u32) {
+        if let Some(gui) = &self.gui {
+            let mut plugin_handle = self.plugin.plugin_handle();
+            // Only call set_size if the plugin supports resizing
+            if gui.can_resize(&plugin_handle) {
+                let _ = gui.set_size(&mut plugin_handle, GuiSize { width, height });
+            }
+        }
+    }
+}
+
+impl Drop for ClapInstance {
+    fn drop(&mut self) {
+        self.hide_gui();
+    }
 }

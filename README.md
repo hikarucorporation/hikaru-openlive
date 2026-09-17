@@ -1,4 +1,4 @@
-# Hikaru OpenStudio
+# Hikaru OpenLive
 
 > DAW modular, libre y multiplataforma escrito en Rust. Tiempo real, baja latencia y UI inmediata.
 
@@ -8,7 +8,7 @@
 [![GUI: egui](https://img.shields.io/badge/GUI-egui%200.27-ff4154.svg)](https://github.com/emilk/egui)
 [![Audio: CPAL](https://img.shields.io/badge/Audio-CPAL%200.18-green.svg)](https://github.com/RustAudio/cpal)
 
-**Hikaru OpenStudio** es una estación de trabajo de audio digital (DAW) de código abierto y multiplataforma (Linux, Windows y FreeBSD) escrita en Rust enfocado en:
+**Hikaru OpenLive** es una estación de trabajo de audio digital (DAW) de código abierto y multiplataforma (Linux, Windows y FreeBSD) escrita en Rust enfocado en:
 
 - **Rendimiento en tiempo real** sin allocations ni bloqueos en el hilo de audio.
 - **UI inmediata con `egui`** — Session View por escenas, Mixer Rack flotante y editor de clips.
@@ -18,7 +18,7 @@
 
 ## Vista Previa
 
-![Hikaru OpenStudio UI Preview](assets/screenshots/preview.png)
+![Hikaru OpenLive UI Preview](assets/screenshots/preview.png)
 
 *Session Matrix disparando escenas, File Explorer integrado con preview de samples, Clip Track Editor y Mixer Rack con vúmetros en tiempo real.*
 
@@ -42,8 +42,8 @@
 sudo apt update && sudo apt install -y build-essential pkg-config git libasound2-dev libx11-dev libgl1-mesa-dev
 
 # 2. Clonar y ejecutar
-git clone https://github.com/hikarucorporation/hikaru-openstudio.git
-cd hikaru-openstudio
+git clone https://github.com/hikarucorporation/hikaru-openlive.git
+cd hikaru-openlive
 cargo run --release -p hikaru_gui
 
 ```
@@ -52,7 +52,7 @@ cargo run --release -p hikaru_gui
 
 ## Compilación Cruzada para Windows (Cross-compilation)
 
-Hikaru OpenStudio puede compilarse directamente desde Linux para generar el ejecutable nativo de Windows (`.exe`) utilizando el target GNU de Rust.
+Hikaru OpenLive puede compilarse directamente desde Linux para generar el ejecutable nativo de Windows (`.exe`) utilizando el target GNU de Rust.
 
 ### Requisitos previos
 

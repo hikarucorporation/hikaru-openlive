@@ -524,7 +524,7 @@ fn load_clip_into_arranger_slot(
             name: name.clone(),
             path,
             duration_secs: 0.0,
-            pcm_data: Vec::new(),
+            content: matrix::ClipData::Audio { pcm_data: Vec::new() }, // <-- CAMBIO AQUÍ
             local_state,
             local_track: mixer::Track::new(0, name, false),
             local_bar: 1.0,

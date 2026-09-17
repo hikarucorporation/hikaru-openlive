@@ -5,5 +5,7 @@ edition = "2021"
 
 [dependencies]
 hikaru_core = { path = "../hikaru_core" }
+hikaru_midi = { path = "../hikaru_midi" }
+hikaru_plugin_host = { path = "../hikaru_plugin_host" }
 realfft = "3.3.0" # La artillería pesada para FFT
 rustfft = "6.1.0"

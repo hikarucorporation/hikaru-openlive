@@ -13,3 +13,5 @@ pub mod audio_settings;
 pub mod clipboard;
 pub mod waveform;
 pub mod clip_editor;
+pub mod piano_roll; // <--- AGREGAR ESTA LÍNEA
+pub mod external_plugins_settings;

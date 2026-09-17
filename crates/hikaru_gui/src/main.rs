@@ -14,7 +14,14 @@ use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
 
 static DEFAULT_WAVETABLE: [f32; 2048] = [0.0; 2048];
 
-fn main() -> Result<(), eframe::Error> {
+fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // Force X11 backend via XWayland — Wayland native causes transparency/blur
+        // issues with KDE Plasma compositor and plugin X11 windows render incorrectly.
+        std::env::set_var("WINIT_UNIX_BACKEND", "x11");
+    }
+    
     let (tx, rx) = channel();
     let audio_proxy = AudioProxy::new(tx);
 
@@ -298,14 +305,16 @@ fn main() -> Result<(), eframe::Error> {
     use eframe::egui;
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 720.0])
+            .with_min_inner_size([800.0, 480.0]),
         #[cfg(target_os = "windows")]
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
 
     eframe::run_native(
-        "Hikaru OpenStudio",
+        "Hikaru OpenLive",
         native_options,
         Box::new(move |cc| {
             // FORZAR MODO OSCURO EN EGUI INDEPENDIENTEMENTE DEL TEMA DEL SISTEMA OPERATIVO

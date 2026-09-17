@@ -1,20 +1,23 @@
-# hikaru_workspace/Cargo.toml (¡Actualizado para la Fase 3!)
 [workspace]
-resolver = "2" # <--- ¡AGREGÁ ESTO ACÁ!
+resolver = "2"
 members = [
     "crates/hikaru_core",
     "crates/hikaru_transport",
-    "crates/hikaru_audio_engine", # ¡Aquí está nuestro nuevo y poderoso motor de audio!
-    "crates/hikaru_sequencer", # <--- ¡AGREGÁ ESTA LÍNEA!
-    "crates/hikaru_dsp", # <--- EL GORDO DSP
-    "crates/hikaru_plugin_host", # <--- EL GORDO PLUGINS
-    "crates/hikaru_gui", # <--- interfaz
-    "crates/hikaru_audio_drivers", # <--- LOS DRIVERS PROPIOS OPEN-SOURCE (VAMO ARRIBA CARAJO KJJ)
+    "crates/hikaru_audio_engine",
+    "crates/hikaru_sequencer",
+    "crates/hikaru_dsp",
+    "crates/hikaru_plugin_host",
+    "crates/hikaru_midi",
+    "crates/hikaru_gui",
+    "crates/hikaru_audio_drivers",
 ]
 
-# Puedes añadir la sección [profile.release] aquí si quieres optimizar la compilación
-# para el rendimiento en producción, pero por ahora no es estrictamente necesario.
-# [profile.release]
-# opt-level = 3
-# lto = true
-# codegen-units = 1
+[workspace.dependencies]
+clack-host = "0.2"
+clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log"] }
+vst3-host = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

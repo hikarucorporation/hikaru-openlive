@@ -5,8 +5,11 @@ edition = "2021"
 
 [dependencies]
 hikaru_core = { path = "../hikaru_core" }
-libloading = "0.8"
-vst3-host = "0.1" # O bindings directos si preferís moonlitt
-clack-host = "0.1" # La mejor opción para CLAP en Rust
-raw-window-handle = "0.5"
-winit = "0.28"
+clack-host = { workspace = true }
+clack-extensions = { workspace = true }
+vst3-host = { workspace = true }
+raw-window-handle = "0.6"
+winit = "0.29"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "dl-libxcb"] }

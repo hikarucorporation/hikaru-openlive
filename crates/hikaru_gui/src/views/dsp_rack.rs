@@ -1,6 +1,6 @@
 /*
  * Hikaru OpenStudio - DSP Rack View
- * License: AGPL-3.0-only
+ * License: AGPL-3.0-or-later
  */
 
 use egui::{Ui, RichText, Color32, ScrollArea, Frame, Stroke, Vec2, Button, Align, CursorIcon};
@@ -158,11 +158,12 @@ fn render_slot_placeholder(
 
                     ui.separator();
 
-                    // 2. Desplegable de módulos [ 🔻 ]
+                    // 2. Desplegable de módulos [ 🔻 ] con 4 Secciones VST3/CLAP + Nativos
                     ui.menu_button(RichText::new("🔻").small(), |ui| {
-                        ui.set_min_width(160.0);
+                        ui.set_min_width(180.0);
                         
-                        ui.label(RichText::new("Generadores").small().color(Color32::from_rgb(0, 255, 255)));
+                        // Nativos
+                        ui.label(RichText::new("Native Generators").small().color(Color32::from_rgb(0, 255, 255)));
                         if ui.button(" OpenWavetable").clicked() {
                             slot.name = "OpenWavetable".to_string();
                             *selected_slot = idx;
@@ -171,9 +172,49 @@ fn render_slot_placeholder(
 
                         ui.separator();
 
-                        ui.label(RichText::new("Efectos").small().color(Color32::from_rgb(255, 110, 0)));
+                        ui.label(RichText::new("Native FX").small().color(Color32::from_rgb(255, 110, 0)));
                         if ui.button(" OpenSpectralFX").clicked() {
                             slot.name = "OpenSpectralFX".to_string();
+                            *selected_slot = idx;
+                            ui.close_menu();
+                        }
+
+                        ui.separator();
+
+                        // 1. VST3 Generators
+                        ui.label(RichText::new("VST3 Generators").small().color(Color32::from_rgb(100, 200, 255)));
+                        if ui.button(" Vital (VST3)").clicked() {
+                            slot.name = "Vital (VST3)".to_string();
+                            *selected_slot = idx;
+                            ui.close_menu();
+                        }
+
+                        ui.separator();
+
+                        // 2. VST3 FX
+                        ui.label(RichText::new("VST3 FX").small().color(Color32::from_rgb(255, 180, 100)));
+                        if ui.button(" External VST3 FX...").clicked() {
+                            slot.name = "VST3 FX".to_string();
+                            *selected_slot = idx;
+                            ui.close_menu();
+                        }
+
+                        ui.separator();
+
+                        // 3. CLAP Generators
+                        ui.label(RichText::new("CLAP Generators").small().color(Color32::from_rgb(180, 100, 255)));
+                        if ui.button(" External CLAP Synth...").clicked() {
+                            slot.name = "CLAP Synth".to_string();
+                            *selected_slot = idx;
+                            ui.close_menu();
+                        }
+
+                        ui.separator();
+
+                        // 4. CLAP FX
+                        ui.label(RichText::new("CLAP FX").small().color(Color32::from_rgb(255, 100, 180)));
+                        if ui.button(" External CLAP FX...").clicked() {
+                            slot.name = "CLAP FX".to_string();
                             *selected_slot = idx;
                             ui.close_menu();
                         }
@@ -181,7 +222,7 @@ fn render_slot_placeholder(
 
                     // 3. Nombre del Slot
                     let name_btn = ui.add_sized(
-                        Vec2::new(130.0, 20.0),
+                        Vec2::new(140.0, 20.0),
                         Button::new(RichText::new(&slot.name).color(if is_selected { Color32::WHITE } else { Color32::from_gray(200) }))
                             .fill(Color32::TRANSPARENT)
                             .frame(false)
@@ -199,8 +240,8 @@ fn render_slot_placeholder(
                             *selected_slot = idx;
                         }
 
-                        // Botón Toggle para abrir/cerrar la ventana de ESTA instancia de OpenWavetable
-                        if slot.name == "OpenWavetable" {
+                        // Botón Toggle para abrir/cerrar la GUI (sea Nativo, VST3 o CLAP)
+                        if slot.name != "Empty Slot" {
                             let icon_text = if slot.is_open { "▣" } else { "□" };
                             let gui_btn = ui.add(
                                 Button::new(RichText::new(icon_text).strong().size(13.0).color(Color32::from_rgb(0, 255, 255)))
