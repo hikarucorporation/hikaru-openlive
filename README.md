@@ -1,48 +1,56 @@
 # Hikaru OpenLive
 
-> DAW modular, libre y multiplataforma escrito en Rust. Tiempo real, baja latencia y UI inmediata.
+> DAW modular, libre y multiplataforma en Rust para producción musical en vivo y en directo.
+> **Alternativa FOSS e independiente a Ableton Live y Bitwig Studio.** *(En desarrollo activo)*
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-orange.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey.svg)](#instalación)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey.svg)](#compilación-rápida-linux--debian--ubuntu)
 [![GUI: egui](https://img.shields.io/badge/GUI-egui%200.27-ff4154.svg)](https://github.com/emilk/egui)
 [![Audio: CPAL](https://img.shields.io/badge/Audio-CPAL%200.18-green.svg)](https://github.com/RustAudio/cpal)
 
-**Hikaru OpenLive** es una estación de trabajo de audio digital (DAW) de código abierto y multiplataforma (Linux, Windows y FreeBSD) escrita en Rust enfocado en:
-
-- **Rendimiento en tiempo real** sin allocations ni bloqueos en el hilo de audio.
-- **UI inmediata con `egui`** — Session View por escenas, Mixer Rack flotante y editor de clips.
-- **Motor de audio con CPAL** + secuenciador sample-accurate con compensación de latencia.
+**Hikaru OpenLive** es una estación de trabajo de audio digital (DAW) diseñada para **actuaciones en vivo, lanzamiento de clips en tiempo real y composición lineal**. Construido completamente en Rust, ofrece un motor de audio de ultra baja latencia sin asignaciones de memoria dinámicas en el hilo crítico.
 
 ---
 
-## Vista Previa
+## 📸 Vista Previa
 
-![Hikaru OpenLive UI Preview](assets/screenshots/preview.png)
+### Arranger View
+![Arranger View](assets/screenshots/arranger-view.png)
+*Línea de tiempo para composición tradicional, edición de pistas y arreglo lineal.*
 
-*Session Matrix disparando escenas, File Explorer integrado con preview de samples, Clip Track Editor y Mixer Rack con vúmetros en tiempo real.*
+### Session Matrix
+![Session Matrix](assets/screenshots/session-matrix.png)
+*Grilla de clips al estilo Ableton/Bitwig para disparo cuantizado de escenas y waveforms en tiempo real.*
+
+### Piano Roll & Editor MIDI
+![Piano Roll](assets/screenshots/piano-roll-dev-1.png)
+*Edición secuenciada de notas MIDI, edición de clips y control rítmico.*
+
+### Host de Plugins VST3 / CLAP (Experimental/Beta)
+![Plugin Host](assets/screenshots/lgpl-vst3-clap-host-dev-1.png)
+*Carga y gestión de plugins de terceros en formato VST3 y CLAP.*
 
 ---
 
-## Características Principal
+## 🚀 Características Principales
 
-- **Session Matrix / OpenLive:** Grilla de clips con lanzamiento cuantizado y triggers por escena.
-- **Mixer:** Canales independientes + Master, faders, mute/solo/arm y vúmetros Peak/RMS.
-- **Transporte global:** Play/stop/record, BPM, metrónomo y loop con Time Selection.
-- **Secuenciador (`hikaru_sequencer`):** Scheduler sample-accurate, lookahead y prioridad rítmica en el hilo de audio.
-- **DSP Rack (`hikaru_dsp`):** Filtros, flanger, phaser, ultracomb, open-harmonic y sintesis wavetable nativa.
-- **Host de plugins (`hikaru_plugin_host`):** Soporte VST3 y CLAP.
+- **Session Matrix (Live Workflow):** Lanzamiento de clips por escenas, cuantización rígida y triggers instantáneos.
+- **Arranger View:** Edición en línea de tiempo paralela a la matriz de sesión.
+- **Motor de Audio sin Bloqueos:** Hilo de audio en tiempo real impulsado por CPAL y secuenciador sample-accurate.
+- **DSP & Sintesis Nativa:** Racks de efectos (filtros, flanger, phaser) y generador wavetable integrado.
+- **Host VST3 / CLAP:** Integración experimental para instrumentos y efectos externos.
 
 ---
 
-## Compilación Rápida (Linux / Debian / Ubuntu)
+## 🛠️ Compilación Rápida (Linux)
 
 ```bash
-# 1. Instalar dependencias base
+# Dependencias base (Debian/Ubuntu)
 sudo apt update && sudo apt install -y build-essential pkg-config git libasound2-dev libx11-dev libgl1-mesa-dev
 
-# 2. Clonar y ejecutar
-git clone https://github.com/hikarucorporation/hikaru-openlive.git
+# Clonar y ejecutar
+git clone [https://github.com/hikarucorporation/hikaru-openlive.git](https://github.com/hikarucorporation/hikaru-openlive.git)
 cd hikaru-openlive
 cargo run --release -p hikaru_gui
 
