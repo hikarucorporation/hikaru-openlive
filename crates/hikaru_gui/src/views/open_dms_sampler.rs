@@ -54,6 +54,8 @@ impl Default for DmsSampler {
 }
 
 pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32) {
+    ui.spacing_mut().item_spacing = Vec2::splat(2.0);
+
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             if ui
@@ -85,7 +87,7 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                 sampler.sync_tempo = !sampler.sync_tempo;
             }
 
-            ui.label(RichText::new("BPM:").size(10.0));
+            ui.label(RichText::new("BPM:").size(9.0));
             ui.add(
                 egui::DragValue::new(&mut sampler.sample_bpm)
                     .speed(0.1)
@@ -96,26 +98,24 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                 let ratio = project_bpm / sampler.sample_bpm;
                 ui.label(
                     RichText::new(format!("Ratio: {:.2}x", ratio))
-                        .size(10.0)
+                        .size(9.0)
                         .color(Color32::YELLOW),
                 );
             }
         });
 
-        ui.add_space(4.0);
-
-        let canvas_size = Vec2::new(ui.available_width(), 60.0);
+        let canvas_size = Vec2::new(ui.available_width(), 48.0);
         let (response, painter) = ui.allocate_painter(canvas_size, Sense::click_and_drag());
         let rect = response.rect;
 
-        painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 18, 22));
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, Color32::from_gray(50)));
+        painter.rect_filled(rect, 2.0, Color32::from_rgb(18, 18, 22));
+        painter.rect_stroke(rect, 2.0, Stroke::new(1.0_f32, Color32::from_gray(50)));
 
         let center_y = rect.center().y;
         let points_count = 120;
         for i in 0..points_count {
             let x = rect.left() + (i as f32 / points_count as f32) * rect.width();
-            let amp = ((i as f32 * 0.3).sin() * 18.0).abs();
+            let amp = ((i as f32 * 0.3).sin() * 16.0).abs();
             painter.line_segment(
                 [
                     Pos2::new(x, center_y - amp),
@@ -143,10 +143,10 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
             );
 
             painter.text(
-                Pos2::new(slice_x + 3.0, rect.top() + 2.0),
+                Pos2::new(slice_x + 2.0, rect.top() + 1.0),
                 egui::Align2::LEFT_TOP,
                 format!("S{}", idx + 1),
-                egui::FontId::proportional(8.0),
+                egui::FontId::proportional(7.0),
                 c,
             );
         }
@@ -166,17 +166,17 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
             sampler.selected_slice = closest;
         }
 
-        ui.add_space(4.0);
+        ui.add_space(2.0);
 
         ui.horizontal(|ui| {
             ui.group(|ui| {
                 ui.label(
-                    RichText::new("Slice Tools")
+                    RichText::new("Slices")
                         .small()
                         .strong()
                         .color(Color32::from_rgb(0, 255, 200)),
                 );
-                if ui.button(RichText::new("Auto-Slice").small()).clicked() {}
+                if ui.button(RichText::new("Auto").small()).clicked() {}
                 if ui.button(RichText::new("Clear").small()).clicked() {
                     sampler.slices.clear();
                 }
@@ -192,30 +192,17 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                         .color(Color32::from_rgb(0, 255, 255)),
                 );
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("A").size(9.0));
-                        ui.add(
-                            Slider::new(&mut sampler.adsr.attack, 0.0..=500.0).show_value(false),
-                        );
-                    });
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("D").size(9.0));
-                        ui.add(
-                            Slider::new(&mut sampler.adsr.decay, 0.0..=1000.0).show_value(false),
-                        );
-                    });
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("S").size(9.0));
-                        ui.add(
-                            Slider::new(&mut sampler.adsr.sustain, 0.0..=1.0).show_value(false),
-                        );
-                    });
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("R").size(9.0));
-                        ui.add(
-                            Slider::new(&mut sampler.adsr.release, 0.0..=1000.0).show_value(false),
-                        );
-                    });
+                    for (label, val, range) in [
+                        ("A", &mut sampler.adsr.attack, 0.0_f32..=500.0),
+                        ("D", &mut sampler.adsr.decay, 0.0..=1000.0),
+                        ("S", &mut sampler.adsr.sustain, 0.0..=1.0),
+                        ("R", &mut sampler.adsr.release, 0.0..=1000.0),
+                    ] {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(label).size(8.0));
+                            ui.add(Slider::new(val, range).show_value(false));
+                        });
+                    }
                 });
             });
 
@@ -228,12 +215,10 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                         .strong()
                         .color(Color32::LIGHT_GREEN),
                 );
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Cents").size(9.0));
-                    ui.add(
-                        Slider::new(&mut sampler.pitch_cents, -1200.0..=1200.0).show_value(false),
-                    );
-                });
+                ui.add(
+                    Slider::new(&mut sampler.pitch_cents, -1200.0..=1200.0)
+                        .show_value(false),
+                );
             });
         });
     });

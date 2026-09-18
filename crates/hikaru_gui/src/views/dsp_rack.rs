@@ -141,14 +141,14 @@ fn render_slot_card(
                 // Adaptamos el ancho de la tarjeta según el tipo de dispositivo
                 let card_width = match slot.name.as_str() {
                     "OpenWavetable" => 240.0,
-                    "Hikaru OpenDMS" => 520.0,
+                    "Hikaru OpenDMS" => 620.0,
                     "OpenSpectralFX" => 200.0,
                     "Empty Slot" => 170.0,
                     _ => 190.0,
                 };
 
                 ui.set_width(card_width);
-                let card_height = if slot.name == "Hikaru OpenDMS" { 230.0 } else { 100.0 };
+                let card_height = if slot.name == "Hikaru OpenDMS" { 220.0 } else { 100.0 };
                 ui.set_height(card_height);
 
                 ui.vertical(|ui| {
