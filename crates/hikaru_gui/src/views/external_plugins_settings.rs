@@ -248,8 +248,8 @@ fn run_plugin_window(
         }
     };
 
-    let width: u16 = 800;
-    let height: u16 = 600;
+    let width: u16 = 1024;
+    let height: u16 = 700;
 
     let window_aux = CreateWindowAux::new()
         .event_mask(
@@ -351,148 +351,117 @@ fn run_plugin_window(
     let xlib_handle = XlibWindowHandle::new(window as u64);
     let raw_handle = RawWindowHandle::Xlib(xlib_handle);
 
-    // Load and open the plugin GUI
-    let mut instance: Option<Box<dyn PluginInstance>> = match format {
+    // 1. Cargar la instancia del plugin
+    let instance: Option<Box<dyn PluginInstance>> = match format {
         PluginFormat::CLAP => match ClapInstance::load(&plugin_path) {
-            Ok(mut inst) => {
-                println!(
-                    "[PluginWindow] CLAP loaded, calling show_gui_embedded for '{}'",
-                    plugin_name
-                );
-                inst.show_gui_embedded(raw_handle);
+            Ok(inst) => {
+                println!("[PluginWindow] CLAP cargado para '{}'", plugin_name);
                 Some(Box::new(inst))
             }
             Err(e) => {
-                eprintln!("[PluginWindow] CLAP load failed: {}", e);
+                eprintln!("[PluginWindow] Error al cargar CLAP: {}", e);
                 None
             }
         },
         PluginFormat::VST3 => match Vst3Instance::load(&plugin_path) {
-            Ok(mut inst) => {
-                println!(
-                    "[PluginWindow] VST3 loaded, calling show_gui_embedded for '{}'",
-                    plugin_name
-                );
-                inst.show_gui_embedded(raw_handle);
+            Ok(inst) => {
+                println!("[PluginWindow] VST3 cargado para '{}'", plugin_name);
                 Some(Box::new(inst))
             }
             Err(e) => {
-                eprintln!("[PluginWindow] VST3 load failed: {}", e);
+                eprintln!("[PluginWindow] Error al cargar VST3: {}", e);
                 None
             }
         },
     };
 
-    if instance.is_none() {
-        eprintln!(
-            "[PluginWindow] Plugin '{}' failed to load, closing window",
-            plugin_name
-        );
-        let _ = conn.destroy_window(window);
-        let _ = conn.flush();
-        let _ = close_tx.send(PluginClosedNotification {
-            name: plugin_name,
-        });
-        return;
+    let mut inst = match instance {
+        Some(i) => i,
+        None => {
+            eprintln!("[PluginWindow] Cerrando ventana por fallo de carga en '{}'", plugin_name);
+            let _ = conn.destroy_window(window);
+            let _ = conn.flush();
+            let _ = close_tx.send(PluginClosedNotification { name: plugin_name });
+            return;
+        }
+    };
+
+    // 2. Si el plugin reporta un tamaño preferido, ajustar la ventana X11 ANTES de embeber
+    if let Some((pref_w, pref_h)) = inst.get_gui_size() {
+        if pref_w > 0 && pref_h > 0 {
+            let values = ConfigureWindowAux::new()
+                .width(pref_w)
+                .height(pref_h);
+            let _ = conn.configure_window(window, &values);
+            let _ = conn.flush();
+            println!("[PluginWindow] Ventana X11 redimensionada a {}x{} según la preferencia del plugin", pref_w, pref_h);
+        }
     }
 
-    // Give the plugin GUI time to initialize and realize its X11 windows
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // 3. Vincular e iniciar el renderizado FFI
+    inst.show_gui_embedded(raw_handle);
+
+    // 4. Post-embed: query the actual preferred size and resize the X11 window to match.
+    //    Some plugins (like Vital) only report the correct size after the GUI is attached.
+    if let Some((actual_w, actual_h)) = inst.notify_gui_embedded() {
+        if actual_w > 0 && actual_h > 0 && (actual_w != width as u32 || actual_h != height as u32) {
+            let values = ConfigureWindowAux::new()
+                .width(actual_w)
+                .height(actual_h);
+            let _ = conn.configure_window(window, &values);
+            let _ = conn.flush();
+            println!(
+                "[PluginWindow] Ventana X11 redimensionada post-embebido a {}x{} (era {}x{})",
+                actual_w, actual_h, width, height
+            );
+        }
+    }
+
+    // Dar tiempo a la superficie X11 para inicializar los buffers de pintado
+    std::thread::sleep(std::time::Duration::from_millis(100));
     let _ = conn.flush();
 
-    println!("[PluginWindow] GUI '{}' opened, entering event loop", plugin_name);
+    // 4. Run X11 event loop — keep the plugin instance alive until the window is closed.
+    //    Without this loop the function returns immediately, dropping `inst` and destroying
+    //    the plugin GUI before the user can interact with it.
+    let wm_delete = {
+        let cookie = conn.intern_atom(true, b"WM_DELETE_WINDOW").unwrap();
+        cookie.reply().unwrap().atom
+    };
 
-    // X11 event loop
-    let mut consecutive_errors = 0u32;
-    let mut current_size = (width as u32, height as u32);
     loop {
-        // Poll for X11 events
-        match conn.poll_for_event() {
-            Ok(Some(event)) => {
-                consecutive_errors = 0;
-                match event {
-                    Event::ClientMessage(event) => {
-                        // WM_DELETE_WINDOW or other client messages
-                        println!(
-                            "[PluginWindow] ClientMessage for '{}': type={:?}",
-                            plugin_name, event.type_
-                        );
-                        break;
-                    }
-                    Event::DestroyNotify(event) => {
-                        if event.window == window {
-                            println!(
-                                "[PluginWindow] Window destroyed for '{}'",
-                                plugin_name
-                            );
-                            break;
-                        }
-                    }
-                    Event::KeyPress(event) => {
-                        // Escape key (keycode 9 on most X11 systems)
-                        if event.detail == 9 {
-                            println!(
-                                "[PluginWindow] Escape pressed for '{}'",
-                                plugin_name
-                            );
-                            break;
-                        }
-                    }
-                    Event::ConfigureNotify(event) => {
-                        if event.window == window {
-                            let new_size = (event.width as u32, event.height as u32);
-                            if new_size != current_size && new_size.0 > 0 && new_size.1 > 0 {
-                                current_size = new_size;
-                                if let Some(ref mut inst) = instance {
-                                    inst.resize_gui(new_size.0, new_size.1);
-                                }
-                            }
-                        }
-                    }
-                    Event::UnmapNotify(event) => {
-                        if event.window == window {
-                            println!(
-                                "[PluginWindow] Window unmapped for '{}'",
-                                plugin_name
-                            );
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(None) => {
-                // No events pending — normal
-                consecutive_errors = 0;
-            }
-            Err(e) => {
-                consecutive_errors += 1;
-                eprintln!(
-                    "[PluginWindow] X11 event error for '{}' ({}): {:?}",
-                    plugin_name, consecutive_errors, e
-                );
-                // If we get 3 consecutive errors, the connection is probably dead
-                if consecutive_errors >= 3 {
-                    eprintln!(
-                        "[PluginWindow] Too many X11 errors, giving up for '{}'",
+        match conn.wait_for_event() {
+            Ok(Event::ClientMessage(msg)) => {
+                if msg.type_ == wm_delete {
+                    println!(
+                        "[PluginWindow] WM_DELETE_WINDOW received for '{}' — closing",
                         plugin_name
                     );
                     break;
                 }
             }
+            Ok(Event::DestroyNotify(ev)) => {
+                if ev.window == window {
+                    println!(
+                        "[PluginWindow] DestroyNotify for '{}' — closing",
+                        plugin_name
+                    );
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!(
+                    "[PluginWindow] X11 error for '{}': {:?}",
+                    plugin_name, e
+                );
+                break;
+            }
         }
-
-        // Sleep to avoid busy-waiting (16ms ~ 60fps)
-        std::thread::sleep(std::time::Duration::from_millis(16));
     }
 
-    // Cleanup — hide GUI first, then destroy X11 window
-    println!("[PluginWindow] Cleaning up '{}'", plugin_name);
-    if let Some(mut inst) = instance.take() {
-        inst.hide_gui();
-    }
-    // Give the plugin time to release X11 resources
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Cleanup: drop the plugin instance (calls hide_gui / close_editor / dlclose)
+    drop(inst);
     let _ = conn.destroy_window(window);
     let _ = conn.flush();
 

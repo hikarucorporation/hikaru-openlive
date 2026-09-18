@@ -221,27 +221,34 @@ impl ClapInstance {
 impl PluginInstance for ClapInstance {
     fn process(&mut self, _buffer: &mut AudioBuffer) {}
 
+    fn get_gui_size(&self) -> Option<(u32, u32)> {
+        // En CLAP gui.get_size requiere un gui.create previo.
+        // Devolvemos None aquí para consultar el tamaño tras la creación en show_gui_embedded.
+        None
+    }
+
+    fn notify_gui_embedded(&mut self) -> Option<(u32, u32)> {
+        // After gui.create + gui.set_parent + gui.show, query the actual native size.
+        let gui = self.gui.as_ref()?;
+        let mut plugin_handle = self.plugin.plugin_handle();
+        gui.get_size(&mut plugin_handle)
+            .map(|size| (size.width, size.height))
+    }
+
     fn show_gui_embedded(&mut self, handle: RawWindowHandle) {
         let Some(gui) = &self.gui else {
-            eprintln!(
-                "[CLAP] '{}' sin GUI extension — no se puede embebir",
-                self.name
-            );
+            eprintln!("[CLAP] '{}' sin GUI extension", self.name);
             return;
         };
 
         let mut plugin_handle = self.plugin.plugin_handle();
 
-        // Step 1: Create the parent X11 window BEFORE gui.create() / gui.set_parent()
-        // The window must exist and be mapped when DPF's pugl realizes the view.
         #[cfg(target_os = "linux")]
-        let (window_id, x11_conn) = {
-            match crate::platform::linux::get_or_create_x11_window(handle, 800, 600) {
-                Ok((wid, conn)) => (wid, conn),
-                Err(e) => {
-                    eprintln!("[CLAP] Failed to create X11 parent window: {}", e);
-                    return;
-                }
+        let (window_id, x11_conn) = match crate::platform::linux::get_or_create_x11_window(handle, 1024, 700) {
+            Ok((wid, conn)) => (wid, conn),
+            Err(e) => {
+                eprintln!("[CLAP] Fallo al crear ventana X11: {}", e);
+                return;
             }
         };
 
@@ -249,77 +256,53 @@ impl PluginInstance for ClapInstance {
         let window_id = match handle {
             RawWindowHandle::Xlib(h) => h.window as u32,
             RawWindowHandle::Xcb(h) => h.window.get().into(),
-            _ => {
-                eprintln!("[CLAP] Unsupported window handle: {:?}", handle);
-                return;
-            }
+            _ => return,
         };
 
-        // Step 2: Create the GUI (DPF only allocates ClapUI object, no X11 yet)
+        // 1. gui.create siempre antes de cualquier otra llamada a la GUI
         let config = GuiConfiguration {
             api_type: GuiApiType::X11,
             is_floating: false,
         };
 
         if let Err(e) = gui.create(&mut plugin_handle, config) {
-            eprintln!("[CLAP] gui.create(embedded) failed: {:?}", e);
-
-            // Fallback: try floating mode (plugin creates own window)
-            let floating_config = GuiConfiguration {
-                api_type: GuiApiType::X11,
-                is_floating: true,
-            };
-
-            let _ = gui.destroy(&mut plugin_handle);
-            if let Err(e2) = gui.create(&mut plugin_handle, floating_config) {
-                eprintln!("[CLAP] gui.create(floating) also failed: {:?}", e2);
-                return;
-            }
-            println!("[CLAP] Usando modo flotante como fallback para '{}'", self.name);
-
-            // Show floating window
-            if let Err(e) = gui.show(&mut plugin_handle) {
-                eprintln!("[CLAP] gui.show(floating) failed: {:?}", e);
-                let _ = gui.destroy(&mut plugin_handle);
-                return;
-            }
-
-            self.window_attached = true;
-            println!("[CLAP] GUI '{}' abierta OK (flotante)", self.name);
+            eprintln!("[CLAP] gui.create() falló para '{}': {:?}", self.name, e);
             return;
         }
 
-        // Step 3: Set parent window — THIS is where DPF/pugl creates the X11 window
-        // The parent window must already exist and be mapped on the X server.
+        // 2. Consultar y aplicar el tamaño nativo del plugin
+        if let Some(native_size) = gui.get_size(&mut plugin_handle) {
+            println!(
+                "[CLAP] Ajustando GUI de '{}' a tamaño nativo: {}x{}",
+                self.name, native_size.width, native_size.height
+            );
+            let _ = gui.set_size(&mut plugin_handle, native_size);
+        }
+
+        // 3. Vincular ventana padre
         let parent_window = Window::from_x11_handle(window_id as std::ffi::c_ulong);
 
         if let Err(e) = unsafe { gui.set_parent(&mut plugin_handle, parent_window) } {
-            eprintln!("[CLAP] gui.set_parent() failed: {:?}", e);
+            eprintln!("[CLAP] gui.set_parent() falló: {:?}", e);
             let _ = gui.destroy(&mut plugin_handle);
             return;
         }
 
-        println!(
-            "[CLAP] Parent window {} set for '{}'",
-            window_id, self.name
-        );
-
-        // Step 4: Show the GUI
+        // 4. Mostrar la GUI
         if let Err(e) = gui.show(&mut plugin_handle) {
-            eprintln!("[CLAP] gui.show() failed: {:?}", e);
+            eprintln!("[CLAP] gui.show() falló: {:?}", e);
             let _ = gui.destroy(&mut plugin_handle);
             return;
         }
 
         self.window_attached = true;
 
-        // Store the X11 connection to keep the parent window alive
         #[cfg(target_os = "linux")]
         {
             self._x11_conn = x11_conn;
         }
 
-        println!("[CLAP] GUI '{}' abierta OK", self.name);
+        println!("[CLAP] GUI de '{}' abierta OK", self.name);
     }
 
     fn show_gui_floating(&mut self) -> Result<(), String> {
@@ -352,7 +335,6 @@ impl PluginInstance for ClapInstance {
                 let _ = gui.destroy(&mut plugin_handle);
             }
             self.window_attached = false;
-            // Drop X11 connection (destroys the parent window)
             #[cfg(target_os = "linux")]
             {
                 self._x11_conn = None;
@@ -364,14 +346,9 @@ impl PluginInstance for ClapInstance {
         &self.name
     }
 
-    fn get_gui_size(&self) -> Option<(u32, u32)> {
-        None
-    }
-
     fn resize_gui(&mut self, width: u32, height: u32) {
         if let Some(gui) = &self.gui {
             let mut plugin_handle = self.plugin.plugin_handle();
-            // Only call set_size if the plugin supports resizing
             if gui.can_resize(&plugin_handle) {
                 let _ = gui.set_size(&mut plugin_handle, GuiSize { width, height });
             }

@@ -30,6 +30,13 @@ pub trait PluginInstance: Send {
         None
     }
 
+    /// Called after `show_gui_embedded` to let the plugin query the actual preferred
+    /// size now that the GUI context exists. Returns the preferred `(width, height)`
+    /// if the plugin reports one, so the caller can resize the container window.
+    fn notify_gui_embedded(&mut self) -> Option<(u32, u32)> {
+        None
+    }
+
     fn resize_gui(&mut self, _width: u32, _height: u32) {}
 }
 

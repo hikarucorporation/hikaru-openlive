@@ -107,7 +107,7 @@ impl Vst3Instance {
             .map_err(|e| format!("[VST3] EventLoop: {}", e))?;
         let window = winit::window::WindowBuilder::new()
             .with_title(format!("VST3: {}", self.name))
-            .with_inner_size(winit::dpi::LogicalSize::new(900.0, 600.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 700.0))
             .build(&event_loop)
             .map_err(|e| format!("[VST3] WindowBuilder: {}", e))?;
 
@@ -175,7 +175,7 @@ impl PluginInstance for Vst3Instance {
 
         #[cfg(target_os = "linux")]
         let embedded_result = {
-            match crate::platform::linux::get_or_create_x11_window(handle, 800, 600) {
+            match crate::platform::linux::get_or_create_x11_window(handle, 1024, 700) {
                 Ok((window_id, x11_conn)) => {
                     println!(
                         "[VST3] Embebiendo GUI de '{}' en X11 window {}",
@@ -246,6 +246,15 @@ impl PluginInstance for Vst3Instance {
     }
 
     fn get_gui_size(&self) -> Option<(u32, u32)> {
+        self.plugin
+            .get_editor_size()
+            .ok()
+            .map(|(w, h)| (w as u32, h as u32))
+    }
+
+    fn notify_gui_embedded(&mut self) -> Option<(u32, u32)> {
+        // Query the actual editor size now that the view is attached to the parent window.
+        // Some plugins only report the correct size after open_editor completes.
         self.plugin
             .get_editor_size()
             .ok()
