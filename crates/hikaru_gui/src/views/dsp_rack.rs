@@ -141,7 +141,7 @@ fn render_slot_card(
                 // Adaptamos el ancho de la tarjeta según el tipo de dispositivo
                 let card_width = match slot.name.as_str() {
                     "OpenWavetable" => 240.0,
-                    "Hikaru OpenDMS" => 620.0,
+                    "Hikaru OpenDMS" => 540.0,
                     "OpenSpectralFX" => 200.0,
                     "Empty Slot" => 170.0,
                     _ => 190.0,

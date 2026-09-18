@@ -5,7 +5,7 @@
  */
 
 use egui::{CursorIcon, RichText, Rounding, Sense, Stroke, Ui, Vec2, Color32};
-use super::open_dms_sampler::{self, DmsSampler};
+use super::open_dms_sampler::{self, DmsSampler, ui_knob};
 
 const MIDI_NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -247,25 +247,11 @@ pub fn render_dms_ui(ui: &mut Ui, dms: &mut OpenDms, project_bpm: f32) {
                 ui.add_space(2.0);
 
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Gain").size(9.0));
-                        ui.add(
-                            egui::Slider::new(&mut pad.volume, 0.0..=2.0).show_value(false),
-                        );
-                    });
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Pan").size(9.0));
-                        ui.add(
-                            egui::Slider::new(&mut pad.pan, -1.0..=1.0).show_value(false),
-                        );
-                    });
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Pitch").size(9.0));
-                        ui.add(
-                            egui::Slider::new(&mut pad.pitch, -24.0..=24.0)
-                                .show_value(false),
-                        );
-                    });
+                    ui_knob(ui, &mut pad.volume, 0.0..=2.0, "Gain");
+                    ui_knob(ui, &mut pad.pan, -1.0..=1.0, "Pan");
+                    ui_knob(ui, &mut pad.pitch, -24.0..=24.0, "Pitch");
+
+                    ui.add_space(6.0);
                     ui.vertical(|ui| {
                         ui.label(RichText::new("").size(9.0));
                         ui.horizontal(|ui| {

@@ -3,7 +3,118 @@
  * License: AGPL-3.0-or-later
  */
 
-use egui::{Ui, RichText, Color32, Stroke, Vec2, Slider, Sense, Pos2};
+use egui::{Pos2, RichText, Sense, Stroke, Ui, Vec2, Color32};
+
+// ─── Knob widget ───────────────────────────────────────────────────
+
+/// Dibuja una perilla rotativa compacta con label arriba y valor abajo.
+/// Devuelve `true` si el valor cambió.
+pub fn ui_knob(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    label: &str,
+) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(38.0, 50.0), Sense::drag());
+
+    let radius = 11.0_f32;
+    let center = Pos2::new(rect.center().x, rect.top() + 22.0);
+
+    let start = *range.start();
+    let end = *range.end();
+    let t = if (end - start).abs() > f32::EPSILON {
+        ((value.clamp(start, end) - start) / (end - start)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // -135° → +135° (arco de 270°)
+    let angle_deg = -135.0 + t * 270.0;
+
+    let painter = ui.painter();
+
+    // Fondo + borde del círculo
+    painter.circle_filled(center, radius + 2.0, Color32::from_rgb(20, 20, 24));
+    painter.circle_stroke(
+        center,
+        radius,
+        Stroke::new(1.0_f32, Color32::from_rgb(60, 60, 65)),
+    );
+
+    // Arco de progreso (desde -135° hasta el ángulo actual)
+    let arc_color = Color32::from_rgb(0, 200, 220);
+    let min_deg = -135.0_f32;
+    let sweep = (angle_deg - min_deg).max(0.0);
+    let steps = 24;
+    if sweep > 1.0 {
+        let mut prev = polar_to_pos(center, radius, min_deg);
+        for i in 1..=steps {
+            let frac = i as f32 / steps as f32;
+            let p = polar_to_pos(center, radius, min_deg + frac * sweep);
+            painter.line_segment([prev, p], Stroke::new(2.0_f32, arc_color));
+            prev = p;
+        }
+    }
+
+    // Línea indicadora: tail (0.3) → tip (0.85)
+    let tail = polar_to_pos(center, radius * 0.3, angle_deg);
+    let tip = polar_to_pos(center, radius * 0.85, angle_deg);
+    painter.line_segment(
+        [tail, tip],
+        Stroke::new(2.0_f32, Color32::from_rgb(0, 255, 200)),
+    );
+
+    // Centro
+    painter.circle_filled(center, 2.0, Color32::from_rgb(40, 40, 45));
+
+    // Label arriba
+    painter.text(
+        Pos2::new(center.x, rect.top() + 2.0),
+        egui::Align2::CENTER_TOP,
+        label,
+        egui::FontId::proportional(9.0),
+        Color32::from_rgb(160, 160, 165),
+    );
+
+    // Valor debajo
+    let val_text = if (end - start).abs() < 10.0 {
+        format!("{:.1}", value)
+    } else {
+        format!("{:.0}", value)
+    };
+    painter.text(
+        Pos2::new(center.x, rect.bottom() - 2.0),
+        egui::Align2::CENTER_BOTTOM,
+        &val_text,
+        egui::FontId::proportional(8.0),
+        Color32::from_rgb(120, 120, 125),
+    );
+
+    // Interacción: arrastre vertical
+    let changed = if response.dragged() {
+        let delta = -response.drag_delta().y;
+        let sensitivity = (end - start) / 200.0;
+        *value = (*value + delta * sensitivity).clamp(start, end);
+        true
+    } else {
+        false
+    };
+
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+
+    changed
+}
+
+/// Convierte grados a posición en pantalla (0° = arriba, sentido horario).
+fn polar_to_pos(center: Pos2, r: f32, angle_deg: f32) -> Pos2 {
+    let rad = angle_deg.to_radians();
+    Pos2::new(center.x + r * rad.sin(), center.y - r * rad.cos())
+}
+
+// ─── Data Structures ───────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub struct AdsrEnvelope {
@@ -53,10 +164,13 @@ impl Default for DmsSampler {
     }
 }
 
+// ─── Sampler UI ────────────────────────────────────────────────────
+
 pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32) {
     ui.spacing_mut().item_spacing = Vec2::splat(2.0);
 
     ui.vertical(|ui| {
+        // Fila superior: Load, Sync, BPM, Ratio
         ui.horizontal(|ui| {
             if ui
                 .button(RichText::new("Load WAV").small().strong())
@@ -104,7 +218,8 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
             }
         });
 
-        let canvas_size = Vec2::new(ui.available_width(), 48.0);
+        // Waveform canvas
+        let canvas_size = Vec2::new(ui.available_width(), 44.0);
         let (response, painter) = ui.allocate_painter(canvas_size, Sense::click_and_drag());
         let rect = response.rect;
 
@@ -115,7 +230,7 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
         let points_count = 120;
         for i in 0..points_count {
             let x = rect.left() + (i as f32 / points_count as f32) * rect.width();
-            let amp = ((i as f32 * 0.3).sin() * 16.0).abs();
+            let amp = ((i as f32 * 0.3).sin() * 14.0).abs();
             painter.line_segment(
                 [
                     Pos2::new(x, center_y - amp),
@@ -168,7 +283,10 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
 
         ui.add_space(2.0);
 
+        // Fila inferior: Slices tools + ADSR knobs + Pitch knob
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+
             ui.group(|ui| {
                 ui.label(
                     RichText::new("Slices")
@@ -192,17 +310,11 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                         .color(Color32::from_rgb(0, 255, 255)),
                 );
                 ui.horizontal(|ui| {
-                    for (label, val, range) in [
-                        ("A", &mut sampler.adsr.attack, 0.0_f32..=500.0),
-                        ("D", &mut sampler.adsr.decay, 0.0..=1000.0),
-                        ("S", &mut sampler.adsr.sustain, 0.0..=1.0),
-                        ("R", &mut sampler.adsr.release, 0.0..=1000.0),
-                    ] {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(label).size(8.0));
-                            ui.add(Slider::new(val, range).show_value(false));
-                        });
-                    }
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui_knob(ui, &mut sampler.adsr.attack, 0.0..=500.0, "A");
+                    ui_knob(ui, &mut sampler.adsr.decay, 0.0..=1000.0, "D");
+                    ui_knob(ui, &mut sampler.adsr.sustain, 0.0..=1.0, "S");
+                    ui_knob(ui, &mut sampler.adsr.release, 0.0..=1000.0, "R");
                 });
             });
 
@@ -215,10 +327,7 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                         .strong()
                         .color(Color32::LIGHT_GREEN),
                 );
-                ui.add(
-                    Slider::new(&mut sampler.pitch_cents, -1200.0..=1200.0)
-                        .show_value(false),
-                );
+                ui_knob(ui, &mut sampler.pitch_cents, -1200.0..=1200.0, "Tune");
             });
         });
     });
