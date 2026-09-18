@@ -540,6 +540,7 @@ impl eframe::App for HikaruApp {
                         active_tracks,
                         self.selected_track_index,
                         &mut self.selected_slot_index,
+                        &mut self.dragged_sample,
                     );
                 });
         }

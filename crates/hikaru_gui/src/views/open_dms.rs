@@ -4,6 +4,7 @@
  * License: AGPL-3.0-or-later
  */
 
+use std::path::PathBuf;
 use egui::{CursorIcon, RichText, Rounding, Sense, Stroke, Ui, Vec2, Color32};
 use super::open_dms_sampler::{self, DmsSampler, ui_knob};
 
@@ -86,7 +87,12 @@ fn pad_color(pad: &DmsPad, is_selected: bool) -> (Color32, Color32) {
     (bg, border)
 }
 
-pub fn render_dms_ui(ui: &mut Ui, dms: &mut OpenDms, project_bpm: f32) {
+pub fn render_dms_ui(
+    ui: &mut Ui,
+    dms: &mut OpenDms,
+    project_bpm: f32,
+    dragged_sample: &mut Option<PathBuf>,
+) {
     ui.horizontal(|ui| {
         // --- COLUMNA IZQUIERDA: GRILLA DE PADS ---
         ui.vertical(|ui| {
@@ -270,7 +276,7 @@ pub fn render_dms_ui(ui: &mut Ui, dms: &mut OpenDms, project_bpm: f32) {
                 ui.add_space(2.0);
                 ui.separator();
 
-                open_dms_sampler::render_sampler_ui(ui, &mut dms.sampler, project_bpm);
+                open_dms_sampler::render_sampler_ui(ui, &mut dms.sampler, project_bpm, dragged_sample);
             }
         });
     });

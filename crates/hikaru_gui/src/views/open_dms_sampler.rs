@@ -146,6 +146,8 @@ pub struct DmsSampler {
     pub adsr: AdsrEnvelope,
     pub slices: Vec<f32>,
     pub selected_slice: usize,
+    pub waveform_peaks: Vec<f32>,
+    pub(crate) cached_peak_path: Option<String>,
 }
 
 impl Default for DmsSampler {
@@ -160,13 +162,80 @@ impl Default for DmsSampler {
             adsr: AdsrEnvelope::default(),
             slices: vec![0.0, 0.25, 0.5, 0.75],
             selected_slice: 0,
+            waveform_peaks: Vec::new(),
+            cached_peak_path: None,
         }
     }
 }
 
+fn load_sample_peaks(sampler: &mut DmsSampler) {
+    let needs_reload = match (&sampler.sample_path, &sampler.cached_peak_path) {
+        (Some(p), Some(c)) => p != c,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    if !needs_reload {
+        return;
+    }
+    let path = match &sampler.sample_path {
+        Some(p) => p.clone(),
+        None => return,
+    };
+    let target_bins = 512;
+    let mut peaks = vec![0.0_f32; target_bins];
+    if let Ok(mut reader) = hound::WavReader::open(&path) {
+        let spec = reader.spec();
+        let total_samples = reader.len() as usize;
+        if total_samples == 0 {
+            sampler.waveform_peaks = peaks;
+            sampler.cached_peak_path = Some(path);
+            return;
+        }
+        let samples_per_bin = (total_samples / target_bins).max(1);
+        match spec.sample_format {
+            hound::SampleFormat::Int => {
+                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                let mut iter = reader.samples::<i32>().filter_map(Result::ok);
+                for bin in 0..target_bins {
+                    let mut max_peak = 0.0_f32;
+                    for _ in 0..samples_per_bin {
+                        if let Some(s) = iter.next() {
+                            let v = (s as f32 / max_val).abs();
+                            if v > max_peak { max_peak = v; }
+                        } else { break; }
+                    }
+                    peaks[bin] = max_peak;
+                }
+            }
+            hound::SampleFormat::Float => {
+                let mut iter = reader.samples::<f32>().filter_map(Result::ok);
+                for bin in 0..target_bins {
+                    let mut max_peak = 0.0_f32;
+                    for _ in 0..samples_per_bin {
+                        if let Some(s) = iter.next() {
+                            let v = s.abs();
+                            if v > max_peak { max_peak = v; }
+                        } else { break; }
+                    }
+                    peaks[bin] = max_peak;
+                }
+            }
+        }
+        sampler.waveform_peaks = peaks;
+    } else {
+        sampler.waveform_peaks = peaks;
+    }
+    sampler.cached_peak_path = Some(path);
+}
+
 // ─── Sampler UI ────────────────────────────────────────────────────
 
-pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32) {
+pub fn render_sampler_ui(
+    ui: &mut Ui,
+    sampler: &mut DmsSampler,
+    project_bpm: f32,
+    dragged_sample: &mut Option<std::path::PathBuf>,
+) {
     ui.spacing_mut().item_spacing = Vec2::splat(2.0);
 
     ui.vertical(|ui| {
@@ -181,6 +250,7 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
                     .pick_file()
                 {
                     sampler.sample_path = Some(path.to_string_lossy().to_string());
+                    load_sample_peaks(sampler);
                 }
             }
 
@@ -226,20 +296,72 @@ pub fn render_sampler_ui(ui: &mut Ui, sampler: &mut DmsSampler, project_bpm: f32
         painter.rect_filled(rect, 2.0, Color32::from_rgb(18, 18, 22));
         painter.rect_stroke(rect, 2.0, Stroke::new(1.0_f32, Color32::from_gray(50)));
 
-        let center_y = rect.center().y;
-        let points_count = 120;
-        for i in 0..points_count {
-            let x = rect.left() + (i as f32 / points_count as f32) * rect.width();
-            let amp = ((i as f32 * 0.3).sin() * 14.0).abs();
-            painter.line_segment(
-                [
-                    Pos2::new(x, center_y - amp),
-                    Pos2::new(x, center_y + amp),
-                ],
-                Stroke::new(1.0_f32, Color32::from_rgb(0, 200, 255)),
-            );
+        // Check for native file drops on the canvas
+        let dropped_files: Vec<std::path::PathBuf> = ui.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if let Some(dropped) = dropped_files.into_iter().find(|p| {
+            let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg")
+        }) {
+            sampler.sample_path = Some(dropped.to_string_lossy().to_string());
+            load_sample_peaks(sampler);
         }
 
+        // Check for in-app drag from explorer
+        if dragged_sample.is_some() && response.hovered() {
+            if ui.input(|i| i.pointer.any_released()) {
+                if let Some(path) = dragged_sample.take() {
+                    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    if matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg") {
+                        sampler.sample_path = Some(path.to_string_lossy().to_string());
+                        load_sample_peaks(sampler);
+                    }
+                }
+            }
+        }
+
+        // Sync peaks when path changed (e.g. pad switch)
+        load_sample_peaks(sampler);
+
+        let center_y = rect.center().y;
+
+        if sampler.waveform_peaks.is_empty() {
+            // Empty state
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "No Sample Loaded \u{2014} Drag & Drop WAV or click Load WAV",
+                egui::FontId::proportional(10.0),
+                Color32::from_rgb(80, 80, 85),
+            );
+        } else {
+            // Render real waveform from peaks
+            let half_height = (rect.height() / 2.0) * 0.92_f32;
+            let peaks = &sampler.waveform_peaks;
+            let num_bins = peaks.len();
+            let width_px = rect.width().floor() as usize;
+            let wave_color = Color32::from_rgb(0, 200, 255);
+
+            for x_idx in 0..width_px {
+                let bin = (x_idx * num_bins) / width_px;
+                let amp = peaks[bin] * half_height;
+                if amp < 1.0 {
+                    continue;
+                }
+                let x = rect.left() + x_idx as f32;
+                painter.line_segment(
+                    [Pos2::new(x, center_y - amp), Pos2::new(x, center_y + amp)],
+                    Stroke::new(1.0_f32, wave_color),
+                );
+            }
+        }
+
+        // Slice markers
         for (idx, &slice_pos) in sampler.slices.iter().enumerate() {
             let slice_x = rect.left() + slice_pos * rect.width();
             let is_sel = idx == sampler.selected_slice;

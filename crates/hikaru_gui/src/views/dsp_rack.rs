@@ -3,6 +3,7 @@
  * License: AGPL-3.0-or-later
  */
 
+use std::path::PathBuf;
 use egui::{Ui, RichText, Color32, ScrollArea, Frame, Stroke, Button, Align, Slider};
 use crate::views::mixer::{Track, DspSlot};
 use crate::views::open_dms;
@@ -12,6 +13,7 @@ pub fn show(
     tracks: &mut Vec<Track>,
     selected_idx: usize,
     selected_slot: &mut usize,
+    dragged_sample: &mut Option<PathBuf>,
 ) {
     if tracks.is_empty() {
         ui.label(RichText::new("No active track selected.").color(Color32::GRAY));
@@ -104,7 +106,7 @@ pub fn show(
                 for (idx, slot) in track.effects.iter_mut().enumerate() {
                     let is_selected = idx == *selected_slot;
                     
-                    if let Some(swap) = render_slot_card(ui, slot, idx, total_slots, is_selected, selected_slot, should_scroll) {
+                    if let Some(swap) = render_slot_card(ui, slot, idx, total_slots, is_selected, selected_slot, should_scroll, dragged_sample) {
                         swap_to_trigger = Some(swap);
                     }
                     
@@ -127,6 +129,7 @@ fn render_slot_card(
     is_selected: bool, 
     selected_slot: &mut usize,
     should_scroll: bool,
+    dragged_sample: &mut Option<PathBuf>,
 ) -> Option<(usize, usize)> {
     let mut swap_req = None;
     let border_color = if is_selected { Color32::from_rgb(255, 110, 0) } else { Color32::from_gray(50) };
@@ -261,7 +264,7 @@ fn render_slot_card(
                                 slot.dms_state = Some(open_dms::OpenDms::default());
                             }
                             if let Some(ref mut dms) = slot.dms_state {
-                                open_dms::render_dms_ui(ui, dms, 120.0);
+                                open_dms::render_dms_ui(ui, dms, 120.0, dragged_sample);
                             }
                         }
                         "OpenSpectralFX" => {
