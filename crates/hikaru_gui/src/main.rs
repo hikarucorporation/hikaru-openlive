@@ -1,6 +1,6 @@
 // Copyright (C) Hikaru Corporation - 2026
 // GNU Affero General Public License v3
-// Hikaru OpenStudio - Código fuente del Main
+// Hikaru OpenLive - Código fuente del Main
 // crates/hikaru_gui/src/main.rs
 
 use std::sync::mpsc::channel;

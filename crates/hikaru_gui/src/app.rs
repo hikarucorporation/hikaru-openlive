@@ -531,9 +531,9 @@ impl eframe::App for HikaruApp {
 
             egui::TopBottomPanel::bottom("dsp_rack_bottom_panel")
                 .resizable(true)
-                .default_height(200.0)
-                .min_height(120.0)
-                .max_height(400.0)
+                .default_height(280.0)
+                .min_height(180.0)
+                .max_height(500.0)
                 .show(ctx, |ui| {
                     dsp_rack::show(
                         ui,

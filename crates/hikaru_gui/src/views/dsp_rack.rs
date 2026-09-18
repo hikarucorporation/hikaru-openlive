@@ -1,10 +1,11 @@
 /*
- * Hikaru OpenStudio - DSP Rack View
+ * Hikaru OpenLive - DSP Rack View
  * License: AGPL-3.0-or-later
  */
 
 use egui::{Ui, RichText, Color32, ScrollArea, Frame, Stroke, Button, Align, Slider};
 use crate::views::mixer::{Track, DspSlot};
+use crate::views::open_dms;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -140,13 +141,15 @@ fn render_slot_card(
                 // Adaptamos el ancho de la tarjeta según el tipo de dispositivo
                 let card_width = match slot.name.as_str() {
                     "OpenWavetable" => 240.0,
+                    "Hikaru OpenDMS" => 520.0,
                     "OpenSpectralFX" => 200.0,
                     "Empty Slot" => 170.0,
                     _ => 190.0,
                 };
 
                 ui.set_width(card_width);
-                ui.set_height(100.0);
+                let card_height = if slot.name == "Hikaru OpenDMS" { 230.0 } else { 100.0 };
+                ui.set_height(card_height);
 
                 ui.vertical(|ui| {
                     // Cabecera: Controles de orden, índice, bypass y selector de plugin
@@ -174,13 +177,22 @@ fn render_slot_card(
 
                         ui.menu_button(RichText::new("🔻").small(), |ui| {
                             ui.set_min_width(180.0);
-                            
+
                             ui.label(RichText::new("Native Generators").small().color(Color32::from_rgb(0, 255, 255)));
-                            if ui.button(" OpenWavetable").clicked() {
-                                slot.name = "OpenWavetable".to_string();
-                                *selected_slot = idx;
-                                ui.close_menu();
-                            }
+                            ui.indent("hdr_native_gen", |ui| {
+                                ui.label(RichText::new("Synths").small().color(Color32::from_rgb(0, 200, 200)));
+                                if ui.button(" OpenWavetable").clicked() {
+                                    slot.name = "OpenWavetable".to_string();
+                                    *selected_slot = idx;
+                                    ui.close_menu();
+                                }
+                                ui.label(RichText::new("Drums").small().color(Color32::from_rgb(0, 200, 200)));
+                                if ui.button(" Hikaru OpenDMS").clicked() {
+                                    slot.name = "Hikaru OpenDMS".to_string();
+                                    *selected_slot = idx;
+                                    ui.close_menu();
+                                }
+                            });
 
                             ui.separator();
 
@@ -193,16 +205,12 @@ fn render_slot_card(
 
                             ui.separator();
 
-                            ui.label(RichText::new("VST3 Generators").small().color(Color32::from_rgb(100, 200, 255)));
+                            ui.label(RichText::new("VST3 / External").small().color(Color32::from_rgb(100, 200, 255)));
                             if ui.button(" Vital (VST3)").clicked() {
                                 slot.name = "Vital (VST3)".to_string();
                                 *selected_slot = idx;
                                 ui.close_menu();
                             }
-
-                            ui.separator();
-
-                            ui.label(RichText::new("CLAP FX / Synth").small().color(Color32::from_rgb(180, 100, 255)));
                             if ui.button(" External CLAP...").clicked() {
                                 slot.name = "CLAP Plugin".to_string();
                                 *selected_slot = idx;
@@ -248,6 +256,14 @@ fn render_slot_card(
                                 });
                             });
                         }
+                        "Hikaru OpenDMS" => {
+                            if slot.dms_state.is_none() {
+                                slot.dms_state = Some(open_dms::OpenDms::default());
+                            }
+                            if let Some(ref mut dms) = slot.dms_state {
+                                open_dms::render_dms_ui(ui, dms, 120.0);
+                            }
+                        }
                         "OpenSpectralFX" => {
                             ui.label(RichText::new("Spectral Processor").small().strong().color(Color32::from_rgb(255, 110, 0)));
                             ui.horizontal(|ui| {
@@ -264,7 +280,48 @@ fn render_slot_card(
                         "Empty Slot" => {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("Select Plugin 🔻").small().color(Color32::GRAY));
+                                ui.menu_button(RichText::new("Select Plugin 🔻").small().color(Color32::GRAY), |ui| {
+                                    ui.set_min_width(180.0);
+
+                                    ui.label(RichText::new("Native Generators").small().color(Color32::from_rgb(0, 255, 255)));
+                                    ui.indent("empty_native_gen", |ui| {
+                                        ui.label(RichText::new("Synths").small().color(Color32::from_rgb(0, 200, 200)));
+                                        if ui.button(" OpenWavetable").clicked() {
+                                            slot.name = "OpenWavetable".to_string();
+                                            *selected_slot = idx;
+                                            ui.close_menu();
+                                        }
+                                        ui.label(RichText::new("Drums").small().color(Color32::from_rgb(0, 200, 200)));
+                                        if ui.button(" Hikaru OpenDMS").clicked() {
+                                            slot.name = "Hikaru OpenDMS".to_string();
+                                            *selected_slot = idx;
+                                            ui.close_menu();
+                                        }
+                                    });
+
+                                    ui.separator();
+
+                                    ui.label(RichText::new("Native FX").small().color(Color32::from_rgb(255, 110, 0)));
+                                    if ui.button(" OpenSpectralFX").clicked() {
+                                        slot.name = "OpenSpectralFX".to_string();
+                                        *selected_slot = idx;
+                                        ui.close_menu();
+                                    }
+
+                                    ui.separator();
+
+                                    ui.label(RichText::new("VST3 / External").small().color(Color32::from_rgb(100, 200, 255)));
+                                    if ui.button(" Vital (VST3)").clicked() {
+                                        slot.name = "Vital (VST3)".to_string();
+                                        *selected_slot = idx;
+                                        ui.close_menu();
+                                    }
+                                    if ui.button(" External CLAP...").clicked() {
+                                        slot.name = "CLAP Plugin".to_string();
+                                        *selected_slot = idx;
+                                        ui.close_menu();
+                                    }
+                                });
                             });
                         }
                         _ => {

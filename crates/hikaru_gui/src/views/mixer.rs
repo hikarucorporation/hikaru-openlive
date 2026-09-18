@@ -7,10 +7,11 @@ use egui::{Ui, Vec2, Color32, RichText, Stroke, Frame, Rect, Pos2, Sense, Button
 use std::f32::consts::PI;
 use crate::app::{PanMode, AppMode};
 use crate::views::open_wavetable::{WavetableOscillator, ModulatorNode};
+use crate::views::open_dms::OpenDms;
 
 // --- DATA STRUCTURES ---
 
-#[derive(Clone, Debug)] // <--- AGREGAR AQUÍ
+#[derive(Clone, Debug)]
 pub struct DspSlot {
     pub id: usize,
     pub name: String,
@@ -21,6 +22,7 @@ pub struct DspSlot {
     pub cam_z: f32,
     pub wavetable_oscillators: Vec<WavetableOscillator>,
     pub modulators: Vec<ModulatorNode>,
+    pub dms_state: Option<OpenDms>,
 }
 
 impl DspSlot {
@@ -37,6 +39,7 @@ impl DspSlot {
                 WavetableOscillator::new(0, "OSC A", egui::Pos2::new(40.0, 60.0)),
             ],
             modulators: Vec::new(),
+            dms_state: None,
         }
     }
 }
