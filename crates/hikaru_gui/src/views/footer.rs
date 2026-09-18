@@ -6,12 +6,17 @@ pub fn show(
     cpu_usage: f32,
     show_clip_editor: &mut bool,
     show_piano_roll: &mut bool,
+    show_dsp_rack: &mut bool,
 ) {
     ui.horizontal(|ui| {
         // Toggle Clip Editor
         let clip_icon = if *show_clip_editor { "🎛 CLIP EDITOR [▼]" } else { "🎛 CLIP EDITOR [▲]" };
         if ui.selectable_label(*show_clip_editor, RichText::new(clip_icon).small().strong()).clicked() {
             *show_clip_editor = !*show_clip_editor;
+            if *show_clip_editor {
+                *show_piano_roll = false;
+                *show_dsp_rack = false;
+            }
         }
 
         ui.separator();
@@ -20,6 +25,22 @@ pub fn show(
         let pr_icon = if *show_piano_roll { "🎹 PIANO ROLL [▼]" } else { "🎹 PIANO ROLL [▲]" };
         if ui.selectable_label(*show_piano_roll, RichText::new(pr_icon).small().strong()).clicked() {
             *show_piano_roll = !*show_piano_roll;
+            if *show_piano_roll {
+                *show_clip_editor = false;
+                *show_dsp_rack = false;
+            }
+        }
+
+        ui.separator();
+
+        // Toggle DSP FX Rack
+        let dsp_icon = if *show_dsp_rack { "🎚 DSP RACK [▼]" } else { "🎚 DSP RACK [▲]" };
+        if ui.selectable_label(*show_dsp_rack, RichText::new(dsp_icon).small().strong()).clicked() {
+            *show_dsp_rack = !*show_dsp_rack;
+            if *show_dsp_rack {
+                *show_clip_editor = false;
+                *show_piano_roll = false;
+            }
         }
 
         ui.separator();

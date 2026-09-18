@@ -472,8 +472,12 @@ impl eframe::App for HikaruApp {
                 self.cpu_usage, 
                 &mut self.matrix_state.show_editor, 
                 &mut self.show_piano_roll,
+                &mut self.show_dsp_rack, // <-- Agregar esta variable
             );
         });
+
+        // 1. DENTRO DE IMPL APPARC FOR HIKARUAPP (update):
+        // Declaramos primero todos los TopBottomPanels inferiores para que recorten el espacio del CentralPanel.
 
         if self.show_piano_roll {
             if let Some((track_idx, scene_idx)) = self.matrix_state.selected_slot {
@@ -517,6 +521,27 @@ impl eframe::App for HikaruApp {
                     }
                 }
             }
+        }
+
+        if self.show_dsp_rack {
+            let active_tracks = match self.mode {
+                AppMode::OpenLive => &mut self.live_tracks,
+                AppMode::OpenStudio => &mut self.studio_tracks,
+            };
+
+            egui::TopBottomPanel::bottom("dsp_rack_bottom_panel")
+                .resizable(true)
+                .default_height(200.0)
+                .min_height(120.0)
+                .max_height(400.0)
+                .show(ctx, |ui| {
+                    dsp_rack::show(
+                        ui,
+                        active_tracks,
+                        self.selected_track_index,
+                        &mut self.selected_slot_index,
+                    );
+                });
         }
 
         CentralPanel::default().show(ctx, |ui| {
@@ -691,30 +716,7 @@ impl eframe::App for HikaruApp {
             }
         }
 
-        if self.show_dsp_rack {
-            ctx.show_viewport_immediate(
-                ViewportId::from_hash_of("hikaru_dsp_rack_viewport"),
-                ViewportBuilder::default()
-                    .with_title("DSP FX Rack")
-                    .with_inner_size([400.0, 500.0])
-                    .with_min_inner_size([250.0, 250.0]),
-                |vp_ctx, _class| {
-                    CentralPanel::default().show(vp_ctx, |ui| {
-                        let active_tracks = match self.mode {
-                            AppMode::OpenLive => &mut self.live_tracks,
-                            AppMode::OpenStudio => &mut self.studio_tracks,
-                        };
-                        dsp_rack::show(
-                            ui,
-                            active_tracks,
-                            self.selected_track_index,
-                            &mut self.selected_slot_index,
-                        );
-                    });
-                },
-            );
-        }
-
+        // DSP RACK PANEL (Se declara antes del CentralPanel)
         let active_tracks = match self.mode {
             AppMode::OpenLive => &mut self.live_tracks,
             AppMode::OpenStudio => &mut self.studio_tracks,
