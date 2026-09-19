@@ -137,7 +137,6 @@ impl Default for AdsrEnvelope {
 
 #[derive(Clone, Debug)]
 pub struct DmsSampler {
-    pub sample_path: Option<String>,
     pub sample_bpm: f32,
     pub sync_tempo: bool,
     pub pitch_cents: f32,
@@ -146,14 +145,11 @@ pub struct DmsSampler {
     pub adsr: AdsrEnvelope,
     pub slices: Vec<f32>,
     pub selected_slice: usize,
-    pub waveform_peaks: Vec<f32>,
-    pub(crate) cached_peak_path: Option<String>,
 }
 
 impl Default for DmsSampler {
     fn default() -> Self {
         Self {
-            sample_path: None,
             sample_bpm: 120.0,
             sync_tempo: true,
             pitch_cents: 0.0,
@@ -162,80 +158,22 @@ impl Default for DmsSampler {
             adsr: AdsrEnvelope::default(),
             slices: vec![0.0, 0.25, 0.5, 0.75],
             selected_slice: 0,
-            waveform_peaks: Vec::new(),
-            cached_peak_path: None,
         }
     }
-}
-
-fn load_sample_peaks(sampler: &mut DmsSampler) {
-    let needs_reload = match (&sampler.sample_path, &sampler.cached_peak_path) {
-        (Some(p), Some(c)) => p != c,
-        (Some(_), None) => true,
-        _ => false,
-    };
-    if !needs_reload {
-        return;
-    }
-    let path = match &sampler.sample_path {
-        Some(p) => p.clone(),
-        None => return,
-    };
-    let target_bins = 512;
-    let mut peaks = vec![0.0_f32; target_bins];
-    if let Ok(mut reader) = hound::WavReader::open(&path) {
-        let spec = reader.spec();
-        let total_samples = reader.len() as usize;
-        if total_samples == 0 {
-            sampler.waveform_peaks = peaks;
-            sampler.cached_peak_path = Some(path);
-            return;
-        }
-        let samples_per_bin = (total_samples / target_bins).max(1);
-        match spec.sample_format {
-            hound::SampleFormat::Int => {
-                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
-                let mut iter = reader.samples::<i32>().filter_map(Result::ok);
-                for bin in 0..target_bins {
-                    let mut max_peak = 0.0_f32;
-                    for _ in 0..samples_per_bin {
-                        if let Some(s) = iter.next() {
-                            let v = (s as f32 / max_val).abs();
-                            if v > max_peak { max_peak = v; }
-                        } else { break; }
-                    }
-                    peaks[bin] = max_peak;
-                }
-            }
-            hound::SampleFormat::Float => {
-                let mut iter = reader.samples::<f32>().filter_map(Result::ok);
-                for bin in 0..target_bins {
-                    let mut max_peak = 0.0_f32;
-                    for _ in 0..samples_per_bin {
-                        if let Some(s) = iter.next() {
-                            let v = s.abs();
-                            if v > max_peak { max_peak = v; }
-                        } else { break; }
-                    }
-                    peaks[bin] = max_peak;
-                }
-            }
-        }
-        sampler.waveform_peaks = peaks;
-    } else {
-        sampler.waveform_peaks = peaks;
-    }
-    sampler.cached_peak_path = Some(path);
 }
 
 // ─── Sampler UI ────────────────────────────────────────────────────
 
+/// Render the sampler editor. Returns `Some(new_path)` if a file was loaded
+/// via the Load WAV button or drag-and-drop on the waveform canvas.
 pub fn render_sampler_ui(
     ui: &mut Ui,
     sampler: &mut DmsSampler,
     project_bpm: f32,
     dragged_sample: &mut Option<std::path::PathBuf>,
-) {
+    peaks: &[f32],
+) -> Option<String> {
+    let mut new_path: Option<String> = None;
     ui.spacing_mut().item_spacing = Vec2::splat(2.0);
 
     ui.vertical(|ui| {
@@ -249,8 +187,7 @@ pub fn render_sampler_ui(
                     .add_filter("Audio", &["wav", "mp3", "ogg", "flac"])
                     .pick_file()
                 {
-                    sampler.sample_path = Some(path.to_string_lossy().to_string());
-                    load_sample_peaks(sampler);
+                    new_path = Some(path.to_string_lossy().to_string());
                 }
             }
 
@@ -296,7 +233,7 @@ pub fn render_sampler_ui(
         painter.rect_filled(rect, 2.0, Color32::from_rgb(18, 18, 22));
         painter.rect_stroke(rect, 2.0, Stroke::new(1.0_f32, Color32::from_gray(50)));
 
-        // Check for native file drops on the canvas
+        // Native file drops on the canvas
         let dropped_files: Vec<std::path::PathBuf> = ui.input(|i| {
             i.raw
                 .dropped_files
@@ -304,33 +241,30 @@ pub fn render_sampler_ui(
                 .filter_map(|f| f.path.clone())
                 .collect()
         });
-        if let Some(dropped) = dropped_files.into_iter().find(|p| {
-            let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-            matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg")
-        }) {
-            sampler.sample_path = Some(dropped.to_string_lossy().to_string());
-            load_sample_peaks(sampler);
+        if new_path.is_none() {
+            if let Some(dropped) = dropped_files.into_iter().find(|p| {
+                let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg")
+            }) {
+                new_path = Some(dropped.to_string_lossy().to_string());
+            }
         }
 
-        // Check for in-app drag from explorer
-        if dragged_sample.is_some() && response.hovered() {
+        // In-app drag from explorer
+        if new_path.is_none() && dragged_sample.is_some() && response.hovered() {
             if ui.input(|i| i.pointer.any_released()) {
                 if let Some(path) = dragged_sample.take() {
                     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                     if matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg") {
-                        sampler.sample_path = Some(path.to_string_lossy().to_string());
-                        load_sample_peaks(sampler);
+                        new_path = Some(path.to_string_lossy().to_string());
                     }
                 }
             }
         }
 
-        // Sync peaks when path changed (e.g. pad switch)
-        load_sample_peaks(sampler);
-
         let center_y = rect.center().y;
 
-        if sampler.waveform_peaks.is_empty() {
+        if peaks.is_empty() {
             // Empty state
             painter.text(
                 rect.center(),
@@ -342,7 +276,6 @@ pub fn render_sampler_ui(
         } else {
             // Render real waveform from peaks
             let half_height = (rect.height() / 2.0) * 0.92_f32;
-            let peaks = &sampler.waveform_peaks;
             let num_bins = peaks.len();
             let width_px = rect.width().floor() as usize;
             let wave_color = Color32::from_rgb(0, 200, 255);
@@ -453,4 +386,49 @@ pub fn render_sampler_ui(
             });
         });
     });
+
+    new_path
+}
+
+/// Compute peak-per-bin from a WAV file for waveform display.
+pub fn load_peaks_from_wav(path: &str, target_bins: usize) -> Vec<f32> {
+    let mut peaks = vec![0.0_f32; target_bins];
+    if let Ok(mut reader) = hound::WavReader::open(path) {
+        let spec = reader.spec();
+        let total_samples = reader.len() as usize;
+        if total_samples == 0 {
+            return peaks;
+        }
+        let samples_per_bin = (total_samples / target_bins).max(1);
+        match spec.sample_format {
+            hound::SampleFormat::Int => {
+                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                let mut iter = reader.samples::<i32>().filter_map(Result::ok);
+                for bin in 0..target_bins {
+                    let mut max_peak = 0.0_f32;
+                    for _ in 0..samples_per_bin {
+                        if let Some(s) = iter.next() {
+                            let v = (s as f32 / max_val).abs();
+                            if v > max_peak { max_peak = v; }
+                        } else { break; }
+                    }
+                    peaks[bin] = max_peak;
+                }
+            }
+            hound::SampleFormat::Float => {
+                let mut iter = reader.samples::<f32>().filter_map(Result::ok);
+                for bin in 0..target_bins {
+                    let mut max_peak = 0.0_f32;
+                    for _ in 0..samples_per_bin {
+                        if let Some(s) = iter.next() {
+                            let v = s.abs();
+                            if v > max_peak { max_peak = v; }
+                        } else { break; }
+                    }
+                    peaks[bin] = max_peak;
+                }
+            }
+        }
+    }
+    peaks
 }

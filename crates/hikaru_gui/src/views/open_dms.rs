@@ -5,8 +5,9 @@
  */
 
 use std::path::PathBuf;
-use egui::{CursorIcon, RichText, Rounding, Sense, Stroke, Ui, Vec2, Color32};
+use egui::{Align, CursorIcon, RichText, Rounding, Sense, Stroke, Ui, Vec2, Color32};
 use super::open_dms_sampler::{self, DmsSampler, ui_knob};
+use crate::audio_proxy::{AudioProxy, GuiCommand};
 
 const MIDI_NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -27,6 +28,8 @@ pub struct DmsPad {
     pub pitch: f32,
     pub mute: bool,
     pub solo: bool,
+    pub waveform_peaks: Vec<f32>,
+    cached_peak_path: Option<String>,
 }
 
 impl DmsPad {
@@ -41,6 +44,27 @@ impl DmsPad {
             pitch: 0.0,
             mute: false,
             solo: false,
+            waveform_peaks: Vec::new(),
+            cached_peak_path: None,
+        }
+    }
+
+    pub fn load_sample(&mut self, path: String) {
+        if self.cached_peak_path.as_deref() == Some(&path) {
+            return;
+        }
+        self.waveform_peaks = open_dms_sampler::load_peaks_from_wav(&path, 512);
+        self.cached_peak_path = Some(path.clone());
+        self.sample_path = Some(path);
+    }
+
+    pub fn display_filename(&self) -> String {
+        match &self.sample_path {
+            Some(p) => std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Unknown".to_string()),
+            None => "No Sample Loaded".to_string(),
         }
     }
 }
@@ -92,6 +116,7 @@ pub fn render_dms_ui(
     dms: &mut OpenDms,
     project_bpm: f32,
     dragged_sample: &mut Option<PathBuf>,
+    audio_proxy: &AudioProxy,
 ) {
     ui.horizontal(|ui| {
         // --- COLUMNA IZQUIERDA: GRILLA DE PADS ---
@@ -141,9 +166,12 @@ pub fn render_dms_ui(
                                 continue;
                             }
 
-                            let pad = &dms.pads[pad_idx];
+                            // Copy rendering data from pad to avoid borrow conflicts
                             let is_selected = pad_idx == dms.selected_pad;
-                            let (bg, border) = pad_color(pad, is_selected);
+                            let (bg, border) = pad_color(&dms.pads[pad_idx], is_selected);
+                            let midi_note = dms.pads[pad_idx].midi_note;
+                            let has_sample = dms.pads[pad_idx].sample_path.is_some();
+                            let pad_name = dms.pads[pad_idx].name.clone();
 
                             let desired = Vec2::splat(pad_size);
                             let (rect, response) =
@@ -156,11 +184,32 @@ pub fn render_dms_ui(
 
                             if response.clicked() {
                                 dms.selected_pad = pad_idx;
-                                let sp = &dms.pads[pad_idx];
-                                dms.sampler = DmsSampler {
-                                    sample_path: sp.sample_path.clone(),
-                                    ..dms.sampler.clone()
-                                };
+
+                                // Trigger audio preview for the pad's sample
+                                if let Some(ref path) = dms.pads[pad_idx].sample_path {
+                                    let vol = dms.pads[pad_idx].volume;
+                                    let pitch_shift = dms.pads[pad_idx].pitch;
+                                    let speed = 2.0_f32.powf(pitch_shift / 12.0);
+                                    audio_proxy.send(GuiCommand::PreviewSample {
+                                        path: path.clone(),
+                                        volume: vol,
+                                        speed,
+                                    });
+                                }
+                            }
+
+                            // Handle drag-over drop on this pad
+                            if dragged_sample.is_some() && response.hovered() && ui.input(|i| i.pointer.any_released()) {
+                                if let Some(path) = dragged_sample.take() {
+                                    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                                    if matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg") {
+                                        let stem = path.file_stem()
+                                            .map(|s| s.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| "Sample".to_string());
+                                        dms.pads[pad_idx].name = stem;
+                                        dms.pads[pad_idx].load_sample(path.to_string_lossy().to_string());
+                                    }
+                                }
                             }
 
                             // Pintar el pad completo sobre el rect asignado
@@ -184,7 +233,7 @@ pub fn render_dms_ui(
                             );
 
                             // Texto de la nota MIDI (arriba-derecha)
-                            let note_text = midi_note_name(pad.midi_note);
+                            let note_text = midi_note_name(midi_note);
                             let note_pos = rect.right_top() + Vec2::new(-3.0, 2.0);
                             painter.text(
                                 note_pos,
@@ -195,16 +244,11 @@ pub fn render_dms_ui(
                             );
 
                             // Nombre del sample o nada (centro)
-                            let label = if pad.sample_path.is_some() {
-                                &pad.name
-                            } else {
-                                ""
-                            };
-                            if !label.is_empty() {
+                            if has_sample {
                                 painter.text(
                                     rect.center(),
                                     egui::Align2::CENTER_CENTER,
-                                    label,
+                                    &pad_name,
                                     egui::FontId::proportional(8.0),
                                     Color32::WHITE,
                                 );
@@ -221,62 +265,94 @@ pub fn render_dms_ui(
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = Vec2::splat(2.0);
 
-            if let Some(pad) = dms.pads.get_mut(dms.selected_pad) {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "PAD {:02} [{}]",
-                            pad.id + 1,
-                            midi_note_name(pad.midi_note)
-                        ))
-                        .strong()
-                        .size(11.0)
-                        .color(Color32::from_rgb(0, 255, 255)),
-                    );
+            let sel = dms.selected_pad;
+
+            // Header: pad identifier + filename display + Load Sample button
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "PAD {:02} [{}]",
+                        sel + 1,
+                        midi_note_name(dms.pads[sel].midi_note)
+                    ))
+                    .strong()
+                    .size(11.0)
+                    .color(Color32::from_rgb(0, 255, 255)),
+                );
+
+                ui.separator();
+
+                // Show loaded filename
+                let filename = dms.pads[sel].display_filename();
+                let file_color = if dms.pads[sel].sample_path.is_some() {
+                    Color32::from_rgb(180, 180, 190)
+                } else {
+                    Color32::from_rgb(80, 80, 85)
+                };
+                ui.label(
+                    RichText::new(&filename).small().color(file_color),
+                );
+
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                     if ui.button(RichText::new("Load Sample").small()).clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Audio", &["wav", "mp3", "ogg", "flac"])
                             .pick_file()
                         {
-                            let path_str = path.to_string_lossy().to_string();
-                            pad.sample_path = Some(path_str.clone());
-                            pad.name = path
-                                .file_stem()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            dms.sampler.sample_path = Some(path_str);
+                            let stem = path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Sample".to_string());
+                            dms.pads[sel].name = stem;
+                            dms.pads[sel].load_sample(path.to_string_lossy().to_string());
                         }
                     }
                 });
+            });
 
-                ui.add_space(2.0);
+            ui.add_space(2.0);
 
-                ui.horizontal(|ui| {
-                    ui_knob(ui, &mut pad.volume, 0.0..=2.0, "Gain");
-                    ui_knob(ui, &mut pad.pan, -1.0..=1.0, "Pan");
-                    ui_knob(ui, &mut pad.pitch, -24.0..=24.0, "Pitch");
+            let pad = &mut dms.pads[sel];
+            ui.horizontal(|ui| {
+                ui_knob(ui, &mut pad.volume, 0.0..=2.0, "Gain");
+                ui_knob(ui, &mut pad.pan, -1.0..=1.0, "Pan");
+                ui_knob(ui, &mut pad.pitch, -24.0..=24.0, "Pitch");
 
-                    ui.add_space(6.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("").size(9.0));
-                        ui.horizontal(|ui| {
-                            ui.toggle_value(
-                                &mut pad.mute,
-                                RichText::new("M").small().strong(),
-                            );
-                            ui.toggle_value(
-                                &mut pad.solo,
-                                RichText::new("S").small().strong(),
-                            );
-                        });
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("").size(9.0));
+                    ui.horizontal(|ui| {
+                        ui.toggle_value(
+                            &mut pad.mute,
+                            RichText::new("M").small().strong(),
+                        );
+                        ui.toggle_value(
+                            &mut pad.solo,
+                            RichText::new("S").small().strong(),
+                        );
                     });
                 });
+            });
 
-                ui.add_space(2.0);
-                ui.separator();
+            ui.add_space(2.0);
+            ui.separator();
 
-                open_dms_sampler::render_sampler_ui(ui, &mut dms.sampler, project_bpm, dragged_sample);
+            // Sampler editor — pass pad's peaks, receive new path if loaded
+            let peaks = dms.pads[sel].waveform_peaks.clone();
+            let new_path = open_dms_sampler::render_sampler_ui(
+                ui,
+                &mut dms.sampler,
+                project_bpm,
+                dragged_sample,
+                &peaks,
+            );
+
+            if let Some(path) = new_path {
+                let stem = std::path::Path::new(&path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Sample".to_string());
+                dms.pads[sel].name = stem;
+                dms.pads[sel].load_sample(path);
             }
         });
     });
