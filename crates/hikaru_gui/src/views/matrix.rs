@@ -770,6 +770,59 @@ fn render_pad(
     response.context_menu(|ui| {
         ui.style_mut().spacing.button_padding = Vec2::new(8.0, 4.0);
 
+        // --- SUBMENÚ O SECCIÓN DE INSERTAR ---
+        ui.menu_button("➕ Insertar", |ui| {
+            if ui.button("🎵 Clip de Audio...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Audio Files", &["wav", "mp3", "flac", "ogg"])
+                    .pick_file() 
+                {
+                    state.selected_slot = Some((track_idx, scene_idx));
+                    load_clip_into_slot(state, audio_proxy, track_idx, scene_idx, path, bpm);
+                }
+                ui.close_menu();
+            }
+
+            ui.menu_button("🎹 MIDI Clip...", |ui| {
+                if ui.button("✨ Nuevo MIDI Clip").clicked() {
+                    let new_id = state.next_clip_id;
+                    state.next_clip_id += 1;
+
+                    state.grid[track_idx][scene_idx] = MatrixSlot {
+                        state: SlotState::Stopped,
+                        clip: Some(MatrixClip {
+                            id: new_id,
+                            name: "Nuevo MIDI".to_string(),
+                            path: PathBuf::new(),
+                            duration_secs: 4.0, // 1 compás por defecto
+                            content: ClipData::Midi { notes: Vec::new() },
+                            local_state: PlaylistState::default(),
+                            local_track: Track::new(0, "Nuevo MIDI".to_string(), false),
+                            local_bar: 1.0,
+                            loop_start: 0,
+                            loop_end: 1920, // Ticks de ejemplo para 1 bar a 480 PPQN
+                            loop_enabled: true,
+                        }),
+                    };
+                    state.selected_slot = Some((track_idx, scene_idx));
+                    ui.close_menu();
+                }
+
+                if ui.button("📂 Abrir MIDI Clip (.mid/.midi)").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Archivos MIDI", &["mid", "midi"])
+                        .pick_file() 
+                    {
+                        state.selected_slot = Some((track_idx, scene_idx));
+                        load_clip_into_slot(state, audio_proxy, track_idx, scene_idx, path, bpm);
+                    }
+                    ui.close_menu();
+                }
+            });
+        });
+
+        ui.separator();
+
         if ui.add_enabled(has_clip, Button::new("📋 Copiar")).clicked() {
             state.copy_slot(track_idx, scene_idx, clipboard);
             ui.close_menu();
@@ -792,7 +845,7 @@ fn render_pad(
             ui.close_menu();
         }
     });
-
+    
     if response.clicked() {
         state.selected_slot = Some((track_idx, scene_idx));
         trigger_pad(state, audio_proxy, track_idx, scene_idx);

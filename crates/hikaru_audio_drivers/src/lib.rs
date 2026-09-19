@@ -9,6 +9,15 @@ pub struct HikaruAlsaDriver {
     pcm_handle: *mut snd_pcm_t,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MidiEvent {
+    pub frame_offset: usize, // En qué frame relativo al buffer actual ocurre
+    pub channel: u8,
+    pub note: u8,
+    pub velocity: u8,
+    pub is_note_on: bool,
+}
+
 impl HikaruAlsaDriver {
     pub fn open_direct_device(device_name: &str, sample_rate: u32, buffer_size: u32) -> Result<Self, String> {
         let mut pcm_handle: *mut snd_pcm_t = ptr::null_mut();
@@ -61,6 +70,13 @@ impl HikaruAlsaDriver {
             // Mandamos los frames directamente a la Placa sin pasar por intermediarios
             let frames = (buffer.len() / 2) as u64; // Estéreo (2 canales)
             snd_pcm_writei(self.pcm_handle, buffer.as_ptr() as *const _, frames)
+        }
+    }
+
+    // Disparar las voces del sampler OpenDMS únicamente en el frame exacto de frame_offset
+    for event in incoming_midi_events {
+        if event.is_note_on {
+            open_dms_instance.trigger_note(event.note, event.velocity);
         }
     }
 }

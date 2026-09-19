@@ -1,5 +1,5 @@
 /*
- * Hikaru OpenStudio - Global Menu Bar
+ * Hikaru OpenLive - Global Menu Bar
  * License: AGPL-3.0-or-later
  */
 
