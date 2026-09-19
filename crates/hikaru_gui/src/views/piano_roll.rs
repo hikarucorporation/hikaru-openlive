@@ -3,7 +3,10 @@
 // crates/hikaru_gui/src/views/piano_roll.rs
 
 use egui::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use crate::audio_proxy::{AudioProxy, GuiCommand};
+use super::open_dms::OpenDms;
+use super::mixer::Track;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PianoRollMode {
@@ -26,35 +29,80 @@ pub struct PianoRollState {
     pub notes: Vec<MidiNote>,
     pub drum_map: HashMap<u8, String>,
     pub playhead_tick: u64,
+    triggered_notes: HashSet<(u8, u64)>,
 }
 
 impl Default for PianoRollState {
     fn default() -> Self {
-        let mut drum_map = HashMap::new();
-        drum_map.insert(36, "Kick 01".to_string());
-        drum_map.insert(37, "Rimshot".to_string());
-        drum_map.insert(38, "Snare 01".to_string());
-        drum_map.insert(39, "Clap 01".to_string());
-        drum_map.insert(42, "Closed Hat".to_string());
-        drum_map.insert(46, "Open Hat".to_string());
-
         Self {
             mode: PianoRollMode::Keys,
             zoom_x: 0.15,
             key_height: 16.0,
             notes: Vec::new(),
-            drum_map,
+            drum_map: HashMap::new(),
             playhead_tick: 0,
+            triggered_notes: HashSet::new(),
         }
     }
 }
 
-pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
+/// Sincroniza el drum_map del Piano Roll con los pads activos de OpenDMS.
+/// Mapea la nota MIDI de cada pad al nombre del pad + nombre del archivo WAV cargado.
+pub fn sync_drum_map_from_opendms(state: &mut PianoRollState, opendms: &OpenDms) {
+    let pad_entries: Vec<(u8, String)> = opendms.pads.iter().map(|pad| {
+        let display_name = if pad.sample_path.is_some() {
+            let filename = pad.display_filename();
+            format!("{}: {}", pad.name, filename)
+        } else {
+            pad.name.clone()
+        };
+        (pad.midi_note, display_name)
+    }).collect();
+
+    state.drum_map.clear();
+    for (pitch, name) in pad_entries {
+        state.drum_map.insert(pitch, name);
+    }
+}
+
+/// Busca una instancia de OpenDMS en la cadena de effects del track seleccionado.
+fn find_opendms_in_track(track: &Track) -> Option<&OpenDms> {
+    track.effects.iter().find_map(|slot| {
+        if slot.name == "Hikaru OpenDMS" {
+            slot.dms_state.as_ref()
+        } else {
+            None
+        }
+    })
+}
+
+pub fn show(
+    ui: &mut Ui,
+    state: &mut PianoRollState,
+    tracks: &[Track],
+    selected_track_index: usize,
+    audio_proxy: &AudioProxy,
+) {
+    // Auto-detect: si el track seleccionado tiene OpenDMS, cambiar a modo Drums
+    if let Some(track) = tracks.get(selected_track_index) {
+        let has_opendms = track.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
+        if has_opendms && state.mode == PianoRollMode::Keys && state.drum_map.is_empty() {
+            state.mode = PianoRollMode::Drums;
+        }
+    }
+
+    // Sync drum_map from OpenDMS si esta disponible
+    if let Some(track) = tracks.get(selected_track_index) {
+        if let Some(opendms) = find_opendms_in_track(track) {
+            sync_drum_map_from_opendms(state, opendms);
+        }
+    }
+
     ui.vertical(|ui| {
         // --- Toolbar ---
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut state.mode, PianoRollMode::Keys, "🎹 Keys");
-            ui.selectable_value(&mut state.mode, PianoRollMode::Drums, "🥁 Drums");
+            ui.selectable_value(&mut state.mode, PianoRollMode::Keys, "\u{1F3B9} Keys");
+            ui.selectable_value(&mut state.mode, PianoRollMode::Drums, "\u{1F941} Drums");
             ui.separator();
             ui.label(RichText::new("Zoom H:").small());
             ui.add(Slider::new(&mut state.zoom_x, 0.02..=0.8).text("X"));
@@ -67,11 +115,11 @@ pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
         let total_height = 128.0 * state.key_height;
 
         let max_note_tick = state.notes.iter().map(|n| n.start_tick + n.duration_ticks).max().unwrap_or(0);
-        let min_ticks = 19200; 
+        let min_ticks = 19200;
         let total_ticks = max_note_tick.max(min_ticks) + 9600;
         let total_grid_width = total_ticks as f32 * state.zoom_x;
 
-        // ScrollArea envuelve todo el área (Sidebar + Grid) para mantener Y sincronizado en nativo
+        // ScrollArea envuelve todo el area (Sidebar + Grid) para mantener Y sincronizado
         ScrollArea::both()
             .id_source("piano_roll_master_scroll")
             .show(ui, |ui| {
@@ -91,8 +139,27 @@ pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
                     vec2(total_grid_width, total_height),
                 );
 
-                // --- 1. RENDER SIDEBAR (Teclado) ---
-                draw_sidebar(ui, sidebar_rect, state);
+                // --- 1. RENDER SIDEBAR (Teclado / Pads) ---
+                let sidebar_clicked_pitch = draw_sidebar(ui, sidebar_rect, state);
+
+                // Handle sidebar click: trigger audio audition from OpenDMS
+                if let Some(clicked_pitch) = sidebar_clicked_pitch {
+                    if let Some(track) = tracks.get(selected_track_index) {
+                        if let Some(opendms) = find_opendms_in_track(track) {
+                            if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == clicked_pitch) {
+                                if let Some(ref path) = pad.sample_path {
+                                    let vol = pad.volume;
+                                    let speed = 2.0_f32.powf(pad.pitch / 12.0);
+                                    audio_proxy.send(GuiCommand::PreviewSample {
+                                        path: path.clone(),
+                                        volume: vol,
+                                        speed,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // --- 2. RENDER GRILLA Y NOTAS ---
                 let response = ui.interact(grid_rect, ui.id().with("grid_interact"), Sense::click_and_drag());
@@ -124,7 +191,40 @@ pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
                     );
                 }
 
-                // Interacción Clics (Crear / Eliminar con Cuantización 1/16th)
+                // --- 3. PLAYHEAD-BASED NOTE TRIGGERING ---
+                let current_tick = state.playhead_tick;
+                for note in &state.notes {
+                    let note_key = (note.pitch, note.start_tick);
+                    if current_tick >= note.start_tick
+                        && current_tick < note.start_tick + note.duration_ticks
+                        && !state.triggered_notes.contains(&note_key)
+                    {
+                        state.triggered_notes.insert(note_key);
+
+                        if let Some(track) = tracks.get(selected_track_index) {
+                            if let Some(opendms) = find_opendms_in_track(track) {
+                                if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == note.pitch) {
+                                    if let Some(ref path) = pad.sample_path {
+                                        let vol = pad.volume * (note.velocity as f32 / 127.0);
+                                        let speed = 2.0_f32.powf(pad.pitch / 12.0);
+                                        audio_proxy.send(GuiCommand::PreviewSample {
+                                            path: path.clone(),
+                                            volume: vol,
+                                            speed,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Reset triggered notes when playhead moves backward or to zero
+                if current_tick == 0 || state.triggered_notes.iter().any(|&(_, tick)| tick > current_tick) {
+                    state.triggered_notes.clear();
+                }
+
+                // --- 4. INTERACCIÓN CLICS (Crear / Eliminar con Cuantización 1/16th) ---
                 if response.clicked() || response.secondary_clicked() {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let rel_x = pos.x - grid_rect.min.x;
@@ -139,8 +239,8 @@ pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
 
                         if response.secondary_clicked() {
                             state.notes.retain(|n| {
-                                !(n.pitch == pitch 
-                                  && quantized_start_tick >= n.start_tick 
+                                !(n.pitch == pitch
+                                  && quantized_start_tick >= n.start_tick
                                   && quantized_start_tick < n.start_tick + n.duration_ticks)
                             });
                         } else {
@@ -150,6 +250,25 @@ pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
                                 duration_ticks: 240, // 1/16th note
                                 velocity: 100,
                             });
+
+                            // Trigger audio preview when placing a note in Drums mode
+                            if state.mode == PianoRollMode::Drums {
+                                if let Some(track) = tracks.get(selected_track_index) {
+                                    if let Some(opendms) = find_opendms_in_track(track) {
+                                        if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == pitch) {
+                                            if let Some(ref path) = pad.sample_path {
+                                                let vol = pad.volume * (100.0 / 127.0);
+                                                let speed = 2.0_f32.powf(pad.pitch / 12.0);
+                                                audio_proxy.send(GuiCommand::PreviewSample {
+                                                    path: path.clone(),
+                                                    volume: vol,
+                                                    speed,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -157,9 +276,13 @@ pub fn show(ui: &mut Ui, state: &mut PianoRollState) {
     });
 }
 
-fn draw_sidebar(ui: &Ui, rect: Rect, state: &PianoRollState) {
+/// Renderiza el sidebar del piano roll.
+/// Retorna Some(pitch) si el usuario hizo clic en un pad de drum para audition.
+fn draw_sidebar(ui: &Ui, rect: Rect, state: &PianoRollState) -> Option<u8> {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, Color32::from_rgb(20, 20, 24));
+
+    let mut clicked_pitch: Option<u8> = None;
 
     for pitch in (0..=127).rev() {
         let row = 127 - pitch;
@@ -192,30 +315,62 @@ fn draw_sidebar(ui: &Ui, rect: Rect, state: &PianoRollState) {
                     .cloned()
                     .unwrap_or_else(|| format!("Pad {} ({})", pitch, get_note_name(pitch)));
 
-                painter.rect_filled(key_rect, 1.0, Color32::from_rgb(35, 38, 48));
+                let has_sample = state.drum_map.contains_key(&pitch);
+
+                let bg = if has_sample {
+                    Color32::from_rgb(35, 38, 48)
+                } else {
+                    Color32::from_rgb(28, 30, 38)
+                };
+
+                painter.rect_filled(key_rect, 1.0, bg);
                 painter.rect_stroke(key_rect, 1.0, Stroke::new(0.5_f32, Color32::from_rgb(55, 60, 72)));
+
+                let label_color = if has_sample {
+                    Color32::from_rgb(180, 220, 255)
+                } else {
+                    Color32::from_rgb(90, 95, 110)
+                };
 
                 painter.text(
                     pos2(key_rect.min.x + 4.0, key_rect.center().y),
                     Align2::LEFT_CENTER,
-                    format!("▶ {}", display_name),
+                    format!("\u{25B6} {}", display_name),
                     FontId::proportional(10.0),
-                    Color32::LIGHT_GRAY,
+                    label_color,
                 );
+
+                // Make drum pad rows clickable for audition
+                let response = ui.interact(key_rect, ui.id().with(("drum_pad", pitch)), Sense::click());
+                if response.clicked() && has_sample {
+                    clicked_pitch = Some(pitch);
+                }
+                if response.hovered() && has_sample {
+                    painter.rect_filled(key_rect, 1.0, Color32::from_rgb(50, 55, 70));
+                    painter.text(
+                        pos2(key_rect.min.x + 4.0, key_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        format!("\u{25B6} {}", display_name),
+                        FontId::proportional(10.0),
+                        Color32::from_rgb(220, 240, 255),
+                    );
+                }
             }
         }
     }
+
+    clicked_pitch
 }
 
 fn draw_grid_background(painter: &Painter, rect: Rect, key_height: f32, zoom_x: f32) {
     painter.rect_filled(rect, 0.0, Color32::from_rgb(14, 14, 18));
 
-    // Líneas horizontales (Pitch: 0 a 127)
+    // Lineas horizontales (Pitch: 0 a 127)
     for i in 0..=128 {
         let y = rect.min.y + (i as f32 * key_height);
         let pitch = 127 - i;
-        let is_c = pitch >= 0 && pitch <= 127 && (pitch % 12 == 0);
-        
+        let is_c = (0..=127).contains(&pitch) && (pitch % 12 == 0);
+
         let stroke = if is_c {
             Stroke::new(0.8_f32, Color32::from_rgb(45, 45, 55))
         } else {
@@ -228,7 +383,7 @@ fn draw_grid_background(painter: &Painter, rect: Rect, key_height: f32, zoom_x: 
         );
     }
 
-    // Líneas verticales (Compases y semicorcheas en ticks)
+    // Lineas verticales (Compases y semicorcheas en ticks)
     let px_per_tick = zoom_x;
     let step_ticks = 240.0_f32; // 1/16 note
     let bar_ticks = 3840.0_f32; // 4/4 bar (960 * 4)

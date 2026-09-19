@@ -503,11 +503,22 @@ impl eframe::App for HikaruApp {
                 self.piano_roll_state.notes.clear();
             }
 
+            let piano_roll_tracks = match self.mode {
+                AppMode::OpenLive => &self.live_tracks,
+                AppMode::OpenStudio => &self.studio_tracks,
+            };
+
             TopBottomPanel::bottom("piano_roll_panel")
                 .resizable(true)
                 .default_height(280.0)
                 .show(ctx, |ui| {
-                    crate::views::piano_roll::show(ui, &mut self.piano_roll_state);
+                    crate::views::piano_roll::show(
+                        ui,
+                        &mut self.piano_roll_state,
+                        piano_roll_tracks,
+                        self.selected_track_index,
+                        &self.audio_proxy,
+                    );
                 });
 
             if let Some((track_idx, scene_idx)) = self.matrix_state.selected_slot {
