@@ -4,7 +4,7 @@
 // crates/hikaru_audio_engine/src/lib.rs
 
 pub mod preview_player;
-pub mod audio_drivers; // <--- Agregar esta línea
+pub mod audio_drivers;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,6 +16,22 @@ use hikaru_sequencer::TrackMatrix;
 use hikaru_transport::{TransportPlaybackState, TransportPosition};
 
 const MAX_TRACK_BUF: usize = 2048 * 2;
+
+// --- Definición de estructuras de clips MIDI ---
+#[derive(Clone, Debug)]
+pub struct MidiNoteInstance {
+    pub start_tick: u64,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub duration_ticks: u32,
+}
+
+pub struct MidiClipInstance {
+    pub track_index: usize,
+    pub scene_index: usize,
+    pub notes: Vec<MidiNoteInstance>,
+    pub is_playing: bool,
+}
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 static ORIGINAL_MXCSR: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
@@ -240,6 +256,7 @@ pub struct AudioEngine<'a> {
     pub track_mutes: [AtomicBool; 16],
     pub track_solos: [AtomicBool; 16],
     pub master_gain: AtomicU32,
+    pub midi_clips: Vec<MidiClipInstance>, // Almacenamiento de clips MIDI activos
 }
 
 impl<'a> AudioEngine<'a> {
@@ -266,6 +283,7 @@ impl<'a> AudioEngine<'a> {
             track_mutes: std::array::from_fn(|_| AtomicBool::new(false)),
             track_solos: std::array::from_fn(|_| AtomicBool::new(false)),
             master_gain: AtomicU32::new(0.75f32.to_bits()),
+            midi_clips: Vec::new(),
         }
     }
 
@@ -822,6 +840,30 @@ impl<'a> AudioEngine<'a> {
         self.output_level_bits.store(peak.to_bits(), Ordering::Relaxed);
         self.position_clock.store(self.transport.sample_count, Ordering::Relaxed);
     }
+
+        // Método para sincronizar y actualizar las notas de un clip MIDI en tiempo real
+        pub fn update_midi_clip(
+            &mut self,
+            track_index: usize,
+            scene_index: usize,
+            notes: Vec<MidiNoteInstance>,
+        ) {
+            if let Some(clip) = self
+                .midi_clips
+                .iter_mut()
+                .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+            {
+                clip.notes = notes;
+            } else {
+                self.midi_clips.push(MidiClipInstance {
+                    track_index,
+                    scene_index,
+                    notes,
+                    is_playing: false,
+                });
+            }
+        }
+    //
 }
 
 #[cfg(test)]

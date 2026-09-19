@@ -551,6 +551,7 @@ impl eframe::App for HikaruApp {
                         active_tracks,
                         self.selected_track_index,
                         &mut self.selected_slot_index,
+                        self.matrix_state.selected_slot,
                         &mut self.dragged_sample,
                         &self.audio_proxy,
                     );

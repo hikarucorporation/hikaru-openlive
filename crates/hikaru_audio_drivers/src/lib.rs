@@ -9,6 +9,10 @@ pub struct HikaruAlsaDriver {
     pcm_handle: *mut snd_pcm_t,
 }
 
+/*
+
+// Esto:
+
 #[derive(Debug, Clone, Copy)]
 pub struct MidiEvent {
     pub frame_offset: usize, // En qué frame relativo al buffer actual ocurre
@@ -17,6 +21,8 @@ pub struct MidiEvent {
     pub velocity: u8,
     pub is_note_on: bool,
 }
+    // Debería estár en el `lib.rs` del crate `hikaru_audio_engine`, no acá KJJ,
+*/
 
 impl HikaruAlsaDriver {
     pub fn open_direct_device(device_name: &str, sample_rate: u32, buffer_size: u32) -> Result<Self, String> {

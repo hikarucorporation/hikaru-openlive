@@ -1,9 +1,26 @@
 // Copyright (c) Hikaru Corporation - 2026
-// Hikaru OpenStudio - Audio Proxy
+// Hikaru OpenLive - Audio Proxy
 // GNU Affero General Public License v3
 // crates/hikaru_gui/src/audio_proxy.rs
 
 use std::sync::mpsc::Sender;
+
+#[derive(Clone, Debug)]
+pub struct MidiNoteInstance {
+    pub start_tick: u64,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub duration_ticks: u32,
+}
+
+pub struct MidiClipInstance {
+    pub track_index: usize,
+    pub scene_index: usize,
+    pub notes: Vec<MidiNoteInstance>,
+    pub is_playing: bool,
+    pub start_frame: u64,
+    pub clip_loop_ticks: u64,
+}
 
 #[derive(Clone, Debug)] // HOTFIX CLAUDE #1
 pub struct AudioClipData {
@@ -56,6 +73,19 @@ pub enum GuiCommand {
         duration_secs: f32, 
         offset_secs: f32 
     },
+
+    LoadMidiClip {
+        clip_id: usize,
+        track_index: usize,
+        scene_index: usize,
+        notes: Vec<(u64, u8, u8, u32)>,
+    },
+    UpdateMidiClipNotes {
+        track_idx: usize,
+        scene_idx: usize,
+        notes: Vec<(u64, u8, u8, u32)>,
+    },
+
     SyncPlaylistClips { 
         clips: Vec<AudioClipData> 
     },
@@ -122,3 +152,48 @@ pub enum GuiCommand {
     StopPreview,
     SetPreviewVolume(f32),
 }
+
+/*
+GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, notes } => {
+    let converted_notes = notes
+        .into_iter()
+        .map(|(start_tick, pitch, velocity, duration_ticks)| MidiNoteInstance {
+            start_tick,
+            pitch,
+            velocity,
+            duration_ticks,
+        })
+        .collect();
+
+    engine.update_midi_clip(track_idx, scene_idx, converted_notes);
+}
+*/
+
+/*
+// Dentro del bloque de iteración de frames de AudioEngine::process
+let current_tick = self.transport.samples_to_ticks(self.transport.sample_count);
+
+for midi_clip in self.midi_clips.iter_mut().filter(|c| c.is_playing) {
+    let clip_elapsed_ticks = current_tick.saturating_sub(self.transport.samples_to_ticks(midi_clip.start_frame));
+    let loop_ticks = if midi_clip.clip_loop_ticks > 0 { midi_clip.clip_loop_ticks } else { 3840 }; // 1 Bar = 3840 ticks
+    let local_tick = clip_elapsed_ticks % loop_ticks;
+
+    for note in &midi_clip.notes {
+        // Generar NoteOn
+        if note.start_tick == local_tick {
+            self.send_midi_event_to_instrument(midi_clip.track_index, MidiEvent::NoteOn {
+                key: note.pitch,
+                velocity: note.velocity,
+            });
+        }
+        
+        // Generar NoteOff
+        let note_end_tick = note.start_tick + note.duration_ticks as u64;
+        if note_end_tick == local_tick {
+            self.send_midi_event_to_instrument(midi_clip.track_index, MidiEvent::NoteOff {
+                key: note.pitch,
+            });
+        }
+    }
+}
+*/

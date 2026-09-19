@@ -223,22 +223,32 @@ impl SessionMatrixState {
             let next_id = self.next_clip_id;
             self.next_clip_id += 1;
 
+            let is_midi = matches!(
+                target_slot.clip.as_ref().map(|c| &c.content),
+                Some(ClipData::Midi { .. })
+            );
+
             if let Some(clip) = target_slot.clip.as_mut() {
                 clip.id = next_id;
-                
-                let path_str = clip.path.to_string_lossy().to_string();
-                audio_proxy.send(GuiCommand::LoadClip {
-                    clip_id: next_id,
-                    path: path_str,
-                    position_secs: 0.0,
-                    duration_secs: 0.0,
-                    offset_secs: 0.0,
-                    track_index: track_idx,
-                    scene_index: scene_idx,
-                });
+
+                if !is_midi {
+                    let path_str = clip.path.to_string_lossy().to_string();
+                    audio_proxy.send(GuiCommand::LoadClip {
+                        clip_id: next_id,
+                        path: path_str,
+                        position_secs: 0.0,
+                        duration_secs: 0.0,
+                        offset_secs: 0.0,
+                        track_index: track_idx,
+                        scene_index: scene_idx,
+                    });
+                }
             }
 
             self.grid[track_idx][scene_idx] = target_slot;
+            if is_midi {
+                sync_midi_clip(self, audio_proxy, track_idx, scene_idx);
+            }
         }
     }
 
@@ -251,32 +261,76 @@ impl SessionMatrixState {
             let next_id = self.next_clip_id;
             self.next_clip_id += 1;
 
+            let is_midi = matches!(
+                clip_copy.clip.as_ref().map(|c| &c.content),
+                Some(ClipData::Midi { .. })
+            );
+
             if let Some(clip) = clip_copy.clip.as_mut() {
                 clip.id = next_id;
-                let path_str = clip.path.to_string_lossy().to_string();
-                audio_proxy.send(GuiCommand::LoadClip {
-                    clip_id: next_id,
-                    path: path_str,
-                    position_secs: 0.0,
-                    duration_secs: 0.0,
-                    offset_secs: 0.0,
-                    track_index: track_idx,
-                    scene_index: target_scene,
-                });
+                if !is_midi {
+                    let path_str = clip.path.to_string_lossy().to_string();
+                    audio_proxy.send(GuiCommand::LoadClip {
+                        clip_id: next_id,
+                        path: path_str,
+                        position_secs: 0.0,
+                        duration_secs: 0.0,
+                        offset_secs: 0.0,
+                        track_index: track_idx,
+                        scene_index: target_scene,
+                    });
+                }
             }
             self.grid[track_idx][target_scene] = clip_copy;
+            if is_midi {
+                sync_midi_clip(self, audio_proxy, track_idx, target_scene);
+            }
         }
     }
 
-    pub fn delete_slot(&mut self, track_idx: usize, scene_idx: usize, _audio_proxy: &AudioProxy) {
+    pub fn delete_slot(&mut self, track_idx: usize, scene_idx: usize, audio_proxy: &AudioProxy) {
         if let Some(slot) = self.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
+            let was_active = matches!(
+                slot.state,
+                SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop
+            );
             *slot = MatrixSlot::default();
+            if was_active {
+                audio_proxy.send(GuiCommand::TriggerClip { track_idx, scene_idx });
+            }
         }
     }
 }
 
+pub(crate) fn sync_midi_clip(
+    state: &SessionMatrixState,
+    audio_proxy: &AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+) {
+    if let Some(ClipData::Midi { notes }) = state
+        .grid
+        .get(track_idx)
+        .and_then(|row| row.get(scene_idx))
+        .and_then(|slot| slot.clip.as_ref())
+        .map(|clip| &clip.content)
+    {
+        audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+            track_idx,
+            scene_idx,
+            notes: notes.clone(),
+        });
+    }
+}
+
 pub(crate) fn trigger_pad(state: &mut SessionMatrixState, audio_proxy: &AudioProxy, track_idx: usize, scene_idx: usize) {
-    if state.grid[track_idx][scene_idx].clip.is_none() {
+    let has_clip = state
+        .grid
+        .get(track_idx)
+        .and_then(|row| row.get(scene_idx))
+        .map_or(false, |slot| slot.clip.is_some());
+
+    if !has_clip {
         return;
     }
 
@@ -289,9 +343,14 @@ pub(crate) fn trigger_pad(state: &mut SessionMatrixState, audio_proxy: &AudioPro
                     state.grid[track_idx][s].state = SlotState::Stopped;
                 }
             }
-            state.grid[track_idx][scene_idx].state = SlotState::Playing;
-            if let Some(clip) = state.grid[track_idx][scene_idx].clip.as_mut() {
-                clip.local_bar = 1.0;
+
+            sync_midi_clip(state, audio_proxy, track_idx, scene_idx);
+
+            if let Some(slot) = state.grid.get_mut(track_idx).and_then(|row| row.get_mut(scene_idx)) {
+                slot.state = SlotState::Playing;
+                if let Some(clip) = slot.clip.as_mut() {
+                    clip.local_bar = 1.0;
+                }
             }
 
             audio_proxy.send(GuiCommand::TriggerClip {
@@ -300,7 +359,9 @@ pub(crate) fn trigger_pad(state: &mut SessionMatrixState, audio_proxy: &AudioPro
             });
         }
         SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop => {
-            state.grid[track_idx][scene_idx].state = SlotState::Stopped;
+            if let Some(slot) = state.grid.get_mut(track_idx).and_then(|row| row.get_mut(scene_idx)) {
+                slot.state = SlotState::Stopped;
+            }
 
             audio_proxy.send(GuiCommand::TriggerClip {
                 track_idx,
@@ -323,6 +384,7 @@ pub(crate) fn trigger_scene(state: &mut SessionMatrixState, audio_proxy: &AudioP
             if let Some(clip) = state.grid[track_idx][scene_idx].clip.as_mut() {
                 clip.local_bar = 1.0;
             }
+            sync_midi_clip(state, audio_proxy, track_idx, scene_idx);
         }
     }
 
@@ -337,7 +399,15 @@ where
     for track_idx in 0..state.tracks.len() {
         for scene_idx in 0..state.scenes.len() {
             if state.grid[track_idx][scene_idx].state == SlotState::Playing {
-                if !is_active(track_idx, scene_idx) {
+                let slot = &state.grid[track_idx][scene_idx];
+                let is_midi = matches!(
+                    slot.clip.as_ref().map(|c| &c.content),
+                    Some(ClipData::Midi { .. })
+                );
+
+                // Los clips MIDI no dependen del bus de voces PCM, se mantienen activos en GUI
+                // a menos que el usuario los detenga explícitamente o cambie de escena.
+                if !is_midi && !is_active(track_idx, scene_idx) {
                     state.grid[track_idx][scene_idx].state = SlotState::Stopped;
                     deactivated += 1;
                 }
@@ -635,6 +705,45 @@ fn draw_mini_waveform(
     }
 }
 
+fn draw_mini_midi_notes(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    notes: &[(u64, u8, u8, u32)],
+    color: Color32,
+) {
+    if notes.is_empty() {
+        return;
+    }
+
+    let max_tick = notes.iter().map(|(s, _, _, d)| s + *d as u64).max().unwrap_or(1920) as f32;
+    let min_pitch = notes.iter().map(|(_, p, _, _)| *p).min().unwrap_or(36) as f32;
+    let max_pitch = notes.iter().map(|(_, p, _, _)| *p).max().unwrap_or(84) as f32;
+
+    let pitch_range = (max_pitch - min_pitch).max(12.0);
+    let pad_w = rect.width();
+    let pad_h = rect.height();
+
+    for &(start_tick, pitch, _vel, duration_ticks) in notes {
+        let x_norm = start_tick as f32 / max_tick;
+        let w_norm = (duration_ticks as f32 / max_tick).max(0.02);
+        let y_norm = 1.0 - ((pitch as f32 - min_pitch) / pitch_range).clamp(0.0, 1.0);
+
+        let x = rect.min.x + (x_norm * pad_w);
+        let y = rect.min.y + (y_norm * (pad_h - 4.0));
+        let note_w = (w_norm * pad_w).max(2.0);
+        let note_h = 2.5_f32;
+
+        let note_rect = egui::Rect::from_min_size(
+            egui::pos2(x, y),
+            egui::vec2(note_w, note_h),
+        );
+
+        if note_rect.intersects(rect) {
+            painter.rect_filled(note_rect, 0.5, color);
+        }
+    }
+}
+
 fn render_pad(
     ui: &mut Ui,
     state: &mut SessionMatrixState,
@@ -702,14 +811,23 @@ fn render_pad(
                     };
                     draw_mini_waveform(&clipped_painter, inner_rect, pcm_data, wave_color);
                 }
-                ClipData::Midi { .. } => {
-                    clipped_painter.text(
-                        inner_rect.left_bottom() + egui::vec2(4.0, -4.0),
-                        Align2::LEFT_BOTTOM,
-                        "🎹 MIDI",
-                        egui::FontId::proportional(9.0),
-                        Color32::from_rgb(255, 180, 0),
-                    );
+                ClipData::Midi { notes } => {
+                    let note_color = match slot.state {
+                        SlotState::Playing => Color32::from_rgb(0, 255, 150),
+                        _ => Color32::from_rgb(255, 180, 50),
+                    };
+
+                    if notes.is_empty() {
+                        clipped_painter.text(
+                            inner_rect.left_bottom() + egui::vec2(4.0, -4.0),
+                            Align2::LEFT_BOTTOM,
+                            "🎹 MIDI (Vacío)",
+                            egui::FontId::proportional(9.0),
+                            Color32::from_gray(120),
+                        );
+                    } else {
+                        draw_mini_midi_notes(&clipped_painter, inner_rect, notes, note_color);
+                    }
                 }
             }
 
@@ -718,31 +836,36 @@ fn render_pad(
                     handle.try_lock().ok()?.voice_elapsed_frames(track_idx, scene_idx)
                 });
 
-                // ✅ CÓDIGO CORREGIDO:
                 if let Some(frames) = elapsed_frames {
-                    let total_samples = clip.pcm_data().len();
-                    if total_samples > 0 {
-                        let play_progress = if clip.has_valid_clip_loop() {
-                            let loop_len = clip.loop_length_ticks() as f64;
-                            if loop_len > 0.0 {
-                                ((frames as f64 % loop_len) / loop_len) as f32
-                            } else {
+                    let play_progress = match &clip.content {
+                        ClipData::Audio { pcm_data } => {
+                            let total_samples = pcm_data.len();
+                            if total_samples > 0 {
                                 (frames as f32 / total_samples as f32).clamp(0.0, 1.0)
+                            } else {
+                                0.0
                             }
-                        } else {
-                            (frames as f32 / total_samples as f32).clamp(0.0, 1.0)
-                        };
+                        }
+                        ClipData::Midi { notes } => {
+                            let max_ticks = notes.iter().map(|(s, _, _, d)| s + *d as u64).max().unwrap_or(1920);
+                            let estimated_total_frames = (max_ticks as f32 * (48000.0 / 960.0)) as u64;
+                            if estimated_total_frames > 0 {
+                                ((frames % estimated_total_frames) as f32 / estimated_total_frames as f32).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
 
-                        let playhead_x = inner_rect.min.x + (inner_rect.width() * play_progress);
+                    let playhead_x = inner_rect.min.x + (inner_rect.width() * play_progress);
 
-                        clipped_painter.line_segment(
-                            [
-                                egui::pos2(playhead_x, inner_rect.min.y),
-                                egui::pos2(playhead_x, inner_rect.max.y),
-                            ],
-                            Stroke::new(1.5_f32, Color32::WHITE),
-                        );
-                    }
+                    clipped_painter.line_segment(
+                        [
+                            egui::pos2(playhead_x, inner_rect.min.y),
+                            egui::pos2(playhead_x, inner_rect.max.y),
+                        ],
+                        Stroke::new(1.5_f32, Color32::WHITE),
+                    );
                 }
             }
         }
@@ -770,7 +893,6 @@ fn render_pad(
     response.context_menu(|ui| {
         ui.style_mut().spacing.button_padding = Vec2::new(8.0, 4.0);
 
-        // --- SUBMENÚ O SECCIÓN DE INSERTAR ---
         ui.menu_button("➕ Insertar", |ui| {
             if ui.button("🎵 Clip de Audio...").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
@@ -794,17 +916,25 @@ fn render_pad(
                             id: new_id,
                             name: "Nuevo MIDI".to_string(),
                             path: PathBuf::new(),
-                            duration_secs: 4.0, // 1 compás por defecto
+                            duration_secs: 4.0,
                             content: ClipData::Midi { notes: Vec::new() },
                             local_state: PlaylistState::default(),
                             local_track: Track::new(0, "Nuevo MIDI".to_string(), false),
                             local_bar: 1.0,
                             loop_start: 0,
-                            loop_end: 1920, // Ticks de ejemplo para 1 bar a 480 PPQN
+                            loop_end: 1920,
                             loop_enabled: true,
                         }),
                     };
                     state.selected_slot = Some((track_idx, scene_idx));
+
+                    audio_proxy.send(GuiCommand::LoadMidiClip {
+                        clip_id: new_id,
+                        track_index: track_idx,
+                        scene_index: scene_idx,
+                        notes: vec![],
+                    });
+
                     ui.close_menu();
                 }
 
@@ -879,7 +1009,7 @@ fn render_clip_editor_track_view(
     ui: &mut Ui,
     state: &mut SessionMatrixState,
     _dragged_sample: &mut Option<PathBuf>,
-    audio_proxy: &AudioProxy,
+    _audio_proxy: &AudioProxy,
     bpm: f64,
     sample_rate: u32,
     _transport_sample_count: u64,
@@ -929,32 +1059,64 @@ fn render_clip_editor_track_view(
                 ui.ctx().request_repaint();
             }
 
-            let prev_start = slot.loop_start;
-            let prev_end = slot.loop_end;
-            let prev_enabled = slot.loop_enabled;
+            match &mut slot.content {
+                ClipData::Audio { .. } => {
+                    clip_editor::show(
+                        ui,
+                        slot,
+                        elapsed_frames,
+                        sample_rate,
+                        bpm as f32,
+                    );
+                }
+                ClipData::Midi { notes } => {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("🎹 PIANO ROLL EDITOR")
+                                    .strong()
+                                    .color(Color32::from_rgb(255, 180, 0)),
+                            );
+                            ui.separator();
+                            ui.label(format!("Notas registradas: {}", notes.len()));
+                        });
+                        ui.separator();
 
-            clip_editor::show(
-                ui,
-                slot,
-                elapsed_frames,
-                sample_rate,
-                bpm as f32,
-            );
+                        ScrollArea::both().show(ui, |ui| {
+                            ui.set_min_size(Vec2::new(ui.available_width(), 120.0));
+                            if notes.is_empty() {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label("Clip MIDI sin notas. Agregá notas desde la vista Piano Roll principal.");
+                                });
+                            } else {
+                                Grid::new("mini_piano_roll_grid")
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.label(RichText::new("Tick").strong());
+                                        ui.label(RichText::new("Pitch (Nota)").strong());
+                                        ui.label(RichText::new("Velocidad").strong());
+                                        ui.label(RichText::new("Duración (Ticks)").strong());
+                                        ui.end_row();
 
-            if prev_start != slot.loop_start || prev_end != slot.loop_end || prev_enabled != slot.loop_enabled {
-                let current_sample_rate = sample_rate.max(1) as f32;
-                let loop_start_secs = slot.loop_start as f32 / current_sample_rate;
-                let loop_end_secs = slot.loop_end as f32 / current_sample_rate;
-
-                audio_proxy.send(GuiCommand::SetClipLoop {
-                    track_idx,
-                    scene_idx,
-                    loop_start_secs,
-                    loop_end_secs,
-                    enabled: slot.loop_enabled,
-                });
+                                        for (tick, pitch, vel, dur) in notes.iter() {
+                                            ui.label(tick.to_string());
+                                            ui.label(format!("{} ({})", pitch, pitch_to_note_name(*pitch)));
+                                            ui.label(vel.to_string());
+                                            ui.label(dur.to_string());
+                                            ui.end_row();
+                                        }
+                                    });
+                            }
+                        });
+                    });
+                }
             }
         });
+}
+
+fn pitch_to_note_name(pitch: u8) -> &'static str {
+    let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    names[(pitch % 12) as usize]
 }
 
 fn load_clip_into_slot(
@@ -1003,14 +1165,17 @@ fn load_clip_into_slot(
         }),
     };
 
-    // Reutilizamos GuiCommand::LoadClip de forma universal
-    audio_proxy.send(GuiCommand::LoadClip {
-        clip_id: new_id,
-        path: path_str,
-        position_secs: 0.0,
-        duration_secs: 0.0,
-        offset_secs: 0.0,
-        track_index: track_idx,
-        scene_index: scene_idx,
-    });
+    if is_midi {
+        sync_midi_clip(state, audio_proxy, track_idx, scene_idx);
+    } else {
+        audio_proxy.send(GuiCommand::LoadClip {
+            clip_id: new_id,
+            path: path_str,
+            position_secs: 0.0,
+            duration_secs: 0.0,
+            offset_secs: 0.0,
+            track_index: track_idx,
+            scene_index: scene_idx,
+        });
+    }
 }

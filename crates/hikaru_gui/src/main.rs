@@ -276,6 +276,26 @@ fn main() -> eframe::Result<()> {
                         engine.set_master_gain(volume_db);
                     }
                 }
+
+                // Los MIDI Clips porongos:
+                GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, notes } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        let converted_notes = notes
+                            .into_iter()
+                            .map(|(start_tick, pitch, velocity, duration_ticks)| {
+                                hikaru_audio_engine::MidiNoteInstance {
+                                    start_tick,
+                                    pitch,
+                                    velocity,
+                                    duration_ticks,
+                                }
+                            })
+                            .collect();
+
+                        engine.update_midi_clip(track_idx, scene_idx, converted_notes);
+                    }
+                }
+                // Antes del final `_ => {}`
                 _ => {}
             }
         }

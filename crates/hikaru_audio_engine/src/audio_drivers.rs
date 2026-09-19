@@ -1,6 +1,6 @@
 /*
- * Hikaru OpenStudio - Audio Driver Host (Linux)
- * License: AGPL-3.0-only
+ * Hikaru OpenLive - Audio Driver Host (Linux)
+ * License: AGPL-3.0-or-later
  * Path: crates/hikaru_audio_engine/src/audio_drivers.rs
  */
 

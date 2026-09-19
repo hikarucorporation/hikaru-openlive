@@ -14,6 +14,7 @@ pub fn show(
     tracks: &mut Vec<Track>,
     selected_idx: usize,
     selected_slot: &mut usize,
+    selected_matrix_slot: Option<(usize, usize)>, // <--- Agregamos la celda de la matriz (Track, Scene)
     dragged_sample: &mut Option<PathBuf>,
     audio_proxy: &AudioProxy,
 ) {
@@ -60,6 +61,13 @@ pub fn show(
         track.effects.swap(from, to);
     }
 
+    // Armamos la etiqueta con Track y Scene
+    let rack_title = if let Some((_t_idx, s_idx)) = selected_matrix_slot {
+        format!("DSP RACK: {} | Scene {}", track.name, s_idx + 1)
+    } else {
+        format!("DSP RACK: {}", track.name)
+    };;
+
     // Contenedor raíz: ScrollArea horizontal directamente sobre ui
     ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -67,7 +75,7 @@ pub fn show(
             ui.vertical(|ui| {
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(format!("RACK: {}", track.name))
+                    RichText::new(rack_title)
                         .strong()
                         .size(14.0)
                         .color(Color32::from_rgb(0, 255, 255))
