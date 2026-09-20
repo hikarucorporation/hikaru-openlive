@@ -599,7 +599,19 @@ pub fn show(
                                     });
 
                                 for scene_idx in 0..state.scenes.len() {
-                                    render_pad(ui, state, clipboard, dragged_sample, audio_proxy, track_idx, scene_idx, bpm, sample_rate, engine_handle);
+                                    render_pad(
+                                        ui,
+                                        state,
+                                        clipboard,
+                                        dragged_sample,
+                                        audio_proxy,
+                                        track_idx,
+                                        scene_idx,
+                                        bpm,
+                                        sample_rate,
+                                        transport_sample_count, // Pasa el contador global de muestras
+                                        engine_handle,
+                                    );
                                 }
 
                                 ui.end_row();
@@ -753,7 +765,8 @@ fn render_pad(
     track_idx: usize,
     scene_idx: usize,
     bpm: f64,
-    _sample_rate: u32,
+    sample_rate: u32,
+    transport_sample_count: u64,
     engine_handle: Option<&Arc<Mutex<AudioEngine<'static>>>>,
 ) {
     let slot = &state.grid[track_idx][scene_idx];
@@ -832,32 +845,63 @@ fn render_pad(
             }
 
             if slot.state == SlotState::Playing {
+                let mut play_progress: Option<f32> = None;
+
+                // 1. Intentar consultar las muestras transcurridas directas del motor
                 let elapsed_frames = engine_handle.and_then(|handle| {
                     handle.try_lock().ok()?.voice_elapsed_frames(track_idx, scene_idx)
                 });
 
                 if let Some(frames) = elapsed_frames {
-                    let play_progress = match &clip.content {
-                        ClipData::Audio { pcm_data } => {
-                            let total_samples = pcm_data.len();
-                            if total_samples > 0 {
-                                (frames as f32 / total_samples as f32).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            }
+                    play_progress = match &clip.content {
+                        ClipData::Audio { pcm_data } if !pcm_data.is_empty() => {
+                            Some((frames as f32 / pcm_data.len() as f32).clamp(0.0, 1.0))
                         }
                         ClipData::Midi { notes } => {
-                            let max_ticks = notes.iter().map(|(s, _, _, d)| s + *d as u64).max().unwrap_or(1920);
-                            let estimated_total_frames = (max_ticks as f32 * (48000.0 / 960.0)) as u64;
-                            if estimated_total_frames > 0 {
-                                ((frames % estimated_total_frames) as f32 / estimated_total_frames as f32).clamp(0.0, 1.0)
+                            let max_ticks = notes
+                                .iter()
+                                .map(|(s, _, _, d)| s + *d as u64)
+                                .max()
+                                .unwrap_or(1920);
+                            let samples_per_tick = (sample_rate as f64 * 60.0) / (bpm * 960.0);
+                            let total_clip_frames = (max_ticks as f64 * samples_per_tick) as u64;
+
+                            if total_clip_frames > 0 {
+                                Some(((frames % total_clip_frames) as f32 / total_clip_frames as f32).clamp(0.0, 1.0))
                             } else {
-                                0.0
+                                None
                             }
                         }
+                        _ => None,
+                    };
+                }
+
+                // 2. Sincronización exacta con el reloj/transporte de audio (BPM + Sample Rate)
+                if play_progress.is_none() {
+                    let samples_per_beat = (sample_rate as f64 * 60.0) / bpm.max(1.0);
+                    let clip_length_samples = match &clip.content {
+                        ClipData::Audio { pcm_data } if !pcm_data.is_empty() => pcm_data.len() as f64,
+                        ClipData::Midi { notes } => {
+                            let max_ticks = notes
+                                .iter()
+                                .map(|(s, _, _, d)| s + *d as u64)
+                                .max()
+                                .unwrap_or(1920);
+                            (max_ticks as f64 / 960.0) * (samples_per_beat * 4.0) // 4 beats por compás
+                        }
+                        _ => samples_per_beat * 4.0,
                     };
 
-                    let playhead_x = inner_rect.min.x + (inner_rect.width() * play_progress);
+                    if clip_length_samples > 0.0 {
+                        let current_frame = transport_sample_count as f64;
+                        let progress = (current_frame % clip_length_samples) / clip_length_samples;
+                        play_progress = Some(progress as f32);
+                    }
+                }
+
+                // Renderizado de la aguja de reproducción (Playhead)
+                if let Some(progress) = play_progress {
+                    let playhead_x = inner_rect.min.x + (inner_rect.width() * progress);
 
                     clipped_painter.line_segment(
                         [
@@ -889,6 +933,9 @@ fn render_pad(
             );
         }
     }
+
+    // Context menu, drags & clicks...
+    // (Mantener el resto del método context_menu y click handlers como los tenías)
 
     response.context_menu(|ui| {
         ui.style_mut().spacing.button_padding = Vec2::new(8.0, 4.0);

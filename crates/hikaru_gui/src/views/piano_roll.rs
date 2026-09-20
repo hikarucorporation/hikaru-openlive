@@ -76,6 +76,9 @@ fn find_opendms_in_track(track: &Track) -> Option<&OpenDms> {
 }
 
 const QUANTIZE_TICKS: u64 = 240; // 1/16 note a 960 PPQ
+const TICKS_PER_BEAT: u64 = 960;
+const TICKS_PER_BAR: u64 = 3840; // 4/4 a 960 PPQ
+const RULER_HEIGHT: f32 = 24.0;   // Altura fija de la regla de compases
 const NOTE_INSERT_VELOCITY: u8 = 100;
 
 pub fn show(
@@ -99,7 +102,7 @@ pub fn show(
     }
 
     ui.vertical(|ui| {
-        // --- Toolbar ---
+        // --- 1. TOOLBAR ---
         ui.horizontal(|ui| {
             ui.selectable_value(&mut state.mode, PianoRollMode::Keys, "\u{1F3B9} Keys");
             ui.selectable_value(&mut state.mode, PianoRollMode::Drums, "\u{1F941} Drums");
@@ -108,42 +111,67 @@ pub fn show(
             ui.add(Slider::new(&mut state.zoom_x, 0.02..=0.8).text("X"));
             ui.add(Slider::new(&mut state.key_height, 10.0..=28.0).text("Y"));
             ui.separator();
-            ui.label(RichText::new(format!("Tick: {}", state.playhead_tick)).small());
+
+            let bar = (state.playhead_tick / TICKS_PER_BAR) + 1;
+            let beat = ((state.playhead_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
+            ui.label(RichText::new(format!("Compás: {}.{} | Tick: {}", bar, beat, state.playhead_tick)).small());
         });
 
         ui.separator();
 
         let sidebar_width = 140.0;
-        let total_height = 128.0 * state.key_height;
+        let grid_height = 128.0 * state.key_height;
 
+        // Longitud dinámica de grilla
         let max_note_tick = state
             .notes
             .iter()
             .map(|n| n.start_tick + n.duration_ticks)
             .max()
             .unwrap_or(0);
-        let total_ticks = max_note_tick.max(19200) + 9600;
+        
+        let min_default_ticks = TICKS_PER_BAR * 128;
+        let active_boundary = max_note_tick.max(state.playhead_tick);
+        let total_ticks = min_default_ticks.max(active_boundary + (TICKS_PER_BAR * 16));
         let total_grid_width = total_ticks as f32 * state.zoom_x;
 
+        // --- 2. ÁREA DE CONTENIDO INTEGRADA (REGLA + GRILLA CON UN SOLO SCROLL H/V) ---
         ScrollArea::both()
-            .id_source("piano_roll_master_scroll")
-            .show_viewport(ui, |ui, _viewport| {
+            .id_source("piano_roll_body_scroll")
+            .show_viewport(ui, |ui, viewport| {
                 let content_width = (sidebar_width + total_grid_width).max(ui.available_width());
+                let total_content_height = RULER_HEIGHT + grid_height;
+
                 let (content_rect, _) = ui.allocate_exact_size(
-                    vec2(content_width, total_height),
+                    vec2(content_width, total_content_height),
                     Sense::hover(),
                 );
 
-                let sidebar_rect = Rect::from_min_size(
-                    content_rect.min,
-                    vec2(sidebar_width, total_height),
+                // --- REGLA Y ESQUINA (Sticky Top con offset según el viewport de scroll) ---
+                // Ajuste para pegar la regla exactamente al borde superior sin flotado:
+                let ruler_y = (content_rect.min.y + viewport.min.y - 3.0).max(content_rect.min.y);
+                let corner_rect = Rect::from_min_size(
+                    pos2(content_rect.min.x + viewport.min.x, ruler_y),
+                    vec2(sidebar_width, RULER_HEIGHT),
                 );
-                let grid_rect = Rect::from_min_size(
-                    pos2(content_rect.min.x + sidebar_width, content_rect.min.y),
-                    vec2(total_grid_width, total_height),
+                
+                let ruler_rect = Rect::from_min_size(
+                    pos2(content_rect.min.x + sidebar_width, ruler_y),
+                    vec2(total_grid_width, RULER_HEIGHT),
                 );
 
-                // --- 1. DIBUJO: fondo grilla y notas existentes ---
+                // Dibujar el contenido de la grilla principal
+                let sidebar_rect = Rect::from_min_size(
+                    pos2(content_rect.min.x + viewport.min.x, content_rect.min.y + RULER_HEIGHT),
+                    vec2(sidebar_width, grid_height),
+                );
+
+                let grid_rect = Rect::from_min_size(
+                    pos2(content_rect.min.x + sidebar_width, content_rect.min.y + RULER_HEIGHT),
+                    vec2(total_grid_width, grid_height),
+                );
+
+                // Fondo de grilla y notas
                 if ui.is_rect_visible(grid_rect) {
                     let painter = ui.painter_at(grid_rect);
                     draw_grid_background(&painter, grid_rect, state.key_height, state.zoom_x);
@@ -157,48 +185,30 @@ pub fn show(
                     }
                 }
 
-                // --- 2. INTERACCIÓN Y CREACIÓN/ELIMINACIÓN DE NOTAS ---
+                // Edición en la grilla
                 let grid_response = ui.interact(
                     grid_rect,
                     ui.id().with("piano_roll_grid_interaction"),
                     Sense::click_and_drag(),
                 );
 
-                // Regla superior para mover el playhead con clic/drag
-                if let Some(pointer_pos) = grid_response.interact_pointer_pos() {
-                    let local_x = pointer_pos.x - grid_rect.min.x;
-                    let local_y = pointer_pos.y - grid_rect.min.y;
-
-                    if local_y <= 20.0 && local_x >= 0.0 {
-                        let clicked_tick = (local_x / state.zoom_x).max(0.0) as u64;
-                        state.playhead_tick = clicked_tick;
-                        ui.ctx().request_repaint();
-                    }
-                }
-
-                // Inserción / Eliminación de notas MIDI
                 if let Some(hover_pos) = grid_response.hover_pos() {
                     let local_x = hover_pos.x - grid_rect.min.x;
                     let local_y = hover_pos.y - grid_rect.min.y;
 
-                    if local_x >= 0.0 && local_y > 20.0 {
+                    if local_x >= 0.0 && local_y >= 0.0 {
                         let raw_tick = (local_x / state.zoom_x).max(0.0) as u64;
                         let quantized_tick = (raw_tick / QUANTIZE_TICKS) * QUANTIZE_TICKS;
-
                         let row = (local_y / state.key_height).max(0.0) as i32;
                         let pitch = (127 - row).clamp(0, 127) as u8;
 
-                        // Ghost preview
                         if ui.is_rect_visible(grid_rect) {
                             let ghost_rect = Rect::from_min_size(
                                 pos2(
                                     grid_rect.min.x + (quantized_tick as f32 * state.zoom_x),
                                     grid_rect.min.y + (row.clamp(0, 127) as f32 * state.key_height),
                                 ),
-                                vec2(
-                                    QUANTIZE_TICKS as f32 * state.zoom_x,
-                                    state.key_height - 1.0,
-                                ),
+                                vec2(QUANTIZE_TICKS as f32 * state.zoom_x, state.key_height - 1.0),
                             );
                             ui.painter_at(grid_rect).rect_filled(
                                 ghost_rect,
@@ -207,7 +217,6 @@ pub fn show(
                             );
                         }
 
-                        // Clic izquierdo: INSERTAR NOTA MIDI
                         if grid_response.clicked() {
                             let already_exists = state.notes.iter().any(|n| {
                                 n.pitch == pitch
@@ -230,7 +239,6 @@ pub fn show(
                             }
                         }
 
-                        // Clic derecho: ELIMINAR NOTA MIDI
                         if grid_response.secondary_clicked() {
                             let prev_len = state.notes.len();
                             state.notes.retain(|n| {
@@ -245,42 +253,64 @@ pub fn show(
                     }
                 }
 
-                // --- 3. DIBUJAR PLAYHEAD (Línea + Cabeza del marcador) ---
+                // Línea de Playhead
+                let playhead_x = grid_rect.min.x + (state.playhead_tick as f32 * state.zoom_x);
                 if ui.is_rect_visible(grid_rect) {
-                    let painter = ui.painter_at(grid_rect);
-                    let playhead_x = grid_rect.min.x + (state.playhead_tick as f32 * state.zoom_x);
-
-                    // Línea vertical
-                    painter.line_segment(
-                        [
-                            pos2(playhead_x, grid_rect.min.y),
-                            pos2(playhead_x, grid_rect.max.y),
-                        ],
+                    let grid_p = ui.painter_at(grid_rect);
+                    grid_p.line_segment(
+                        [pos2(playhead_x, grid_rect.min.y), pos2(playhead_x, grid_rect.max.y)],
                         Stroke::new(2.0_f32, Color32::from_rgb(0, 200, 255)),
                     );
+                }
 
-                    // Cabeza triangular del Playhead
+                // Teclado lateral
+                let sidebar_clicked_pitch = draw_sidebar(ui, sidebar_rect, state);
+                if let Some(clicked_pitch) = sidebar_clicked_pitch {
+                    preview_drum_pad(tracks, selected_track_index, clicked_pitch, 1.0, audio_proxy);
+                }
+
+                // --- DIBUJAR LA REGLA Y LA ESQUINA POR ENCIMA (CAPA SUPERIOR) ---
+                if ui.is_rect_visible(corner_rect) {
+                    let p = ui.painter_at(corner_rect);
+                    p.rect_filled(corner_rect, 0.0, Color32::from_rgb(20, 20, 24));
+                    p.line_segment([corner_rect.left_bottom(), corner_rect.right_bottom()], Stroke::new(1.0, Color32::from_gray(50)));
+                    p.line_segment([corner_rect.right_top(), corner_rect.right_bottom()], Stroke::new(1.0, Color32::from_gray(50)));
+                }
+
+                if ui.is_rect_visible(ruler_rect) {
+                    let ruler_painter = ui.painter_at(ruler_rect);
+                    draw_bar_ruler(&ruler_painter, ruler_rect, state.zoom_x, total_ticks);
+
+                    // Indicador Playhead en la regla
+                    let ruler_playhead_x = ruler_rect.min.x + (state.playhead_tick as f32 * state.zoom_x);
                     let head_size = 6.0_f32;
                     let head_triangle = vec![
-                        pos2(playhead_x - head_size, grid_rect.min.y),
-                        pos2(playhead_x + head_size, grid_rect.min.y),
-                        pos2(playhead_x, grid_rect.min.y + 10.0),
+                        pos2(ruler_playhead_x - head_size, ruler_rect.min.y),
+                        pos2(ruler_playhead_x + head_size, ruler_rect.min.y),
+                        pos2(ruler_playhead_x, ruler_rect.max.y),
                     ];
-                    
-                    painter.add(Shape::convex_polygon(
+                    ruler_painter.add(Shape::convex_polygon(
                         head_triangle,
                         Color32::from_rgb(0, 200, 255),
                         Stroke::NONE,
                     ));
                 }
 
-                // --- 4. SIDEBAR + PREESCUCHA ---
-                let sidebar_clicked_pitch = draw_sidebar(ui, sidebar_rect, state);
-                if let Some(clicked_pitch) = sidebar_clicked_pitch {
-                    preview_drum_pad(tracks, selected_track_index, clicked_pitch, 1.0, audio_proxy);
+                let ruler_response = ui.interact(
+                    ruler_rect,
+                    ui.id().with("piano_roll_ruler_interaction"),
+                    Sense::click_and_drag(),
+                );
+
+                if let Some(pointer_pos) = ruler_response.interact_pointer_pos() {
+                    let local_x = pointer_pos.x - ruler_rect.min.x;
+                    if local_x >= 0.0 {
+                        state.playhead_tick = (local_x / state.zoom_x).max(0.0) as u64;
+                        ui.ctx().request_repaint();
+                    }
                 }
 
-                // --- 5. PLAYHEAD AUDIO TRIGGERING ---
+                // Audio Playhead trigger
                 let current_tick = state.playhead_tick;
                 let prev_tick = state.prev_playhead_tick;
 
@@ -305,6 +335,58 @@ pub fn show(
                 }
             });
     });
+}
+
+fn draw_bar_ruler(painter: &Painter, ruler_rect: Rect, zoom_x: f32, total_ticks: u64) {
+    painter.rect_filled(ruler_rect, 0.0, Color32::from_rgb(28, 28, 32));
+    painter.line_segment(
+        [ruler_rect.left_bottom(), ruler_rect.right_bottom()],
+        Stroke::new(1.0_f32, Color32::from_gray(60)),
+    );
+
+    let bar_step_px = TICKS_PER_BAR as f32 * zoom_x;
+    let mut tick = 0u64;
+    let mut bar_number = 1;
+
+    while tick <= total_ticks {
+        let x = ruler_rect.min.x + (tick as f32 * zoom_x);
+
+        if x > ruler_rect.max.x {
+            break;
+        }
+
+        if x >= ruler_rect.min.x {
+            painter.line_segment(
+                [pos2(x, ruler_rect.min.y + 4.0), pos2(x, ruler_rect.max.y)],
+                Stroke::new(1.5_f32, Color32::from_gray(140)),
+            );
+
+            painter.text(
+                pos2(x + 5.0, ruler_rect.min.y + 3.0),
+                Align2::LEFT_TOP,
+                bar_number.to_string(),
+                FontId::proportional(11.0),
+                Color32::from_gray(210),
+            );
+
+            if bar_step_px > 30.0 {
+                for b in 1..4 {
+                    let beat_tick = tick + (b * TICKS_PER_BEAT);
+                    let beat_x = ruler_rect.min.x + (beat_tick as f32 * zoom_x);
+
+                    if beat_x >= ruler_rect.min.x && beat_x <= ruler_rect.max.x {
+                        painter.line_segment(
+                            [pos2(beat_x, ruler_rect.min.y + 14.0), pos2(beat_x, ruler_rect.max.y)],
+                            Stroke::new(0.8_f32, Color32::from_gray(80)),
+                        );
+                    }
+                }
+            }
+        }
+
+        tick += TICKS_PER_BAR;
+        bar_number += 1;
+    }
 }
 
 fn note_rect(grid_rect: Rect, note: &MidiNote, zoom_x: f32, key_height: f32) -> Rect {
@@ -351,10 +433,8 @@ fn draw_sidebar(
     if ui.is_rect_visible(sidebar_rect) {
         let painter = ui.painter_at(sidebar_rect);
 
-        // Fondo del sidebar
         painter.rect_filled(sidebar_rect, 0.0, Color32::from_rgb(25, 25, 28));
         
-        // CORREGIDO: uso de right_top() y right_bottom() con sufijo f32 para el Stroke
         painter.line_segment(
             [sidebar_rect.right_top(), sidebar_rect.right_bottom()],
             Stroke::new(1.0_f32, Color32::from_gray(50)),
@@ -425,7 +505,6 @@ fn draw_sidebar(
                 text_color,
             );
 
-            // Interacción de clic en la tecla/pad
             let row_response = ui.interact(
                 row_rect,
                 ui.id().with(("sidebar_row", pitch)),
@@ -447,10 +526,8 @@ fn draw_grid_background(
     key_height: f32,
     zoom_x: f32,
 ) {
-    // Fondo de la grilla
     painter.rect_filled(grid_rect, 0.0, Color32::from_rgb(18, 18, 20));
 
-    // Filas horizontales
     for row in 0..128 {
         let pitch = (127 - row) as u8;
         let y = grid_rect.min.y + (row as f32 * key_height);
@@ -470,7 +547,6 @@ fn draw_grid_background(
         );
     }
 
-    // Líneas verticales (Subdivisiones de tiempo/ticks)
     let subdivision_ticks = QUANTIZE_TICKS; // 240 ticks (1/16)
     let step_px = subdivision_ticks as f32 * zoom_x;
 
@@ -479,8 +555,8 @@ fn draw_grid_background(
         let mut tick = 0u64;
 
         while x < grid_rect.max.x {
-            let is_bar = tick % 3840 == 0; // 1 Compás a 960 PPQ
-            let is_beat = tick % 960 == 0; // 1 Tiempo (1/4)
+            let is_bar = tick % TICKS_PER_BAR == 0;
+            let is_beat = tick % TICKS_PER_BEAT == 0;
 
             let (stroke_width, color) = if is_bar {
                 (1.5_f32, Color32::from_gray(80))
@@ -499,10 +575,4 @@ fn draw_grid_background(
             x += step_px;
         }
     }
-}
-
-fn get_note_name(pitch: u8) -> String {
-    let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    let octave = (pitch / 12) as i8 - 1;
-    format!("{}{}", names[(pitch % 12) as usize], octave)
 }
