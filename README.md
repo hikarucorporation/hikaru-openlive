@@ -100,3 +100,9 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 ## Licencia
 
 Este programa es software libre bajo los términos de la **GNU Affero General Public License (AGPLv3)**. Ver [`LICENSE`](https://www.gnu.org/licenses/agpl-3.0.en.html) para más detalles.
+
+---
+
+### Posdata:
+
+Nota Personal: Cambiar el framework grafico de **`egui`** a **`gpui-kit`** cuando hagas la gran mayoría de cosas en **`egui`**
