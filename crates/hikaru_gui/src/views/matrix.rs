@@ -11,7 +11,13 @@ use egui::{
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use hikaru_audio_engine::AudioEngine;
+
+// use crate::audio::AudioProxy; // esto iba en el clip editor kjj
+
 use crate::audio_proxy::{AudioProxy, GuiCommand};
+
+// use crate::views::matrix::{self, MatrixClip, SessionMatrixState}; // Lo mismo que lo del audio proxy xd
+
 pub use crate::views::clipboard::MatrixClipboard;
 use crate::views::mixer::Track;
 use crate::views::playlist::{self, PlaylistState};
@@ -1111,6 +1117,9 @@ fn render_clip_editor_track_view(
                     clip_editor::show(
                         ui,
                         slot,
+                        track_idx,
+                        scene_idx,
+                        None, // <--- Cambiar 'Some(audio_engine)' por 'None'
                         elapsed_frames,
                         sample_rate,
                         bpm as f32,
@@ -1166,7 +1175,7 @@ fn pitch_to_note_name(pitch: u8) -> &'static str {
     names[(pitch % 12) as usize]
 }
 
-fn load_clip_into_slot(
+pub fn load_clip_into_slot(
     state: &mut SessionMatrixState,
     audio_proxy: &AudioProxy,
     track_idx: usize,

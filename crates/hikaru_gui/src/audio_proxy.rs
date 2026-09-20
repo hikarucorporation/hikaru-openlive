@@ -45,6 +45,33 @@ impl AudioProxy {
     pub fn send(&self, cmd: GuiCommand) {
         let _ = self.cmd_sender.send(cmd);
     }
+        
+    pub fn set_clip_loop(
+        &self,
+        track_idx: usize,
+        scene_idx: usize,
+        start_secs: f32,
+        end_secs: f32,
+        enabled: bool,
+    ) {
+        let _ = self.cmd_sender.send(GuiCommand::SetClipLoop {
+            track_idx,
+            scene_idx,
+            start_secs,
+            end_secs,
+            enabled,
+        });
+    }
+}
+
+pub enum AudioMessage {
+    SetClipLoop {
+        track_idx: usize,
+        scene_idx: usize,
+        start_secs: f32,
+        end_secs: f32,
+        enabled: bool,
+    },
 }
 
 pub enum GuiCommand {
@@ -106,8 +133,8 @@ pub enum GuiCommand {
     SetClipLoop {
         track_idx: usize,
         scene_idx: usize,
-        loop_start_secs: f32,
-        loop_end_secs: f32,
+        start_secs: f32,
+        end_secs: f32,
         enabled: bool,
     },
     /// Región de loop global del transporte (en SAMPLES, convertidos en la
@@ -152,48 +179,3 @@ pub enum GuiCommand {
     StopPreview,
     SetPreviewVolume(f32),
 }
-
-/*
-GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, notes } => {
-    let converted_notes = notes
-        .into_iter()
-        .map(|(start_tick, pitch, velocity, duration_ticks)| MidiNoteInstance {
-            start_tick,
-            pitch,
-            velocity,
-            duration_ticks,
-        })
-        .collect();
-
-    engine.update_midi_clip(track_idx, scene_idx, converted_notes);
-}
-*/
-
-/*
-// Dentro del bloque de iteración de frames de AudioEngine::process
-let current_tick = self.transport.samples_to_ticks(self.transport.sample_count);
-
-for midi_clip in self.midi_clips.iter_mut().filter(|c| c.is_playing) {
-    let clip_elapsed_ticks = current_tick.saturating_sub(self.transport.samples_to_ticks(midi_clip.start_frame));
-    let loop_ticks = if midi_clip.clip_loop_ticks > 0 { midi_clip.clip_loop_ticks } else { 3840 }; // 1 Bar = 3840 ticks
-    let local_tick = clip_elapsed_ticks % loop_ticks;
-
-    for note in &midi_clip.notes {
-        // Generar NoteOn
-        if note.start_tick == local_tick {
-            self.send_midi_event_to_instrument(midi_clip.track_index, MidiEvent::NoteOn {
-                key: note.pitch,
-                velocity: note.velocity,
-            });
-        }
-        
-        // Generar NoteOff
-        let note_end_tick = note.start_tick + note.duration_ticks as u64;
-        if note_end_tick == local_tick {
-            self.send_midi_event_to_instrument(midi_clip.track_index, MidiEvent::NoteOff {
-                key: note.pitch,
-            });
-        }
-    }
-}
-*/

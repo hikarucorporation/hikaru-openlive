@@ -170,7 +170,6 @@ impl AudioClipInstance {
             let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
             let loop_len = loop_end.saturating_sub(loop_start).max(1);
             
-            // Fuerza a que la lectura inicie directamente en loop_start
             return Some((loop_start + (elapsed % loop_len)) as usize);
         }
 
@@ -256,7 +255,7 @@ pub struct AudioEngine<'a> {
     pub track_mutes: [AtomicBool; 16],
     pub track_solos: [AtomicBool; 16],
     pub master_gain: AtomicU32,
-    pub midi_clips: Vec<MidiClipInstance>, // Almacenamiento de clips MIDI activos
+    pub midi_clips: Vec<MidiClipInstance>,
 }
 
 impl<'a> AudioEngine<'a> {
@@ -736,7 +735,7 @@ impl<'a> AudioEngine<'a> {
                             elapsed as usize
                         };
 
-                        let idx = (offset_frames + relative_frame) * ch;
+                        let idx = relative_frame * ch;
 
                         if xfade_frames > 0
                             && clip.prev_frame != usize::MAX
@@ -760,7 +759,7 @@ impl<'a> AudioEngine<'a> {
                                 l_new
                             };
 
-                            let prev_idx = (offset_frames + clip.prev_frame) * ch;
+                            let prev_idx = clip.prev_frame * ch;
                             let (l_old, r_old) = if prev_idx + ch <= src_len {
                                 let lo = unsafe { *buf_ptr.add(prev_idx) } * gl;
                                 let ro = if ch > 1 {
@@ -841,29 +840,27 @@ impl<'a> AudioEngine<'a> {
         self.position_clock.store(self.transport.sample_count, Ordering::Relaxed);
     }
 
-        // Método para sincronizar y actualizar las notas de un clip MIDI en tiempo real
-        pub fn update_midi_clip(
-            &mut self,
-            track_index: usize,
-            scene_index: usize,
-            notes: Vec<MidiNoteInstance>,
-        ) {
-            if let Some(clip) = self
-                .midi_clips
-                .iter_mut()
-                .find(|c| c.track_index == track_index && c.scene_index == scene_index)
-            {
-                clip.notes = notes;
-            } else {
-                self.midi_clips.push(MidiClipInstance {
-                    track_index,
-                    scene_index,
-                    notes,
-                    is_playing: false,
-                });
-            }
+    pub fn update_midi_clip(
+        &mut self,
+        track_index: usize,
+        scene_index: usize,
+        notes: Vec<MidiNoteInstance>,
+    ) {
+        if let Some(clip) = self
+            .midi_clips
+            .iter_mut()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            clip.notes = notes;
+        } else {
+            self.midi_clips.push(MidiClipInstance {
+                track_index,
+                scene_index,
+                notes,
+                is_playing: false,
+            });
         }
-    //
+    }
 }
 
 #[cfg(test)]

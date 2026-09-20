@@ -231,9 +231,9 @@ fn main() -> eframe::Result<()> {
                         engine.stop_track(track_idx);
                     }
                 }
-                GuiCommand::SetClipLoop { track_idx, scene_idx, loop_start_secs, loop_end_secs, enabled } => {
+                GuiCommand::SetClipLoop { track_idx, scene_idx, start_secs, end_secs, enabled } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
-                        engine.set_clip_loop(track_idx, scene_idx, loop_start_secs, loop_end_secs, enabled);
+                        engine.set_clip_loop(track_idx, scene_idx, start_secs, end_secs, enabled);
                     }
                 }
                 GuiCommand::SetGlobalLoop { start_samples, end_samples, enabled } => {
