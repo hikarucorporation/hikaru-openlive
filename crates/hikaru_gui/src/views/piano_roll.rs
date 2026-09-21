@@ -485,7 +485,8 @@ pub fn show(
 
                 if let Some(pos) = pointer_pos {
                     let local_x = pos.x - ruler_rect.min.x;
-                    let tick = (local_x / state.zoom_x).max(0.0) as u64;
+                    let raw_tick = (local_x / state.zoom_x).max(0.0) as u64;
+                    let tick = (raw_tick / QUANTIZE_TICKS) * QUANTIZE_TICKS;
 
                     if ruler_response.drag_started() && shift {
                         state.selection_dragging = true;
