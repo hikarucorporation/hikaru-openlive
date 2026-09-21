@@ -9,6 +9,13 @@ use super::open_dms::OpenDms;
 use super::mixer::Track;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionDragHandle {
+    None,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PianoRollMode {
     Keys,
     Drums,
@@ -31,6 +38,20 @@ pub struct PianoRollState {
     pub playhead_tick: u64,
     pub prev_playhead_tick: u64,
     triggered_notes: HashSet<(u8, u64)>,
+    /// Inicio de la selección de tiempo en ticks.
+    pub selection_start_tick: u64,
+    /// Fin de la selección de tiempo en ticks.
+    pub selection_end_tick: u64,
+    /// Si hay una selección de tiempo activa.
+    pub selection_active: bool,
+    /// Estado temporal para dibujar la selección mientras se arrastra.
+    pub selection_dragging: bool,
+    /// Selección visual (translúcida) mientras dura el Shift+Drag.
+    pub selection_preview_start_ticks: u64,
+    pub selection_preview_end_ticks: u64,
+    pub selection_preview_active: bool,
+    /// Handle activo para redimensionar la selección.
+    pub selection_drag_handle: SelectionDragHandle,
 }
 
 impl Default for PianoRollState {
@@ -44,7 +65,28 @@ impl Default for PianoRollState {
             playhead_tick: 0,
             prev_playhead_tick: 0,
             triggered_notes: HashSet::new(),
+            selection_start_tick: 0,
+            selection_end_tick: 0,
+            selection_active: false,
+            selection_dragging: false,
+            selection_preview_start_ticks: 0,
+            selection_preview_end_ticks: 0,
+            selection_preview_active: false,
+            selection_drag_handle: SelectionDragHandle::None,
         }
+    }
+}
+
+impl PianoRollState {
+    pub fn clear_selection(&mut self) {
+        self.selection_start_tick = 0;
+        self.selection_end_tick = 0;
+        self.selection_active = false;
+        self.selection_dragging = false;
+        self.selection_preview_start_ticks = 0;
+        self.selection_preview_end_ticks = 0;
+        self.selection_preview_active = false;
+        self.selection_drag_handle = SelectionDragHandle::None;
     }
 }
 
@@ -115,6 +157,22 @@ pub fn show(
             let bar = (state.playhead_tick / TICKS_PER_BAR) + 1;
             let beat = ((state.playhead_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
             ui.label(RichText::new(format!("Compás: {}.{} | Tick: {}", bar, beat, state.playhead_tick)).small());
+
+            if state.selection_active {
+                ui.separator();
+                let sel_start_bar = (state.selection_start_tick / TICKS_PER_BAR) + 1;
+                let sel_start_beat = ((state.selection_start_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
+                let sel_end_bar = (state.selection_end_tick / TICKS_PER_BAR) + 1;
+                let sel_end_beat = ((state.selection_end_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
+                ui.label(RichText::new(format!(
+                    "Sel: {}.{} -> {}.{}",
+                    sel_start_bar, sel_start_beat, sel_end_bar, sel_end_beat
+                )).small().color(Color32::LIGHT_BLUE));
+
+                if ui.small_button("X Sel").on_hover_text("Limpiar selección (Shift+Drag en regla para crear)").clicked() {
+                    state.clear_selection();
+                }
+            }
         });
 
         ui.separator();
@@ -175,6 +233,66 @@ pub fn show(
                 if ui.is_rect_visible(grid_rect) {
                     let painter = ui.painter_at(grid_rect);
                     draw_grid_background(&painter, grid_rect, state.key_height, state.zoom_x);
+
+                    // Dibujar Time Selection sobre la grilla
+                    let (render_active, render_start, render_end) = if state.selection_dragging && state.selection_preview_active {
+                        (true, state.selection_preview_start_ticks, state.selection_preview_end_ticks)
+                    } else {
+                        (state.selection_active, state.selection_start_tick, state.selection_end_tick)
+                    };
+
+                    if render_active && render_end > render_start {
+                        let start_x = render_start as f32 * state.zoom_x;
+                        let end_x = render_end as f32 * state.zoom_x;
+                        let (min_x, max_x) = if start_x <= end_x { (start_x, end_x) } else { (end_x, start_x) };
+
+                        let selection_rect = Rect::from_min_max(
+                            pos2(grid_rect.min.x + min_x, grid_rect.min.y),
+                            pos2(grid_rect.min.x + max_x, grid_rect.max.y),
+                        );
+
+                        // Fondo translúcido de la selección
+                        painter.rect_filled(
+                            selection_rect,
+                            0.0,
+                            Color32::from_rgba_unmultiplied(100, 200, 255, 40),
+                        );
+
+                        // Corchetes de selección estilo REAPER
+                        let bracket_color = Color32::LIGHT_BLUE;
+                        let bracket_stroke = Stroke::new(2.0_f32, bracket_color);
+                        let tick_len = 6.0_f32;
+                        let top_y = grid_rect.min.y;
+                        let bottom_y = grid_rect.max.y;
+
+                        // Corchete izquierdo `[`
+                        painter.line_segment(
+                            [pos2(grid_rect.min.x + min_x, top_y), pos2(grid_rect.min.x + min_x, bottom_y)],
+                            bracket_stroke,
+                        );
+                        painter.line_segment(
+                            [pos2(grid_rect.min.x + min_x, top_y), pos2(grid_rect.min.x + min_x + tick_len, top_y)],
+                            bracket_stroke,
+                        );
+                        painter.line_segment(
+                            [pos2(grid_rect.min.x + min_x, bottom_y), pos2(grid_rect.min.x + min_x + tick_len, bottom_y)],
+                            bracket_stroke,
+                        );
+
+                        // Corchete derecho `]`
+                        painter.line_segment(
+                            [pos2(grid_rect.min.x + max_x, top_y), pos2(grid_rect.min.x + max_x, bottom_y)],
+                            bracket_stroke,
+                        );
+                        painter.line_segment(
+                            [pos2(grid_rect.min.x + max_x, top_y), pos2(grid_rect.min.x + max_x - tick_len, top_y)],
+                            bracket_stroke,
+                        );
+                        painter.line_segment(
+                            [pos2(grid_rect.min.x + max_x, bottom_y), pos2(grid_rect.min.x + max_x - tick_len, bottom_y)],
+                            bracket_stroke,
+                        );
+                    }
 
                     for note in &state.notes {
                         let rect = note_rect(grid_rect, note, state.zoom_x, state.key_height);
@@ -273,13 +391,73 @@ pub fn show(
                 if ui.is_rect_visible(corner_rect) {
                     let p = ui.painter_at(corner_rect);
                     p.rect_filled(corner_rect, 0.0, Color32::from_rgb(20, 20, 24));
-                    p.line_segment([corner_rect.left_bottom(), corner_rect.right_bottom()], Stroke::new(1.0, Color32::from_gray(50)));
-                    p.line_segment([corner_rect.right_top(), corner_rect.right_bottom()], Stroke::new(1.0, Color32::from_gray(50)));
+                    p.line_segment([corner_rect.left_bottom(), corner_rect.right_bottom()], Stroke::new(1.0_f32, Color32::from_gray(50)));
+                    p.line_segment([corner_rect.right_top(), corner_rect.right_bottom()], Stroke::new(1.0_f32, Color32::from_gray(50)));
                 }
 
                 if ui.is_rect_visible(ruler_rect) {
                     let ruler_painter = ui.painter_at(ruler_rect);
                     draw_bar_ruler(&ruler_painter, ruler_rect, state.zoom_x, total_ticks);
+
+                    // Dibujar Time Selection en la regla
+                    let (render_active, render_start, render_end) = if state.selection_dragging && state.selection_preview_active {
+                        (true, state.selection_preview_start_ticks, state.selection_preview_end_ticks)
+                    } else {
+                        (state.selection_active, state.selection_start_tick, state.selection_end_tick)
+                    };
+
+                    if render_active && render_end > render_start {
+                        let start_x = ruler_rect.min.x + (render_start as f32 * state.zoom_x);
+                        let end_x = ruler_rect.min.x + (render_end as f32 * state.zoom_x);
+                        let (min_x, max_x) = if start_x <= end_x { (start_x, end_x) } else { (end_x, start_x) };
+
+                        let selection_rect = Rect::from_min_max(
+                            pos2(min_x, ruler_rect.min.y),
+                            pos2(max_x, ruler_rect.max.y),
+                        );
+
+                        // Fondo translúcido en la regla
+                        ruler_painter.rect_filled(
+                            selection_rect,
+                            0.0,
+                            Color32::from_rgba_unmultiplied(100, 200, 255, 60),
+                        );
+
+                        // Corchetes de selección en la regla
+                        let bracket_color = Color32::LIGHT_BLUE;
+                        let bracket_stroke = Stroke::new(2.0_f32, bracket_color);
+                        let tick_len = 5.0_f32;
+                        let top_y = ruler_rect.min.y + 1.0;
+                        let bottom_y = ruler_rect.max.y - 1.0;
+
+                        // `[` izquierdo
+                        ruler_painter.line_segment(
+                            [pos2(min_x, top_y), pos2(min_x, bottom_y)],
+                            bracket_stroke,
+                        );
+                        ruler_painter.line_segment(
+                            [pos2(min_x, top_y), pos2(min_x + tick_len, top_y)],
+                            bracket_stroke,
+                        );
+                        ruler_painter.line_segment(
+                            [pos2(min_x, bottom_y), pos2(min_x + tick_len, bottom_y)],
+                            bracket_stroke,
+                        );
+
+                        // `]` derecho
+                        ruler_painter.line_segment(
+                            [pos2(max_x, top_y), pos2(max_x, bottom_y)],
+                            bracket_stroke,
+                        );
+                        ruler_painter.line_segment(
+                            [pos2(max_x, top_y), pos2(max_x - tick_len, top_y)],
+                            bracket_stroke,
+                        );
+                        ruler_painter.line_segment(
+                            [pos2(max_x, bottom_y), pos2(max_x - tick_len, bottom_y)],
+                            bracket_stroke,
+                        );
+                    }
 
                     // Indicador Playhead en la regla
                     let ruler_playhead_x = ruler_rect.min.x + (state.playhead_tick as f32 * state.zoom_x);
@@ -302,10 +480,39 @@ pub fn show(
                     Sense::click_and_drag(),
                 );
 
-                if let Some(pointer_pos) = ruler_response.interact_pointer_pos() {
-                    let local_x = pointer_pos.x - ruler_rect.min.x;
-                    if local_x >= 0.0 {
-                        state.playhead_tick = (local_x / state.zoom_x).max(0.0) as u64;
+                let shift = ui.input(|i| i.modifiers.shift);
+                let pointer_pos = ruler_response.interact_pointer_pos();
+
+                if let Some(pos) = pointer_pos {
+                    let local_x = pos.x - ruler_rect.min.x;
+                    let tick = (local_x / state.zoom_x).max(0.0) as u64;
+
+                    if ruler_response.drag_started() && shift {
+                        state.selection_dragging = true;
+                        state.selection_preview_active = true;
+                        state.selection_preview_start_ticks = tick;
+                        state.selection_preview_end_ticks = tick;
+                        ui.ctx().request_repaint();
+                    } else if ruler_response.dragged() && state.selection_dragging && shift {
+                        state.selection_preview_end_ticks = tick;
+                        ui.ctx().request_repaint();
+                    } else if ruler_response.drag_stopped() && state.selection_dragging {
+                        let start = state.selection_preview_start_ticks.min(state.selection_preview_end_ticks);
+                        let end = state.selection_preview_start_ticks.max(state.selection_preview_end_ticks);
+                        if end > start {
+                            state.selection_start_tick = start;
+                            state.selection_end_tick = end;
+                            state.selection_active = true;
+                        } else {
+                            state.selection_active = false;
+                        }
+                        state.selection_dragging = false;
+                        state.selection_preview_active = false;
+                        state.selection_preview_start_ticks = 0;
+                        state.selection_preview_end_ticks = 0;
+                        ui.ctx().request_repaint();
+                    } else if ruler_response.clicked() && !shift {
+                        state.playhead_tick = tick;
                         ui.ctx().request_repaint();
                     }
                 }
