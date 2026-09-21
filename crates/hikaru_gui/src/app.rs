@@ -503,6 +503,10 @@ impl eframe::App for HikaruApp {
                 self.piano_roll_state.notes.clear();
             }
 
+            if self.transport.playback_state == TransportPlaybackState::Playing {
+                self.piano_roll_state.playhead_tick = self.current_tick();
+            }
+
             let piano_roll_tracks = match self.mode {
                 AppMode::OpenLive => &self.live_tracks,
                 AppMode::OpenStudio => &self.studio_tracks,
