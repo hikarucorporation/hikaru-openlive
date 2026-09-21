@@ -411,11 +411,19 @@ fn preview_drum_pad(
     if let Some(track) = tracks.get(selected_track_index) {
         if let Some(opendms) = find_opendms_in_track(track) {
             if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == pitch) {
-                if let Some(ref path) = pad.sample_path {
-                    audio_proxy.send(GuiCommand::PreviewSample {
-                        path: path.clone(),
-                        volume: pad.volume * velocity_scale,
-                        speed: 2.0_f32.powf(pad.pitch / 12.0),
+                if pad.sample_path.is_some() {
+                    let adsr = &opendms.sampler.adsr;
+                    let speed = 2.0_f32.powf(pad.pitch / 12.0);
+                    audio_proxy.send(GuiCommand::DmsNoteOn {
+                        pad_idx: pad.id,
+                        gain: pad.volume * velocity_scale,
+                        pan: pad.pan,
+                        velocity: velocity_scale,
+                        play_speed: speed as f64,
+                        attack_ms: adsr.attack,
+                        decay_ms: adsr.decay,
+                        sustain: adsr.sustain,
+                        release_ms: adsr.release,
                     });
                 }
             }

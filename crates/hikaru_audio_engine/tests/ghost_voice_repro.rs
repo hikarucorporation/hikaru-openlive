@@ -23,7 +23,7 @@ fn engine_with_5bar_clip(mode: EngineMode, global_loop: Option<(u64, u64)>) -> (
     // Sample audible constante: cualquier fuga se detecta de inmediato.
     let samples = vec![0.5f32; (five_bars as usize) * 2]; // estéreo
     let duration_secs = five_bars as f32 / 44100.0;
-    engine.add_clip(1, 0, 0, samples, 0.0, duration_secs, 0.0, 2, false, engine.sample_rate);
+    engine.add_clip(1, 0, 0, samples, 0.0, duration_secs, 0.0, 2, false);
     assert!(!engine.clips[0].has_valid_clip_loop());
 
     if mode == EngineMode::OpenLive {

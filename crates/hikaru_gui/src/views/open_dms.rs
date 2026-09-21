@@ -185,15 +185,23 @@ pub fn render_dms_ui(
                             if response.clicked() {
                                 dms.selected_pad = pad_idx;
 
-                                // Trigger audio preview for the pad's sample
-                                if let Some(ref path) = dms.pads[pad_idx].sample_path {
+                                // Trigger polyphonic DMS voice
+                                if dms.pads[pad_idx].sample_path.is_some() {
                                     let vol = dms.pads[pad_idx].volume;
+                                    let pan = dms.pads[pad_idx].pan;
                                     let pitch_shift = dms.pads[pad_idx].pitch;
                                     let speed = 2.0_f32.powf(pitch_shift / 12.0);
-                                    audio_proxy.send(GuiCommand::PreviewSample {
-                                        path: path.clone(),
-                                        volume: vol,
-                                        speed,
+                                    let adsr = &dms.sampler.adsr;
+                                    audio_proxy.send(GuiCommand::DmsNoteOn {
+                                        pad_idx,
+                                        gain: vol,
+                                        pan,
+                                        velocity: 1.0,
+                                        play_speed: speed as f64,
+                                        attack_ms: adsr.attack,
+                                        decay_ms: adsr.decay,
+                                        sustain: adsr.sustain,
+                                        release_ms: adsr.release,
                                     });
                                 }
                             }
@@ -207,7 +215,12 @@ pub fn render_dms_ui(
                                             .map(|s| s.to_string_lossy().to_string())
                                             .unwrap_or_else(|| "Sample".to_string());
                                         dms.pads[pad_idx].name = stem;
-                                        dms.pads[pad_idx].load_sample(path.to_string_lossy().to_string());
+                                        let path_str = path.to_string_lossy().to_string();
+                                        dms.pads[pad_idx].load_sample(path_str.clone());
+                                        audio_proxy.send(GuiCommand::LoadDmsSample {
+                                            pad_idx,
+                                            path: path_str,
+                                        });
                                     }
                                 }
                             }
@@ -303,7 +316,12 @@ pub fn render_dms_ui(
                                 .map(|s| s.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "Sample".to_string());
                             dms.pads[sel].name = stem;
-                            dms.pads[sel].load_sample(path.to_string_lossy().to_string());
+                            let path_str = path.to_string_lossy().to_string();
+                            dms.pads[sel].load_sample(path_str.clone());
+                            audio_proxy.send(GuiCommand::LoadDmsSample {
+                                pad_idx: sel,
+                                path: path_str,
+                            });
                         }
                     }
                 });
@@ -352,7 +370,11 @@ pub fn render_dms_ui(
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| "Sample".to_string());
                 dms.pads[sel].name = stem;
-                dms.pads[sel].load_sample(path);
+                dms.pads[sel].load_sample(path.clone());
+                audio_proxy.send(GuiCommand::LoadDmsSample {
+                    pad_idx: sel,
+                    path,
+                });
             }
         });
     });

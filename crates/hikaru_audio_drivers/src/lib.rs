@@ -73,16 +73,8 @@ impl HikaruAlsaDriver {
 
     pub fn write_samples(&self, buffer: &[i16]) -> i64 {
         unsafe {
-            // Mandamos los frames directamente a la Placa sin pasar por intermediarios
-            let frames = (buffer.len() / 2) as u64; // Estéreo (2 canales)
+            let frames = (buffer.len() / 2) as u64;
             snd_pcm_writei(self.pcm_handle, buffer.as_ptr() as *const _, frames)
-        }
-    }
-
-    // Disparar las voces del sampler OpenDMS únicamente en el frame exacto de frame_offset
-    for event in incoming_midi_events {
-        if event.is_note_on {
-            open_dms_instance.trigger_note(event.note, event.velocity);
         }
     }
 }

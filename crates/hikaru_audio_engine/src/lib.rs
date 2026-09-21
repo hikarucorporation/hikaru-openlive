@@ -236,6 +236,268 @@ impl AudioClipInstance {
     }
 }
 
+// ─── OpenDMS Polyphonic Voice Pool ────────────────────────────────
+
+const MAX_DMS_VOICES: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DmsEnvStage {
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+    Free,
+}
+
+#[derive(Debug, Clone)]
+pub struct DmsVoice {
+    active: bool,
+    samples: *const [f32],
+    channels: usize,
+    sample_len: usize,
+    play_pos: f64,
+    play_speed: f64,
+    gain: f32,
+    pan: f32,
+    velocity: f32,
+    pad_idx: usize,
+    env_stage: DmsEnvStage,
+    env_level: f32,
+    attack_rate: f32,
+    decay_rate: f32,
+    sustain_level: f32,
+    release_rate: f32,
+    age: u64,
+}
+
+unsafe impl Send for DmsVoice {}
+unsafe impl Sync for DmsVoice {}
+
+impl DmsVoice {
+    fn new() -> Self {
+        Self {
+            active: false,
+            samples: &[],
+            channels: 0,
+            sample_len: 0,
+            play_pos: 0.0,
+            play_speed: 1.0,
+            gain: 1.0,
+            pan: 0.0,
+            velocity: 1.0,
+            pad_idx: 0,
+            env_stage: DmsEnvStage::Free,
+            env_level: 0.0,
+            attack_rate: 0.0,
+            decay_rate: 0.0,
+            sustain_level: 1.0,
+            release_rate: 0.0,
+            age: 0,
+        }
+    }
+
+    fn process_frame(&mut self, sr: f32) -> (f32, f32) {
+        if !self.active || self.env_stage == DmsEnvStage::Free {
+            return (0.0, 0.0);
+        }
+
+        let (env_out, stage_done) = self.advance_envelope(sr);
+        if stage_done {
+            match self.env_stage {
+                DmsEnvStage::Attack => {
+                    self.env_stage = DmsEnvStage::Decay;
+                    self.env_level = 1.0;
+                }
+                DmsEnvStage::Decay => {
+                    self.env_stage = DmsEnvStage::Sustain;
+                    self.env_level = self.sustain_level;
+                }
+                DmsEnvStage::Release => {
+                    self.active = false;
+                    self.env_stage = DmsEnvStage::Free;
+                    return (0.0, 0.0);
+                }
+                _ => {}
+            }
+        }
+
+        let idx = self.play_pos as usize;
+        if idx >= self.sample_len {
+            self.active = false;
+            self.env_stage = DmsEnvStage::Free;
+            return (0.0, 0.0);
+        }
+
+        let ch = self.channels.max(1);
+        let raw_idx = idx * ch;
+        let slice = unsafe { &*self.samples };
+        let l = if raw_idx < slice.len() {
+            slice[raw_idx]
+        } else {
+            0.0
+        };
+        let r = if ch > 1 && raw_idx + 1 < slice.len() {
+            slice[raw_idx + 1]
+        } else {
+            l
+        };
+
+        self.play_pos += self.play_speed;
+        if self.play_pos >= self.sample_len as f64 {
+            self.active = false;
+            self.env_stage = DmsEnvStage::Free;
+            return (0.0, 0.0);
+        }
+
+        let amp = env_out * self.gain * self.velocity;
+        let pan_l = if self.pan <= 0.0 { 1.0 } else { 1.0 - self.pan };
+        let pan_r = if self.pan >= 0.0 { 1.0 } else { 1.0 + self.pan };
+
+        (l * amp * pan_l, r * amp * pan_r)
+    }
+
+    fn advance_envelope(&mut self, sr: f32) -> (f32, bool) {
+        match self.env_stage {
+            DmsEnvStage::Attack => {
+                if self.attack_rate <= 0.0 {
+                    return (1.0, true);
+                }
+                self.env_level += self.attack_rate / sr;
+                if self.env_level >= 1.0 {
+                    (1.0, true)
+                } else {
+                    (self.env_level, false)
+                }
+            }
+            DmsEnvStage::Decay => {
+                if self.decay_rate <= 0.0 {
+                    return (self.sustain_level, true);
+                }
+                self.env_level -= self.decay_rate / sr;
+                if self.env_level <= self.sustain_level {
+                    (self.sustain_level, true)
+                } else {
+                    (self.env_level, false)
+                }
+            }
+            DmsEnvStage::Sustain => (self.sustain_level, false),
+            DmsEnvStage::Release => {
+                if self.release_rate <= 0.0 {
+                    return (0.0, true);
+                }
+                self.env_level -= self.release_rate / sr;
+                if self.env_level <= 0.0 {
+                    (0.0, true)
+                } else {
+                    (self.env_level.max(0.0), false)
+                }
+            }
+            DmsEnvStage::Free => (0.0, true),
+        }
+    }
+}
+
+pub struct DmsVoicePool {
+    voices: Vec<DmsVoice>,
+    global_age: u64,
+}
+
+impl DmsVoicePool {
+    pub fn new() -> Self {
+        let voices = (0..MAX_DMS_VOICES).map(|_| DmsVoice::new()).collect();
+        Self {
+            voices,
+            global_age: 0,
+        }
+    }
+
+    pub fn trigger(
+        &mut self,
+        samples: &[f32],
+        channels: usize,
+        pad_idx: usize,
+        gain: f32,
+        pan: f32,
+        velocity: f32,
+        play_speed: f64,
+        adsr: &DmsAdsrParams,
+    ) -> Option<usize> {
+        self.global_age = self.global_age.wrapping_add(1);
+
+        let free = self.voices.iter().position(|v| !v.active);
+        let idx = match free {
+            Some(i) => i,
+            None => {
+                let oldest = self.voices.iter().enumerate()
+                    .min_by_key(|(_, v)| v.age)
+                    .map(|(i, _)| i)?;
+                self.voices[oldest].active = false;
+                oldest
+            }
+        };
+
+        let v = &mut self.voices[idx];
+        v.active = true;
+        v.samples = samples as *const [f32];
+        v.channels = channels;
+        v.sample_len = samples.len() / channels.max(1);
+        v.play_pos = 0.0;
+        v.play_speed = play_speed;
+        v.gain = gain;
+        v.pan = pan;
+        v.velocity = velocity;
+        v.pad_idx = pad_idx;
+        v.env_stage = DmsEnvStage::Attack;
+        v.env_level = 0.0;
+        v.attack_rate = adsr.attack_rate;
+        v.decay_rate = adsr.decay_rate;
+        v.sustain_level = adsr.sustain_level;
+        v.release_rate = adsr.release_rate;
+        v.age = self.global_age;
+
+        Some(idx)
+    }
+
+    pub fn release_pad(&mut self, pad_idx: usize) {
+        for v in self.voices.iter_mut() {
+            if v.active && v.pad_idx == pad_idx && v.env_stage != DmsEnvStage::Release {
+                v.env_stage = DmsEnvStage::Release;
+            }
+        }
+    }
+
+    pub fn kill_pad(&mut self, pad_idx: usize) {
+        for v in self.voices.iter_mut() {
+            if v.active && v.pad_idx == pad_idx {
+                v.active = false;
+                v.env_stage = DmsEnvStage::Free;
+            }
+        }
+    }
+
+    pub fn process_all(&mut self, output_l: &mut [f32], output_r: &mut [f32], sr: f32) {
+        let buf_len = output_l.len();
+        for v in self.voices.iter_mut() {
+            if !v.active {
+                continue;
+            }
+            for i in 0..buf_len {
+                let (l, r) = v.process_frame(sr);
+                output_l[i] += l;
+                output_r[i] += r;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DmsAdsrParams {
+    pub attack_rate: f32,
+    pub decay_rate: f32,
+    pub sustain_level: f32,
+    pub release_rate: f32,
+}
+
 pub struct AudioEngine<'a> {
     pub transport: TransportPosition,
     pub mode: EngineMode,
@@ -256,6 +518,10 @@ pub struct AudioEngine<'a> {
     pub track_solos: [AtomicBool; 16],
     pub master_gain: AtomicU32,
     pub midi_clips: Vec<MidiClipInstance>,
+    pub dms_voice_pool: DmsVoicePool,
+    pub dms_samples: Vec<Option<Vec<f32>>>,
+    pub dms_channels: Vec<usize>,
+    pub dms_track_idx: usize,
 }
 
 impl<'a> AudioEngine<'a> {
@@ -283,6 +549,10 @@ impl<'a> AudioEngine<'a> {
             track_solos: std::array::from_fn(|_| AtomicBool::new(false)),
             master_gain: AtomicU32::new(0.75f32.to_bits()),
             midi_clips: Vec::new(),
+            dms_voice_pool: DmsVoicePool::new(),
+            dms_samples: Vec::new(),
+            dms_channels: Vec::new(),
+            dms_track_idx: 0,
         }
     }
 
@@ -592,6 +862,56 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    // ─── OpenDMS Polyphonic Methods ──────────────────────────────
+
+    pub fn load_dms_sample(&mut self, pad_idx: usize, samples: Vec<f32>, channels: usize) {
+        while self.dms_samples.len() <= pad_idx {
+            self.dms_samples.push(None);
+            self.dms_channels.push(1);
+        }
+        self.dms_channels[pad_idx] = channels;
+        self.dms_samples[pad_idx] = Some(samples);
+    }
+
+    pub fn trigger_dms_note(
+        &mut self,
+        pad_idx: usize,
+        gain: f32,
+        pan: f32,
+        velocity: f32,
+        play_speed: f64,
+        adsr: &DmsAdsrParams,
+    ) {
+        if pad_idx >= self.dms_samples.len() {
+            return;
+        }
+        if let Some(ref samples) = self.dms_samples[pad_idx] {
+            let channels = self.dms_channels[pad_idx];
+            self.dms_voice_pool.trigger(
+                samples,
+                channels,
+                pad_idx,
+                gain,
+                pan,
+                velocity,
+                play_speed,
+                adsr,
+            );
+        }
+    }
+
+    pub fn release_dms_note(&mut self, pad_idx: usize) {
+        self.dms_voice_pool.release_pad(pad_idx);
+    }
+
+    pub fn kill_dms_note(&mut self, pad_idx: usize) {
+        self.dms_voice_pool.kill_pad(pad_idx);
+    }
+
+    pub fn set_dms_track(&mut self, track_idx: usize) {
+        self.dms_track_idx = track_idx.min(15);
+    }
+
     pub fn process(&mut self, out_buffer: &mut AudioBuffer<'_>) {
         let samples = out_buffer.get_samples_mut();
         let num_channels = 2;
@@ -601,6 +921,37 @@ impl<'a> AudioEngine<'a> {
         if self.preview_player.is_active() {
             let preview = self.preview_player.shared_buffer();
             preview.process(samples);
+        }
+
+        // ─── OpenDMS Polyphonic Voice Mixing ──────────────────────
+        // Always active (not gated by transport), like preview player.
+        {
+            let buf_frames = samples.len() / 2;
+            let ti = self.dms_track_idx;
+            let vol = f32::from_bits(self.track_volumes[ti].load(Ordering::Relaxed));
+            let muted = self.track_mutes[ti].load(Ordering::Relaxed);
+            let soloed = self.track_solos[ti].load(Ordering::Relaxed);
+            let any_solo_dms = self.track_solos.iter().any(|s| s.load(Ordering::Relaxed));
+            let effective_gain = if muted {
+                0.0
+            } else if any_solo_dms && !soloed {
+                0.0
+            } else {
+                vol
+            };
+            let pan_norm = f32::from_bits(self.track_pans[ti].load(Ordering::Relaxed)) / 100.0;
+            let track_gain_l = effective_gain * if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
+            let track_gain_r = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
+
+            if effective_gain > 0.0 {
+                let mut dms_l = vec![0.0f32; buf_frames];
+                let mut dms_r = vec![0.0f32; buf_frames];
+                self.dms_voice_pool.process_all(&mut dms_l, &mut dms_r, self.sample_rate);
+                for i in 0..buf_frames {
+                    samples[i * 2] += dms_l[i] * track_gain_l;
+                    samples[i * 2 + 1] += dms_r[i] * track_gain_r;
+                }
+            }
         }
 
         if self.transport.playback_state == TransportPlaybackState::Playing {

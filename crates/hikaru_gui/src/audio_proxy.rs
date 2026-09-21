@@ -178,4 +178,22 @@ pub enum GuiCommand {
     },
     StopPreview,
     SetPreviewVolume(f32),
+    LoadDmsSample {
+        pad_idx: usize,
+        path: String,
+    },
+    DmsNoteOn {
+        pad_idx: usize,
+        gain: f32,
+        pan: f32,
+        velocity: f32,
+        play_speed: f64,
+        attack_ms: f32,
+        decay_ms: f32,
+        sustain: f32,
+        release_ms: f32,
+    },
+    DmsNoteOff {
+        pad_idx: usize,
+    },
 }

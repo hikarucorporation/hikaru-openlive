@@ -295,6 +295,56 @@ fn main() -> eframe::Result<()> {
                         engine.update_midi_clip(track_idx, scene_idx, converted_notes);
                     }
                 }
+
+                // ─── OpenDMS Polyphonic Commands ───────────────────
+                GuiCommand::LoadDmsSample { pad_idx, path } => {
+                    if let Ok(mut reader) = hound::WavReader::open(&path) {
+                        let spec = reader.spec();
+                        let file_sr = spec.sample_rate as f32;
+                        let channels = spec.channels as usize;
+
+                        let raw_samples: Vec<f32> = match spec.sample_format {
+                            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
+                            hound::SampleFormat::Int => {
+                                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                                reader.samples::<i32>()
+                                    .filter_map(Result::ok)
+                                    .map(|s| s as f32 / max_val)
+                                    .collect()
+                            }
+                        };
+
+                        if let Ok(mut engine) = engine_for_commands.lock() {
+                            let target_sr = engine.sample_rate;
+                            let final_samples = if (file_sr - target_sr).abs() > 1.0 {
+                                resample_linear(&raw_samples, channels, file_sr, target_sr)
+                            } else {
+                                raw_samples
+                            };
+                            engine.load_dms_sample(pad_idx, final_samples, channels);
+                        }
+                    } else {
+                        eprintln!("[Hikaru Engine Error] No se pudo abrir WAV para DMS pad {}: {}", pad_idx, path);
+                    }
+                }
+                GuiCommand::DmsNoteOn { pad_idx, gain, pan, velocity, play_speed, attack_ms, decay_ms, sustain, release_ms } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        let sr = engine.sample_rate;
+                        let adsr = hikaru_audio_engine::DmsAdsrParams {
+                            attack_rate: if attack_ms > 0.0 { 1.0 / (attack_ms * 0.001 * sr) } else { sr },
+                            decay_rate: if decay_ms > 0.0 { (1.0 - sustain) / (decay_ms * 0.001 * sr) } else { sr },
+                            sustain_level: sustain.clamp(0.0, 1.0),
+                            release_rate: if release_ms > 0.0 { sustain / (release_ms * 0.001 * sr) } else { sr },
+                        };
+                        engine.trigger_dms_note(pad_idx, gain, pan, velocity, play_speed, &adsr);
+                    }
+                }
+                GuiCommand::DmsNoteOff { pad_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.release_dms_note(pad_idx);
+                    }
+                }
+
                 // Antes del final `_ => {}`
                 _ => {}
             }
