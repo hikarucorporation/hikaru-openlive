@@ -479,71 +479,75 @@ impl eframe::App for HikaruApp {
         // 1. DENTRO DE IMPL APPARC FOR HIKARUAPP (update):
         // Declaramos primero todos los TopBottomPanels inferiores para que recorten el espacio del CentralPanel.
 
-        if self.show_piano_roll {
-            if let Some((track_idx, scene_idx)) = self.matrix_state.selected_slot {
-                if let Some(slot) = self.matrix_state.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
-                    if let Some(clip) = &mut slot.clip {
-                        if let matrix::ClipData::Midi { notes } = &mut clip.content {
-                            self.piano_roll_state.notes = notes.iter().map(|&(start_tick, pitch, velocity, duration_ticks)| {
-                                crate::views::piano_roll::MidiNote {
-                                    pitch,
-                                    start_tick,
-                                    duration_ticks: duration_ticks as u64,
-                                    velocity,
-                                }
-                            }).collect();
-                        } else {
-                            self.piano_roll_state.notes.clear();
-                        }
+        // La carga de notas, la actualización del playhead y el trigger de
+        // audio deben correr SIEMPRE (aunque el panel esté minimizado), porque
+        // son los que hacen sonar los clips MIDI. Antes vivían dentro del
+        // `if show_piano_roll` y minimizar el Piano Roll cortaba el sonido.
+        if let Some((track_idx, scene_idx)) = self.matrix_state.selected_slot {
+            if let Some(slot) = self.matrix_state.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
+                if let Some(clip) = &mut slot.clip {
+                    if let matrix::ClipData::Midi { notes } = &mut clip.content {
+                        self.piano_roll_state.notes = notes.iter().map(|&(start_tick, pitch, velocity, duration_ticks)| {
+                            crate::views::piano_roll::MidiNote {
+                                pitch,
+                                start_tick,
+                                duration_ticks: duration_ticks as u64,
+                                velocity,
+                            }
+                        }).collect();
                     } else {
                         self.piano_roll_state.notes.clear();
                     }
-                }
-            } else {
-                self.piano_roll_state.notes.clear();
-            }
-
-            if self.transport.playback_state == TransportPlaybackState::Playing {
-                let transport_tick = self.current_tick();
-
-                // Loop del Piano Roll: calcular tick de forma independiente
-                if self.piano_roll_state.loop_enabled
-                    && self.piano_roll_state.selection_active
-                    && self.piano_roll_state.selection_end_tick > self.piano_roll_state.selection_start_tick
-                {
-                    let loop_len = self.piano_roll_state.selection_end_tick - self.piano_roll_state.selection_start_tick;
-
-                    // Si el loop recién se activó, inicializar el estado
-                    if self.piano_roll_state.loop_start_instant.is_none() {
-                        self.piano_roll_state.loop_transport_start_tick = transport_tick;
-                        self.piano_roll_state.loop_start_instant = Some(std::time::Instant::now());
-                    }
-
-                    let elapsed_secs = self.piano_roll_state.loop_start_instant
-                        .map(|t| t.elapsed().as_secs_f64())
-                        .unwrap_or(0.0);
-
-                    let ppqn = self.transport.ppqn().max(1) as f64;
-                    let ticks_per_second = (self.transport.bpm * ppqn) / 60.0;
-                    let ticks_elapsed = (elapsed_secs * ticks_per_second) as u64;
-
-                    // Offset dentro del loop usando módulo
-                    let offset_in_loop = ticks_elapsed % loop_len;
-                    self.piano_roll_state.playhead_tick = self.piano_roll_state.selection_start_tick + offset_in_loop;
                 } else {
-                    self.piano_roll_state.playhead_tick = transport_tick;
-                    self.piano_roll_state.loop_start_instant = None;
+                    self.piano_roll_state.notes.clear();
                 }
+            }
+        } else {
+            self.piano_roll_state.notes.clear();
+        }
+
+        if self.transport.playback_state == TransportPlaybackState::Playing {
+            let transport_tick = self.current_tick();
+
+            // Loop del Piano Roll: calcular tick de forma independiente
+            if self.piano_roll_state.loop_enabled
+                && self.piano_roll_state.selection_active
+                && self.piano_roll_state.selection_end_tick > self.piano_roll_state.selection_start_tick
+            {
+                let loop_len = self.piano_roll_state.selection_end_tick - self.piano_roll_state.selection_start_tick;
+
+                // Si el loop recién se activó, inicializar el estado
+                if self.piano_roll_state.loop_start_instant.is_none() {
+                    self.piano_roll_state.loop_transport_start_tick = transport_tick;
+                    self.piano_roll_state.loop_start_instant = Some(std::time::Instant::now());
+                }
+
+                let elapsed_secs = self.piano_roll_state.loop_start_instant
+                    .map(|t| t.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+
+                let ppqn = self.transport.ppqn().max(1) as f64;
+                let ticks_per_second = (self.transport.bpm * ppqn) / 60.0;
+                let ticks_elapsed = (elapsed_secs * ticks_per_second) as u64;
+
+                // Offset dentro del loop usando módulo
+                let offset_in_loop = ticks_elapsed % loop_len;
+                self.piano_roll_state.playhead_tick = self.piano_roll_state.selection_start_tick + offset_in_loop;
             } else {
-                // Cuando se pausa, limpiar el estado del loop
+                self.piano_roll_state.playhead_tick = transport_tick;
                 self.piano_roll_state.loop_start_instant = None;
             }
+        } else {
+            // Cuando se pausa, limpiar el estado del loop
+            self.piano_roll_state.loop_start_instant = None;
+        }
 
-            let piano_roll_tracks = match self.mode {
-                AppMode::OpenLive => &self.live_tracks,
-                AppMode::OpenStudio => &self.studio_tracks,
-            };
+        let piano_roll_tracks = match self.mode {
+            AppMode::OpenLive => &self.live_tracks,
+            AppMode::OpenStudio => &self.studio_tracks,
+        };
 
+        if self.show_piano_roll {
             TopBottomPanel::bottom("piano_roll_panel")
                 .resizable(true)
                 .default_height(280.0)
@@ -572,6 +576,14 @@ impl eframe::App for HikaruApp {
                 }
             }
         }
+
+        // Disparar notas del playhead aunque el panel esté minimizado.
+        crate::views::piano_roll::trigger_playhead_notes(
+            &mut self.piano_roll_state,
+            piano_roll_tracks,
+            self.selected_track_index,
+            &self.audio_proxy,
+        );
 
         if self.show_dsp_rack {
             let active_tracks = match self.mode {

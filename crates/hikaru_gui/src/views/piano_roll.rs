@@ -544,28 +544,41 @@ pub fn show(
                     }
                 }
 
-                // Audio Playhead trigger
-                let current_tick = state.playhead_tick;
-                let prev_tick = state.prev_playhead_tick;
-
-                if current_tick != prev_tick {
-                    for note in &state.notes {
-                        if note_just_crossed(prev_tick, current_tick, note.start_tick) {
-                            let velocity_scale = note.velocity as f32 / 127.0;
-                            preview_drum_pad(
-                                tracks,
-                                selected_track_index,
-                                note.pitch,
-                                velocity_scale,
-                                audio_proxy,
-                            );
-                        }
-                    }
-                }
-
-                state.prev_playhead_tick = state.playhead_tick;
             });
     });
+}
+
+/// Dispara las notas cruzadas por el playhead.
+///
+/// Se llama cada frame desde el app **independientemente de si el panel del
+/// Piano Roll está visible**. Antes este código vivía dentro de `show()`, por
+/// lo que minimizar el panel cortaba el único productor de eventos de nota
+/// y los clips MIDI dejaban de sonar.
+pub fn trigger_playhead_notes(
+    state: &mut PianoRollState,
+    tracks: &[Track],
+    selected_track_index: usize,
+    audio_proxy: &AudioProxy,
+) {
+    let current_tick = state.playhead_tick;
+    let prev_tick = state.prev_playhead_tick;
+
+    if current_tick != prev_tick {
+        for note in &state.notes {
+            if note_just_crossed(prev_tick, current_tick, note.start_tick) {
+                let velocity_scale = note.velocity as f32 / 127.0;
+                preview_drum_pad(
+                    tracks,
+                    selected_track_index,
+                    note.pitch,
+                    velocity_scale,
+                    audio_proxy,
+                );
+            }
+        }
+    }
+
+    state.prev_playhead_tick = state.playhead_tick;
 }
 
 /// `true` si el playhead cruzó `start_tick` en este frame.
