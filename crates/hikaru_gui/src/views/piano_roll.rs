@@ -58,6 +58,18 @@ pub struct PianoRollState {
     pub loop_transport_start_tick: u64,
     /// Timestamp del sistema (Instant) cuando empezó el loop.
     pub loop_start_instant: Option<std::time::Instant>,
+    /// Si hay un resize de nota en curso por uno de sus extremos.
+    pub note_resize_active: bool,
+    /// Extremo que se está arrastrando (Left o Right).
+    pub note_resize_handle: SelectionDragHandle,
+    /// Índice en `notes` de la nota que se está redimensionando.
+    pub note_resize_index: Option<usize>,
+    /// Valores originales de la nota al iniciar el resize.
+    pub note_resize_orig_start: u64,
+    pub note_resize_orig_duration: u64,
+    /// Preview visual mientras dura el arrastre.
+    pub note_resize_preview_start: u64,
+    pub note_resize_preview_duration: u64,
 }
 
 impl Default for PianoRollState {
@@ -82,6 +94,13 @@ impl Default for PianoRollState {
             loop_enabled: false,
             loop_transport_start_tick: 0,
             loop_start_instant: None,
+            note_resize_active: false,
+            note_resize_handle: SelectionDragHandle::None,
+            note_resize_index: None,
+            note_resize_orig_start: 0,
+            note_resize_orig_duration: 0,
+            note_resize_preview_start: 0,
+            note_resize_preview_duration: 0,
         }
     }
 }
@@ -99,6 +118,11 @@ impl PianoRollState {
         self.loop_enabled = false;
         self.loop_transport_start_tick = 0;
         self.loop_start_instant = None;
+        self.note_resize_active = false;
+        self.note_resize_handle = SelectionDragHandle::None;
+        self.note_resize_index = None;
+        self.note_resize_preview_start = 0;
+        self.note_resize_preview_duration = 0;
     }
 }
 
@@ -134,6 +158,40 @@ const TICKS_PER_BEAT: u64 = 960;
 const TICKS_PER_BAR: u64 = 3840; // 4/4 a 960 PPQ
 const RULER_HEIGHT: f32 = 24.0;   // Altura fija de la regla de compases
 const NOTE_INSERT_VELOCITY: u8 = 100;
+/// Ancho en px de las hitboxes de resize en los extremos de cada nota.
+const NOTE_EDGE_HIT_W: f32 = 8.0;
+/// Duración mínima de una nota al redimensionar (1/16).
+const MIN_NOTE_DURATION_TICKS: u64 = QUANTIZE_TICKS;
+
+/// Cuantiza `tick` a múltiplos de `step` (hacia abajo), sin bajar de 0.
+fn quantize_tick(tick: u64, step: u64) -> u64 {
+    if step == 0 {
+        return tick;
+    }
+    (tick / step) * step
+}
+
+/// Redimensiona el extremo **izquierdo** de una nota.
+/// El extremo derecho queda anclado; se devuelve `(nuevo_start, nueva_duration)`.
+fn resize_note_left(orig_start: u64, orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
+    let end = orig_start.saturating_add(orig_duration);
+    let min_dur = MIN_NOTE_DURATION_TICKS;
+    if end <= min_dur {
+        return (0, end.max(min_dur));
+    }
+    let new_start = quantize_tick(pointer_tick, QUANTIZE_TICKS).min(end - min_dur);
+    let new_duration = end - new_start;
+    (new_start, new_duration)
+}
+
+/// Redimensiona el extremo **derecho** de una nota.
+/// El extremo izquierdo queda anclado; se devuelve `(start, nueva_duration)`.
+fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
+    let min_dur = MIN_NOTE_DURATION_TICKS;
+    let new_end = quantize_tick(pointer_tick, QUANTIZE_TICKS).max(orig_start + min_dur);
+    let new_duration = new_end - orig_start;
+    (orig_start, new_duration)
+}
 
 pub fn show(
     ui: &mut Ui,
@@ -319,10 +377,34 @@ pub fn show(
                         );
                     }
 
-                    for note in &state.notes {
-                        let rect = note_rect(grid_rect, note, state.zoom_x, state.key_height);
+                    for (i, note) in state.notes.iter().enumerate() {
+                        // Durante un resize se dibuja el preview en lugar de los
+                        // valores reales de la nota.
+                        let (start_tick, duration_ticks) =
+                            if state.note_resize_active && state.note_resize_index == Some(i) {
+                                (
+                                    state.note_resize_preview_start,
+                                    state.note_resize_preview_duration,
+                                )
+                            } else {
+                                (note.start_tick, note.duration_ticks)
+                            };
+                        let preview_note = MidiNote {
+                            pitch: note.pitch,
+                            start_tick,
+                            duration_ticks,
+                            velocity: note.velocity,
+                        };
+                        let rect = note_rect(grid_rect, &preview_note, state.zoom_x, state.key_height);
                         if rect.intersects(grid_rect) {
-                            painter.rect_filled(rect, 2.0, Color32::from_rgb(255, 140, 0));
+                            let body_color = if state.note_resize_active
+                                && state.note_resize_index == Some(i)
+                            {
+                                Color32::from_rgb(255, 190, 60)
+                            } else {
+                                Color32::from_rgb(255, 140, 0)
+                            };
+                            painter.rect_filled(rect, 2.0, body_color);
                             painter.rect_stroke(rect, 1.0, Stroke::new(1.0_f32, Color32::WHITE));
                         }
                     }
@@ -335,11 +417,153 @@ pub fn show(
                     Sense::click_and_drag(),
                 );
 
+                // --- RESIZE DE NOTAS POR LOS EXTREMOS (estilo DAW) ---
+                // Hitboxes en el borde izquierdo y derecho de cada nota
+                // visible. Prioridad sobre el grid: si el puntero está sobre
+                // un extremo no se crea/borra nota ni se muestra el ghost.
+                // PATRÓN PLAYLIST: durante `.dragged()` solo se toca el
+                // preview; la confirmación es SOLO en `drag_stopped()`.
+                let mut note_edge_active = false;
+                let mut commit_note_resize = false;
+                if ui.is_rect_visible(grid_rect) {
+                    for (i, note) in state.notes.iter().enumerate() {
+                        let (start_tick, duration_ticks) =
+                            if state.note_resize_active && state.note_resize_index == Some(i) {
+                                (
+                                    state.note_resize_preview_start,
+                                    state.note_resize_preview_duration,
+                                )
+                            } else {
+                                (note.start_tick, note.duration_ticks)
+                            };
+                        let preview_note = MidiNote {
+                            pitch: note.pitch,
+                            start_tick,
+                            duration_ticks,
+                            velocity: note.velocity,
+                        };
+                        let rect =
+                            note_rect(grid_rect, &preview_note, state.zoom_x, state.key_height);
+                        if !rect.intersects(grid_rect) {
+                            continue;
+                        }
+
+                        let edge_h = rect.height().max(state.key_height - 1.0);
+                        let left_hit = Rect::from_center_size(
+                            pos2(rect.min.x, rect.center().y),
+                            vec2(NOTE_EDGE_HIT_W, edge_h),
+                        );
+                        let right_hit = Rect::from_center_size(
+                            pos2(rect.max.x, rect.center().y),
+                            vec2(NOTE_EDGE_HIT_W, edge_h),
+                        );
+                        let left_id = ui.id().with(("note_resize_left", i));
+                        let right_id = ui.id().with(("note_resize_right", i));
+                        let l_resp = ui.interact(left_hit, left_id, Sense::drag());
+                        let r_resp = ui.interact(right_hit, right_id, Sense::drag());
+
+                        if l_resp.hovered() || l_resp.dragged() {
+                            note_edge_active = true;
+                            ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                        }
+                        if r_resp.hovered() || r_resp.dragged() {
+                            note_edge_active = true;
+                            ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                        }
+
+                        // Iniciar resize: sembrar preview desde la nota real.
+                        // Solo si no hay ya otro resize en curso.
+                        if !state.note_resize_active {
+                            if l_resp.drag_started() {
+                                state.note_resize_active = true;
+                                state.note_resize_handle = SelectionDragHandle::Left;
+                                state.note_resize_index = Some(i);
+                                state.note_resize_orig_start = note.start_tick;
+                                state.note_resize_orig_duration = note.duration_ticks;
+                                state.note_resize_preview_start = note.start_tick;
+                                state.note_resize_preview_duration = note.duration_ticks;
+                                note_edge_active = true;
+                                ui.ctx().request_repaint();
+                            } else if r_resp.drag_started() {
+                                state.note_resize_active = true;
+                                state.note_resize_handle = SelectionDragHandle::Right;
+                                state.note_resize_index = Some(i);
+                                state.note_resize_orig_start = note.start_tick;
+                                state.note_resize_orig_duration = note.duration_ticks;
+                                state.note_resize_preview_start = note.start_tick;
+                                state.note_resize_preview_duration = note.duration_ticks;
+                                note_edge_active = true;
+                                ui.ctx().request_repaint();
+                            }
+                        }
+
+                        // Arrastrar el extremo activo de ESTA nota.
+                        if state.note_resize_active && state.note_resize_index == Some(i) {
+                            let resp = match state.note_resize_handle {
+                                SelectionDragHandle::Left => &l_resp,
+                                SelectionDragHandle::Right => &r_resp,
+                                SelectionDragHandle::None => continue,
+                            };
+                            note_edge_active = true;
+
+                            if resp.dragged() {
+                                if let Some(pointer_pos) = resp.interact_pointer_pos() {
+                                    let rel_x = (pointer_pos.x - grid_rect.min.x).max(0.0);
+                                    let raw_tick = (rel_x / state.zoom_x) as u64;
+                                    let (new_start, new_dur) = match state.note_resize_handle {
+                                        SelectionDragHandle::Left => resize_note_left(
+                                            state.note_resize_orig_start,
+                                            state.note_resize_orig_duration,
+                                            raw_tick,
+                                        ),
+                                        SelectionDragHandle::Right => resize_note_right(
+                                            state.note_resize_orig_start,
+                                            state.note_resize_orig_duration,
+                                            raw_tick,
+                                        ),
+                                        SelectionDragHandle::None => (0, 0),
+                                    };
+                                    state.note_resize_preview_start = new_start;
+                                    state.note_resize_preview_duration = new_dur;
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+
+                            // Confirmar al soltar (fuera del préstamo inmutable
+                            // de `note`: se marca y se aplica tras el bucle).
+                            if resp.drag_stopped() {
+                                commit_note_resize = true;
+                            }
+                        }
+                    }
+                }
+
+                // Aplicar el resize confirmado al soltar el puntero.
+                if commit_note_resize {
+                    if let Some(idx) = state.note_resize_index {
+                        if idx < state.notes.len() {
+                            state.notes[idx].start_tick = state.note_resize_preview_start;
+                            state.notes[idx].duration_ticks =
+                                state.note_resize_preview_duration.max(MIN_NOTE_DURATION_TICKS);
+                        }
+                    }
+                    state.note_resize_active = false;
+                    state.note_resize_handle = SelectionDragHandle::None;
+                    state.note_resize_index = None;
+                    note_edge_active = true;
+                    ui.ctx().request_repaint();
+                }
+
+                // Si el resize sigue activo, no procesar el grid.
+                if state.note_resize_active {
+                    note_edge_active = true;
+                }
+
                 if let Some(hover_pos) = grid_response.hover_pos() {
                     let local_x = hover_pos.x - grid_rect.min.x;
                     let local_y = hover_pos.y - grid_rect.min.y;
 
-                    if local_x >= 0.0 && local_y >= 0.0 {
+                    if local_x >= 0.0 && local_y >= 0.0 && !note_edge_active {
                         let raw_tick = (local_x / state.zoom_x).max(0.0) as u64;
                         let quantized_tick = (raw_tick / QUANTIZE_TICKS) * QUANTIZE_TICKS;
                         let row = (local_y / state.key_height).max(0.0) as i32;
@@ -360,7 +584,7 @@ pub fn show(
                             );
                         }
 
-                        if grid_response.clicked() {
+                        if grid_response.clicked() && !note_edge_active {
                             let already_exists = state.notes.iter().any(|n| {
                                 n.pitch == pitch
                                     && quantized_tick >= n.start_tick
@@ -382,7 +606,7 @@ pub fn show(
                             }
                         }
 
-                        if grid_response.secondary_clicked() {
+                        if grid_response.secondary_clicked() && !note_edge_active {
                             let prev_len = state.notes.len();
                             state.notes.retain(|n| {
                                 !(n.pitch == pitch
@@ -844,7 +1068,10 @@ fn draw_grid_background(
 
 #[cfg(test)]
 mod tests {
-    use super::note_just_crossed;
+    use super::{
+        note_just_crossed, resize_note_left, resize_note_right, quantize_tick,
+        MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
+    };
 
     #[test]
     fn crosses_note_start_from_below() {
@@ -876,5 +1103,78 @@ mod tests {
     fn does_not_fire_when_stationary() {
         assert!(!note_just_crossed(240, 240, 240));
         assert!(!note_just_crossed(100, 100, 240));
+    }
+
+    #[test]
+    fn resize_right_extends_note() {
+        // Nota en start=0, dur=240; arrastrar el extremo derecho a tick 960.
+        let (start, dur) = resize_note_right(0, 240, 960);
+        assert_eq!(start, 0);
+        assert_eq!(dur, 960);
+    }
+
+    #[test]
+    fn resize_right_snaps_to_quantize() {
+        // Pointer en 1000 se cuantiza hacia abajo a 960.
+        let (start, dur) = resize_note_right(0, 240, 1000);
+        assert_eq!(start, 0);
+        assert_eq!(dur, 960);
+        // Pointer en 959 → 720.
+        let (_, dur) = resize_note_right(0, 240, 959);
+        assert_eq!(dur, 720);
+    }
+
+    #[test]
+    fn resize_right_enforces_min_duration() {
+        // No se puede achicar por debajo de 1/16.
+        let (start, dur) = resize_note_right(480, 960, 100);
+        assert_eq!(start, 480);
+        assert_eq!(dur, MIN_NOTE_DURATION_TICKS);
+    }
+
+    #[test]
+    fn resize_left_extends_backwards() {
+        // Nota start=480, dur=240 (end=720); arrastrar izq a tick 0.
+        let (start, dur) = resize_note_left(480, 240, 0);
+        assert_eq!(start, 0);
+        assert_eq!(dur, 720);
+    }
+
+    #[test]
+    fn resize_left_keeps_end_anchored() {
+        // end = 480+960 = 1440; nuevo start cuantizado 720 → dur 720.
+        let (start, dur) = resize_note_left(480, 960, 730);
+        assert_eq!(start, 720);
+        assert_eq!(dur, 1440 - 720);
+    }
+
+    #[test]
+    fn resize_left_enforces_min_duration() {
+        // end = 480+960 = 1440; min start = 1440-240 = 1200.
+        // Pointer más allá del extremo derecho: se acota a min duration.
+        let (start, dur) = resize_note_left(480, 960, 2000);
+        assert_eq!(start, 1200);
+        assert_eq!(dur, MIN_NOTE_DURATION_TICKS);
+        // Pointer en 0 con nota start=240, dur=240 (end=480): extiende a 0.
+        let (start, dur) = resize_note_left(240, 240, 0);
+        assert_eq!(start, 0);
+        assert_eq!(dur, 480);
+    }
+
+    #[test]
+    fn resize_left_snaps_to_quantize() {
+        // Pointer en 500 → 480.
+        // end = 480+720 = 1200; start=480 → dur=720.
+        let (start, dur) = resize_note_left(480, 720, 500);
+        assert_eq!(start, 480);
+        assert_eq!(dur, 720);
+    }
+
+    #[test]
+    fn quantize_rounds_down() {
+        assert_eq!(quantize_tick(0, QUANTIZE_TICKS), 0);
+        assert_eq!(quantize_tick(239, QUANTIZE_TICKS), 0);
+        assert_eq!(quantize_tick(240, QUANTIZE_TICKS), 240);
+        assert_eq!(quantize_tick(479, QUANTIZE_TICKS), 240);
     }
 }
