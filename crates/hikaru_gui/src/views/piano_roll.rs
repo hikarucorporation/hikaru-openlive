@@ -62,14 +62,15 @@ pub struct PianoRollState {
     pub note_resize_active: bool,
     /// Extremo que se está arrastrando (Left o Right).
     pub note_resize_handle: SelectionDragHandle,
-    /// Índice en `notes` de la nota que se está redimensionando.
+    /// Índice en `notes` de la nota cuyo extremo se agarró.
     pub note_resize_index: Option<usize>,
-    /// Valores originales de la nota al iniciar el resize.
-    pub note_resize_orig_start: u64,
-    pub note_resize_orig_duration: u64,
-    /// Preview visual mientras dura el arrastre.
-    pub note_resize_preview_start: u64,
-    pub note_resize_preview_duration: u64,
+    /// Notas afectadas por el resize multi: `(index, start_orig, duration_orig)`.
+    /// Si el grab estaba en la selección, son todas las seleccionadas; si no, solo esa.
+    pub note_resize_targets: Vec<(usize, u64, u64)>,
+    /// Delta de start (handle Left), en ticks. Se aplica a cada target.
+    pub note_resize_delta_start: i64,
+    /// Delta de duration (handle Right), en ticks. Se aplica a cada target.
+    pub note_resize_delta_duration: i64,
     /// Índices de notas seleccionadas (marquee con click derecho).
     /// NO confundir con la Time Selection (que sirve para loopear).
     pub selected_notes: HashSet<usize>,
@@ -122,10 +123,9 @@ impl Default for PianoRollState {
             note_resize_active: false,
             note_resize_handle: SelectionDragHandle::None,
             note_resize_index: None,
-            note_resize_orig_start: 0,
-            note_resize_orig_duration: 0,
-            note_resize_preview_start: 0,
-            note_resize_preview_duration: 0,
+            note_resize_targets: Vec::new(),
+            note_resize_delta_start: 0,
+            note_resize_delta_duration: 0,
             selected_notes: HashSet::new(),
             note_marquee_active: false,
             note_marquee_start: None,
@@ -158,8 +158,9 @@ impl PianoRollState {
         self.note_resize_active = false;
         self.note_resize_handle = SelectionDragHandle::None;
         self.note_resize_index = None;
-        self.note_resize_preview_start = 0;
-        self.note_resize_preview_duration = 0;
+        self.note_resize_targets.clear();
+        self.note_resize_delta_start = 0;
+        self.note_resize_delta_duration = 0;
         self.note_move_active = false;
         self.note_move_grab_index = None;
         self.note_move_orig.clear();
@@ -249,6 +250,79 @@ fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) ->
     let new_end = quantize_tick(pointer_tick, QUANTIZE_TICKS).max(orig_start + min_dur);
     let new_duration = new_end - orig_start;
     (orig_start, new_duration)
+}
+
+/// Aplica un delta de start (handle Left) a una nota origen, anclando el final.
+/// Devuelve `(nuevo_start, nueva_duration)`.
+fn apply_resize_left_delta(orig_start: u64, orig_duration: u64, delta_start: i64) -> (u64, u64) {
+    let end = orig_start.saturating_add(orig_duration);
+    let min_end = orig_start.saturating_add(MIN_NOTE_DURATION_TICKS);
+    let new_end = end.max(min_end);
+    let raw_start = (orig_start as i64).saturating_add(delta_start);
+    let new_start = (raw_start.max(0) as u64).min(new_end.saturating_sub(MIN_NOTE_DURATION_TICKS));
+    (new_start, new_end.saturating_sub(new_start))
+}
+
+/// Aplica un delta de duration (handle Right) a una nota origen.
+/// El inicio queda anclado; se devuelve `(start, nueva_duration)`.
+fn apply_resize_right_delta(orig_start: u64, orig_duration: u64, delta_duration: i64) -> (u64, u64) {
+    let raw_dur = (orig_duration as i64).saturating_add(delta_duration);
+    let new_dur = (raw_dur.max(MIN_NOTE_DURATION_TICKS as i64) as u64)
+        .max(MIN_NOTE_DURATION_TICKS);
+    (orig_start, new_dur)
+}
+
+/// Calcula el delta de start (izq) para resize multi: la nota grab mueve su
+/// extremo izquierdo; el resto de targets recibe el MISMO delta de start
+/// (cada uno ancla su propio final).
+fn compute_resize_left_delta(
+    targets: &[(usize, u64, u64)],
+    grab_index: usize,
+    pointer_tick: u64,
+) -> i64 {
+    let (_, orig_start, orig_duration) = match targets.iter().find(|(i, _, _)| *i == grab_index) {
+        Some(t) => *t,
+        None => return 0,
+    };
+    let (new_start, _) = resize_note_left(orig_start, orig_duration, pointer_tick);
+    (new_start as i64) - (orig_start as i64)
+}
+
+/// Calcula el delta de duration (der) para resize multi: la nota grab mueve su
+/// extremo derecho; el resto de targets recibe el MISMO delta de duration.
+fn compute_resize_right_delta(
+    targets: &[(usize, u64, u64)],
+    grab_index: usize,
+    pointer_tick: u64,
+) -> i64 {
+    let (_, orig_start, orig_duration) = match targets.iter().find(|(i, _, _)| *i == grab_index) {
+        Some(t) => *t,
+        None => return 0,
+    };
+    let (_, new_dur) = resize_note_right(orig_start, orig_duration, pointer_tick);
+    (new_dur as i64) - (orig_duration as i64)
+}
+
+/// Arma la lista de targets al iniciar un resize: si el grab está en la
+/// selección (y hay más de una), todas las seleccionadas; si no, solo el grab.
+fn build_resize_targets(
+    notes: &[MidiNote],
+    grab_index: usize,
+    selected: &HashSet<usize>,
+) -> Vec<(usize, u64, u64)> {
+    let mut idxs: Vec<usize> = if selected.contains(&grab_index) && selected.len() > 1 {
+        selected.iter().copied().filter(|&i| i < notes.len()).collect()
+    } else {
+        vec![grab_index]
+    };
+    if !idxs.contains(&grab_index) && grab_index < notes.len() {
+        idxs.push(grab_index);
+    }
+    idxs.sort_unstable();
+    idxs.dedup();
+    idxs.into_iter()
+        .filter_map(|i| notes.get(i).map(|n| (i, n.start_tick, n.duration_ticks)))
+        .collect()
 }
 
 /// Aplica un delta de arrastre a una nota original `(start, pitch)`.
@@ -369,9 +443,31 @@ fn effective_note_view(state: &PianoRollState, index: usize, note: &MidiNote) ->
             pitch = np;
         }
     }
-    if state.note_resize_active && state.note_resize_index == Some(index) {
-        start = state.note_resize_preview_start;
-        duration = state.note_resize_preview_duration;
+    if state.note_resize_active {
+        if let Some(&(_, orig_start, orig_duration)) = state
+            .note_resize_targets
+            .iter()
+            .find(|(i, _, _)| *i == index)
+        {
+            match state.note_resize_handle {
+                SelectionDragHandle::Left => {
+                    let (ns, nd) =
+                        apply_resize_left_delta(orig_start, orig_duration, state.note_resize_delta_start);
+                    start = ns;
+                    duration = nd;
+                }
+                SelectionDragHandle::Right => {
+                    let (ns, nd) = apply_resize_right_delta(
+                        orig_start,
+                        orig_duration,
+                        state.note_resize_delta_duration,
+                    );
+                    start = ns;
+                    duration = nd;
+                }
+                SelectionDragHandle::None => {}
+            }
+        }
     }
 
     (start, duration, pitch)
@@ -537,15 +633,55 @@ pub fn show(
         ui.ctx().request_repaint();
     }
 
+    // Zoom con rueda: Ctrl = horizontal (zoom_x), Alt = vertical (key_height).
+    // Corre ANTES del ScrollArea y anula el scroll del frame, para que la
+    // rueda no paneée el viewport al mismo tiempo que zoomea.
+    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+        if ui.max_rect().contains(pos) {
+            let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+            let alt = ui.input(|i| i.modifiers.alt);
+            if ctrl || alt {
+                let mut zoom_delta = 0.0_f32;
+                ui.input(|i| {
+                    for event in &i.events {
+                        if let egui::Event::MouseWheel { delta, .. } = event {
+                            zoom_delta += delta.y;
+                        }
+                    }
+                });
+                if zoom_delta != 0.0 {
+                    let factor = if zoom_delta > 0.0 { 1.15 } else { 0.85 };
+                    if ctrl && !alt {
+                        state.zoom_x = (state.zoom_x * factor).clamp(0.02, 0.8);
+                    } else if alt && !ctrl {
+                        state.key_height = (state.key_height * factor).clamp(10.0, 28.0);
+                    } else {
+                        // Ctrl+Alt a la vez: aplicar ambos ejes.
+                        state.zoom_x = (state.zoom_x * factor).clamp(0.02, 0.8);
+                        state.key_height = (state.key_height * factor).clamp(10.0, 28.0);
+                    }
+                    ui.input_mut(|i| {
+                        i.smooth_scroll_delta = Vec2::ZERO;
+                        i.raw_scroll_delta = Vec2::ZERO;
+                    });
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
+
     ui.vertical(|ui| {
         // --- 1. TOOLBAR ---
         ui.horizontal(|ui| {
             ui.selectable_value(&mut state.mode, PianoRollMode::Keys, "\u{1F3B9} Keys");
             ui.selectable_value(&mut state.mode, PianoRollMode::Drums, "\u{1F941} Drums");
             ui.separator();
-            ui.label(RichText::new("Zoom H:").small());
-            ui.add(Slider::new(&mut state.zoom_x, 0.02..=0.8).text("X"));
-            ui.add(Slider::new(&mut state.key_height, 10.0..=28.0).text("Y"));
+            ui.label(
+                RichText::new(format!("Zoom {:.2} / {}", state.zoom_x, state.key_height))
+                    .small()
+                    .color(Color32::GRAY),
+            )
+            .on_hover_text("Ctrl+Rueda: zoom horizontal · Alt+Rueda: zoom vertical");
             ui.separator();
 
             let bar = (state.playhead_tick / TICKS_PER_BAR) + 1;
@@ -728,7 +864,10 @@ pub fn show(
                         if rect.intersects(grid_rect) {
                             let is_selected = state.selected_notes.contains(&i);
                             let body_color = if state.note_resize_active
-                                && state.note_resize_index == Some(i)
+                                && state
+                                    .note_resize_targets
+                                    .iter()
+                                    .any(|(ti, _, _)| *ti == i)
                             {
                                 Color32::from_rgb(255, 190, 60)
                             } else if is_selected {
@@ -803,33 +942,39 @@ pub fn show(
                             ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
                         }
 
-                        // Iniciar resize: sembrar preview desde la nota real.
+                        // Iniciar resize: sembrar targets y deltas desde 0.
                         // Solo si no hay ya otro resize ni un move en curso.
                         if !state.note_resize_active && !state.note_move_active {
                             if l_resp.drag_started_by(PointerButton::Primary) {
                                 state.note_resize_active = true;
                                 state.note_resize_handle = SelectionDragHandle::Left;
                                 state.note_resize_index = Some(i);
-                                state.note_resize_orig_start = note.start_tick;
-                                state.note_resize_orig_duration = note.duration_ticks;
-                                state.note_resize_preview_start = note.start_tick;
-                                state.note_resize_preview_duration = note.duration_ticks;
+                                state.note_resize_targets = build_resize_targets(
+                                    &state.notes,
+                                    i,
+                                    &state.selected_notes,
+                                );
+                                state.note_resize_delta_start = 0;
+                                state.note_resize_delta_duration = 0;
                                 note_edge_active = true;
                                 ui.ctx().request_repaint();
                             } else if r_resp.drag_started_by(PointerButton::Primary) {
                                 state.note_resize_active = true;
                                 state.note_resize_handle = SelectionDragHandle::Right;
                                 state.note_resize_index = Some(i);
-                                state.note_resize_orig_start = note.start_tick;
-                                state.note_resize_orig_duration = note.duration_ticks;
-                                state.note_resize_preview_start = note.start_tick;
-                                state.note_resize_preview_duration = note.duration_ticks;
+                                state.note_resize_targets = build_resize_targets(
+                                    &state.notes,
+                                    i,
+                                    &state.selected_notes,
+                                );
+                                state.note_resize_delta_start = 0;
+                                state.note_resize_delta_duration = 0;
                                 note_edge_active = true;
                                 ui.ctx().request_repaint();
                             }
                         }
 
-                        // Arrastrar el extremo activo de ESTA nota.
+                        // Arrastrar el extremo activo de ESTA nota (la grab).
                         if state.note_resize_active && state.note_resize_index == Some(i) {
                             let resp = match state.note_resize_handle {
                                 SelectionDragHandle::Left => &l_resp,
@@ -842,21 +987,25 @@ pub fn show(
                                 if let Some(pointer_pos) = resp.interact_pointer_pos() {
                                     let rel_x = (pointer_pos.x - grid_rect.min.x).max(0.0);
                                     let raw_tick = (rel_x / state.zoom_x) as u64;
-                                    let (new_start, new_dur) = match state.note_resize_handle {
-                                        SelectionDragHandle::Left => resize_note_left(
-                                            state.note_resize_orig_start,
-                                            state.note_resize_orig_duration,
-                                            raw_tick,
-                                        ),
-                                        SelectionDragHandle::Right => resize_note_right(
-                                            state.note_resize_orig_start,
-                                            state.note_resize_orig_duration,
-                                            raw_tick,
-                                        ),
-                                        SelectionDragHandle::None => (0, 0),
-                                    };
-                                    state.note_resize_preview_start = new_start;
-                                    state.note_resize_preview_duration = new_dur;
+                                    match state.note_resize_handle {
+                                        SelectionDragHandle::Left => {
+                                            state.note_resize_delta_start =
+                                                compute_resize_left_delta(
+                                                    &state.note_resize_targets,
+                                                    i,
+                                                    raw_tick,
+                                                );
+                                        }
+                                        SelectionDragHandle::Right => {
+                                            state.note_resize_delta_duration =
+                                                compute_resize_right_delta(
+                                                    &state.note_resize_targets,
+                                                    i,
+                                                    raw_tick,
+                                                );
+                                        }
+                                        SelectionDragHandle::None => {}
+                                    }
                                     ui.ctx().request_repaint();
                                 }
                             }
@@ -870,18 +1019,34 @@ pub fn show(
                     }
                 }
 
-                // Aplicar el resize confirmado al soltar el puntero.
+                // Aplicar el resize multi confirmado al soltar el puntero.
                 if commit_note_resize {
-                    if let Some(idx) = state.note_resize_index {
-                        if idx < state.notes.len() {
-                            state.notes[idx].start_tick = state.note_resize_preview_start;
-                            state.notes[idx].duration_ticks =
-                                state.note_resize_preview_duration.max(MIN_NOTE_DURATION_TICKS);
+                    let handle = state.note_resize_handle;
+                    let delta_start = state.note_resize_delta_start;
+                    let delta_duration = state.note_resize_delta_duration;
+                    for (idx, orig_start, orig_duration) in
+                        std::mem::take(&mut state.note_resize_targets)
+                    {
+                        if idx >= state.notes.len() {
+                            continue;
                         }
+                        let (ns, nd) = match handle {
+                            SelectionDragHandle::Left => {
+                                apply_resize_left_delta(orig_start, orig_duration, delta_start)
+                            }
+                            SelectionDragHandle::Right => {
+                                apply_resize_right_delta(orig_start, orig_duration, delta_duration)
+                            }
+                            SelectionDragHandle::None => continue,
+                        };
+                        state.notes[idx].start_tick = ns;
+                        state.notes[idx].duration_ticks = nd.max(MIN_NOTE_DURATION_TICKS);
                     }
                     state.note_resize_active = false;
                     state.note_resize_handle = SelectionDragHandle::None;
                     state.note_resize_index = None;
+                    state.note_resize_delta_start = 0;
+                    state.note_resize_delta_duration = 0;
                     note_edge_active = true;
                     ui.ctx().request_repaint();
                 }
@@ -1707,10 +1872,12 @@ fn draw_grid_background(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_move_delta, compute_note_move_deltas, duplicate_selected_notes,
-        hit_test_note_body, hit_test_note_full, note_just_crossed, notes_in_marquee,
-        quantize_tick, remove_selected_notes, resize_note_left, resize_note_right,
-        select_note_set, MidiNote, MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
+        apply_move_delta, apply_resize_left_delta, apply_resize_right_delta,
+        build_resize_targets, compute_note_move_deltas, compute_resize_left_delta,
+        compute_resize_right_delta, duplicate_selected_notes, hit_test_note_body,
+        hit_test_note_full, note_just_crossed, notes_in_marquee, quantize_tick,
+        remove_selected_notes, resize_note_left, resize_note_right, select_note_set,
+        MidiNote, MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
     };
     use egui::{pos2, Rect};
     use std::collections::HashSet;
@@ -2032,5 +2199,79 @@ mod tests {
         all.insert(0);
         assert_eq!(remove_selected_notes(&mut notes, &mut all), 1);
         assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn build_resize_targets_uses_selection_when_grab_selected() {
+        let notes = vec![
+            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
+            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 480, velocity: 100 },
+            MidiNote { pitch: 64, start_tick: 960, duration_ticks: 240, velocity: 100 },
+        ];
+        let mut sel = HashSet::new();
+        sel.insert(0);
+        sel.insert(1);
+        // Grab 0 está seleccionado → targets = {0, 1} (no la 2).
+        let t = build_resize_targets(&notes, 0, &sel);
+        assert_eq!(t.len(), 2);
+        assert!(t.iter().any(|(i, _, _)| *i == 0));
+        assert!(t.iter().any(|(i, _, _)| *i == 1));
+        assert!(!t.iter().any(|(i, _, _)| *i == 2));
+    }
+
+    #[test]
+    fn build_resize_targets_single_when_grab_not_selected() {
+        let notes = vec![
+            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
+            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 480, velocity: 100 },
+        ];
+        let mut sel = HashSet::new();
+        sel.insert(1);
+        // Grab 0 NO está seleccionado → solo el grab.
+        let t = build_resize_targets(&notes, 0, &sel);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].0, 0);
+    }
+
+    #[test]
+    fn resize_multi_right_same_duration_delta() {
+        // Grab (0): dur 240 → pointer en 720 → new_dur=720 → delta=+480.
+        // Target (1): dur 480 → 480+480=960. Start anclado.
+        let targets = vec![(0, 0, 240), (1, 0, 480)];
+        let delta = compute_resize_right_delta(&targets, 0, 720);
+        assert_eq!(delta, 480);
+
+        let (_, d0) = apply_resize_right_delta(0, 240, delta);
+        let (_, d1) = apply_resize_right_delta(0, 480, delta);
+        assert_eq!(d0, 720);
+        assert_eq!(d1, 960);
+    }
+
+    #[test]
+    fn resize_multi_left_same_start_delta_anchors_ends() {
+        // Grab (0): start 480, dur 240 (end=720); pointer en 240 → new_start=240 → delta=-240.
+        // Target (1): start 480, dur 480 (end=960) → start=240, end sigue 960 → dur=720.
+        let targets = vec![(0, 480, 240), (1, 480, 480)];
+        let delta = compute_resize_left_delta(&targets, 0, 240);
+        assert_eq!(delta, -240);
+
+        let (s0, d0) = apply_resize_left_delta(480, 240, delta);
+        let (s1, d1) = apply_resize_left_delta(480, 480, delta);
+        assert_eq!(s0, 240);
+        assert_eq!(d0, 480); // end=720, start=240
+        assert_eq!(s1, 240);
+        assert_eq!(d1, 720); // end=960, start=240
+    }
+
+    #[test]
+    fn resize_multi_left_clamps_at_zero_and_min_duration() {
+        // Delta muy negativo: start no baja de 0 y duration no baja de min.
+        let (s, d) = apply_resize_left_delta(240, 240, -10_000);
+        assert_eq!(s, 0);
+        assert_eq!(d, 480); // end=480 anclado
+
+        let (s, d) = apply_resize_right_delta(0, 240, -10_000);
+        assert_eq!(d, MIN_NOTE_DURATION_TICKS);
+        assert_eq!(s, 0);
     }
 }
