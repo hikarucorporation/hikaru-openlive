@@ -1111,8 +1111,21 @@ pub fn show(
                     {
                         commit_note_move = true;
                     }
-                } else if grid_response.drag_started_by(primary) && !note_edge_active {
-                    if let Some(pos) = grid_response.interact_pointer_pos() {
+                } else if !note_edge_active
+                    && ui.input(|i| i.pointer.primary_pressed())
+                    && grid_response.hovered()
+                {
+                    // Arranque en el MISMO frame del press (sin esperar el
+                    // drag threshold de egui): así el grab es fluido de una.
+                    // El hit-test usa press_origin (posición real del click),
+                    // no interact_pointer_pos, que ya se corrió al superar
+                    // el threshold y a veces queda fuera de la nota → fallaba
+                    // el hit y había que "reintentar" (doble click).
+                    let pos = ui
+                        .input(|i| i.pointer.press_origin())
+                        .or_else(|| grid_response.interact_pointer_pos())
+                        .or_else(|| grid_response.hover_pos());
+                    if let Some(pos) = pos {
                         if let Some(grab) = hit_test_note_body(
                             &state.notes,
                             pos,
@@ -1135,11 +1148,7 @@ pub fn show(
                                 state.note_move_orig = orig;
                                 state.note_move_preview_delta_ticks = 0;
                                 state.note_move_preview_delta_rows = 0;
-                                // Origen del delta acumulado: donde empezó el press
-                                // (no el frame actual, que ya puede haberse movido).
-                                state.note_move_origin_pointer = ui
-                                    .input(|i| i.pointer.press_origin())
-                                    .or(Some(pos));
+                                state.note_move_origin_pointer = Some(pos);
                                 note_body_active = true;
                                 just_started_move = true;
                                 ui.ctx().request_repaint();
