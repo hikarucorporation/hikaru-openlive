@@ -861,7 +861,24 @@ fn render_pad(
                 if let Some(frames) = elapsed_frames {
                     play_progress = match &clip.content {
                         ClipData::Audio { pcm_data } if !pcm_data.is_empty() => {
-                            Some((frames as f32 / pcm_data.len() as f32).clamp(0.0, 1.0))
+                            // `voice_elapsed_frames` solo crece (absolute_frame nunca wrap);
+                            // sin módulo el playhead se queda en 1.0 tras un loop.
+                            let total_frames = pcm_data.len() as u64;
+                            let active_start = clip.loop_start.min(total_frames);
+                            let active_end = if clip.loop_end > active_start {
+                                clip.loop_end.min(total_frames)
+                            } else {
+                                total_frames
+                            };
+                            let loop_length = active_end.saturating_sub(active_start).max(1);
+
+                            let current_frame = if clip.has_valid_clip_loop() {
+                                active_start + (frames % loop_length)
+                            } else {
+                                frames % total_frames
+                            };
+
+                            Some((current_frame as f32 / total_frames as f32).clamp(0.0, 1.0))
                         }
                         ClipData::Midi { notes } => {
                             let max_ticks = notes
