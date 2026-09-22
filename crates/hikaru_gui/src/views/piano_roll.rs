@@ -550,11 +550,7 @@ pub fn show(
 
                 if current_tick != prev_tick {
                     for note in &state.notes {
-                        let just_crossed = (prev_tick <= note.start_tick || prev_tick > current_tick)
-                            && current_tick >= note.start_tick
-                            && current_tick < note.start_tick + 240;
-
-                        if just_crossed {
+                        if note_just_crossed(prev_tick, current_tick, note.start_tick) {
                             let velocity_scale = note.velocity as f32 / 127.0;
                             preview_drum_pad(
                                 tracks,
@@ -570,6 +566,19 @@ pub fn show(
                 state.prev_playhead_tick = state.playhead_tick;
             });
     });
+}
+
+/// `true` si el playhead cruzó `start_tick` en este frame.
+///
+/// - Avance normal: `prev < start <= current` dentro de la ventana de 240 ticks.
+/// - Wrap de loop o seek hacia atrás: `prev > current` y el destino cae en la ventana.
+///
+/// Usa `<` (no `<=`): si `prev == start`, el frame anterior ya disparó la nota;
+/// con `<=` se re-dispararía dentro de la ventana y sonaría duplicada.
+fn note_just_crossed(prev_tick: u64, current_tick: u64, start_tick: u64) -> bool {
+    (prev_tick < start_tick || prev_tick > current_tick)
+        && current_tick >= start_tick
+        && current_tick < start_tick + 240
 }
 
 fn draw_bar_ruler(painter: &Painter, ruler_rect: Rect, zoom_x: f32, total_ticks: u64) {
@@ -817,5 +826,42 @@ fn draw_grid_background(
             tick += subdivision_ticks;
             x += step_px;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::note_just_crossed;
+
+    #[test]
+    fn crosses_note_start_from_below() {
+        assert!(note_just_crossed(239, 240, 240));
+        assert!(note_just_crossed(200, 280, 240));
+    }
+
+    #[test]
+    fn does_not_refire_when_prev_lands_exactly_on_start() {
+        // Frame anterior ya disparó al llegar a start; este frame no debe re-disparar.
+        assert!(!note_just_crossed(240, 274, 240));
+        assert!(!note_just_crossed(0, 34, 0));
+    }
+
+    #[test]
+    fn fires_once_on_loop_wrap_to_note_at_start() {
+        // Wrap: playhead salta del final del loop al inicio.
+        assert!(note_just_crossed(3839, 0, 0));
+        // Frame siguiente con prev exacto en start: no duplica.
+        assert!(!note_just_crossed(0, 34, 0));
+    }
+
+    #[test]
+    fn misses_note_further_than_window() {
+        assert!(!note_just_crossed(0, 480, 240));
+    }
+
+    #[test]
+    fn does_not_fire_when_stationary() {
+        assert!(!note_just_crossed(240, 240, 240));
+        assert!(!note_just_crossed(100, 100, 240));
     }
 }
