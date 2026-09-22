@@ -771,8 +771,8 @@ fn render_pad(
     track_idx: usize,
     scene_idx: usize,
     bpm: f64,
-    sample_rate: u32,
-    transport_sample_count: u64,
+    _sample_rate: u32,
+    _transport_sample_count: u64,
     engine_handle: Option<&Arc<Mutex<AudioEngine<'static>>>>,
 ) {
     let slot = &state.grid[track_idx][scene_idx];
@@ -791,17 +791,17 @@ fn render_pad(
             SlotState::QueuedToPlay => (
                 Color32::from_rgb(120, 100, 30),
                 Color32::YELLOW,
-                format!("⌛ {}", slot.clip.as_ref().map(|c| &c.name).unwrap_or(&"".into())),
+                slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
             ),
             SlotState::Playing => (
                 Color32::from_rgb(35, 135, 60),
                 Color32::GREEN,
-                format!("▶ {}", slot.clip.as_ref().map(|c| &c.name).unwrap_or(&"".into())),
+                slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
             ),
             SlotState::QueuedToStop => (
                 Color32::from_rgb(130, 45, 45),
                 Color32::RED,
-                "⏹ Stop".to_string(),
+                slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
             ),
             SlotState::Empty => (Color32::from_gray(25), Color32::from_gray(40), "".to_string()),
         }
@@ -813,6 +813,7 @@ fn render_pad(
 
     let size = Vec2::new(110.0, 54.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let mut btn_clicked = false;
 
     if ui.is_rect_visible(rect) {
         ui.painter().rect_filled(rect, 3.0, bg_color);
@@ -851,78 +852,17 @@ fn render_pad(
             }
 
             if slot.state == SlotState::Playing {
-                let mut play_progress: Option<f32> = None;
-
-                // 1. Intentar consultar las muestras transcurridas directas del motor
-                let elapsed_frames = engine_handle.and_then(|handle| {
-                    handle.try_lock().ok()?.voice_elapsed_frames(track_idx, scene_idx)
+                // Posición exacta del motor (voice_frame_linear + natural_frames).
+                // Sin fallback de transporte: si el motor no responde, no se dibuja playhead.
+                let play_progress: Option<f32> = engine_handle.and_then(|handle| {
+                    let (frame, total) =
+                        handle.try_lock().ok()?.voice_playhead_frame(track_idx, scene_idx)?;
+                    if total == 0 {
+                        return None;
+                    }
+                    Some((frame as f32 / total as f32).clamp(0.0, 1.0))
                 });
 
-                if let Some(frames) = elapsed_frames {
-                    play_progress = match &clip.content {
-                        ClipData::Audio { pcm_data } if !pcm_data.is_empty() => {
-                            // `voice_elapsed_frames` solo crece (absolute_frame nunca wrap);
-                            // sin módulo el playhead se queda en 1.0 tras un loop.
-                            let total_frames = pcm_data.len() as u64;
-                            let active_start = clip.loop_start.min(total_frames);
-                            let active_end = if clip.loop_end > active_start {
-                                clip.loop_end.min(total_frames)
-                            } else {
-                                total_frames
-                            };
-                            let loop_length = active_end.saturating_sub(active_start).max(1);
-
-                            let current_frame = if clip.has_valid_clip_loop() {
-                                active_start + (frames % loop_length)
-                            } else {
-                                frames % total_frames
-                            };
-
-                            Some((current_frame as f32 / total_frames as f32).clamp(0.0, 1.0))
-                        }
-                        ClipData::Midi { notes } => {
-                            let max_ticks = notes
-                                .iter()
-                                .map(|(s, _, _, d)| s + *d as u64)
-                                .max()
-                                .unwrap_or(1920);
-                            let samples_per_tick = (sample_rate as f64 * 60.0) / (bpm * 960.0);
-                            let total_clip_frames = (max_ticks as f64 * samples_per_tick) as u64;
-
-                            if total_clip_frames > 0 {
-                                Some(((frames % total_clip_frames) as f32 / total_clip_frames as f32).clamp(0.0, 1.0))
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    };
-                }
-
-                // 2. Sincronización exacta con el reloj/transporte de audio (BPM + Sample Rate)
-                if play_progress.is_none() {
-                    let samples_per_beat = (sample_rate as f64 * 60.0) / bpm.max(1.0);
-                    let clip_length_samples = match &clip.content {
-                        ClipData::Audio { pcm_data } if !pcm_data.is_empty() => pcm_data.len() as f64,
-                        ClipData::Midi { notes } => {
-                            let max_ticks = notes
-                                .iter()
-                                .map(|(s, _, _, d)| s + *d as u64)
-                                .max()
-                                .unwrap_or(1920);
-                            (max_ticks as f64 / 960.0) * (samples_per_beat * 4.0) // 4 beats por compás
-                        }
-                        _ => samples_per_beat * 4.0,
-                    };
-
-                    if clip_length_samples > 0.0 {
-                        let current_frame = transport_sample_count as f64;
-                        let progress = (current_frame % clip_length_samples) / clip_length_samples;
-                        play_progress = Some(progress as f32);
-                    }
-                }
-
-                // Renderizado de la aguja de reproducción (Playhead)
                 if let Some(progress) = play_progress {
                     let playhead_x = inner_rect.min.x + (inner_rect.width() * progress);
 
@@ -940,6 +880,58 @@ fn render_pad(
         let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
         ui.painter().rect_stroke(rect, 3.0, Stroke::new(stroke_width, border_color));
 
+        // Botón Play/Stop estilo Bitwig en la esquina superior izquierda
+        if has_clip {
+            let btn_size = Vec2::new(16.0, 16.0);
+            let btn_rect = egui::Rect::from_min_size(rect.min + Vec2::new(3.0, 3.0), btn_size);
+            let btn_id = ui.make_persistent_id(format!("pad_play_{}_{}", track_idx, scene_idx));
+            let btn_response = ui.interact(btn_rect, btn_id, Sense::click());
+            let btn_hovered = btn_response.hovered();
+
+            let btn_bg = match slot.state {
+                SlotState::Playing => Color32::from_rgb(40, 160, 70),
+                SlotState::QueuedToPlay => Color32::from_rgb(180, 150, 40),
+                SlotState::QueuedToStop => Color32::from_rgb(160, 55, 55),
+                _ => {
+                    if btn_hovered {
+                        Color32::from_rgb(70, 95, 130)
+                    } else {
+                        Color32::from_rgb(30, 35, 45)
+                    }
+                }
+            };
+            ui.painter().rect_filled(btn_rect, 2.0, btn_bg);
+            ui.painter().rect_stroke(
+                btn_rect,
+                2.0,
+                Stroke::new(1.0_f32, Color32::from_gray(110)),
+            );
+
+            match slot.state {
+                SlotState::Playing | SlotState::QueuedToStop => {
+                    // Icono Stop (cuadrado)
+                    let stop_rect =
+                        egui::Rect::from_center_size(btn_rect.center(), Vec2::new(7.0, 7.0));
+                    ui.painter().rect_filled(stop_rect, 1.0, Color32::WHITE);
+                }
+                _ => {
+                    // Icono Play (triángulo)
+                    let p1 = egui::pos2(btn_rect.min.x + 5.0, btn_rect.min.y + 4.0);
+                    let p2 = egui::pos2(btn_rect.min.x + 5.0, btn_rect.max.y - 4.0);
+                    let p3 = egui::pos2(btn_rect.max.x - 4.0, btn_rect.center().y);
+                    ui.painter().add(egui::epaint::PathShape::convex_polygon(
+                        vec![p1, p2, p3],
+                        Color32::WHITE,
+                        Stroke::NONE,
+                    ));
+                }
+            }
+
+            if btn_response.clicked() {
+                btn_clicked = true;
+            }
+        }
+
         if !text.is_empty() {
             let display_text = if text.len() > 14 {
                 format!("{}...", &text[..11])
@@ -947,9 +939,21 @@ fn render_pad(
                 text
             };
 
+            // Nombre del sample al lado del botón Play/Stop
+            let text_pos = if has_clip {
+                egui::pos2(rect.min.x + 22.0, rect.min.y + 11.0)
+            } else {
+                rect.center()
+            };
+            let align = if has_clip {
+                Align2::LEFT_CENTER
+            } else {
+                Align2::CENTER_CENTER
+            };
+
             ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
+                text_pos,
+                align,
                 display_text,
                 egui::FontId::proportional(11.0),
                 Color32::WHITE,
@@ -1046,9 +1050,11 @@ fn render_pad(
         }
     });
     
-    if response.clicked() {
+    if btn_clicked {
         state.selected_slot = Some((track_idx, scene_idx));
         trigger_pad(state, audio_proxy, track_idx, scene_idx);
+    } else if response.clicked() {
+        state.selected_slot = Some((track_idx, scene_idx));
     }
 
     if ui.rect_contains_pointer(rect) {
@@ -1119,13 +1125,13 @@ fn render_clip_editor_track_view(
                 return;
             };
 
-            let elapsed_frames = (|| {
+            let playhead = (|| {
                 let handle = engine_handle?;
                 let engine = handle.try_lock().ok()?;
-                engine.voice_elapsed_frames(track_idx, scene_idx)
+                engine.voice_playhead_frame(track_idx, scene_idx)
             })();
 
-            if elapsed_frames.is_some() {
+            if playhead.is_some() {
                 ui.ctx().request_repaint();
             }
 
@@ -1141,7 +1147,7 @@ fn render_clip_editor_track_view(
                         track_idx,
                         scene_idx,
                         None,
-                        elapsed_frames,
+                        playhead,
                         sample_rate,
                         bpm as f32,
                     );

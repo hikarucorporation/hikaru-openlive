@@ -856,6 +856,28 @@ impl<'a> AudioEngine<'a> {
         Some(self.absolute_frame.saturating_sub(clip.start_absolute))
     }
 
+    /// Posición exacta del playhead dentro del clip: `(frame_actual, duración_natural)`.
+    /// `None` si no existe el clip, no está sonando o la voz ya terminó.
+    pub fn voice_playhead_frame(
+        &self,
+        track_index: usize,
+        scene_index: usize,
+    ) -> Option<(u64, u64)> {
+        let clip = self
+            .clips
+            .iter()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)?;
+        if !clip.is_playing {
+            return None;
+        }
+        if clip.voice_state_linear(self.absolute_frame) != VoiceState::Active {
+            return None;
+        }
+        let frame = clip.voice_frame_linear(self.absolute_frame)? as u64;
+        let total = clip.natural_frames().max(1);
+        Some((frame, total))
+    }
+
     pub fn stop_track(&mut self, track_index: usize) {
         for clip in self.clips.iter_mut().filter(|c| c.track_index == track_index) {
             clip.is_playing = false;
@@ -1613,6 +1635,21 @@ mod tests {
         assert_eq!(engine.voice_elapsed_frames(0, 0), Some(512));
         engine.transport.sample_count = 0;
         assert_eq!(engine.voice_elapsed_frames(0, 0), Some(512));
+    }
+
+    #[test]
+    fn voice_playhead_frame_returns_voice_position_and_natural_frames() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, vec![0.5f32; 8192 * 2], 0.0, 0.0, 0.0, 2, false);
+        assert_eq!(engine.voice_playhead_frame(0, 0), None);
+        engine.trigger_clip(0, 0);
+        assert_eq!(engine.voice_playhead_frame(0, 0), Some((0, 8192)));
+        engine.play();
+        run_frames(&mut engine, 512);
+        assert_eq!(engine.voice_playhead_frame(0, 0), Some((512, 8192)));
+        engine.trigger_clip(0, 0); // stop
+        assert_eq!(engine.voice_playhead_frame(0, 0), None);
     }
 
     #[test]

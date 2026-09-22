@@ -61,7 +61,7 @@ pub fn show(
     track_idx: usize,
     scene_idx: usize,
     audio_engine: Option<&mut AudioEngine>,
-    elapsed_frames: Option<u64>,
+    playhead: Option<(u64, u64)>,
     sample_rate: u32,
     bpm: f32,
 ) {
@@ -357,25 +357,11 @@ pub fn show(
                     }
                 }
 
-                // LAYER 6: Playhead con Anti-Zero Division Guard
-                if let Some(frames) = elapsed_frames {
-                    if total_frames > 0 {
-                        let active_start = clip.loop_start.min(total_frames);
-                        let active_end = if clip.loop_end > active_start {
-                            clip.loop_end.min(total_frames)
-                        } else {
-                            total_frames
-                        };
-                        
-                        let loop_length = active_end.saturating_sub(active_start).max(1);
-
-                        let current_frame = if clip.loop_enabled {
-                            active_start + (frames % loop_length)
-                        } else {
-                            frames % total_frames
-                        };
-
-                        let progress = (current_frame as f32 / total_frames as f32).clamp(0.0, 1.0);
+                // LAYER 6: Playhead desde el motor (frame, total) — sin re-cálculo de loop en GUI
+                if let Some((frame, engine_total)) = playhead {
+                    let denom = if engine_total > 0 { engine_total } else { total_frames };
+                    if denom > 0 {
+                        let progress = (frame as f32 / denom as f32).clamp(0.0, 1.0);
                         let playhead_x = rect.min.x + (progress * rect.width());
 
                         ui.painter().line_segment(
