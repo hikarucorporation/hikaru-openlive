@@ -548,18 +548,10 @@ pub fn show(
                 let current_tick = state.playhead_tick;
                 let prev_tick = state.prev_playhead_tick;
 
-                // Detectar salto grande (loop) para no activar notas falsamente
-                let jump_size = if current_tick > prev_tick {
-                    current_tick - prev_tick
-                } else {
-                    prev_tick - current_tick
-                };
-                let is_loop_jump = jump_size > TICKS_PER_BEAT;
-
-                if current_tick != prev_tick && !is_loop_jump {
+                if current_tick != prev_tick {
                     for note in &state.notes {
-                        let just_crossed = (prev_tick < note.start_tick || prev_tick > current_tick) 
-                            && current_tick >= note.start_tick 
+                        let just_crossed = (prev_tick <= note.start_tick || prev_tick > current_tick)
+                            && current_tick >= note.start_tick
                             && current_tick < note.start_tick + 240;
 
                         if just_crossed {
