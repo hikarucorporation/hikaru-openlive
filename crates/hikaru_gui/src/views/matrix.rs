@@ -1062,7 +1062,7 @@ fn render_clip_editor_track_view(
     ui: &mut Ui,
     state: &mut SessionMatrixState,
     _dragged_sample: &mut Option<PathBuf>,
-    _audio_proxy: &AudioProxy,
+    audio_proxy: &AudioProxy,
     bpm: f64,
     sample_rate: u32,
     _transport_sample_count: u64,
@@ -1114,16 +1114,35 @@ fn render_clip_editor_track_view(
 
             match &mut slot.content {
                 ClipData::Audio { .. } => {
+                    let old_loop = slot.loop_enabled;
+                    let old_start = slot.loop_start;
+                    let old_end = slot.loop_end;
+
                     clip_editor::show(
                         ui,
                         slot,
                         track_idx,
                         scene_idx,
-                        None, // <--- Cambiar 'Some(audio_engine)' por 'None'
+                        None,
                         elapsed_frames,
                         sample_rate,
                         bpm as f32,
                     );
+
+                    if slot.loop_enabled != old_loop
+                        || slot.loop_start != old_start
+                        || slot.loop_end != old_end
+                    {
+                        let start_secs = slot.loop_start as f32 / sample_rate as f32;
+                        let end_secs = slot.loop_end as f32 / sample_rate as f32;
+                        audio_proxy.set_clip_loop(
+                            track_idx,
+                            scene_idx,
+                            start_secs,
+                            end_secs,
+                            slot.loop_enabled,
+                        );
+                    }
                 }
                 ClipData::Midi { notes } => {
                     ui.vertical(|ui| {

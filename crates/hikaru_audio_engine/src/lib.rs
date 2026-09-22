@@ -1081,7 +1081,12 @@ impl<'a> AudioEngine<'a> {
                         }
 
                         let relative_frame = if has_loop {
-                            (loop_start + (elapsed % loop_len)) as usize
+                            let loop_end = loop_start + loop_len;
+                            if elapsed < loop_end {
+                                elapsed as usize
+                            } else {
+                                (loop_start + ((elapsed - loop_end) % loop_len)) as usize
+                            }
                         } else {
                             elapsed as usize
                         };
@@ -1608,5 +1613,71 @@ mod tests {
         assert_eq!(engine.voice_elapsed_frames(0, 0), Some(512));
         engine.transport.sample_count = 0;
         assert_eq!(engine.voice_elapsed_frames(0, 0), Some(512));
+    }
+
+    #[test]
+    fn openlive_full_clip_loop_wraps_past_natural_end() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+
+        let natural = 4096u64;
+        let mut samples = Vec::with_capacity((natural * 2) as usize);
+        for i in 0..natural {
+            // Mitad silenciosa, mitad fuerte: permite verificar el wrap.
+            let v = if i < natural / 2 { 0.0f32 } else { 0.5f32 };
+            samples.push(v);
+            samples.push(v);
+        }
+        engine.add_clip(1, 0, 0, samples, 0.0, 0.0, 0.0, 2, false);
+        engine.set_clip_loop(
+            0,
+            0,
+            0.0,
+            natural as f32 / engine.sample_rate as f32,
+            true,
+        );
+        assert!(engine.clips[0].has_valid_clip_loop());
+
+        engine.trigger_clip(0, 0);
+        engine.play();
+
+        // Reproducir hasta justo ANTES del final natural (mitad fuerte).
+        let to_loud_half = natural / 2 + 100;
+        run_frames(&mut engine, to_loud_half);
+        let mut raw = vec![0.0f32; 256 * 2];
+        let mut buf = AudioBuffer::new(&mut raw);
+        engine.process(&mut buf);
+        let peak_loud = raw.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!(peak_loud > 0.1, "mitad fuerte debe sonar, peak={}", peak_loud);
+
+        // Saltar hasta pasada la mitad silenciosa del primer pase
+        // (posición natural/4, que tras wrap cae en la primera mitad = silencio).
+        let remaining_to_quarter = natural - to_loud_half + natural / 4;
+        run_frames(&mut engine, remaining_to_quarter);
+        assert!(engine.clips[0].is_playing, "el clip debe seguir sonando tras el loop");
+
+        let mut raw2 = vec![0.0f32; 256 * 2];
+        let mut buf2 = AudioBuffer::new(&mut raw2);
+        engine.process(&mut buf2);
+        let peak_wrapped = raw2.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!(
+            peak_wrapped < 0.05,
+            "tras wrap debe caer en zona silenciosa, peak={}",
+            peak_wrapped
+        );
+
+        // Avanzar hasta la segunda mitad tras wrap: debe sonar de nuevo.
+        let to_loud_after_wrap = natural / 2;
+        run_frames(&mut engine, to_loud_after_wrap);
+        assert!(engine.clips[0].is_playing);
+        let mut raw3 = vec![0.0f32; 256 * 2];
+        let mut buf3 = AudioBuffer::new(&mut raw3);
+        engine.process(&mut buf3);
+        let peak_loud2 = raw3.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!(
+            peak_loud2 > 0.1,
+            "segunda mitad tras wrap debe sonar, peak={}",
+            peak_loud2
+        );
     }
 }
