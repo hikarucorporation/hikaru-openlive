@@ -52,6 +52,12 @@ pub struct PianoRollState {
     pub selection_preview_active: bool,
     /// Handle activo para redimensionar la selección.
     pub selection_drag_handle: SelectionDragHandle,
+    /// Si el loop de la selección está activado.
+    pub loop_enabled: bool,
+    /// Tick del transporte cuando empezó el loop.
+    pub loop_transport_start_tick: u64,
+    /// Timestamp del sistema (Instant) cuando empezó el loop.
+    pub loop_start_instant: Option<std::time::Instant>,
 }
 
 impl Default for PianoRollState {
@@ -73,6 +79,9 @@ impl Default for PianoRollState {
             selection_preview_end_ticks: 0,
             selection_preview_active: false,
             selection_drag_handle: SelectionDragHandle::None,
+            loop_enabled: false,
+            loop_transport_start_tick: 0,
+            loop_start_instant: None,
         }
     }
 }
@@ -87,6 +96,9 @@ impl PianoRollState {
         self.selection_preview_end_ticks = 0;
         self.selection_preview_active = false;
         self.selection_drag_handle = SelectionDragHandle::None;
+        self.loop_enabled = false;
+        self.loop_transport_start_tick = 0;
+        self.loop_start_instant = None;
     }
 }
 
@@ -129,6 +141,9 @@ pub fn show(
     tracks: &[Track],
     selected_track_index: usize,
     audio_proxy: &AudioProxy,
+    bpm: f64,
+    ppqn: u64,
+    is_playing: bool,
 ) {
     if let Some(track) = tracks.get(selected_track_index) {
         let has_opendms = track.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
@@ -169,8 +184,18 @@ pub fn show(
                     sel_start_bar, sel_start_beat, sel_end_bar, sel_end_beat
                 )).small().color(Color32::LIGHT_BLUE));
 
+                let loop_text = if state.loop_enabled { "Loop ON" } else { "Loop OFF" };
+                let loop_color = if state.loop_enabled { Color32::LIGHT_GREEN } else { Color32::GRAY };
+                if ui.selectable_label(state.loop_enabled, RichText::new(loop_text).color(loop_color))
+                    .on_hover_text("Activar/desactivar loop de la selección")
+                    .clicked()
+                {
+                    state.loop_enabled = !state.loop_enabled;
+                }
+
                 if ui.small_button("X Sel").on_hover_text("Limpiar selección (Shift+Drag en regla para crear)").clicked() {
                     state.clear_selection();
+                    state.loop_enabled = false;
                 }
             }
         });
@@ -514,6 +539,7 @@ pub fn show(
                         ui.ctx().request_repaint();
                     } else if ruler_response.clicked() && !shift {
                         state.playhead_tick = tick;
+                        state.loop_start_instant = None;
                         ui.ctx().request_repaint();
                     }
                 }
@@ -522,7 +548,15 @@ pub fn show(
                 let current_tick = state.playhead_tick;
                 let prev_tick = state.prev_playhead_tick;
 
-                if current_tick != prev_tick {
+                // Detectar salto grande (loop) para no activar notas falsamente
+                let jump_size = if current_tick > prev_tick {
+                    current_tick - prev_tick
+                } else {
+                    prev_tick - current_tick
+                };
+                let is_loop_jump = jump_size > TICKS_PER_BEAT;
+
+                if current_tick != prev_tick && !is_loop_jump {
                     for note in &state.notes {
                         let just_crossed = (prev_tick < note.start_tick || prev_tick > current_tick) 
                             && current_tick >= note.start_tick 
@@ -539,8 +573,9 @@ pub fn show(
                             );
                         }
                     }
-                    state.prev_playhead_tick = current_tick;
                 }
+
+                state.prev_playhead_tick = state.playhead_tick;
             });
     });
 }

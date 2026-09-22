@@ -504,7 +504,39 @@ impl eframe::App for HikaruApp {
             }
 
             if self.transport.playback_state == TransportPlaybackState::Playing {
-                self.piano_roll_state.playhead_tick = self.current_tick();
+                let transport_tick = self.current_tick();
+
+                // Loop del Piano Roll: calcular tick de forma independiente
+                if self.piano_roll_state.loop_enabled
+                    && self.piano_roll_state.selection_active
+                    && self.piano_roll_state.selection_end_tick > self.piano_roll_state.selection_start_tick
+                {
+                    let loop_len = self.piano_roll_state.selection_end_tick - self.piano_roll_state.selection_start_tick;
+
+                    // Si el loop recién se activó, inicializar el estado
+                    if self.piano_roll_state.loop_start_instant.is_none() {
+                        self.piano_roll_state.loop_transport_start_tick = transport_tick;
+                        self.piano_roll_state.loop_start_instant = Some(std::time::Instant::now());
+                    }
+
+                    let elapsed_secs = self.piano_roll_state.loop_start_instant
+                        .map(|t| t.elapsed().as_secs_f64())
+                        .unwrap_or(0.0);
+
+                    let ppqn = self.transport.ppqn().max(1) as f64;
+                    let ticks_per_second = (self.transport.bpm * ppqn) / 60.0;
+                    let ticks_elapsed = (elapsed_secs * ticks_per_second) as u64;
+
+                    // Offset dentro del loop usando módulo
+                    let offset_in_loop = ticks_elapsed % loop_len;
+                    self.piano_roll_state.playhead_tick = self.piano_roll_state.selection_start_tick + offset_in_loop;
+                } else {
+                    self.piano_roll_state.playhead_tick = transport_tick;
+                    self.piano_roll_state.loop_start_instant = None;
+                }
+            } else {
+                // Cuando se pausa, limpiar el estado del loop
+                self.piano_roll_state.loop_start_instant = None;
             }
 
             let piano_roll_tracks = match self.mode {
@@ -522,6 +554,9 @@ impl eframe::App for HikaruApp {
                         piano_roll_tracks,
                         self.selected_track_index,
                         &self.audio_proxy,
+                        self.transport.bpm,
+                        self.transport.ppqn(),
+                        self.transport.playback_state == TransportPlaybackState::Playing,
                     );
                 });
 
