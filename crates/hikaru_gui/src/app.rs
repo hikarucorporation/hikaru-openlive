@@ -487,6 +487,11 @@ impl eframe::App for HikaruApp {
             if let Some(slot) = self.matrix_state.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
                 if let Some(clip) = &mut slot.clip {
                     if let matrix::ClipData::Midi { notes } = &mut clip.content {
+                        // Si cambió el clip de origen, invalidar la selección de notas.
+                        if self.piano_roll_state.notes_source_slot != Some((track_idx, scene_idx)) {
+                            self.piano_roll_state.clear_note_selection();
+                            self.piano_roll_state.notes_source_slot = Some((track_idx, scene_idx));
+                        }
                         self.piano_roll_state.notes = notes.iter().map(|&(start_tick, pitch, velocity, duration_ticks)| {
                             crate::views::piano_roll::MidiNote {
                                 pitch,
@@ -497,13 +502,19 @@ impl eframe::App for HikaruApp {
                         }).collect();
                     } else {
                         self.piano_roll_state.notes.clear();
+                        self.piano_roll_state.clear_note_selection();
+                        self.piano_roll_state.notes_source_slot = None;
                     }
                 } else {
                     self.piano_roll_state.notes.clear();
+                    self.piano_roll_state.clear_note_selection();
+                    self.piano_roll_state.notes_source_slot = None;
                 }
             }
         } else {
             self.piano_roll_state.notes.clear();
+            self.piano_roll_state.clear_note_selection();
+            self.piano_roll_state.notes_source_slot = None;
         }
 
         if self.transport.playback_state == TransportPlaybackState::Playing {

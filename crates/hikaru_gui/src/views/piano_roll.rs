@@ -70,6 +70,19 @@ pub struct PianoRollState {
     /// Preview visual mientras dura el arrastre.
     pub note_resize_preview_start: u64,
     pub note_resize_preview_duration: u64,
+    /// Índices de notas seleccionadas (marquee con click derecho).
+    /// NO confundir con la Time Selection (que sirve para loopear).
+    pub selected_notes: HashSet<usize>,
+    /// Si el marquee de selección de notas está en curso.
+    pub note_marquee_active: bool,
+    /// Esquina de inicio del marquee (coords de contenido).
+    pub note_marquee_start: Option<Pos2>,
+    /// Esquina actual del marquee mientras se arrastra.
+    pub note_marquee_current: Option<Pos2>,
+    /// Si el marquee actual añade a la selección (Shift) o la reemplaza.
+    pub note_marquee_additive: bool,
+    /// Slot del que se cargaron las notas (para invalidar la selección al cambiar).
+    pub notes_source_slot: Option<(usize, usize)>,
 }
 
 impl Default for PianoRollState {
@@ -101,6 +114,12 @@ impl Default for PianoRollState {
             note_resize_orig_duration: 0,
             note_resize_preview_start: 0,
             note_resize_preview_duration: 0,
+            selected_notes: HashSet::new(),
+            note_marquee_active: false,
+            note_marquee_start: None,
+            note_marquee_current: None,
+            note_marquee_additive: false,
+            notes_source_slot: None,
         }
     }
 }
@@ -123,6 +142,15 @@ impl PianoRollState {
         self.note_resize_index = None;
         self.note_resize_preview_start = 0;
         self.note_resize_preview_duration = 0;
+    }
+
+    /// Limpia solo la selección de NOTAS (marquee), sin tocar la Time Selection.
+    pub fn clear_note_selection(&mut self) {
+        self.selected_notes.clear();
+        self.note_marquee_active = false;
+        self.note_marquee_start = None;
+        self.note_marquee_current = None;
+        self.note_marquee_additive = false;
     }
 }
 
@@ -193,6 +221,66 @@ fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) ->
     (orig_start, new_duration)
 }
 
+/// Índices de las notas cuyo rectángulo intersecta `marquee` (en coords de contenido).
+fn notes_in_marquee(
+    notes: &[MidiNote],
+    marquee: Rect,
+    grid_rect: Rect,
+    zoom_x: f32,
+    key_height: f32,
+) -> HashSet<usize> {
+    let mut out = HashSet::new();
+    for (i, note) in notes.iter().enumerate() {
+        let rect = note_rect(grid_rect, note, zoom_x, key_height);
+        if rect.intersects(marquee) {
+            out.insert(i);
+        }
+    }
+    out
+}
+
+/// Duplica las notas seleccionadas, colocándolas justo después del bloque
+/// que ocupan (mismo criterio que Ctrl+D en la Playlist).
+/// Devuelve las notas nuevas y sus índices tras insertarlas.
+fn duplicate_selected_notes(
+    notes: &mut Vec<MidiNote>,
+    selected: &HashSet<usize>,
+) -> Vec<usize> {
+    if selected.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sorted: Vec<usize> = selected.iter().copied().filter(|&i| i < notes.len()).collect();
+    sorted.sort_unstable();
+
+    let mut selected_notes: Vec<MidiNote> = Vec::with_capacity(sorted.len());
+    for i in sorted {
+        selected_notes.push(notes[i].clone());
+    }
+    if selected_notes.is_empty() {
+        return Vec::new();
+    }
+
+    let min_start = selected_notes.iter().map(|n| n.start_tick).min().unwrap_or(0);
+    let max_end = selected_notes
+        .iter()
+        .map(|n| n.start_tick + n.duration_ticks)
+        .max()
+        .unwrap_or(0);
+    let duration_block = max_end.saturating_sub(min_start);
+
+    let base = notes.len();
+    let mut new_indices = Vec::with_capacity(selected_notes.len());
+    for note in selected_notes {
+        let mut clone = note.clone();
+        clone.start_tick = note.start_tick.saturating_add(duration_block);
+        notes.push(clone);
+        new_indices.push(notes.len() - 1);
+    }
+    debug_assert_eq!(base + new_indices.len(), notes.len());
+    new_indices
+}
+
 pub fn show(
     ui: &mut Ui,
     state: &mut PianoRollState,
@@ -214,6 +302,27 @@ pub fn show(
         if let Some(opendms) = find_opendms_in_track(track) {
             sync_drum_map_from_opendms(state, opendms);
         }
+    }
+
+    // Sanear selección de notas por si el clip cambió de tamaño.
+    state.selected_notes.retain(|&i| i < state.notes.len());
+
+    // Ctrl+D: duplicar notas seleccionadas por el marquee (click derecho+drag).
+    // Distinto del Ctrl+D de la Playlist (que duplica clips).
+    // consume_key evita que el atajo llegue también a la Playlist si está visible.
+    if !state.selected_notes.is_empty() {
+        let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+        if ctrl && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::D)) {
+            let new_indices = duplicate_selected_notes(&mut state.notes, &state.selected_notes);
+            state.selected_notes = new_indices.into_iter().collect();
+            ui.ctx().request_repaint();
+        }
+    }
+
+    // Escape: limpiar solo la selección de notas (no la Time Selection).
+    if !state.selected_notes.is_empty() && ui.input(|i| i.key_pressed(Key::Escape)) {
+        state.clear_note_selection();
+        ui.ctx().request_repaint();
     }
 
     ui.vertical(|ui| {
@@ -254,6 +363,21 @@ pub fn show(
                 if ui.small_button("X Sel").on_hover_text("Limpiar selección (Shift+Drag en regla para crear)").clicked() {
                     state.clear_selection();
                     state.loop_enabled = false;
+                }
+            }
+
+            if !state.selected_notes.is_empty() {
+                ui.separator();
+                ui.label(RichText::new(format!("Notas: {}", state.selected_notes.len()))
+                    .small()
+                    .color(Color32::YELLOW))
+                    .on_hover_text("Selección de notas (click derecho+drag). Ctrl+D duplica. Esc limpia.");
+                if ui.small_button("X Notas")
+                    .on_hover_text("Limpiar selección de notas (no toca la Time Selection)")
+                    .clicked()
+                {
+                    state.clear_note_selection();
+                    ui.ctx().request_repaint();
                 }
             }
         });
@@ -397,15 +521,23 @@ pub fn show(
                         };
                         let rect = note_rect(grid_rect, &preview_note, state.zoom_x, state.key_height);
                         if rect.intersects(grid_rect) {
+                            let is_selected = state.selected_notes.contains(&i);
                             let body_color = if state.note_resize_active
                                 && state.note_resize_index == Some(i)
                             {
                                 Color32::from_rgb(255, 190, 60)
+                            } else if is_selected {
+                                Color32::from_rgb(255, 210, 60)
                             } else {
                                 Color32::from_rgb(255, 140, 0)
                             };
                             painter.rect_filled(rect, 2.0, body_color);
-                            painter.rect_stroke(rect, 1.0, Stroke::new(1.0_f32, Color32::WHITE));
+                            let (stroke_w, stroke_c) = if is_selected {
+                                (2.0_f32, Color32::from_rgb(255, 255, 160))
+                            } else {
+                                (1.0_f32, Color32::WHITE)
+                            };
+                            painter.rect_stroke(rect, 1.0, Stroke::new(stroke_w, stroke_c));
                         }
                     }
                 }
@@ -462,11 +594,13 @@ pub fn show(
                         let l_resp = ui.interact(left_hit, left_id, Sense::drag());
                         let r_resp = ui.interact(right_hit, right_id, Sense::drag());
 
-                        if l_resp.hovered() || l_resp.dragged() {
+                        // Resize SOLO con botón izquierdo: el botón derecho queda
+                        // libre para el marquee de selección de notas.
+                        if l_resp.hovered() || l_resp.dragged_by(PointerButton::Primary) {
                             note_edge_active = true;
                             ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
                         }
-                        if r_resp.hovered() || r_resp.dragged() {
+                        if r_resp.hovered() || r_resp.dragged_by(PointerButton::Primary) {
                             note_edge_active = true;
                             ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
                         }
@@ -474,7 +608,7 @@ pub fn show(
                         // Iniciar resize: sembrar preview desde la nota real.
                         // Solo si no hay ya otro resize en curso.
                         if !state.note_resize_active {
-                            if l_resp.drag_started() {
+                            if l_resp.drag_started_by(PointerButton::Primary) {
                                 state.note_resize_active = true;
                                 state.note_resize_handle = SelectionDragHandle::Left;
                                 state.note_resize_index = Some(i);
@@ -484,7 +618,7 @@ pub fn show(
                                 state.note_resize_preview_duration = note.duration_ticks;
                                 note_edge_active = true;
                                 ui.ctx().request_repaint();
-                            } else if r_resp.drag_started() {
+                            } else if r_resp.drag_started_by(PointerButton::Primary) {
                                 state.note_resize_active = true;
                                 state.note_resize_handle = SelectionDragHandle::Right;
                                 state.note_resize_index = Some(i);
@@ -506,7 +640,7 @@ pub fn show(
                             };
                             note_edge_active = true;
 
-                            if resp.dragged() {
+                            if resp.dragged_by(PointerButton::Primary) {
                                 if let Some(pointer_pos) = resp.interact_pointer_pos() {
                                     let rel_x = (pointer_pos.x - grid_rect.min.x).max(0.0);
                                     let raw_tick = (rel_x / state.zoom_x) as u64;
@@ -531,7 +665,7 @@ pub fn show(
 
                             // Confirmar al soltar (fuera del préstamo inmutable
                             // de `note`: se marca y se aplica tras el bucle).
-                            if resp.drag_stopped() {
+                            if resp.drag_stopped_by(PointerButton::Primary) {
                                 commit_note_resize = true;
                             }
                         }
@@ -559,11 +693,90 @@ pub fn show(
                     note_edge_active = true;
                 }
 
+                // --- MARQUEE: selección de notas con click derecho + drag ---
+                // Distinto de la Time Selection (Shift+drag en la regla), que
+                // sirve para loopear. Este sirve para copiar/duplicar notas.
+                {
+                    let secondary = PointerButton::Secondary;
+                    if grid_response.drag_started_by(secondary) && !note_edge_active {
+                        if let Some(pos) = grid_response.interact_pointer_pos() {
+                            state.note_marquee_active = true;
+                            state.note_marquee_start = Some(pos);
+                            state.note_marquee_current = Some(pos);
+                            state.note_marquee_additive =
+                                ui.input(|i| i.modifiers.shift);
+                            if !state.note_marquee_additive {
+                                state.selected_notes.clear();
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                    } else if state.note_marquee_active
+                        && grid_response.dragged_by(secondary)
+                    {
+                        state.note_marquee_current =
+                            grid_response.interact_pointer_pos();
+                        ui.ctx().request_repaint();
+                    } else if state.note_marquee_active
+                        && (grid_response.drag_stopped_by(secondary)
+                            || !ui.input(|i| i.pointer.secondary_down()))
+                    {
+                        // Confirmar al soltar el botón derecho.
+                        if let (Some(start), Some(current)) =
+                            (state.note_marquee_start, state.note_marquee_current)
+                        {
+                            let marquee = Rect::from_two_pos(start, current);
+                            if marquee.width() > 2.0 || marquee.height() > 2.0 {
+                                let found = notes_in_marquee(
+                                    &state.notes,
+                                    marquee,
+                                    grid_rect,
+                                    state.zoom_x,
+                                    state.key_height,
+                                );
+                                if state.note_marquee_additive {
+                                    state.selected_notes.extend(found);
+                                } else {
+                                    state.selected_notes = found;
+                                }
+                            }
+                        }
+                        state.note_marquee_active = false;
+                        state.note_marquee_start = None;
+                        state.note_marquee_current = None;
+                        state.note_marquee_additive = false;
+                        ui.ctx().request_repaint();
+                    }
+                }
+
+                // Dibujar el marquee encima de las notas (mismo frame del drag).
+                if state.note_marquee_active && ui.is_rect_visible(grid_rect) {
+                    if let (Some(start), Some(current)) =
+                        (state.note_marquee_start, state.note_marquee_current)
+                    {
+                        let marquee = Rect::from_two_pos(start, current);
+                        let p = ui.painter_at(grid_rect);
+                        p.rect_filled(
+                            marquee,
+                            0.0,
+                            Color32::from_rgba_unmultiplied(255, 200, 0, 35),
+                        );
+                        p.rect_stroke(
+                            marquee,
+                            0.0,
+                            Stroke::new(1.5_f32, Color32::from_rgb(255, 200, 0)),
+                        );
+                    }
+                }
+
                 if let Some(hover_pos) = grid_response.hover_pos() {
                     let local_x = hover_pos.x - grid_rect.min.x;
                     let local_y = hover_pos.y - grid_rect.min.y;
 
-                    if local_x >= 0.0 && local_y >= 0.0 && !note_edge_active {
+                    if local_x >= 0.0
+                        && local_y >= 0.0
+                        && !note_edge_active
+                        && !state.note_marquee_active
+                    {
                         let raw_tick = (local_x / state.zoom_x).max(0.0) as u64;
                         let quantized_tick = (raw_tick / QUANTIZE_TICKS) * QUANTIZE_TICKS;
                         let row = (local_y / state.key_height).max(0.0) as i32;
@@ -606,15 +819,38 @@ pub fn show(
                             }
                         }
 
+                        // Click derecho SIN drag: borrar nota bajo el cursor.
+                        // (Con drag se crea el marquee; egui no dispara
+                        // secondary_clicked si hubo un drag decidedly.)
                         if grid_response.secondary_clicked() && !note_edge_active {
-                            let prev_len = state.notes.len();
-                            state.notes.retain(|n| {
-                                !(n.pitch == pitch
+                            if let Some(idx) = state.notes.iter().position(|n| {
+                                n.pitch == pitch
                                     && quantized_tick >= n.start_tick
-                                    && quantized_tick < n.start_tick + n.duration_ticks)
-                            });
-                            if state.notes.len() != prev_len {
+                                    && quantized_tick < n.start_tick + n.duration_ticks
+                            }) {
+                                state.notes.remove(idx);
+                                // Reajustar índices de la selección de notas.
+                                state.selected_notes = state
+                                    .selected_notes
+                                    .iter()
+                                    .filter_map(|&i| {
+                                        if i == idx {
+                                            None
+                                        } else if i > idx {
+                                            Some(i - 1)
+                                        } else {
+                                            Some(i)
+                                        }
+                                    })
+                                    .collect();
                                 ui.ctx().request_repaint();
+                            } else {
+                                // Click derecho en zona vacía: limpiar solo
+                                // la selección de notas (no la Time Selection).
+                                if !state.selected_notes.is_empty() {
+                                    state.clear_note_selection();
+                                    ui.ctx().request_repaint();
+                                }
                             }
                         }
                     }
@@ -1069,9 +1305,11 @@ fn draw_grid_background(
 #[cfg(test)]
 mod tests {
     use super::{
-        note_just_crossed, resize_note_left, resize_note_right, quantize_tick,
-        MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
+        note_just_crossed, notes_in_marquee, duplicate_selected_notes, resize_note_left,
+        resize_note_right, quantize_tick, MidiNote, MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
     };
+    use egui::{pos2, Rect};
+    use std::collections::HashSet;
 
     #[test]
     fn crosses_note_start_from_below() {
@@ -1176,5 +1414,68 @@ mod tests {
         assert_eq!(quantize_tick(239, QUANTIZE_TICKS), 0);
         assert_eq!(quantize_tick(240, QUANTIZE_TICKS), 240);
         assert_eq!(quantize_tick(479, QUANTIZE_TICKS), 240);
+    }
+
+    #[test]
+    fn marquee_selects_intersecting_notes() {
+        // grid en (0,0), key_height=16, zoom=1.0
+        let grid = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 128.0 * 16.0));
+        let notes = vec![
+            // pitch 60 (C4) -> row = 127-60 = 67 -> y = 67*16 = 1072
+            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
+            // pitch 60, lejos en el tiempo
+            MidiNote { pitch: 60, start_tick: 9600, duration_ticks: 240, velocity: 100 },
+        ];
+        // Marquee que solo cubre la primera nota (x 0..100, y toda la grilla)
+        let marquee = Rect::from_min_size(pos2(0.0, 1000.0), egui::vec2(100.0, 100.0));
+        let sel = notes_in_marquee(&notes, marquee, grid, 1.0, 16.0);
+        assert!(sel.contains(&0));
+        assert!(!sel.contains(&1));
+    }
+
+    #[test]
+    fn marquee_empty_when_no_intersection() {
+        let grid = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 128.0 * 16.0));
+        let notes = vec![MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 }];
+        // Marquee arriba del todo (pitch alto, fuera de la nota)
+        let marquee = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(50.0, 50.0));
+        let sel = notes_in_marquee(&notes, marquee, grid, 1.0, 16.0);
+        assert!(sel.is_empty());
+    }
+
+    #[test]
+    fn duplicate_places_block_after_selection() {
+        let mut notes = vec![
+            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
+            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 240, velocity: 100 },
+            MidiNote { pitch: 64, start_tick: 960, duration_ticks: 240, velocity: 100 }, // no seleccionada
+        ];
+        let mut selected = HashSet::new();
+        selected.insert(0);
+        selected.insert(1);
+
+        let new_idx = duplicate_selected_notes(&mut notes, &selected);
+        assert_eq!(notes.len(), 5);
+        assert_eq!(new_idx.len(), 2);
+
+        // Bloque original: 0..480 -> duration_block = 480
+        // Duplicados en 480 y 720
+        let d0 = &notes[new_idx[0]];
+        let d1 = &notes[new_idx[1]];
+        assert_eq!(d0.start_tick, 480);
+        assert_eq!(d1.start_tick, 720);
+        assert_eq!(d0.pitch, 60);
+        assert_eq!(d1.pitch, 62);
+        // La nota no seleccionada no se duplica
+        assert_eq!(notes[2].start_tick, 960);
+    }
+
+    #[test]
+    fn duplicate_empty_selection_is_noop() {
+        let mut notes = vec![MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 }];
+        let selected = HashSet::new();
+        let new_idx = duplicate_selected_notes(&mut notes, &selected);
+        assert!(new_idx.is_empty());
+        assert_eq!(notes.len(), 1);
     }
 }
