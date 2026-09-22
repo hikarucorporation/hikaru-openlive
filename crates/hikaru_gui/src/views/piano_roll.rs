@@ -413,6 +413,22 @@ fn notes_in_marquee(
     out
 }
 
+/// Elimina de `notes` todos los índices en `selected`.
+/// Devuelve cuántas notas se borraron. `selected` queda vacío.
+fn remove_selected_notes(notes: &mut Vec<MidiNote>, selected: &mut HashSet<usize>) -> usize {
+    let sel = std::mem::take(selected);
+    let before = notes.len();
+    // Índices de `notes` sin las seleccionadas (HashSet no itera en orden,
+    // así que reconstruimos por enumerate para no correr los índices a mano).
+    *notes = std::mem::take(notes)
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !sel.contains(i))
+        .map(|(_, n)| n)
+        .collect();
+    before - notes.len()
+}
+
 /// Duplica las notas seleccionadas, colocándolas justo después del bloque
 /// que ocupan (mismo criterio que Ctrl+D en la Playlist).
 /// Devuelve las notas nuevas y sus índices tras insertarlas.
@@ -496,6 +512,28 @@ pub fn show(
     // Escape: limpiar solo la selección de notas (no la Time Selection).
     if !state.selected_notes.is_empty() && ui.input(|i| i.key_pressed(Key::Escape)) {
         state.clear_note_selection();
+        ui.ctx().request_repaint();
+    }
+
+    // Supr/Backspace: borrar de una vez todas las notas seleccionadas.
+    // consume_key evita que el atajo llegue también a la Playlist si está visible.
+    if !state.selected_notes.is_empty()
+        && ui.input_mut(|i| {
+            i.consume_key(Modifiers::NONE, Key::Delete)
+                || i.consume_key(Modifiers::NONE, Key::Backspace)
+        })
+    {
+        // Si hay un move en curso, cancelarlo: los índices de
+        // `note_move_orig` dejarían de ser válidos tras el remove.
+        if state.note_move_active {
+            state.note_move_active = false;
+            state.note_move_grab_index = None;
+            state.note_move_orig.clear();
+            state.note_move_preview_delta_ticks = 0;
+            state.note_move_preview_delta_rows = 0;
+            state.note_move_origin_pointer = None;
+        }
+        remove_selected_notes(&mut state.notes, &mut state.selected_notes);
         ui.ctx().request_repaint();
     }
 
@@ -1671,8 +1709,8 @@ mod tests {
     use super::{
         apply_move_delta, compute_note_move_deltas, duplicate_selected_notes,
         hit_test_note_body, hit_test_note_full, note_just_crossed, notes_in_marquee,
-        quantize_tick, resize_note_left, resize_note_right, select_note_set, MidiNote,
-        MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
+        quantize_tick, remove_selected_notes, resize_note_left, resize_note_right,
+        select_note_set, MidiNote, MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
     };
     use egui::{pos2, Rect};
     use std::collections::HashSet;
@@ -1958,5 +1996,41 @@ mod tests {
         // Fuera de la nota.
         let outside = pos2(480.0, 0.0);
         assert_eq!(hit_test_note_full(&notes, outside, grid, 1.0, 16.0), None);
+    }
+
+    #[test]
+    fn remove_selected_notes_deletes_only_marked() {
+        let mut notes = vec![
+            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
+            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 240, velocity: 100 },
+            MidiNote { pitch: 64, start_tick: 480, duration_ticks: 240, velocity: 100 },
+        ];
+        let mut selected = HashSet::new();
+        selected.insert(0);
+        selected.insert(2);
+
+        let removed = remove_selected_notes(&mut notes, &mut selected);
+        assert_eq!(removed, 2);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].pitch, 62);
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn remove_selected_notes_all_or_nothing() {
+        let mut notes = vec![MidiNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: 240,
+            velocity: 100,
+        }];
+        let mut empty = HashSet::new();
+        assert_eq!(remove_selected_notes(&mut notes, &mut empty), 0);
+        assert_eq!(notes.len(), 1);
+
+        let mut all = HashSet::new();
+        all.insert(0);
+        assert_eq!(remove_selected_notes(&mut notes, &mut all), 1);
+        assert!(notes.is_empty());
     }
 }
