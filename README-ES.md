@@ -56,6 +56,14 @@ cargo run --release -p hikaru_gui
 
 ```
 
+## 🛠️ Compilación para un Release Completo (Linux)
+
+En la carpeta raíz de tu proyecto (ej; `/miyu-shrine-workspace/*`)
+
+```bash
+cargo build --release --bin hikaru_openlive
+```
+
 ---
 
 ## Compilación Cruzada para Windows (Cross-compilation)
