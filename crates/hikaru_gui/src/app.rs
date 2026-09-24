@@ -841,7 +841,9 @@ impl eframe::App for HikaruApp {
                 ViewportId::from_hash_of("hikaru_about_viewport"),
                 ViewportBuilder::default()
                     .with_title(about_title)
-                    .with_inner_size([380.0, 300.0])
+                    .with_inner_size([420.0, 420.0]) // <- TAMAÑO FIJO VENTANA ABOUT (ancho x alto) // Estaba en `520.0, 420.0`.
+                    .with_min_inner_size([420.0, 420.0])
+                    .with_max_inner_size([420.0, 420.0])
                     .with_resizable(false),
                 |vp_ctx, _class| {
                     if vp_ctx.input(|i| i.viewport().close_requested()) {

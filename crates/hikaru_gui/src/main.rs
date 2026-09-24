@@ -387,6 +387,9 @@ fn main() -> eframe::Result<()> {
         "Hikaru OpenLive",
         native_options,
         Box::new(move |cc| {
+            // REGISTRAR LOADERS DE IMÁGENES (PNG / SVG)
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+
             // FORZAR MODO OSCURO EN EGUI INDEPENDIENTEMENTE DEL TEMA DEL SISTEMA OPERATIVO
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
