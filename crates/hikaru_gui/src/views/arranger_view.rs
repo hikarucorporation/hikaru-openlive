@@ -5,6 +5,7 @@
 
 use egui::*;
 use egui::epaint::PathShape;
+use egui::epaint::text::{LayoutJob, TextWrapping};
 use crate::views::mixer;
 use hikaru_transport::TransportPosition;
 use crate::audio_proxy::{AudioProxy, GuiCommand};
@@ -228,8 +229,8 @@ pub fn show(
                                             // Si SÍ tiene clip, colorear según el estado actual de reproducción
                                             match slot_state {
                                                 SlotState::Playing => (
-                                                    Color32::from_rgb(35, 135, 60),
-                                                    Color32::GREEN,
+                                                    Color32::from_rgb(30, 110, 210),
+                                                    Color32::from_rgb(90, 180, 255),
                                                     if text_label.is_empty() { "Clip".into() } else { text_label },
                                                 ),
                                                 SlotState::QueuedToPlay => (
@@ -362,15 +363,31 @@ pub fn show(
                                             matrix_state.selected_slot = Some((track_idx, scene_idx));
                                         }
 
-                                        // 4. Texto del nombre del clip
-                                        let text_pos = pos2(slot_rect.min.x + 28.0, slot_rect.center().y);
-                                        painter.text(
-                                            text_pos,
-                                            Align2::LEFT_CENTER,
-                                            display_text,
-                                            FontId::proportional(9.0),
-                                            Color32::WHITE,
-                                        );
+                                        // 4. Texto del nombre del clip (recortado al pad con elipsis)
+                                        if !display_text.is_empty() {
+                                            let text_pos =
+                                                pos2(slot_rect.min.x + 28.0, slot_rect.center().y);
+                                            let text_max_width =
+                                                (slot_rect.max.x - text_pos.x - 4.0).max(10.0);
+                                            let mut job = LayoutJob::simple_singleline(
+                                                display_text,
+                                                FontId::proportional(9.0),
+                                                Color32::WHITE,
+                                            );
+                                            job.wrap =
+                                                TextWrapping::truncate_at_width(text_max_width);
+                                            let galley = painter.layout_job(job);
+                                            let text_rect = Align2::LEFT_CENTER
+                                                .anchor_size(text_pos, galley.size());
+                                            // Clip estricto al pad para que nada se escape visualmente
+                                            let clipped_painter = painter
+                                                .with_clip_rect(slot_rect.shrink(1.0));
+                                            clipped_painter.galley(
+                                                text_rect.min,
+                                                galley,
+                                                Color32::WHITE,
+                                            );
+                                        }
                                     }
 
                                     ui.add_space(2.0);
@@ -530,7 +547,7 @@ fn load_clip_into_arranger_slot(
             local_bar: 1.0,
             loop_start: 0,
             loop_end: 0,
-            loop_enabled: false,
+            loop_enabled: true,
         }),
     };
 

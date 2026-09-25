@@ -17,6 +17,9 @@ clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log"] }
 vst3-host = "0.1"
 
+[profile.dev]
+debug = 1
+
 [profile.release]
 opt-level = 3
 lto = true

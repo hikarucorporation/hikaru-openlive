@@ -794,8 +794,8 @@ fn render_pad(
                 slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
             ),
             SlotState::Playing => (
-                Color32::from_rgb(35, 135, 60),
-                Color32::GREEN,
+                Color32::from_rgb(30, 110, 210),
+                Color32::from_rgb(90, 180, 255),
                 slot.clip.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
             ),
             SlotState::QueuedToStop => (
@@ -825,7 +825,7 @@ fn render_pad(
             match &clip.content {
                 ClipData::Audio { pcm_data } => {
                     let wave_color = match slot.state {
-                        SlotState::Playing => Color32::from_rgba_unmultiplied(5, 25, 10, 220),
+                        SlotState::Playing => Color32::from_rgba_unmultiplied(10, 30, 70, 220),
                         SlotState::QueuedToPlay => Color32::from_rgba_unmultiplied(40, 30, 5, 200),
                         _ => Color32::from_rgba_unmultiplied(120, 160, 220, 180),
                     };
@@ -833,7 +833,7 @@ fn render_pad(
                 }
                 ClipData::Midi { notes } => {
                     let note_color = match slot.state {
-                        SlotState::Playing => Color32::from_rgb(0, 255, 150),
+                        SlotState::Playing => Color32::from_rgb(90, 180, 255),
                         _ => Color32::from_rgb(255, 180, 50),
                     };
 
@@ -889,7 +889,7 @@ fn render_pad(
             let btn_hovered = btn_response.hovered();
 
             let btn_bg = match slot.state {
-                SlotState::Playing => Color32::from_rgb(40, 160, 70),
+                SlotState::Playing => Color32::from_rgb(35, 120, 220),
                 SlotState::QueuedToPlay => Color32::from_rgb(180, 150, 40),
                 SlotState::QueuedToStop => Color32::from_rgb(160, 55, 55),
                 _ => {
@@ -1259,7 +1259,7 @@ pub fn load_clip_into_slot(
             local_bar: 1.0,
             loop_start: 0,
             loop_end: 0,
-            loop_enabled: false,
+            loop_enabled: true,
         }),
     };
 

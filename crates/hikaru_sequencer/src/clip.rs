@@ -75,11 +75,12 @@ impl Clip {
             state: AtomicU8::new(ClipState::Stopped as u8),
             trigger_mode: TriggerMode::Trigger,
             start_sample: 0,
-            // NOTA: con región (0,0) `has_valid_clip_loop()` es false, así
-            // que por defecto NO hay loop: la voz muteará al superar la
-            // longitud real. El loop solo suena con región válida +
-            // `loop_enabled` (vía `set_clip_loop` explícito en el engine).
-            loop_enabled: false,
+            // NOTA: `loop_enabled` arranca en true por defecto para que el
+            // botón 🔁 Loop del Clip Editor ya venga activado. Con región
+            // (0,0) `has_valid_clip_loop()` sigue siendo false (one-shot)
+            // hasta que se fije una región válida (loop completo) vía
+            // `set_clip_loop` / `set_loop_points` explícito en el engine.
+            loop_enabled: true,
             loop_start: 0,
             loop_end: 0,
             total_frames: 0,

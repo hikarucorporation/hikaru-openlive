@@ -705,6 +705,14 @@ impl<'a> AudioEngine<'a> {
         };
         let sample_offset = (offset_secs * self.sample_rate) as usize * ch;
 
+        // Los clips de la Session Matrix loopear por defecto (clip entero).
+        // Los de Playlist/Studio mantienen one-shot salvo SetClipLoop explícito.
+        let (default_loop_enabled, default_loop_end) = if is_matrix_clip && natural_frames > 0 {
+            (true, natural_frames)
+        } else {
+            (false, 0)
+        };
+
         let instance = AudioClipInstance {
             id,
             track_index,
@@ -716,9 +724,9 @@ impl<'a> AudioEngine<'a> {
             sample_offset,
             channels: ch,
             is_playing: false,
-            clip_loop_enabled: false,
+            clip_loop_enabled: default_loop_enabled,
             clip_loop_start: 0,
-            clip_loop_end: 0,
+            clip_loop_end: default_loop_end,
             is_matrix_clip,
             prev_frame: usize::MAX,
             xfade_remaining: 0,

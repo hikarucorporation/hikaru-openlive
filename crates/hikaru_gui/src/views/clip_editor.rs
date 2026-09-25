@@ -3,7 +3,7 @@
 // GNU Affero General Public License v3
 // crates/hikaru_gui/src/views/clip_editor.rs
 
-use egui::{Align2, Color32, ComboBox, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui};
+use egui::{Align2, Color32, ComboBox, FontId, Frame, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::path::PathBuf;
 
 use crate::audio_proxy::AudioProxy;
@@ -128,6 +128,11 @@ pub fn show(
     let auto_fades_id = ui.make_persistent_id("inspector_auto_fades");
     let mut auto_fades: bool = ui.data_mut(|d| d.get_temp(auto_fades_id).unwrap_or(true));
 
+    // Zoom horizontal del canvas (1.0 = Fit, >1.0 = ampliado con scroll).
+    let zoom_id = ui.make_persistent_id("clip_editor_zoom_factor");
+    let mut zoom_factor: f32 = ui.data_mut(|d| d.get_temp(zoom_id).unwrap_or(1.0_f32));
+    zoom_factor = zoom_factor.clamp(1.0, 32.0);
+
     Frame::none()
         .fill(Color32::from_rgb(18, 18, 22))
         .stroke(Stroke::new(1.0_f32, Color32::from_gray(45)))
@@ -221,11 +226,64 @@ pub fn show(
 
                 ui.add_space(4.0);
 
-                // --- CANVAS PRINCIPAL: WAVEFORM & RULER ---
-                let available_size = ui.available_size();
-                let (rect, _response) = ui.allocate_exact_size(available_size, Sense::click_and_drag());
+                // --- CANVAS PRINCIPAL: WAVEFORM & RULER (con zoom Ctrl+Ruedita) ---
+                ui.vertical(|ui| {
+                    // Toolbar de zoom
+                    ui.horizontal(|ui| {
+                        ui.label("🔍");
+                        if ui.small_button("➖").clicked() {
+                            zoom_factor = (zoom_factor / 1.25).clamp(1.0, 32.0);
+                            ui.data_mut(|d| d.insert_temp(zoom_id, zoom_factor));
+                        }
+                        ui.label(format!("{:.0}%", zoom_factor * 100.0));
+                        if ui.small_button("➕").clicked() {
+                            zoom_factor = (zoom_factor * 1.25).clamp(1.0, 32.0);
+                            ui.data_mut(|d| d.insert_temp(zoom_id, zoom_factor));
+                        }
+                        if ui.small_button("Fit").clicked() {
+                            zoom_factor = 1.0;
+                            ui.data_mut(|d| d.insert_temp(zoom_id, zoom_factor));
+                        }
+                        ui.weak("Ctrl+Rueda: Zoom");
+                    });
 
-                if ui.is_rect_visible(rect) {
+                    let viewport = ui.available_size();
+                    egui::ScrollArea::horizontal()
+                        .id_source("clip_editor_hscroll")
+                        .show(ui, |ui| {
+                            let canvas_w = (viewport.x * zoom_factor).max(viewport.x);
+                            let canvas_h = viewport.y.max(50.0);
+                            let (rect, response) = ui.allocate_exact_size(
+                                Vec2::new(canvas_w, canvas_h),
+                                Sense::click_and_drag(),
+                            );
+
+                            // Zoom con Ctrl + Ruedita (anclado al canvas, como en playlist.rs)
+                            if response.hovered() {
+                                let ctrl_pressed =
+                                    ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                                if ctrl_pressed {
+                                    let mut zoom_delta = 0.0_f32;
+                                    ui.input(|i| {
+                                        for event in &i.events {
+                                            if let egui::Event::MouseWheel { delta, .. } = event {
+                                                zoom_delta += delta.y;
+                                            }
+                                        }
+                                    });
+                                    if zoom_delta != 0.0 {
+                                        let factor =
+                                            if zoom_delta > 0.0 { 1.15 } else { 0.85 };
+                                        zoom_factor =
+                                            (zoom_factor * factor).clamp(1.0, 32.0);
+                                        ui.data_mut(|d| {
+                                            d.insert_temp(zoom_id, zoom_factor)
+                                        });
+                                    }
+                                }
+                            }
+
+                            if ui.is_rect_visible(rect) {
                     let total_frames = (clip.duration_secs * sample_rate as f64) as u64;
 
                     if total_frames > 0 {
@@ -443,7 +501,9 @@ pub fn show(
                     }
 
                     ui.painter().rect_stroke(rect, 4.0_f32, Stroke::new(1.0_f32, Color32::from_gray(50)));
-                }
+                            }
+                        });
+                    });
             });
         });
 
