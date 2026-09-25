@@ -116,6 +116,15 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ---
 
+## 👥 Comunidad y Colaboradores
+
+Un agradecimiento especial a los gordos contribuyentes y a la comunidad de software libre que apoyan el desarrollo de **Hikaru OpenLive**:
+
+* **Contributors:** [Ver lista de contribuyentes directos](https://github.com/hikarucorporation/hikaru-openlive/graphs/contributors)
+* **Forks y derivados:** [Explorar forks de la comunidad](https://github.com/hikarucorporation/hikaru-openlive/network/members)
+
+¿Querés aportar? ¡Los Pull Requests son más que bienvenidos! (Soporte MIDI, controladores físicos, timestretching y arreglos de bugs son prioridad total).
+
 ## Licencia
 
 Este programa es software libre bajo los términos de la **GNU Affero General Public License (AGPLv3)**. Ver [`LICENSE`](https://www.gnu.org/licenses/agpl-3.0.en.html) para más detalles.
