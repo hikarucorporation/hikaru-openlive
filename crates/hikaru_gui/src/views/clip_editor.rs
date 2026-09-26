@@ -419,7 +419,7 @@ pub fn show(
                                 );
                             });
                         }
-                        ui.weak("Ctrl+Rueda: Zoom");
+                        ui.weak("Ctrl+Rueda: Zoom · Clic-rueda + arrastrar: mover vista");
                     });
 
                     let viewport = ui.available_size();
@@ -583,14 +583,50 @@ pub fn show(
                         // Sin drag_to_scroll: si el área scrolleara durante el
                         // arrastre, el contenido se deslizaría bajo el cursor y
                         // el move/trim se movería al doble / no-lineal.
-                        // Scroll con ruedita/barra, zoom con Ctrl+rueda.
+                        // Scroll con ruedita/barra, zoom con Ctrl+rueda, paneo
+                        // con el botón central (implementado manual abajo).
                         .drag_to_scroll(false);
+                    // --- Paneo con clic de la ruedita (botón central) ---
+                    // Se hace manual porque drag_to_scroll reaccionaría al
+                    // clic izquierdo y rompería el move/trim de eventos.
+                    // offset_nuevo = base - delta.x del frame.
+                    let mut middle_pan_dd: f32 = 0.0;
+                    if ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
+                    {
+                        if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                            if ui.max_rect().contains(pos) {
+                                middle_pan_dd = ui.input(|i| i.pointer.delta().x);
+                                if middle_pan_dd != 0.0 {
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        }
+                    }
                     let scroll_area = if need_reanchor {
                         scroll_area.horizontal_scroll_offset(lead_px.max(0.0))
-                    } else if let Some(off) = zoom_keep_offset {
-                        scroll_area.horizontal_scroll_offset(off.max(0.0))
                     } else {
-                        scroll_area
+                        // Base: corrección de zoom si hubo, si no el último
+                        // scroll conocido. Solo se fuerza offset si hay zoom
+                        // o paneo; si no, se deja el offset interno de egui
+                        // (ruedita/barra) intacto para no pisarlo.
+                        let mut base: Option<f32> =
+                            zoom_keep_offset.or(last_scroll_x);
+                        if middle_pan_dd != 0.0 {
+                            base = Some(
+                                base.unwrap_or(lead_px.max(0.0)) - middle_pan_dd,
+                            );
+                        }
+                        let must_force = zoom_keep_offset.is_some()
+                            || middle_pan_dd != 0.0;
+                        if must_force {
+                            if let Some(off) = base {
+                                scroll_area.horizontal_scroll_offset(off.max(0.0))
+                            } else {
+                                scroll_area
+                            }
+                        } else {
+                            scroll_area
+                        }
                     };
                     let scroll_out = scroll_area.show(ui, |ui| {
                             let canvas_w = ((lead_in_secs + visible_secs) as f32 * px_per_sec)
@@ -1404,6 +1440,13 @@ pub fn show(
                                 Stroke::new(2.0_f32, Color32::WHITE),
                             );
                         }
+                    }
+
+                    // Cursor de paneo con botón central (pisa al de eventos).
+                    if ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
+                        && response.hovered()
+                    {
+                        ui.output_mut(|o| o.cursor_icon = CursorIcon::Grabbing);
                     }
 
                     ui.painter().rect_stroke(rect, 4.0_f32, Stroke::new(1.0_f32, Color32::from_gray(50)));
