@@ -57,6 +57,13 @@ pub fn draw_waveform(ui: &mut Ui, rect: Rect, pcm_data: &[f32], color: Color32) 
             if scaled > sample_max { sample_max = scaled; }
         }
 
+        // Píxel en silencio absoluto: no dibujar nada. Antes se dibujaba
+        // un palito de 2px que formaba una "línea cyan rara" en los huecos
+        // (p. ej. al mover un evento se estiraba a la izquierda del clip).
+        if sample_min == 0.0_f32 && sample_max == 0.0_f32 {
+            continue;
+        }
+
         let x_pos = rect.min.x + x_idx as f32;
 
         // Mapeo top-down en coordenadas de egui

@@ -236,6 +236,43 @@ fn main() -> eframe::Result<()> {
                         engine.set_clip_loop(track_idx, scene_idx, start_secs, end_secs, enabled);
                     }
                 }
+                GuiCommand::SetClipEvents { track_idx, scene_idx, events } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        let target_sr = engine.sample_rate;
+                        let mut engine_events = Vec::with_capacity(events.len());
+                        for ev in events {
+                            let (mut samples, clip_start) = if ev.sample_rate > 0
+                                && (ev.sample_rate as f32 - target_sr).abs() > 1.0
+                            {
+                                let rs = resample_linear(&ev.samples, ev.channels, ev.sample_rate as f32, target_sr);
+                                let cs = (ev.clip_start_secs.max(0.0) * target_sr) as u64;
+                                (rs, cs)
+                            } else {
+                                let cs = (ev.clip_start_secs.max(0.0) * target_sr) as u64;
+                                (ev.samples, cs)
+                            };
+                            // Inicio en negativo (count-in): lo previo al 0 se
+                            // recorta, a partir del 0 suena idéntico.
+                            if ev.clip_start_secs < 0.0 {
+                                let drop = ((-ev.clip_start_secs) * target_sr).round()
+                                    as usize;
+                                let off = (drop * ev.channels.max(1))
+                                    .min(samples.len());
+                                samples = samples[off..].to_vec();
+                            }
+                            engine_events.push(hikaru_audio_engine::EngineAudioEvent {
+                                id: ev.id,
+                                samples,
+                                channels: ev.channels,
+                                clip_start,
+                                gain: ev.gain,
+                                fade_in: (ev.fade_in_secs.max(0.0) * target_sr) as u64,
+                                fade_out: (ev.fade_out_secs.max(0.0) * target_sr) as u64,
+                            });
+                        }
+                        engine.set_clip_events(track_idx, scene_idx, engine_events);
+                    }
+                }
                 GuiCommand::SetGlobalLoop { start_samples, end_samples, enabled } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_global_loop(start_samples, end_samples, enabled);

@@ -32,9 +32,158 @@ pub enum SlotState {
 }
 
 #[derive(Clone, Debug)]
+pub struct AudioEvent {
+    pub id: u64,
+    pub name: String,
+    /// Buffer ORIGINAL completo. El trim es no-destructivo: este buffer
+    /// nunca se muta, solo la ventana visible (se puede re-estirar).
+    pub samples: Vec<f32>,
+    pub channels: usize,
+    pub sample_rate: u32,
+    /// Posición dentro del timeline del pad (segundos).
+    pub start_secs: f64,
+    /// Recorte no-destructivo: frames ocultos al inicio del buffer.
+    pub trim_left_frames: usize,
+    /// Frames visibles a partir de `trim_left_frames`.
+    pub visible_frames: usize,
+    pub gain: f32,
+    pub fade_in_secs: f64,
+    pub fade_out_secs: f64,
+}
+
+impl AudioEvent {
+    /// Constructor con ventana completa (sin recorte).
+    pub fn new_full(
+        id: u64,
+        name: String,
+        samples: Vec<f32>,
+        channels: usize,
+        sample_rate: u32,
+        start_secs: f64,
+    ) -> Self {
+        let visible = samples.len() / channels.max(1);
+        Self {
+            id,
+            name,
+            samples,
+            channels,
+            sample_rate,
+            start_secs,
+            trim_left_frames: 0,
+            visible_frames: visible,
+            gain: 1.0,
+            fade_in_secs: 0.0,
+            fade_out_secs: 0.0,
+        }
+    }
+
+    /// Frames totales del buffer original.
+    pub fn total_frames(&self) -> usize {
+        self.samples.len() / self.channels.max(1)
+    }
+
+    /// Frames visibles (ventana de trim aplicada).
+    pub fn frames(&self) -> u64 {
+        let avail = self
+            .total_frames()
+            .saturating_sub(self.trim_left_frames);
+        avail.min(self.visible_frames) as u64
+    }
+
+    /// Ventana visible del buffer (interleaved, lista para motor/preview).
+    pub fn window_samples(&self) -> &[f32] {
+        let ch = self.channels.max(1);
+        let start = (self.trim_left_frames * ch).min(self.samples.len());
+        let end = (start + self.frames() as usize * ch).min(self.samples.len());
+        &self.samples[start..end]
+    }
+
+    /// Dónde empieza el contenido original en el timeline (para re-estirar).
+    pub fn content_start_secs(&self) -> f64 {
+        if self.sample_rate == 0 {
+            return self.start_secs;
+        }
+        self.start_secs - self.trim_left_frames as f64 / self.sample_rate as f64
+    }
+
+    /// Dónde termina el contenido original en el timeline.
+    pub fn content_end_secs(&self) -> f64 {
+        if self.sample_rate == 0 {
+            return self.end_secs();
+        }
+        self.content_start_secs() + self.total_frames() as f64 / self.sample_rate as f64
+    }
+
+    pub fn duration_secs(&self) -> f64 {
+        if self.sample_rate == 0 {
+            return 0.0;
+        }
+        self.frames() as f64 / self.sample_rate as f64
+    }
+
+    pub fn end_secs(&self) -> f64 {
+        self.start_secs + self.duration_secs()
+    }
+
+    pub fn contains(&self, t: f64) -> bool {
+        t >= self.start_secs && t < self.end_secs()
+    }
+
+    /// Divide el evento en `at_secs` (tiempo del timeline). Retorna la mitad
+    /// derecha (la izquierda muta in-place). `None` si cae fuera.
+    /// No-destructivo: ambas mitades comparten el buffer original.
+    pub fn split_at(&mut self, at_secs: f64, new_id: u64, new_name: String) -> Option<AudioEvent> {
+        if at_secs <= self.start_secs || at_secs >= self.end_secs() || self.sample_rate == 0 {
+            return None;
+        }
+        let cut_frames = ((at_secs - self.start_secs) * self.sample_rate as f64).round() as usize;
+        let left_visible = self.frames() as usize;
+        if cut_frames == 0 || cut_frames >= left_visible {
+            return None;
+        }
+        let abs_cut = self.trim_left_frames + cut_frames;
+        let right = AudioEvent {
+            id: new_id,
+            name: new_name,
+            samples: self.samples.clone(),
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+            start_secs: at_secs,
+            trim_left_frames: abs_cut,
+            visible_frames: left_visible - cut_frames,
+            gain: self.gain,
+            fade_in_secs: 0.0,
+            fade_out_secs: self.fade_out_secs,
+        };
+        self.visible_frames = cut_frames;
+        self.fade_out_secs = 0.0;
+        Some(right)
+    }
+
+    pub fn mono_mixed(&self) -> Vec<f32> {
+        let ch = self.channels.max(1);
+        let window = self.window_samples();
+        if ch == 1 {
+            return window.to_vec();
+        }
+        window
+            .chunks(ch)
+            .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum ClipData {
     Audio {
-        pcm_data: Vec<f32>,
+        /// Eventos (regiones) dentro del pad. Un pad recién cargado tiene
+        /// un solo evento; el editor permite dividir, duplicar y apilar
+        /// varios (overlaps se mezclan por suma en el motor).
+        events: Vec<AudioEvent>,
+        next_event_id: u64,
+        /// PCM mono mezclado para mini-waveforms (caché, se regenera).
+        preview_mix: Vec<f32>,
+        preview_sr: u32,
     },
     Midi {
         notes: Vec<(u64, u8, u8, u32)>, // (start_tick, pitch, velocity, duration_ticks)
@@ -54,20 +203,113 @@ pub struct MatrixClip {
     pub loop_start: u64,
     pub loop_end: u64,
     pub loop_enabled: bool,
+    /// Time Selection visible (región de loop). Con Ctrl+Alt+A se oculta,
+    /// con Ctrl+A se restaura al clip completo. Por defecto: true.
+    pub has_time_selection: bool,
 }
 
 impl MatrixClip {
+    /// Mezcla mono de todos los eventos (para waveforms y previsualización).
+    /// Usa la caché `preview_mix` si sigue vigente, si no la regenera.
     pub fn pcm_data(&self) -> &[f32] {
         match &self.content {
-            ClipData::Audio { pcm_data } => pcm_data,
+            ClipData::Audio { preview_mix, .. } => preview_mix,
             _ => &[],
         }
     }
 
     pub fn pcm_data_mut(&mut self) -> Option<&mut Vec<f32>> {
+        // Legacy: acceso directo al mix de previsualización (solo lectura
+        // real; la edición debe usar `audio_events_mut` + `refresh_preview`).
         match &mut self.content {
-            ClipData::Audio { pcm_data } => Some(pcm_data),
+            ClipData::Audio { preview_mix, .. } => Some(preview_mix),
             _ => None,
+        }
+    }
+
+    pub fn audio_events(&self) -> &[AudioEvent] {
+        match &self.content {
+            ClipData::Audio { events, .. } => events,
+            _ => &[],
+        }
+    }
+
+    pub fn audio_events_mut(&mut self) -> Option<&mut Vec<AudioEvent>> {
+        match &mut self.content {
+            ClipData::Audio { events, .. } => Some(events),
+            _ => None,
+        }
+    }
+
+    /// Duración del pad = fin del evento más lejano.
+    pub fn audio_total_secs(&self) -> f64 {
+        match &self.content {
+            ClipData::Audio { events, .. } => events
+                .iter()
+                .map(|e| e.end_secs())
+                .fold(0.0f64, f64::max),
+            _ => 0.0,
+        }
+    }
+
+    /// Recalcula `preview_mix` (mono) y `duration_secs` desde los eventos.
+    pub fn refresh_preview(&mut self) {
+        if let ClipData::Audio {
+            events,
+            preview_mix,
+            preview_sr,
+            ..
+        } = &mut self.content
+        {
+            let sr = events.first().map(|e| e.sample_rate).unwrap_or(44100);
+            *preview_sr = sr;
+            if events.is_empty() || sr == 0 {
+                preview_mix.clear();
+                self.duration_secs = 0.0;
+                return;
+            }
+            let total_secs = events.iter().map(|e| e.end_secs()).fold(0.0f64, f64::max);
+            let total_frames = (total_secs * sr as f64).ceil() as usize;
+            let mut mix = vec![0.0f32; total_frames];
+            for ev in events.iter() {
+                let mono = ev.mono_mixed();
+                // El evento puede empezar en negativo (count-in): lo previo
+                // al 0 no se mezcla, se salta.
+                let start_frame = (ev.start_secs * sr as f64).round() as i64;
+                let fi = (ev.fade_in_secs * sr as f64).round() as usize;
+                let fo = (ev.fade_out_secs * sr as f64).round() as usize;
+                for (i, s) in mono.iter().enumerate() {
+                    let dst = start_frame + i as i64;
+                    if dst < 0 {
+                        continue;
+                    }
+                    let dst = dst as usize;
+                    if dst >= total_frames {
+                        break;
+                    }
+                    let mut g = ev.gain;
+                    if fi > 0 && i < fi {
+                        g *= i as f32 / fi as f32;
+                    }
+                    let from_end = mono.len().saturating_sub(i);
+                    if fo > 0 && from_end < fo {
+                        g *= from_end as f32 / fo as f32;
+                    }
+                    mix[dst] += s * g;
+                }
+            }
+            *preview_mix = mix;
+            self.duration_secs = total_secs;
+        }
+    }
+
+    pub fn alloc_event_id(&mut self) -> u64 {
+        if let ClipData::Audio { next_event_id, .. } = &mut self.content {
+            let id = (*next_event_id).max(1);
+            *next_event_id = id + 1;
+            id
+        } else {
+            0
         }
     }
 
@@ -823,13 +1065,27 @@ fn render_pad(
             let clipped_painter = ui.painter().with_clip_rect(inner_rect);
 
             match &clip.content {
-                ClipData::Audio { pcm_data } => {
+                ClipData::Audio {
+                    preview_mix: pcm_data,
+                    events,
+                    ..
+                } => {
                     let wave_color = match slot.state {
                         SlotState::Playing => Color32::from_rgba_unmultiplied(10, 30, 70, 220),
                         SlotState::QueuedToPlay => Color32::from_rgba_unmultiplied(40, 30, 5, 200),
                         _ => Color32::from_rgba_unmultiplied(120, 160, 220, 180),
                     };
                     draw_mini_waveform(&clipped_painter, inner_rect, pcm_data, wave_color);
+                    // Indicador de multi-evento: "×N" si hay más de una región.
+                    if events.len() > 1 {
+                        clipped_painter.text(
+                            inner_rect.right_top() + egui::vec2(-4.0, 2.0),
+                            Align2::RIGHT_TOP,
+                            format!("×{}", events.len()),
+                            egui::FontId::proportional(9.0),
+                            Color32::from_rgb(0, 255, 200),
+                        );
+                    }
                 }
                 ClipData::Midi { notes } => {
                     let note_color = match slot.state {
@@ -998,6 +1254,7 @@ fn render_pad(
                             loop_start: 0,
                             loop_end: 1920,
                             loop_enabled: true,
+                            has_time_selection: true,
                         }),
                     };
                     state.selected_slot = Some((track_idx, scene_idx));
@@ -1140,6 +1397,19 @@ fn render_clip_editor_track_view(
                     let old_loop = slot.loop_enabled;
                     let old_start = slot.loop_start;
                     let old_end = slot.loop_end;
+                    let old_sel = slot.has_time_selection;
+                    let old_sig: Vec<(u64, u64, u64, u32)> = slot
+                        .audio_events()
+                        .iter()
+                        .map(|e| {
+                            (
+                                e.id,
+                                (e.start_secs * 1_000_000.0).round() as u64,
+                                e.frames(),
+                                e.gain.to_bits(),
+                            )
+                        })
+                        .collect();
 
                     clip_editor::show(
                         ui,
@@ -1155,6 +1425,7 @@ fn render_clip_editor_track_view(
                     if slot.loop_enabled != old_loop
                         || slot.loop_start != old_start
                         || slot.loop_end != old_end
+                        || slot.has_time_selection != old_sel
                     {
                         let start_secs = slot.loop_start as f32 / sample_rate as f32;
                         let end_secs = slot.loop_end as f32 / sample_rate as f32;
@@ -1163,8 +1434,23 @@ fn render_clip_editor_track_view(
                             scene_idx,
                             start_secs,
                             end_secs,
-                            slot.loop_enabled,
+                            slot.loop_enabled && slot.has_time_selection,
                         );
+                    }
+                    let new_sig: Vec<(u64, u64, u64, u32)> = slot
+                        .audio_events()
+                        .iter()
+                        .map(|e| {
+                            (
+                                e.id,
+                                (e.start_secs * 1_000_000.0).round() as u64,
+                                e.frames(),
+                                e.gain.to_bits(),
+                            )
+                        })
+                        .collect();
+                    if new_sig != old_sig {
+                        sync_audio_events_to_engine(slot, audio_proxy, track_idx, scene_idx);
                     }
                 }
                 ClipData::Midi { notes } => {
@@ -1240,8 +1526,30 @@ pub fn load_clip_into_slot(
     let content = if is_midi {
         ClipData::Midi { notes: Vec::new() }
     } else {
-        ClipData::Audio { pcm_data: Vec::new() }
+        ClipData::Audio {
+            events: Vec::new(),
+            next_event_id: 1,
+            preview_mix: Vec::new(),
+            preview_sr: 44100,
+        }
     };
+
+    // Si el pad ya contiene un clip de AUDIO, no lo reemplazamos: apilamos
+    // el nuevo sample como otro evento dentro del mismo pad (al final del
+    // timeline). Así se pueden poner varios samples en un solo pad.
+    if !is_midi {
+        if let Some(existing) = state
+            .grid
+            .get_mut(track_idx)
+            .and_then(|r| r.get_mut(scene_idx))
+            .and_then(|s| s.clip.as_mut())
+        {
+            if matches!(existing.content, ClipData::Audio { .. }) {
+                append_sample_as_event(existing, audio_proxy, track_idx, scene_idx, path, path_str);
+                return;
+            }
+        }
+    }
 
     let mut local_state = PlaylistState::default();
     local_state.zoom_x = state.editor_zoom_x;
@@ -1260,6 +1568,7 @@ pub fn load_clip_into_slot(
             loop_start: 0,
             loop_end: 0,
             loop_enabled: true,
+            has_time_selection: true,
         }),
     };
 
@@ -1274,6 +1583,104 @@ pub fn load_clip_into_slot(
             offset_secs: 0.0,
             track_index: track_idx,
             scene_index: scene_idx,
+        });
+    }
+}
+
+/// Decodifica un WAV a PCM interleaved + metadatos (helper compartido).
+pub fn decode_audio_file(path: &std::path::Path) -> Option<(Vec<f32>, usize, u32)> {
+    let reader = hound::WavReader::open(path).ok()?;
+    let spec = reader.spec();
+    let channels = spec.channels as usize;
+    let bits = spec.bits_per_sample;
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),
+        hound::SampleFormat::Int => {
+            let max_val = if bits <= 16 {
+                i16::MAX as f32
+            } else {
+                (1 << (bits - 1)) as f32
+            };
+            reader
+                .into_samples::<i32>()
+                .filter_map(Result::ok)
+                .map(|s| s as f32 / max_val)
+                .collect()
+        }
+    };
+    if samples.is_empty() {
+        return None;
+    }
+    Some((samples, channels, spec.sample_rate))
+}
+
+/// Apila un nuevo sample como evento al final del timeline del pad.
+/// Usado cuando se arrastra un segundo (o tercer...) archivo sobre un pad
+/// que ya tiene audio: en vez de reemplazar, se suma.
+pub fn append_sample_as_event(
+    clip: &mut MatrixClip,
+    audio_proxy: &AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+    path: PathBuf,
+    path_str: String,
+) {
+    // Decodificar aquí para crear el evento de inmediato en la GUI.
+    if let Some((samples, channels, sr)) = decode_audio_file(&path) {
+        let start = clip.audio_total_secs();
+        let id = clip.alloc_event_id();
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if let Some(events) = clip.audio_events_mut() {
+            events.push(AudioEvent::new_full(
+                id, name, samples, channels, sr, start,
+            ));
+        }
+        clip.refresh_preview();
+        sync_audio_events_to_engine(clip, audio_proxy, track_idx, scene_idx);
+    } else {
+        // Fallback: que el motor lo intente cargar como clip legacy.
+        audio_proxy.send(GuiCommand::LoadClip {
+            clip_id: clip.id,
+            path: path_str,
+            position_secs: 0.0,
+            duration_secs: 0.0,
+            offset_secs: 0.0,
+            track_index: track_idx,
+            scene_index: scene_idx,
+        });
+    }
+}
+
+/// Envía los eventos editados del pad al motor para mezcla multi-región.
+pub fn sync_audio_events_to_engine(
+    clip: &MatrixClip,
+    audio_proxy: &AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+) {
+    if let ClipData::Audio { events, .. } = &clip.content {
+        let payload = events
+            .iter()
+            .map(|e| crate::audio_proxy::EngineEventData {
+                id: e.id,
+                // Ventana visible (el trim es no-destructivo en la GUI).
+                samples: e.window_samples().to_vec(),
+                channels: e.channels,
+                clip_start_secs: e.start_secs as f32,
+                sample_rate: e.sample_rate,
+                gain: e.gain,
+                fade_in_secs: e.fade_in_secs as f32,
+                fade_out_secs: e.fade_out_secs as f32,
+            })
+            .collect();
+        audio_proxy.send(GuiCommand::SetClipEvents {
+            track_idx,
+            scene_idx,
+            events: payload,
         });
     }
 }

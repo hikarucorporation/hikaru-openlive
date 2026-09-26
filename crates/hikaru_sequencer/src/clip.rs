@@ -47,6 +47,288 @@ pub enum TriggerMode {
     Legato,  // Cambia entre clips manteniendo la posición de transporte
 }
 
+/// Un evento de audio dentro de un clip (región no destructiva).
+///
+/// Cada evento referencia un buffer fuente (`source_id`) con un offset y
+/// una posición dentro del timeline del pad (`clip_start`). Permite tener
+/// **varios eventos dentro de un solo pad**, cortarlos, pegarlos y moverlos
+/// sin reescribir el audio original.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipAudioEvent {
+    pub id: u64,
+    /// Índice del buffer fuente en el pool (o 0 = buffer propio del clip).
+    pub source_id: u32,
+    /// Dónde empieza este evento dentro del timeline del clip (frames).
+    pub clip_start: u64,
+    /// Offset dentro del audio fuente (frames).
+    pub source_offset: u64,
+    /// Longitud del evento (frames). 0 = hasta el final de la fuente.
+    pub length: u64,
+    /// Ganancia lineal 0.0..=2.0.
+    pub gain: f32,
+    /// Fundidos en frames.
+    pub fade_in: u64,
+    pub fade_out: u64,
+}
+
+impl ClipAudioEvent {
+    pub fn new(id: u64, clip_start: u64, source_offset: u64, length: u64) -> Self {
+        Self {
+            id,
+            source_id: 0,
+            clip_start,
+            source_offset,
+            length,
+            gain: 1.0,
+            fade_in: 0,
+            fade_out: 0,
+        }
+    }
+
+    pub fn end(&self) -> u64 {
+        self.clip_start.saturating_add(self.length)
+    }
+
+    pub fn contains_clip_frame(&self, frame: u64) -> bool {
+        frame >= self.clip_start && frame < self.end()
+    }
+
+    /// Ganancia efectiva con fundidos aplicados (0.0..=gain).
+    pub fn gain_at(&self, clip_frame: u64) -> f32 {
+        if !self.contains_clip_frame(clip_frame) {
+            return 0.0;
+        }
+        let rel = clip_frame - self.clip_start;
+        let mut g = self.gain;
+        if self.fade_in > 0 && rel < self.fade_in {
+            g *= rel as f32 / self.fade_in as f32;
+        }
+        let from_end = self.end().saturating_sub(clip_frame);
+        if self.fade_out > 0 && from_end < self.fade_out {
+            g *= from_end as f32 / self.fade_out as f32;
+        }
+        g
+    }
+
+    /// Parte este evento en `at_frame` (posición en timeline del clip).
+    /// Retorna `(izquierda, derecha)` o `None` si el corte cae fuera.
+    pub fn split_at(&self, at_frame: u64, new_id: u64) -> Option<(Self, Self)> {
+        if at_frame <= self.clip_start || at_frame >= self.end() {
+            return None;
+        }
+        let left_len = at_frame - self.clip_start;
+        let right_len = self.end() - at_frame;
+        // Repartir fundidos: el borde del corte queda sin fade para evitar huecos.
+        let mut left = self.clone();
+        left.length = left_len;
+        left.fade_out = 0;
+        let mut right = Self {
+            id: new_id,
+            source_id: self.source_id,
+            clip_start: at_frame,
+            source_offset: self.source_offset.saturating_add(left_len),
+            length: right_len,
+            gain: self.gain,
+            fade_in: 0,
+            fade_out: self.fade_out,
+        };
+        let _ = &mut right;
+        Some((left, right))
+    }
+}
+
+/// Timeline de eventos de un clip de audio.
+///
+/// Mantiene los eventos ordenados por `clip_start` y ofrece las operaciones
+/// de edición que pide la Session Matrix: cortar/pegar/dividir/mover y
+/// apilar varios eventos en el mismo pad (overlaps mezclados por suma).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClipAudioTimeline {
+    pub events: Vec<ClipAudioEvent>,
+    pub next_id: u64,
+}
+
+impl ClipAudioTimeline {
+    pub fn single_full(source_len: u64) -> Self {
+        Self {
+            events: vec![ClipAudioEvent::new(1, 0, 0, source_len)],
+            next_id: 2,
+        }
+    }
+
+    /// Duración del clip = fin del evento más lejano.
+    pub fn total_frames(&self) -> u64 {
+        self.events.iter().map(|e| e.end()).max().unwrap_or(0)
+    }
+
+    pub fn alloc_id(&mut self) -> u64 {
+        let id = self.next_id.max(1);
+        self.next_id = id + 1;
+        id
+    }
+
+    pub fn add_event(&mut self, mut ev: ClipAudioEvent) {
+        if ev.id == 0 {
+            ev.id = self.alloc_id();
+        } else {
+            self.next_id = self.next_id.max(ev.id + 1);
+        }
+        self.events.push(ev);
+        self.sort();
+    }
+
+    pub fn remove_event(&mut self, id: u64) -> Option<ClipAudioEvent> {
+        let pos = self.events.iter().position(|e| e.id == id)?;
+        Some(self.events.remove(pos))
+    }
+
+    pub fn sort(&mut self) {
+        self.events.sort_by_key(|e| (e.clip_start, e.id));
+    }
+
+    /// Divide el evento que contiene `at_frame`. Retorna los ids creados.
+    pub fn split_at(&mut self, at_frame: u64) -> Option<(u64, u64)> {
+        let idx = self.events.iter().position(|e| e.contains_clip_frame(at_frame))?;
+        // Si el corte cae justo en el borde inicial, no hay nada que dividir.
+        if self.events[idx].clip_start == at_frame {
+            return None;
+        }
+        let new_id = self.alloc_id();
+        let (l, r) = self.events[idx].split_at(at_frame, new_id)?;
+        let lid = l.id;
+        self.events[idx] = l;
+        self.events.push(r);
+        self.sort();
+        Some((lid, new_id))
+    }
+
+    /// Corta `[start, end)` del timeline: recorta/parte eventos y devuelve
+    /// los fragmentos removidos como nuevos eventos re-basados en 0.
+    pub fn cut_range(&mut self, start: u64, end: u64) -> Vec<ClipAudioEvent> {
+        if end <= start {
+            return Vec::new();
+        }
+        let mut removed = Vec::new();
+        let mut kept = Vec::new();
+        for ev in self.events.drain(..) {
+            let ev_end = ev.end();
+            if ev_end <= start || ev.clip_start >= end {
+                kept.push(ev);
+                continue;
+            }
+            // Solape: parte izquierda que queda.
+            if ev.clip_start < start {
+                let mut left = ev.clone();
+                left.length = start - ev.clip_start;
+                left.fade_out = 0;
+                kept.push(left);
+            }
+            // Fragmento removido (re-basado a 0 para poder pegarlo).
+            let cut_start = ev.clip_start.max(start);
+            let cut_end = ev_end.min(end);
+            let mut mid = ev.clone();
+            mid.source_offset = ev.source_offset.saturating_add(cut_start - ev.clip_start);
+            mid.length = cut_end - cut_start;
+            mid.clip_start = cut_start - start;
+            removed.push(mid);
+            // Parte derecha que queda (desplazada a la izquierda para cerrar el hueco).
+            if ev_end > end {
+                let mut right = ev.clone();
+                let shift = end - ev.clip_start.max(start).min(end);
+                let _ = shift;
+                right.source_offset = ev.source_offset.saturating_add(end - ev.clip_start);
+                right.length = ev_end - end;
+                right.clip_start = start + (ev.clip_start.max(end) - end);
+                // Cierre de hueco: lo que estaba después de `end` baja hasta `start + resto previo`.
+                // Como ya empujamos la parte izquierda, la derecha arranca en `start + left_kept`.
+                // Simplificación: recolocar al inicio del hueco.
+                right.clip_start = start;
+                // Re-desplazar eventos posteriores se hace abajo con compactación.
+                kept.push(right);
+            }
+        }
+        // Cerrar hueco: todo lo que empezaba en >= end baja (end - start).
+        let gap = end - start;
+        for ev in kept.iter_mut() {
+            if ev.clip_start >= end {
+                ev.clip_start -= gap;
+            } else if ev.clip_start >= start && ev.clip_start < end {
+                // Borde ambiguo por redondeo: anclar al inicio del hueco.
+                ev.clip_start = start.min(ev.clip_start);
+            }
+        }
+        self.events = kept;
+        self.sort();
+        removed
+    }
+
+    /// Pega fragmentos (re-basados en 0) en `at_frame`, desplazando lo
+    /// existente hacia la derecha para hacer hueco (modo insert).
+    pub fn paste_insert(&mut self, at_frame: u64, mut fragments: Vec<ClipAudioEvent>) -> Vec<u64> {
+        if fragments.is_empty() {
+            return Vec::new();
+        }
+        fragments.sort_by_key(|e| e.clip_start);
+        let paste_len = fragments
+            .iter()
+            .map(|e| e.clip_start + e.length)
+            .max()
+            .unwrap_or(0);
+        // Pre-reservar ids para los splits (evita doble borrow mutable).
+        let mut pending_rights: Vec<ClipAudioEvent> = Vec::new();
+        let mut next = self.next_id.max(1);
+        let mut i = 0;
+        while i < self.events.len() {
+            let (s, e) = {
+                let ev = &self.events[i];
+                (ev.clip_start, ev.end())
+            };
+            if s >= at_frame {
+                self.events[i].clip_start += paste_len;
+            } else if e > at_frame {
+                // Partir el evento anfitrión para abrir hueco exacto.
+                let split_id = next;
+                next += 1;
+                if let Some((_, mut right)) = self.events[i].split_at(at_frame, split_id) {
+                    right.clip_start += paste_len;
+                    pending_rights.push(right);
+                }
+            }
+            i += 1;
+        }
+        self.next_id = next;
+        self.events.extend(pending_rights);
+        let mut ids = Vec::new();
+        for mut f in fragments {
+            f.id = self.alloc_id();
+            f.clip_start += at_frame;
+            ids.push(f.id);
+            self.events.push(f);
+        }
+        self.sort();
+        ids
+    }
+
+    /// Mezcla el timeline a un buffer mono (para previsualización / motor
+    /// legacy): suma eventos solapados con su ganancia y fundidos.
+    pub fn render_mono(&self, source: &[f32]) -> Vec<f32> {
+        let total = self.total_frames() as usize;
+        let mut out = vec![0.0f32; total];
+        for ev in &self.events {
+            for i in 0..ev.length {
+                let dst = (ev.clip_start + i) as usize;
+                if dst >= total {
+                    break;
+                }
+                let src = (ev.source_offset + i) as usize;
+                let s = source.get(src).copied().unwrap_or(0.0);
+                out[dst] += s * ev.gain_at(ev.clip_start + i);
+            }
+        }
+        out
+    }
+}
+
 pub struct Clip {
     pub id: u32,
     pub audio_buffer_id: u32, // Referencia al buffer precargado en hikaru_core
@@ -460,5 +742,41 @@ mod tests {
         clip.set_state(ClipState::Playing);
         assert_eq!(clip.poll_voice(5_000, None), VoiceState::Active);
         assert_eq!(clip.get_state(), ClipState::Playing);
+    }
+
+    #[test]
+    fn timeline_split_cut_paste_roundtrip() {
+        let mut tl = ClipAudioTimeline::single_full(1000);
+        assert_eq!(tl.total_frames(), 1000);
+        // Split en 400 → dos eventos.
+        let (l, r) = tl.split_at(400).expect("split");
+        assert_eq!(tl.events.len(), 2);
+        let _ = (l, r);
+        // Cortar [100, 300) → timeline queda en 800 frames.
+        let removed = tl.cut_range(100, 300);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].length, 200);
+        assert_eq!(tl.total_frames(), 800);
+        // Pegar al final (insert en 800).
+        let ids = tl.paste_insert(800, removed);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(tl.total_frames(), 1000);
+    }
+
+    #[test]
+    fn timeline_supports_overlapping_events_in_one_pad() {
+        let mut tl = ClipAudioTimeline::default();
+        tl.next_id = 1;
+        tl.add_event(ClipAudioEvent::new(0, 0, 0, 500));
+        tl.add_event(ClipAudioEvent::new(0, 250, 0, 500));
+        assert_eq!(tl.events.len(), 2);
+        assert_eq!(tl.total_frames(), 750);
+        // Mezcla: zona solapada suma ambas voces.
+        let src = vec![1.0f32; 1000];
+        let mixed = tl.render_mono(&src);
+        assert_eq!(mixed.len(), 750);
+        assert!((mixed[0] - 1.0).abs() < 1e-6);
+        assert!((mixed[300] - 2.0).abs() < 1e-6);
+        assert!((mixed[600] - 1.0).abs() < 1e-6);
     }
 }

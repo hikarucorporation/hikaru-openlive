@@ -541,13 +541,19 @@ fn load_clip_into_arranger_slot(
             name: name.clone(),
             path,
             duration_secs: 0.0,
-            content: matrix::ClipData::Audio { pcm_data: Vec::new() }, // <-- CAMBIO AQUÍ
+            content: matrix::ClipData::Audio {
+                events: Vec::new(),
+                next_event_id: 1,
+                preview_mix: Vec::new(),
+                preview_sr: 44100,
+            },
             local_state,
             local_track: mixer::Track::new(0, name, false),
             local_bar: 1.0,
             loop_start: 0,
             loop_end: 0,
             loop_enabled: true,
+            has_time_selection: true,
         }),
     };
 

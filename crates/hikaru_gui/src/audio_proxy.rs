@@ -32,6 +32,18 @@ pub struct AudioClipData {
     pub track_index: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct EngineEventData {
+    pub id: u64,
+    pub samples: Vec<f32>,
+    pub channels: usize,
+    pub clip_start_secs: f32,
+    pub sample_rate: u32,
+    pub gain: f32,
+    pub fade_in_secs: f32,
+    pub fade_out_secs: f32,
+}
+
 #[derive(Clone)]
 pub struct AudioProxy {
     pub cmd_sender: Sender<GuiCommand>,
@@ -124,6 +136,13 @@ pub enum GuiCommand {
     TriggerClip {
         track_idx: usize,
         scene_idx: usize
+    },
+    /// Eventos editables del pad (cortar/pegar/split/multi-sample).
+    /// El motor los mezcla por suma; el GUI es la fuente de verdad.
+    SetClipEvents {
+        track_idx: usize,
+        scene_idx: usize,
+        events: Vec<EngineEventData>,
     },
     StopTrack {
         track_idx: usize,

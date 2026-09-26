@@ -80,6 +80,72 @@ pub enum VoiceState {
     Finished,
 }
 
+/// Un evento (región) dentro de un pad de la Session Matrix.
+///
+/// Cada evento guarda su propio PCM recortado, de modo que un pad puede
+/// contener **varios samples apilados o secuenciados**, cada uno con su
+/// posición (`clip_start`), ganancia y fundidos. El motor los mezcla por
+/// suma en `process()`.
+#[derive(Clone, Debug)]
+pub struct EngineAudioEvent {
+    pub id: u64,
+    /// PCM interleaved ya recortado a la región del evento.
+    pub samples: Vec<f32>,
+    pub channels: usize,
+    /// Posición dentro del timeline del clip (frames).
+    pub clip_start: u64,
+    pub gain: f32,
+    pub fade_in: u64,
+    pub fade_out: u64,
+}
+
+impl EngineAudioEvent {
+    pub fn frames(&self) -> u64 {
+        (self.samples.len() / self.channels.max(1)) as u64
+    }
+
+    pub fn end(&self) -> u64 {
+        self.clip_start.saturating_add(self.frames())
+    }
+
+    fn gain_at(&self, clip_frame: u64) -> f32 {
+        if clip_frame < self.clip_start || clip_frame >= self.end() {
+            return 0.0;
+        }
+        let rel = clip_frame - self.clip_start;
+        let len = self.frames();
+        let mut g = self.gain;
+        if self.fade_in > 0 && rel < self.fade_in {
+            g *= rel as f32 / self.fade_in as f32;
+        }
+        let from_end = len.saturating_sub(rel);
+        if self.fade_out > 0 && from_end < self.fade_out {
+            g *= from_end as f32 / self.fade_out as f32;
+        }
+        g
+    }
+
+    fn read_at(&self, clip_frame: u64) -> (f32, f32) {
+        if clip_frame < self.clip_start || clip_frame >= self.end() {
+            return (0.0, 0.0);
+        }
+        let rel = (clip_frame - self.clip_start) as usize;
+        let ch = self.channels.max(1);
+        let idx = rel.saturating_mul(ch);
+        let l = self.samples.get(idx).copied().unwrap_or(0.0);
+        let r = if ch > 1 {
+            self.samples.get(idx + 1).copied().unwrap_or(l)
+        } else {
+            l
+        };
+        if !l.is_finite() || !r.is_finite() {
+            return (0.0, 0.0);
+        }
+        let g = self.gain_at(clip_frame);
+        (l * g, r * g)
+    }
+}
+
 pub struct AudioClipInstance {
     pub id: usize,
     pub track_index: usize,
@@ -98,11 +164,18 @@ pub struct AudioClipInstance {
     pub prev_frame: usize,
     pub xfade_remaining: u32,
     pub xfade_len: u32,
+    /// Eventos editables del pad. Vacío = modo legacy (un solo `samples`).
+    /// No vacío = el pad mezcla estos eventos (cortar/pegar/multi-sample).
+    pub events: Vec<EngineAudioEvent>,
 }
 
 impl AudioClipInstance {
     pub fn natural_frames(&self) -> u64 {
-        (self.samples.len() / self.channels.max(1)) as u64
+        if !self.events.is_empty() {
+            self.events.iter().map(|e| e.end()).max().unwrap_or(0)
+        } else {
+            (self.samples.len() / self.channels.max(1)) as u64
+        }
     }
 
     pub fn has_valid_clip_loop(&self) -> bool {
@@ -181,9 +254,75 @@ impl AudioClipInstance {
     }
 
     pub fn voice_state_linear(&self, abs_pos: u64) -> VoiceState {
+        // Modo eventos: activo si hay al menos un evento audible en la posición.
+        if !self.events.is_empty() {
+            if abs_pos < self.start_absolute {
+                return VoiceState::Finished;
+            }
+            let elapsed = abs_pos - self.start_absolute;
+            let natural = self.natural_frames();
+            if natural == 0 {
+                return VoiceState::Finished;
+            }
+            let clip_frame = if self.has_valid_clip_loop() {
+                let loop_start = self.clip_loop_start.min(natural);
+                let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
+                let loop_len = loop_end.saturating_sub(loop_start).max(1);
+                (loop_start + (elapsed % loop_len)) as u64
+            } else {
+                if elapsed >= self.emission_len_frames() {
+                    return VoiceState::Finished;
+                }
+                elapsed
+            };
+            let audible = self.events.iter().any(|e| {
+                clip_frame >= e.clip_start && clip_frame < e.end()
+            });
+            return if audible {
+                VoiceState::Active
+            } else if !self.has_valid_clip_loop() && elapsed >= self.emission_len_frames() {
+                VoiceState::Finished
+            } else {
+                // Hueco entre eventos: silencio pero la voz sigue viva.
+                VoiceState::Active
+            };
+        }
         match self.voice_frame_linear(abs_pos) {
             Some(_) => VoiceState::Active,
             None => VoiceState::Finished,
+        }
+    }
+
+    /// Mezcla todos los eventos del pad en una posición del timeline del
+    /// clip (ya con loop aplicado). Suma overlaps, aplica gain/fades.
+    pub fn mix_events_at(&self, clip_frame: u64) -> (f32, f32) {
+        let mut l = 0.0f32;
+        let mut r = 0.0f32;
+        for ev in &self.events {
+            let (el, er) = ev.read_at(clip_frame);
+            l += el;
+            r += er;
+        }
+        (l, r)
+    }
+
+    /// Resuelve el frame del timeline (con loop) para un `elapsed` absoluto.
+    /// Retorna `None` solo si el clip terminó (sin loop y pasado emisión).
+    pub fn clip_frame_for_elapsed(&self, elapsed: u64) -> Option<u64> {
+        let natural = self.natural_frames();
+        if natural == 0 {
+            return None;
+        }
+        if self.has_valid_clip_loop() {
+            let loop_start = self.clip_loop_start.min(natural);
+            let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
+            let loop_len = loop_end.saturating_sub(loop_start).max(1);
+            Some((loop_start + (elapsed % loop_len)) as u64)
+        } else {
+            if elapsed >= self.emission_len_frames() {
+                return None;
+            }
+            Some(elapsed)
         }
     }
 
@@ -731,6 +870,7 @@ impl<'a> AudioEngine<'a> {
             prev_frame: usize::MAX,
             xfade_remaining: 0,
             xfade_len: 0,
+            events: Vec::new(),
         };
 
         let is_studio = self.mode == EngineMode::OpenStudio;
@@ -748,6 +888,48 @@ impl<'a> AudioEngine<'a> {
             *existing = instance;
         } else {
             self.clips.push(instance);
+        }
+    }
+
+    /// Reemplaza los eventos editables de un pad (cortar/pegar/split/multi).
+    /// Además actualiza el `samples` mezclado legacy para compatibilidad con
+    /// el playhead y previsualizaciones que lean el buffer completo.
+    pub fn set_clip_events(
+        &mut self,
+        track_index: usize,
+        scene_index: usize,
+        events: Vec<EngineAudioEvent>,
+    ) {
+        if let Some(clip) = self
+            .clips
+            .iter_mut()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            // Si el loop cubría el clip entero antes de editar, debe seguir
+            // cubriendo el timeline nuevo (caso apilar/split/paste).
+            let was_full_loop = clip.clip_loop_enabled
+                && clip.clip_loop_start == 0
+                && (clip.clip_loop_end == 0
+                    || clip.clip_loop_end
+                        == (clip.samples.len() / clip.channels.max(1)) as u64
+                    || (clip.events.is_empty()
+                        && clip.clip_loop_end == clip.natural_frames()));
+            clip.events = events;
+            // Refrescar loop por defecto al tamaño del nuevo timeline.
+            let natural = clip.natural_frames();
+            if clip.clip_loop_enabled && natural > 0 {
+                if clip.clip_loop_end == 0 || clip.clip_loop_end > natural || was_full_loop {
+                    clip.clip_loop_start = 0;
+                    clip.clip_loop_end = natural;
+                }
+            } else if natural > 0 && clip.clip_loop_end == 0 {
+                // Los pads de Matrix looapean el clip entero por defecto.
+                clip.clip_loop_enabled = true;
+                clip.clip_loop_start = 0;
+                clip.clip_loop_end = natural;
+            }
+            clip.prev_frame = usize::MAX;
+            clip.xfade_remaining = 0;
         }
     }
 
@@ -1148,6 +1330,25 @@ impl<'a> AudioEngine<'a> {
 
                     let natural = clip.natural_frames();
                     if natural == 0 {
+                        continue;
+                    }
+
+                    // ── Modo multi-evento: el pad mezcla sus regiones ──
+                    if !clip.events.is_empty() {
+                        let mut clip_finished = false;
+                        for f in 0..buffer_frames as usize {
+                            let elapsed = elapsed_start + f as u64;
+                            let Some(clip_frame) = clip.clip_frame_for_elapsed(elapsed) else {
+                                clip_finished = true;
+                                break;
+                            };
+                            let (l, r) = clip.mix_events_at(clip_frame);
+                            track_buf[f * 2] += l * gl;
+                            track_buf[f * 2 + 1] += r * gr;
+                        }
+                        if clip_finished {
+                            clip.is_playing = false;
+                        }
                         continue;
                     }
 
@@ -1889,6 +2090,57 @@ mod tests {
         assert!(
             (raw[0] - expect).abs() < 2e-3,
             "escena nueva debe entrar en fase: {} vs esperado {}",
+            raw[0], expect
+        );
+    }
+
+    #[test]
+    fn multi_event_pad_mixes_overlapping_regions() {
+        // Un pad con dos eventos solapados debe mezclar por suma.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, vec![0.0f32; 100 * 2], 0.0, 0.0, 0.0, 2, true);
+        engine.set_clip_events(
+            0,
+            0,
+            vec![
+                EngineAudioEvent {
+                    id: 1,
+                    samples: vec![1.0f32; 500 * 2],
+                    channels: 2,
+                    clip_start: 0,
+                    gain: 1.0,
+                    fade_in: 0,
+                    fade_out: 0,
+                },
+                EngineAudioEvent {
+                    id: 2,
+                    samples: vec![1.0f32; 500 * 2],
+                    channels: 2,
+                    clip_start: 250,
+                    gain: 1.0,
+                    fade_in: 0,
+                    fade_out: 0,
+                },
+            ],
+        );
+        let clip = &engine.clips[0];
+        assert_eq!(clip.natural_frames(), 750);
+        // Zona solo del primero → 1.0; zona solapada → 2.0.
+        assert_eq!(clip.mix_events_at(100), (1.0, 1.0));
+        assert_eq!(clip.mix_events_at(300), (2.0, 2.0));
+        assert_eq!(clip.mix_events_at(600), (1.0, 1.0));
+        // Reproducción real: el frame 300 (solapado) debe sonar al doble.
+        engine.trigger_clip(0, 0);
+        engine.play();
+        run_frames(&mut engine, 300);
+        let mut raw = vec![0.0f32; 64 * 2];
+        let mut buf = AudioBuffer::new(&mut raw);
+        engine.process(&mut buf);
+        let expect = (2.0f32).tanh();
+        assert!(
+            (raw[0] - expect).abs() < 1e-4,
+            "solape debe sumar voces: {} vs {}",
             raw[0], expect
         );
     }

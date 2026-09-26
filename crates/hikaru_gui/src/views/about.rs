@@ -22,7 +22,7 @@ use crate::app::AppMode;
 
 // Constantes personalizables para el build
 const BUILDER_NAME: &str = "Hikaru Corporation";
-const BUILD_VERSION: &str = "1.11.1";
+const BUILD_VERSION: &str = "1.12.2";
 
 pub fn show(ui: &mut Ui, mode: AppMode) {
     // El `ui` que recibimos ya está limitado al tamaño definido en app.rs
