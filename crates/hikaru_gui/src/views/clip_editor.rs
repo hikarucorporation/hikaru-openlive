@@ -403,10 +403,19 @@ pub fn show(
                             zoom_factor = 1.0;
                             ui.data_mut(|d| {
                                 d.insert_temp(zoom_id, zoom_factor);
-                                // Reencuadrar en el compás 1 (saltear el count-in).
+                                // Reencuadrar en el compás 1 (saltear el count-in)
+                                // y recalibrar la referencia de Fit a la duración
+                                // actual (ver fit_ref abajo).
                                 d.insert_temp(
                                     egui::Id::new("clip_editor_fit_scroll"),
                                     true,
+                                );
+                                d.insert_temp(
+                                    egui::Id::new(format!(
+                                        "clip_editor_fit_ref_{}",
+                                        clip.id
+                                    )),
+                                    clip.duration_secs.max(0.001),
                                 );
                             });
                         }
@@ -414,24 +423,58 @@ pub fn show(
                     });
 
                     let viewport = ui.available_size();
-                    // --- Escala DAW (px/seg) + cola vacía más allá del clip ---
-                    // base: con zoom 1.0 el clip encaja al viewport; la cola
-                    // (mín. 2 compases) deja ver y scrollear más allá del fin
-                    // del clip, como en Ableton/Bitwig.
+                    // --- Escala DAW (px/seg) + regla infinita ---
+                    // La regla ya no está limitada a 2 compases: el canvas es
+                    // virtualmente infinito (64 compases a la izquierda, 512 a
+                    // la derecha por defecto) y crece solo si los eventos se
+                    // arrastran más lejos. El dibujado de la grilla se recorta
+                    // a lo visible (culling) para que el canvas enorme no
+                    // cueste rendimiento. Estilo Ableton/Bitwig.
                     let bpm_tmp = if bpm > 0.0 { bpm as f64 } else { 120.0 };
                     let bar_tmp = (60.0 / bpm_tmp) * 4.0;
                     let dur_tmp = clip.duration_secs.max(0.001);
-                    let fit_tmp = if clip.duration_secs > 0.001 {
-                        clip.duration_secs
-                    } else {
-                        bar_tmp.max(0.5)
-                    };
-                    let tail_secs: f64 = (bar_tmp * 2.0).max(dur_tmp * 0.25).max(1.0);
-                    let visible_secs: f64 = dur_tmp + tail_secs;
-                    // Count-in estilo Ableton/Bitwig: 2 compases en negativo
-                    // a la izquierda del compás 1 (solo regla + referencia,
-                    // los eventos viven en t >= 0).
-                    let lead_in_secs: f64 = bar_tmp * 2.0;
+                    // Referencia de Fit CONGELADA por clip: si usáramos la
+                    // duración actual cada frame, al mover/trimear un evento
+                    // cambiaría duration_secs → cambiaría px_per_sec → el
+                    // mapeo x_of se movería bajo el cursor y el clip saltaría
+                    // a un compás lejano (feedback positivo). Por eso la
+                    // escala solo se recalibra al abrir o con Fit.
+                    let fit_ref_id =
+                        egui::Id::new(format!("clip_editor_fit_ref_{}", clip.id));
+                    let fit_tmp: f64 = ui.data_mut(|d| {
+                        if let Some(v) = d.get_temp::<f64>(fit_ref_id) {
+                            // Si el clip quedó vacío, permitir reencuadre.
+                            if dur_tmp <= 0.002 {
+                                return dur_tmp;
+                            }
+                            v.max(0.001)
+                        } else {
+                            let init = if clip.duration_secs > 0.001 {
+                                clip.duration_secs
+                            } else {
+                                bar_tmp.max(0.5)
+                            };
+                            d.insert_temp(fit_ref_id, init);
+                            init
+                        }
+                    });
+                    // Extensión máxima de los eventos: así la cola crece sola
+                    // al arrastrar un evento lejos (infinito efectivo).
+                    let mut ev_max_end = dur_tmp;
+                    for e in clip.audio_events() {
+                        ev_max_end = ev_max_end.max(e.end_secs());
+                    }
+                    // Izquierda fija y amplia (origen estable: si creciera con
+                    // los eventos, el mapeo x_of se movería bajo el cursor y
+                    // el drag pegaría saltos). 64 compases ≈ infinito práctico.
+                    let lead_in_secs: f64 = bar_tmp * 64.0;
+                    // Derecha: 512 compases por defecto + 32 de margen sobre el
+                    // evento más lejano. Crecer a la derecha no mueve el origen.
+                    let tail_default: f64 = (bar_tmp * 512.0).max(dur_tmp * 0.5).max(4.0);
+                    let mut visible_secs: f64 =
+                        (dur_tmp + tail_default).max(ev_max_end + bar_tmp * 32.0);
+                    // Tope de seguridad (24h) para no desbordar el canvas.
+                    visible_secs = visible_secs.min(86_400.0);
                     let px_per_sec: f32 =
                         (viewport.x.max(1.0) / fit_tmp as f32 * zoom_factor).max(1.0);
                     // Al abrir (y con Fit) encuadrar en el compás 1, no en el
@@ -542,14 +585,15 @@ pub fn show(
                     // LAYER 1: Canvas Background
                     ui.painter().rect_filled(rect, 4.0_f32, Color32::from_rgb(12, 12, 15));
 
-                    // LAYER 2: Grid y Ruler (count-in negativo + cola vacía)
+                    // LAYER 2: Grid y Ruler (count-in negativo + cola infinita)
                     let current_bpm = if bpm > 0.0 { bpm as f64 } else { 120.0 };
                     let sec_per_beat = 60.0 / current_bpm;
                     let sec_per_bar = sec_per_beat * 4.0;
-                    let total_bars = (visible_secs / sec_per_bar).ceil() as usize;
+                    let total_bars = (visible_secs / sec_per_bar).ceil() as i32;
+                    let neg_bars = (lead_in_secs / sec_per_bar).ceil() as i32;
                     // Mapeo DAW con origen desplazado: el compás 1 (t=0) queda
                     // a `lead_in_secs` del borde izquierdo; a la izquierda hay
-                    // 2 compases en negativo estilo Ableton/Bitwig.
+                    // count-in en negativo estilo Ableton/Bitwig.
                     let x_of = |t: f64| -> f32 {
                         rect.min.x + ((t + lead_in_secs) as f32 * px_per_sec)
                     };
@@ -588,11 +632,24 @@ pub fn show(
                     }
 
                     if clip.duration_secs > 0.0 {
-                        let neg_bars = (lead_in_secs / sec_per_bar).ceil() as i32;
-                        for bi in -neg_bars..=total_bars as i32 {
+                        // Culling: solo dibujar los compases que caen en el
+                        // viewport visible. Así el canvas puede ser enorme
+                        // (regla infinita) sin costo de dibujado.
+                        let clip_v = ui.clip_rect();
+                        let t_of_x = |x: f32| -> f64 {
+                            ((x - rect.min.x) / px_per_sec.max(0.001) - lead_in_secs as f32)
+                                as f64
+                        };
+                        let t_min_v = t_of_x(clip_v.min.x).min(t_of_x(clip_v.max.x));
+                        let t_max_v = t_of_x(clip_v.min.x).max(t_of_x(clip_v.max.x));
+                        let mut bi_min =
+                            (t_min_v / sec_per_bar).floor() as i32 - 1;
+                        let mut bi_max =
+                            (t_max_v / sec_per_bar).ceil() as i32 + 1;
+                        bi_min = bi_min.max(-neg_bars).min(total_bars);
+                        bi_max = bi_max.max(-neg_bars).min(total_bars);
+                        for bi in bi_min..=bi_max {
                             let bar_time = bi as f64 * sec_per_bar;
-                            if bar_time < -lead_in_secs - 1e-6 { continue; }
-                            if bar_time > visible_secs { break; }
 
                             let x_pos = x_of(bar_time);
                             let beyond = bar_time < -1e-9
