@@ -475,11 +475,62 @@ pub fn show(
                         (dur_tmp + tail_default).max(ev_max_end + bar_tmp * 32.0);
                     // Tope de seguridad (24h) para no desbordar el canvas.
                     visible_secs = visible_secs.min(86_400.0);
-                    let px_per_sec: f32 =
+                    let mut px_per_sec: f32 =
                         (viewport.x.max(1.0) / fit_tmp as f32 * zoom_factor).max(1.0);
+
+                    // --- Zoom con Ctrl + Ruedita, ANTES del ScrollArea ---
+                    // (igual que piano_roll.rs): si se hace adentro, el
+                    // ScrollArea ya consumió la rueda para scrollear y el zoom
+                    // nunca llega. Se anula el scroll del frame para que la
+                    // rueda no panee el viewport al mismo tiempo que zoomea.
+                    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                        if ui.max_rect().contains(pos) {
+                            let ctrl_pressed =
+                                ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                            if ctrl_pressed {
+                                let mut zoom_delta = 0.0_f32;
+                                ui.input(|i| {
+                                    for event in &i.events {
+                                        if let egui::Event::MouseWheel { delta, .. } =
+                                            event
+                                        {
+                                            zoom_delta += delta.y;
+                                        }
+                                    }
+                                });
+                                if zoom_delta != 0.0 {
+                                    let factor =
+                                        if zoom_delta > 0.0 { 1.15 } else { 0.85 };
+                                    zoom_factor =
+                                        (zoom_factor * factor).clamp(0.25, 32.0);
+                                    ui.data_mut(|d| {
+                                        d.insert_temp(zoom_id, zoom_factor)
+                                    });
+                                    px_per_sec = (viewport.x.max(1.0)
+                                        / fit_tmp as f32
+                                        * zoom_factor)
+                                        .max(1.0);
+                                    // Frenar el scroll: la rueda es zoom, no paneo.
+                                    ui.input_mut(|i| {
+                                        i.smooth_scroll_delta = Vec2::ZERO;
+                                        i.raw_scroll_delta = Vec2::ZERO;
+                                    });
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        }
+                    }
+
                     // Al abrir (y con Fit) encuadrar en el compás 1, no en el
                     // count-in: el offset se aplica una sola vez vía temp.
+                    // También reencuadrar al cambiar de clip (el ScrollArea
+                    // comparte id entre clips, si no quedaría scrolleado en
+                    // un compás random del clip anterior).
                     let lead_px = lead_in_secs as f32 * px_per_sec;
+                    let last_clip_id: Option<usize> = ui.data_mut(|d| {
+                        d.get_temp(egui::Id::new("clip_editor_last_clip"))
+                    });
+                    let clip_switched = last_clip_id != Some(clip.id);
                     let need_reanchor: bool = ui.data_mut(|d| {
                         let init_done: bool =
                             d.get_temp(egui::Id::new("clip_editor_hscroll_init"))
@@ -487,7 +538,7 @@ pub fn show(
                         let fit_req: bool =
                             d.get_temp(egui::Id::new("clip_editor_fit_scroll"))
                                 .unwrap_or(false);
-                        let need = !init_done || fit_req;
+                        let need = !init_done || fit_req || clip_switched;
                         if need {
                             d.insert_temp(egui::Id::new("clip_editor_hscroll_init"), true);
                             d.insert_temp(
@@ -495,8 +546,38 @@ pub fn show(
                                 false,
                             );
                         }
+                        d.insert_temp(
+                            egui::Id::new("clip_editor_last_clip"),
+                            clip.id,
+                        );
                         need
                     });
+                    // --- Conservar el encuadre al cambiar el zoom ---
+                    // Sin esto, el offset en píxeles queda fijo mientras el
+                    // contenido crece (lead_px también escala con px_per_sec),
+                    // así que la vista salta a compases random. Se preserva el
+                    // tiempo del centro del viewport:
+                    //   new_off = (old_off + vw/2) * ratio - vw/2
+                    // donde ratio = new_pps / old_pps.
+                    let last_pps: Option<f32> = ui.data_mut(|d| {
+                        d.get_temp(egui::Id::new("clip_editor_last_pps"))
+                    });
+                    let last_scroll_x: Option<f32> = ui.data_mut(|d| {
+                        d.get_temp(egui::Id::new("clip_editor_last_scroll_x"))
+                    });
+                    let mut zoom_keep_offset: Option<f32> = None;
+                    if !need_reanchor {
+                        if let (Some(lp), Some(ls)) = (last_pps, last_scroll_x) {
+                            if lp > 0.0
+                                && (px_per_sec - lp).abs() / lp > 0.0001
+                            {
+                                let ratio = px_per_sec / lp;
+                                let vw = viewport.x.max(1.0);
+                                zoom_keep_offset =
+                                    Some((ls + vw * 0.5) * ratio - vw * 0.5);
+                            }
+                        }
+                    }
                     let scroll_area = egui::ScrollArea::horizontal()
                         .id_source("clip_editor_hscroll")
                         // Sin drag_to_scroll: si el área scrolleara durante el
@@ -505,11 +586,13 @@ pub fn show(
                         // Scroll con ruedita/barra, zoom con Ctrl+rueda.
                         .drag_to_scroll(false);
                     let scroll_area = if need_reanchor {
-                        scroll_area.horizontal_scroll_offset(lead_px)
+                        scroll_area.horizontal_scroll_offset(lead_px.max(0.0))
+                    } else if let Some(off) = zoom_keep_offset {
+                        scroll_area.horizontal_scroll_offset(off.max(0.0))
                     } else {
                         scroll_area
                     };
-                    scroll_area.show(ui, |ui| {
+                    let scroll_out = scroll_area.show(ui, |ui| {
                             let canvas_w = ((lead_in_secs + visible_secs) as f32 * px_per_sec)
                                 .max(viewport.x);
                             let canvas_h = viewport.y.max(50.0);
@@ -517,31 +600,6 @@ pub fn show(
                                 Vec2::new(canvas_w, canvas_h),
                                 Sense::click_and_drag(),
                             );
-
-                            // Zoom con Ctrl + Ruedita (anclado al canvas, como en playlist.rs)
-                            if response.hovered() {
-                                let ctrl_pressed =
-                                    ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-                                if ctrl_pressed {
-                                    let mut zoom_delta = 0.0_f32;
-                                    ui.input(|i| {
-                                        for event in &i.events {
-                                            if let egui::Event::MouseWheel { delta, .. } = event {
-                                                zoom_delta += delta.y;
-                                            }
-                                        }
-                                    });
-                                    if zoom_delta != 0.0 {
-                                        let factor =
-                                            if zoom_delta > 0.0 { 1.15 } else { 0.85 };
-                                        zoom_factor =
-                                            (zoom_factor * factor).clamp(0.25, 32.0);
-                                        ui.data_mut(|d| {
-                                            d.insert_temp(zoom_id, zoom_factor)
-                                        });
-                                    }
-                                }
-                            }
 
                             if ui.is_rect_visible(rect) {
                     let total_frames = (clip.duration_secs * sample_rate as f64) as u64;
@@ -1351,6 +1409,18 @@ pub fn show(
                     ui.painter().rect_stroke(rect, 4.0_f32, Stroke::new(1.0_f32, Color32::from_gray(50)));
                             }
                         });
+                    // Guardar escala + scroll para conservar el encuadre en el
+                    // próximo cambio de zoom (ver zoom_keep_offset arriba).
+                    ui.data_mut(|d| {
+                        d.insert_temp(
+                            egui::Id::new("clip_editor_last_pps"),
+                            px_per_sec,
+                        );
+                        d.insert_temp(
+                            egui::Id::new("clip_editor_last_scroll_x"),
+                            scroll_out.state.offset.x,
+                        );
+                    });
                     });
             });
         });
