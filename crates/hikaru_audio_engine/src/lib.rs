@@ -785,6 +785,19 @@ impl<'a> AudioEngine<'a> {
         self.transport.sample_count = (position_secs * self.sample_rate) as u64;
     }
 
+    /// Disparo legato de la Session Matrix: el loopeo entre pads es continuo.
+    ///
+    /// Antes cada pad arrancaba con `start = now` (playhead interno desde
+    /// cero), por eso al cambiar de pad en caliente se escuchaba
+    /// desincronizado. Ahora el pad nuevo hereda el origen de fase
+    /// (`start_frame` / `start_absolute`) del clip que venía sonando:
+    /// es como si todos los pads hubieran estado loopeando muteados en
+    /// segundo plano y el trigger solo desmuteara en la fase correcta.
+    ///
+    /// - Prioridad 1: clip sonando en el mismo track (caso "pad de abajo").
+    /// - Prioridad 2: clip sonando más antiguo de cualquier otro track
+    ///   (caso "cualquier pad").
+    /// - Sin nada sonando: arranca desde cero como antes (`now`).
     pub fn trigger_clip(&mut self, track_index: usize, scene_index: usize) {
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
@@ -794,12 +807,26 @@ impl<'a> AudioEngine<'a> {
             .find(|c| c.track_index == track_index && c.scene_index == scene_index)
             .map(|c| c.is_playing)
             .unwrap_or(false);
+        // Capturar origen de referencia ANTES de mutar (legato).
+        let legato_origin: Option<(u64, u64)> = if target_was_playing {
+            None
+        } else {
+            self.legato_reference(Some(track_index))
+        };
         for clip in self.clips.iter_mut().filter(|c| c.track_index == track_index) {
             if clip.scene_index == scene_index {
                 clip.is_playing = !target_was_playing;
                 if clip.is_playing {
-                    clip.start_frame = now;
-                    clip.start_absolute = now_abs;
+                    if let Some((ref_frame, ref_abs)) = legato_origin {
+                        clip.start_frame = ref_frame;
+                        clip.start_absolute = ref_abs;
+                    } else {
+                        clip.start_frame = now;
+                        clip.start_absolute = now_abs;
+                    }
+                    clip.prev_frame = usize::MAX;
+                    clip.xfade_remaining = 0;
+                    clip.xfade_len = 0;
                 }
             } else {
                 clip.is_playing = false;
@@ -807,6 +834,34 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    /// Origen de fase a heredar para un arranque legato.
+    ///
+    /// Devuelve `(start_frame, start_absolute)` del clip en `Playing` más
+    /// antiguo: primero busca en `preferred_track` (cambio de pad dentro
+    /// del mismo track), y si no hay nada sonando ahí, cae al más antiguo
+    /// de cualquier track (sincronía global entre pads).
+    fn legato_reference(&self, preferred_track: Option<usize>) -> Option<(u64, u64)> {
+        if let Some(t) = preferred_track {
+            let same_track = self
+                .clips
+                .iter()
+                .filter(|c| c.track_index == t && c.is_playing)
+                .min_by_key(|c| c.start_absolute)
+                .map(|c| (c.start_frame, c.start_absolute));
+            if same_track.is_some() {
+                return same_track;
+            }
+        }
+        self.clips
+            .iter()
+            .filter(|c| c.is_playing)
+            .min_by_key(|c| c.start_absolute)
+            .map(|c| (c.start_frame, c.start_absolute))
+    }
+
+    /// Disparo de escena con fase continua: todos los clips de la fila
+    /// heredan el origen del clip más antiguo que venía sonando, para que
+    /// la escena nueva entre en fase en vez de rearrancar cada voz.
     pub fn trigger_scene(&mut self, scene_index: usize) {
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
@@ -816,14 +871,19 @@ impl<'a> AudioEngine<'a> {
                 tracks_with_clip.insert(clip.track_index);
             }
         }
+        // Referencia global capturada antes de mutar (o `now` si no hay nada).
+        let (ref_frame, ref_abs) = self.legato_reference(None).unwrap_or((now, now_abs));
         for clip in self.clips.iter_mut() {
             if clip.scene_index == scene_index {
                 if clip.is_playing && clip.start_absolute == now_abs {
                     continue;
                 }
                 clip.is_playing = true;
-                clip.start_frame = now;
-                clip.start_absolute = now_abs;
+                clip.start_frame = ref_frame;
+                clip.start_absolute = ref_abs;
+                clip.prev_frame = usize::MAX;
+                clip.xfade_remaining = 0;
+                clip.xfade_len = 0;
             } else if tracks_with_clip.contains(&clip.track_index) {
                 clip.is_playing = false;
             }
@@ -1723,6 +1783,113 @@ mod tests {
             peak_loud2 > 0.1,
             "segunda mitad tras wrap debe sonar, peak={}",
             peak_loud2
+        );
+    }
+
+    fn ramp_samples(n: u64) -> Vec<f32> {
+        let mut samples = Vec::with_capacity((n * 2) as usize);
+        for i in 0..n {
+            let v = i as f32 / n as f32;
+            samples.push(v);
+            samples.push(v);
+        }
+        samples
+    }
+
+    #[test]
+    fn legato_pad_switch_same_track_keeps_phase() {
+        // Reporte: loopear un pad y disparar el de abajo entraba
+        // desincronizado porque el playhead rearrancaba de cero.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        let n = 8192u64;
+        engine.add_clip(1, 0, 0, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.trigger_clip(0, 0);
+        engine.play();
+        run_frames(&mut engine, 1000);
+        // Cambio de pad en caliente: debe heredar la fase (frame 1000),
+        // no rearrancar en 0.
+        engine.trigger_clip(0, 1);
+        let clip1 = engine.clips.iter().find(|c| c.scene_index == 1).unwrap();
+        assert_eq!(clip1.start_absolute, 0);
+        let mut raw = vec![0.0f32; 64 * 2];
+        let mut buf = AudioBuffer::new(&mut raw);
+        engine.process(&mut buf);
+        let expect = (1000.0f32 / n as f32).tanh();
+        assert!(
+            (raw[0] - expect).abs() < 2e-3,
+            "pad nuevo debe continuar en fase: {} vs esperado {}",
+            raw[0], expect
+        );
+    }
+
+    #[test]
+    fn legato_pad_switch_other_track_inherits_phase() {
+        // "o cualquiera": disparar un pad de otro track también entra en fase.
+        // Ojo: tracks distintos suenan mezclados (ambos quedan en Playing),
+        // así que se verifica herencia de fase + mezcla en fase.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        let n = 8192u64;
+        engine.add_clip(1, 0, 0, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 1, 0, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.trigger_clip(0, 0);
+        engine.play();
+        run_frames(&mut engine, 2000);
+        engine.trigger_clip(1, 0);
+        // Herencia de fase: mismo origen que el clip de referencia.
+        let c0 = engine.clips.iter().find(|c| c.track_index == 0).unwrap();
+        let c1 = engine.clips.iter().find(|c| c.track_index == 1).unwrap();
+        assert!(c0.is_playing && c1.is_playing);
+        assert_eq!(c1.start_absolute, c0.start_absolute);
+        assert_eq!(c1.start_frame, c0.start_frame);
+        let mut raw = vec![0.0f32; 64 * 2];
+        let mut buf = AudioBuffer::new(&mut raw);
+        engine.process(&mut buf);
+        // Ambas voces en fase 2000/n, mezcladas y con tanh del máster.
+        let expect = (2.0 * 2000.0f32 / n as f32).tanh();
+        assert!(
+            (raw[0] - expect).abs() < 2e-3,
+            "pads de distintos tracks deben sonar en fase: {} vs esperado {}",
+            raw[0], expect
+        );
+    }
+
+    #[test]
+    fn legato_first_trigger_starts_at_zero() {
+        // Sin nada sonando, el primer pad arranca de cero como siempre.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        let n = 8192u64;
+        engine.add_clip(1, 0, 0, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.trigger_clip(0, 0);
+        engine.play();
+        let mut raw = vec![0.0f32; 64 * 2];
+        let mut buf = AudioBuffer::new(&mut raw);
+        engine.process(&mut buf);
+        assert!((raw[0] - 0.0).abs() < 2e-3);
+    }
+
+    #[test]
+    fn legato_scene_switch_keeps_phase() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        let n = 8192u64;
+        engine.add_clip(1, 0, 0, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.trigger_scene(0);
+        engine.play();
+        run_frames(&mut engine, 1500);
+        engine.trigger_scene(1);
+        let mut raw = vec![0.0f32; 64 * 2];
+        let mut buf = AudioBuffer::new(&mut raw);
+        engine.process(&mut buf);
+        let expect = (1500.0f32 / n as f32).tanh();
+        assert!(
+            (raw[0] - expect).abs() < 2e-3,
+            "escena nueva debe entrar en fase: {} vs esperado {}",
+            raw[0], expect
         );
     }
 }
