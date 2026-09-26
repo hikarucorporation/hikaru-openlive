@@ -822,6 +822,16 @@ pub fn show(
                                     wave_rect.max.y,
                                 ),
                             );
+                            // COLOR FONDO AUDIO CLIP: versión oscurita del azul del Session Matrix
+                            // en estado Playing (matrix.rs -> render_pad() -> SlotState::Playing = 30,110,210).
+                            // Cambialo manualmente acá si querés otro tono.
+                            ui.painter().rect_filled(
+                                r,
+                                2.0_f32,
+                                Color32::from_rgb(18, 60, 120),
+                            );
+                            // COLOR WAVEFORM: cian actual del Clip Editor.
+                            // Cambialo manualmente acá si querés otro tono.
                             waveform::draw_waveform(
                                 ui,
                                 r,
