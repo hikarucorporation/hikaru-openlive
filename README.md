@@ -135,6 +135,7 @@ Creators:
 
 * [Hikaru Corporation](https://github.com/hikarucorporation)
 * [DTG](https://github.com/doujintechnologicsgroup)
+* 🤖 [OpenCode](https://github.com/opencode-agent)
 
 Want to contribute? Pull Requests are highly welcome! (MIDI controller mapping, physical hardware support, real-time timestretching, and bug fixes are top priority).
 
