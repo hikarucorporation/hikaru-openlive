@@ -1,25 +1,32 @@
-use egui::*;
+use gpui_kit::component::*;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
 
-pub fn show(ui: &mut Ui, scenes_count: usize, active_scene: &mut Option<usize>) {
-    ui.horizontal(|ui| {
-        // Espacio reservado para alinear con la columna del Master a la izquierda
-        ui.allocate_ui(Vec2::new(110.0, 24.0), |_| {});
-        ui.separator();
+use crate::app::{state, HikaruApp};
 
-        for i in 0..scenes_count {
-            let is_selected = *active_scene == Some(i);
-            let btn = Button::new(RichText::new(format!("▶ Scene {}", i + 1)).size(11.0))
-                .min_size(Vec2::new(100.0, 24.0))
-                .fill(if is_selected {
-                    Color32::from_rgb(60, 90, 130)
-                } else {
-                    Color32::from_rgb(45, 45, 45)
-                });
+pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let app = state(cx).read(cx);
+    let scenes = app.matrix_state.scenes.len();
+    drop(app);
 
-            if ui.add(btn).clicked() {
-                *active_scene = Some(i);
-            }
-            ui.add_space(4.0);
-        }
-    });
+    h_flex()
+        .id("scenes_headers")
+        .gap(px(4.0))
+        .children((0..scenes).map(|i| {
+            Button::new(format!("scene_hdr_{}", i))
+                .label(format!("▶ Scene {}", i + 1))
+                .compact()
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, cx| {
+                        crate::views::matrix::trigger_scene(
+                            &mut state.matrix_state,
+                            &state.audio_proxy,
+                            i,
+                        );
+                        cx.notify();
+                    });
+                })
+                .into_any_element()
+        }))
 }

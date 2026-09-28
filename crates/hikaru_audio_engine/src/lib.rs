@@ -400,6 +400,10 @@ pub struct DmsVoice {
     pan: f32,
     velocity: f32,
     pad_idx: usize,
+    /// Índice de pista del engine (0..15) que disparó esta voz.
+    /// Antes todas las voces compartían un único `dms_track_idx` global
+    /// (siempre 0), así que solo el fader del Track 1 afectaba a la batería.
+    pub track_idx: usize,
     env_stage: DmsEnvStage,
     env_level: f32,
     attack_rate: f32,
@@ -425,6 +429,7 @@ impl DmsVoice {
             pan: 0.0,
             velocity: 1.0,
             pad_idx: 0,
+            track_idx: 0,
             env_stage: DmsEnvStage::Free,
             env_level: 0.0,
             attack_rate: 0.0,
@@ -560,6 +565,7 @@ impl DmsVoicePool {
         velocity: f32,
         play_speed: f64,
         adsr: &DmsAdsrParams,
+        track_idx: usize,
     ) -> Option<usize> {
         self.global_age = self.global_age.wrapping_add(1);
 
@@ -586,6 +592,7 @@ impl DmsVoicePool {
         v.pan = pan;
         v.velocity = velocity;
         v.pad_idx = pad_idx;
+        v.track_idx = track_idx.min(15);
         v.env_stage = DmsEnvStage::Attack;
         v.env_level = 0.0;
         v.attack_rate = adsr.attack_rate;
@@ -615,15 +622,42 @@ impl DmsVoicePool {
     }
 
     pub fn process_all(&mut self, output_l: &mut [f32], output_r: &mut [f32], sr: f32) {
+        let unity_l = [1.0f32; 16];
+        let unity_r = [1.0f32; 16];
+        self.process_all_with_gains(output_l, output_r, &unity_l, &unity_r, sr);
+    }
+
+    /// Mezcla aplicando a cada voz el volumen/paneo/mute/solo de SU pista.
+    /// `gains_l/r` ya incluyen mute/solo (0.0 si la pista está silenciada).
+    pub fn process_all_with_gains(
+        &mut self,
+        output_l: &mut [f32],
+        output_r: &mut [f32],
+        gains_l: &[f32; 16],
+        gains_r: &[f32; 16],
+        sr: f32,
+    ) {
         let buf_len = output_l.len();
         for v in self.voices.iter_mut() {
             if !v.active {
                 continue;
             }
+            let ti = v.track_idx.min(15);
+            let gl = gains_l[ti];
+            let gr = gains_r[ti];
+            if gl == 0.0 && gr == 0.0 {
+                // Igual hay que avanzar la envolvente/posición para que la
+                // voz termine aunque su pista esté muteada.
+                for i in 0..buf_len {
+                    let (l, r) = v.process_frame(sr);
+                    let _ = (l, r, i);
+                }
+                continue;
+            }
             for i in 0..buf_len {
                 let (l, r) = v.process_frame(sr);
-                output_l[i] += l;
-                output_r[i] += r;
+                output_l[i] += l * gl;
+                output_r[i] += r * gr;
             }
         }
     }
@@ -637,6 +671,18 @@ pub struct DmsAdsrParams {
     pub release_rate: f32,
 }
 
+/// Pads por pista en el banco global de samples del OpenDMS.
+/// Cada pista tiene su propio banco de 64 pads: la clave global es
+/// `track * DMS_PADS_PER_TRACK + pad`. Antes el banco era único por
+/// `pad_idx` y todas las pistas que usaban el mismo pad se pisaban:
+/// el mixer quedaba sonando todo por un solo canal/track.
+pub const DMS_PADS_PER_TRACK: usize = 64;
+
+#[inline]
+pub fn dms_pad_key(track_idx: usize, pad_idx: usize) -> usize {
+    track_idx.min(15) * DMS_PADS_PER_TRACK + pad_idx.min(DMS_PADS_PER_TRACK - 1)
+}
+
 pub struct AudioEngine<'a> {
     pub transport: TransportPosition,
     pub mode: EngineMode,
@@ -647,6 +693,11 @@ pub struct AudioEngine<'a> {
     pub clips: Vec<AudioClipInstance>,
     pub preview_player: PreviewPlayer,
     pub position_clock: Arc<AtomicU64>,
+    /// Reloj monotónico en frames (nunca wrapea con el loop global ni se
+    /// resetea con Stop/Seek). La GUI lo usa para derivar la fase de los
+    /// MIDI clips con la misma base temporal que las voces de audio
+    /// (`start_absolute`), así el loop MIDI no se desincroniza del audio.
+    pub absolute_clock: Arc<AtomicU64>,
     pub absolute_frame: u64,
     pub output_level_bits: Arc<AtomicU32>,
     pub track_peak_bits: [Arc<AtomicU32>; 16],
@@ -665,6 +716,15 @@ pub struct AudioEngine<'a> {
 
 impl<'a> AudioEngine<'a> {
     pub fn new(sr: SampleRate, wavetable: &'a [f32], position_clock: Arc<AtomicU64>) -> Self {
+        Self::with_clocks(sr, wavetable, position_clock, Arc::new(AtomicU64::new(0)))
+    }
+
+    pub fn with_clocks(
+        sr: SampleRate,
+        wavetable: &'a [f32],
+        position_clock: Arc<AtomicU64>,
+        absolute_clock: Arc<AtomicU64>,
+    ) -> Self {
         let mut filter = StateVariableFilter::new();
         filter.set_params(2000.0, 0.707, sr.get());
 
@@ -678,6 +738,7 @@ impl<'a> AudioEngine<'a> {
             clips: Vec::new(),
             preview_player: PreviewPlayer::new(),
             position_clock,
+            absolute_clock,
             absolute_frame: 0,
             output_level_bits: Arc::new(AtomicU32::new(0.0f32.to_bits())),
             track_peak_bits: std::array::from_fn(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))),
@@ -734,7 +795,14 @@ impl<'a> AudioEngine<'a> {
 
     pub fn set_track_pan(&self, track_idx: usize, pan: f32) {
         if track_idx < 16 {
-            self.track_pans[track_idx].store(pan.clamp(-100.0, 100.0).to_bits(), Ordering::Relaxed);
+            // La GUI trabaja en rango normalizado -1.0..=1.0 (mixer, arranger,
+            // matrix) pero históricamente el engine guardaba -100..100.
+            // Aceptamos ambas escalas: |pan| <= 1.5 se interpreta como
+            // normalizado y se escala a -100..100; si no, se usa tal cual.
+            // Sin esto, un paneo full-R (1.0) se guardaba como 1.0/100 = 0.01
+            // en `process()` y el paneo parecía no andar.
+            let raw = if pan.abs() <= 1.5 { pan * 100.0 } else { pan };
+            self.track_pans[track_idx].store(raw.clamp(-100.0, 100.0).to_bits(), Ordering::Relaxed);
         }
     }
 
@@ -1136,13 +1204,23 @@ impl<'a> AudioEngine<'a> {
 
     // ─── OpenDMS Polyphonic Methods ──────────────────────────────
 
-    pub fn load_dms_sample(&mut self, pad_idx: usize, samples: Vec<f32>, channels: usize) {
-        while self.dms_samples.len() <= pad_idx {
+    /// Carga un sample para un pad en la pista indicada.
+    /// Clave interna: `dms_pad_key(track_idx, pad_idx)`. De esta forma
+    /// dos canales del mixer con el mismo `pad_idx` (ej. Pad 0 = Kick)
+    /// no se pisan entre sí y conservan su propio routing, fader y medidor.
+    pub fn load_dms_sample_for_track(&mut self, track_idx: usize, pad_idx: usize, samples: Vec<f32>, channels: usize) {
+        let key = dms_pad_key(track_idx, pad_idx);
+        while self.dms_samples.len() <= key {
             self.dms_samples.push(None);
             self.dms_channels.push(1);
         }
-        self.dms_channels[pad_idx] = channels;
-        self.dms_samples[pad_idx] = Some(samples);
+        self.dms_channels[key] = channels;
+        self.dms_samples[key] = Some(samples);
+    }
+
+    /// Legacy: por compatibilidad carga en track 0.
+    pub fn load_dms_sample(&mut self, pad_idx: usize, samples: Vec<f32>, channels: usize) {
+        self.load_dms_sample_for_track(0, pad_idx, samples, channels);
     }
 
     pub fn trigger_dms_note(
@@ -1153,31 +1231,56 @@ impl<'a> AudioEngine<'a> {
         velocity: f32,
         play_speed: f64,
         adsr: &DmsAdsrParams,
+        track_idx: usize,
     ) {
-        if pad_idx >= self.dms_samples.len() {
+        let ti = track_idx.min(15);
+        let key = dms_pad_key(ti, pad_idx);
+        // Si el track específico tiene sample, usarlo; si no, fallback al track 0
+        // (por si el pad se cargó de manera legacy sin track_idx).
+        let (samples_ref, channels) = if let Some(Some(ref s)) = self.dms_samples.get(key) {
+            (s.as_slice(), self.dms_channels.get(key).copied().unwrap_or(1))
+        } else if let Some(Some(ref s)) = self.dms_samples.get(pad_idx) {
+            (s.as_slice(), self.dms_channels.get(pad_idx).copied().unwrap_or(1))
+        } else {
             return;
-        }
-        if let Some(ref samples) = self.dms_samples[pad_idx] {
-            let channels = self.dms_channels[pad_idx];
-            self.dms_voice_pool.trigger(
-                samples,
-                channels,
-                pad_idx,
-                gain,
-                pan,
-                velocity,
-                play_speed,
-                adsr,
-            );
-        }
+        };
+
+        self.dms_voice_pool.trigger(
+            samples_ref,
+            channels,
+            key, // Usar key única para release/kill sin pisar otros tracks
+            gain,
+            pan,
+            velocity,
+            play_speed,
+            adsr,
+            ti,
+        );
+    }
+
+    pub fn release_dms_note_for_track(&mut self, track_idx: usize, pad_idx: usize) {
+        let key = dms_pad_key(track_idx, pad_idx);
+        self.dms_voice_pool.release_pad(key);
     }
 
     pub fn release_dms_note(&mut self, pad_idx: usize) {
         self.dms_voice_pool.release_pad(pad_idx);
+        // Liberar también para cualquier pista si se usó pad puro
+        for t in 0..16 {
+            self.dms_voice_pool.release_pad(dms_pad_key(t, pad_idx));
+        }
+    }
+
+    pub fn kill_dms_note_for_track(&mut self, track_idx: usize, pad_idx: usize) {
+        let key = dms_pad_key(track_idx, pad_idx);
+        self.dms_voice_pool.kill_pad(key);
     }
 
     pub fn kill_dms_note(&mut self, pad_idx: usize) {
         self.dms_voice_pool.kill_pad(pad_idx);
+        for t in 0..16 {
+            self.dms_voice_pool.kill_pad(dms_pad_key(t, pad_idx));
+        }
     }
 
     pub fn set_dms_track(&mut self, track_idx: usize) {
@@ -1197,32 +1300,42 @@ impl<'a> AudioEngine<'a> {
 
         // ─── OpenDMS Polyphonic Voice Mixing ──────────────────────
         // Always active (not gated by transport), like preview player.
+        // Cada voz lleva su propio `track_idx`: el fader/pan/mute/solo del
+        // mixer se aplica por voz, no con un único `dms_track_idx` global.
+        // (Ese era el bug "solo baja el volumen del Track 1".)
         {
             let buf_frames = samples.len() / 2;
-            let ti = self.dms_track_idx;
-            let vol = f32::from_bits(self.track_volumes[ti].load(Ordering::Relaxed));
-            let muted = self.track_mutes[ti].load(Ordering::Relaxed);
-            let soloed = self.track_solos[ti].load(Ordering::Relaxed);
             let any_solo_dms = self.track_solos.iter().any(|s| s.load(Ordering::Relaxed));
-            let effective_gain = if muted {
-                0.0
-            } else if any_solo_dms && !soloed {
-                0.0
-            } else {
-                vol
-            };
-            let pan_norm = f32::from_bits(self.track_pans[ti].load(Ordering::Relaxed)) / 100.0;
-            let track_gain_l = effective_gain * if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
-            let track_gain_r = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
+            let mut dms_gain_l = [0.0f32; 16];
+            let mut dms_gain_r = [0.0f32; 16];
+            for t in 0..16 {
+                let vol = f32::from_bits(self.track_volumes[t].load(Ordering::Relaxed));
+                let muted = self.track_mutes[t].load(Ordering::Relaxed);
+                let soloed = self.track_solos[t].load(Ordering::Relaxed);
+                let effective_gain = if muted {
+                    0.0
+                } else if any_solo_dms && !soloed {
+                    0.0
+                } else {
+                    vol
+                };
+                let pan_norm = f32::from_bits(self.track_pans[t].load(Ordering::Relaxed)) / 100.0;
+                dms_gain_l[t] = effective_gain * if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
+                dms_gain_r[t] = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
+            }
 
-            if effective_gain > 0.0 {
-                let mut dms_l = vec![0.0f32; buf_frames];
-                let mut dms_r = vec![0.0f32; buf_frames];
-                self.dms_voice_pool.process_all(&mut dms_l, &mut dms_r, self.sample_rate);
-                for i in 0..buf_frames {
-                    samples[i * 2] += dms_l[i] * track_gain_l;
-                    samples[i * 2 + 1] += dms_r[i] * track_gain_r;
-                }
+            let mut dms_l = vec![0.0f32; buf_frames];
+            let mut dms_r = vec![0.0f32; buf_frames];
+            self.dms_voice_pool.process_all_with_gains(
+                &mut dms_l,
+                &mut dms_r,
+                &dms_gain_l,
+                &dms_gain_r,
+                self.sample_rate,
+            );
+            for i in 0..buf_frames {
+                samples[i * 2] += dms_l[i];
+                samples[i * 2 + 1] += dms_r[i];
             }
         }
 
@@ -1485,6 +1598,7 @@ impl<'a> AudioEngine<'a> {
         }
         self.output_level_bits.store(peak.to_bits(), Ordering::Relaxed);
         self.position_clock.store(self.transport.sample_count, Ordering::Relaxed);
+        self.absolute_clock.store(self.absolute_frame, Ordering::Relaxed);
     }
 
     pub fn update_midi_clip(

@@ -1,12 +1,20 @@
-/*
- * Hikaru OpenStudio - Internal File Explorer & Sample Preview
- * License: AGPL-3.0-or-later
- */
+// Hikaru OpenLive - Explorer
+// GNU AGPLv3
+// crates/hikaru_gui/src/views/explorer.rs
 
-use egui::{Ui, ScrollArea, Color32, RichText, Pos2, Vec2, Stroke};
 use std::fs;
 use std::path::PathBuf;
-use crate::audio_proxy::{AudioProxy, GuiCommand};
+
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
+
+use crate::app::{state, HikaruApp};
+use crate::audio_proxy::GuiCommand;
 
 pub struct FileExplorerState {
     pub current_path: PathBuf,
@@ -17,12 +25,8 @@ pub struct FileExplorerState {
     pub preview_volume: f32,
     pub preview_position: f32,
     pub is_playing_preview: bool,
-    
-    // Controles de Sync y Tempo
     pub sample_bpm: f32,
     pub is_synced: bool,
-
-    // Cache de Waveform
     pub cached_path: Option<PathBuf>,
     pub cached_waveform: Vec<f32>,
     pub sample_duration_secs: f32,
@@ -93,9 +97,10 @@ impl FileExplorerState {
         if let Ok(mut reader) = hound::WavReader::open(path) {
             let spec = reader.spec();
             let total_samples = reader.len() as usize;
-            
+
             if spec.sample_rate > 0 {
-                self.sample_duration_secs = total_samples as f32 / (spec.sample_rate as f32 * spec.channels as f32);
+                self.sample_duration_secs =
+                    total_samples as f32 / (spec.sample_rate as f32 * spec.channels as f32);
             }
 
             if total_samples > 0 {
@@ -105,13 +110,15 @@ impl FileExplorerState {
                     hound::SampleFormat::Int => {
                         let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
                         let mut samples_iter = reader.samples::<i32>().filter_map(|s| s.ok());
-                        
+
                         for bin in 0..target_bins {
                             let mut max_peak = 0.0_f32;
                             for _ in 0..samples_per_bin {
                                 if let Some(s) = samples_iter.next() {
                                     let abs_val = (s as f32 / max_val).abs();
-                                    if abs_val > max_peak { max_peak = abs_val; }
+                                    if abs_val > max_peak {
+                                        max_peak = abs_val;
+                                    }
                                 } else {
                                     break;
                                 }
@@ -121,13 +128,15 @@ impl FileExplorerState {
                     }
                     hound::SampleFormat::Float => {
                         let mut samples_iter = reader.samples::<f32>().filter_map(|s| s.ok());
-                        
+
                         for bin in 0..target_bins {
                             let mut max_peak = 0.0_f32;
                             for _ in 0..samples_per_bin {
                                 if let Some(s) = samples_iter.next() {
                                     let abs_val = s.abs();
-                                    if abs_val > max_peak { max_peak = abs_val; }
+                                    if abs_val > max_peak {
+                                        max_peak = abs_val;
+                                    }
                                 } else {
                                     break;
                                 }
@@ -144,287 +153,358 @@ impl FileExplorerState {
     }
 }
 
-pub fn show(
-    ui: &mut Ui, 
-    state: &mut FileExplorerState, 
-    dragged_sample: &mut Option<PathBuf>,
-    audio_proxy: &AudioProxy,
-    project_bpm: f32,
-) {
-    if dragged_sample.is_some() && ui.input(|i| !i.pointer.any_down()) {
-        *dragged_sample = None;
-    }
+pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
+    let app = state(cx).read(cx);
+    let ex = &app.explorer_state;
+    let current_path = ex.current_path.clone();
+    let path_input = ex.path_input.clone();
+    let selected_file = ex.selected_file.clone();
+    let preview_volume = ex.preview_volume;
+    let preview_position = ex.preview_position;
+    let is_playing = ex.is_playing_preview;
+    let sample_bpm = ex.sample_bpm;
+    let is_synced = ex.is_synced;
+    let cached_waveform = ex.cached_waveform.clone();
+    let audio_proxy = app.audio_proxy.clone();
+    let project_bpm = app.transport.bpm as f32;
+    drop(app);
 
-    if state.is_playing_preview {
-        let dt = ui.input(|i| i.stable_dt);
-        let speed_factor = if state.is_synced && state.sample_bpm > 0.0 {
-            project_bpm / state.sample_bpm
-        } else {
-            1.0
-        };
-
-        let duration = state.sample_duration_secs.max(0.1);
-        state.preview_position += (dt / duration) * speed_factor;
-
-        if state.preview_position >= 1.0 {
-            state.is_playing_preview = false;
-            state.preview_position = 0.0;
-            audio_proxy.send(GuiCommand::StopPreview);
+    let mut entries: Vec<(String, PathBuf, bool)> = Vec::new();
+    if let Ok(rd) = fs::read_dir(&current_path) {
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if is_supported_file(&path) {
+                files.push(path);
+            }
         }
-        ui.ctx().request_repaint();
+        dirs.sort();
+        files.sort();
+        for d in dirs {
+            let name = d.file_name().unwrap_or_default().to_string_lossy().to_string();
+            entries.push((format!("📁 {}", name), d, true));
+        }
+        for f in files {
+            let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let is_midi = is_midi_file(&f);
+            let icon = if is_midi { "🎹" } else { "🎵" };
+            entries.push((format!("{} {}", icon, name), f, false));
+        }
     }
 
-    ui.vertical(|ui| {
-        // --- BARRA SUPERIOR DE NAVEGACIÓN ---
-        ui.horizontal(|ui| {
-            if ui.add_enabled(!state.history_back.is_empty(), egui::Button::new("⮜")).clicked() {
-                state.go_back();
-            }
-            if ui.add_enabled(!state.history_forward.is_empty(), egui::Button::new("⮞")).clicked() {
-                state.go_forward();
-            }
-            if ui.button("⬆").on_hover_text("Carpeta Padre").clicked() {
-                if let Some(parent) = state.current_path.parent() {
-                    let parent_buf = parent.to_path_buf();
-                    state.navigate_to(parent_buf);
-                }
-            }
+    let selected_name = selected_file
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
 
-            let response = ui.add_sized(
-                [ui.available_width(), 20.0],
-                egui::TextEdit::singleline(&mut state.path_input).hint_text("Ruta de entrada..."),
-            );
-
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                let new_path = PathBuf::from(&state.path_input);
-                state.navigate_to(new_path);
-            }
-        });
-
-        ui.add_space(4.0);
-        ui.separator();
-
-        // --- PANEL CENTRAL: LISTA DE ARCHIVOS ---
-        let footer_height = 80.0;
-        let available_height = (ui.available_height() - footer_height).max(50.0);
-
-        ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width(), available_height),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if let Ok(entries) = fs::read_dir(&state.current_path) {
-                            let mut dirs = Vec::new();
-                            let mut files = Vec::new();
-
-                            for entry in entries.flatten() {
-                                let path = entry.path();
-                                if path.is_dir() {
-                                    dirs.push(path);
-                                } else if is_supported_file(&path) {
-                                    files.push(path);
-                                }
-                            }
-
-                            dirs.sort();
-                            files.sort();
-
-                            for dir in dirs {
-                                let dir_name = dir.file_name().unwrap_or_default().to_string_lossy();
-                                if ui.add_sized([ui.available_width(), 18.0], egui::SelectableLabel::new(false, format!("📁 {}", dir_name))).clicked() {
-                                    state.navigate_to(dir);
-                                }
-                            }
-
-                            for file in files {
-                                let file_name = file.file_name().unwrap_or_default().to_string_lossy();
-                                let is_selected = state.selected_file.as_ref() == Some(&file);
-                                let is_midi = is_midi_file(&file);
-
-                                let icon = if is_midi { "🎹" } else { "🎵" };
-                                let label_text = RichText::new(format!("{} {}", icon, file_name))
-                                    .color(if is_selected {
-                                        if is_midi { Color32::from_rgb(255, 180, 0) } else { Color32::from_rgb(0, 220, 255) }
-                                    } else {
-                                        Color32::WHITE
-                                    });
-
-                                let response = ui.add_sized([ui.available_width(), 18.0], egui::SelectableLabel::new(is_selected, label_text));
-
-                                if response.clicked() {
-                                    state.selected_file = Some(file.clone());
-
-                                    if !is_midi {
-                                        // Preview de Audio normal
-                                        state.is_playing_preview = true;
-                                        state.preview_position = 0.0;
-
-                                        if let Some(detected_bpm) = parse_bpm_from_filename(&file_name) {
-                                            state.sample_bpm = detected_bpm;
-                                        }
-
-                                        audio_proxy.send(GuiCommand::SetPreviewVolume(state.preview_volume));
-                                        audio_proxy.send(GuiCommand::PreviewSample {
-                                            path: file.to_string_lossy().to_string(),
-                                            volume: state.preview_volume,
-                                            speed: state.current_speed(project_bpm),
-                                        });
-                                    } else {
-                                        // Si es MIDI, frenamos el preview de audio
-                                        state.is_playing_preview = false;
-                                        audio_proxy.send(GuiCommand::StopPreview);
-                                    }
-                                }
-
-                                if response.drag_started() {
-                                    *dragged_sample = Some(file.clone());
-                                    if state.is_playing_preview {
-                                        state.is_playing_preview = false;
-                                        audio_proxy.send(GuiCommand::StopPreview);
-                                    }
-                                }
-                            }
-                        } else {
-                            ui.label(RichText::new("⚠️ Permiso denegado o directorio no válido.").color(Color32::RED).small());
-                        }
+    let wave_canvas = div()
+        .id("explorer_wave_canvas")
+        .w_full()
+        .h(px(72.0))
+        .bg(crate::theme::SURFACE_BG)
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(crate::theme::BORDER_COLOR)
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let bg = crate::theme::SURFACE_BG;
+                    window.paint_quad(PaintQuad {
+                        bounds,
+                        background: bg.into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
                     });
-            },
-        );
-
-        ui.separator();
-
-        // --- FOOTER: PREVIEW, VOLUMEN Y WAVEFORM ---
-        ui.add_space(2.0);
-        
-        ui.horizontal(|ui| {
-            let play_icon = if state.is_playing_preview { "⏸" } else { "▶" };
-            if ui.button(play_icon).clicked() {
-                state.is_playing_preview = !state.is_playing_preview;
-                if let Some(ref file) = state.selected_file {
-                    if state.is_playing_preview {
-                        audio_proxy.send(GuiCommand::SetPreviewVolume(state.preview_volume));
-                        audio_proxy.send(GuiCommand::PreviewSample {
-                            path: file.to_string_lossy().to_string(),
-                            volume: state.preview_volume,
-                            speed: state.current_speed(project_bpm),
-                        });
-                    } else {
-                        audio_proxy.send(GuiCommand::StopPreview);
+                    if cached_waveform.is_empty() {
+                        return;
                     }
-                }
-            }
-
-            ui.label(RichText::new("🔊").small());
-
-            ui.push_id("explorer_vol_slider_zone", |ui| {
-                let volume_before = state.preview_volume;
-
-                let _vol_response = ui.add(
-                    egui::Slider::new(&mut state.preview_volume, 0.0..=1.0)
-                        .show_value(false)
-                        .clamp_to_range(true)
-                );
-
-                if state.preview_volume != volume_before {
-                    audio_proxy.send(GuiCommand::SetPreviewVolume(state.preview_volume));
-                }
-            });
-
-            ui.separator();
-
-            let sync_color = if state.is_synced { Color32::from_rgb(0, 220, 255) } else { Color32::GRAY };
-            if ui.add(egui::Button::new(RichText::new("Sync").small().color(sync_color))).clicked() {
-                state.is_synced = !state.is_synced;
-            }
-
-            ui.add_sized(
-                [50.0, 18.0],
-                egui::DragValue::new(&mut state.sample_bpm)
-                    .speed(1.0)
-                    .clamp_range(40.0..=300.0)
-                    .suffix(" BPM")
-            );
-        });
-
-        ui.add_space(4.0);
-
-        // WAVEFORM + PLAYHEAD INTERACTIVO
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), egui::Sense::click_and_drag());
-        
-        ui.set_clip_rect(rect);
-
-        ui.painter().rect_filled(rect, 4.0, Color32::from_rgb(20, 22, 26));
-        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0_f32, Color32::from_rgb(45, 50, 60)));
-
-        if let Some(selected_path) = state.selected_file.clone() {
-            let file_name = selected_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let points_count = 150;
-            state.load_waveform_peaks(&selected_path, points_count);
-
-            let stroke = Stroke::new(1.5_f32, Color32::from_rgb(0, 230, 200));
-            let center_y = rect.center().y;
-            let step = rect.width() / points_count as f32;
-            let max_h = rect.height() * 0.40;
-
-            if !state.cached_waveform.is_empty() {
-                for (i, &amplitude) in state.cached_waveform.iter().enumerate() {
-                    let x = rect.min.x + (i as f32 * step);
-                    let h = (amplitude * max_h).max(1.0);
-                    ui.painter().line_segment(
-                        [Pos2::new(x, center_y - h), Pos2::new(x, center_y + h)],
-                        stroke,
-                    );
-                }
-            }
-
-            let playhead_x = rect.min.x + (state.preview_position * rect.width());
-            ui.painter().line_segment(
-                [Pos2::new(playhead_x, rect.min.y), Pos2::new(playhead_x, rect.max.y)],
-                Stroke::new(2.0_f32, Color32::from_rgb(255, 80, 80)),
-            );
-
-            ui.painter().text(
-                Pos2::new(rect.min.x + 6.0, rect.min.y + 3.0),
-                egui::Align2::LEFT_TOP,
-                &file_name,
-                egui::FontId::proportional(10.0),
-                Color32::WHITE,
-            );
-
-            if response.clicked() {
-                if let Some(pointer_pos) = response.interact_pointer_pos() {
-                    let norm_x = ((pointer_pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
-                    state.preview_position = norm_x;
-                    state.is_playing_preview = true;
-
-                    audio_proxy.send(GuiCommand::SetPreviewVolume(state.preview_volume));
-                    audio_proxy.send(GuiCommand::PreviewSample {
-                        path: selected_path.to_string_lossy().to_string(),
-                        volume: state.preview_volume,
-                        speed: state.current_speed(project_bpm),
+                    let origin_x: f32 = bounds.origin.x.into();
+                    let origin_y: f32 = bounds.origin.y.into();
+                    let height_f: f32 = bounds.size.height.into();
+                    let center_y = origin_y + height_f / 2.0;
+                    let max_h = height_f * 0.42;
+                    let n = cached_waveform.len();
+                    let w: f32 = bounds.size.width.into();
+                    let bar_w = (w / n as f32).max(1.0);
+                    for (i, &amp) in cached_waveform.iter().enumerate() {
+                        let x = origin_x + (i as f32 / n as f32) * w;
+                        let h = (amp * max_h).max(1.0);
+                        let mut pb = PathBuilder::fill();
+                        pb.move_to(point(px(x), px(center_y - h)));
+                        pb.line_to(point(px(x + bar_w), px(center_y - h)));
+                        pb.line_to(point(px(x + bar_w), px(center_y + h)));
+                        pb.line_to(point(px(x), px(center_y + h)));
+                        pb.close();
+                        window.paint_path(pb.build().unwrap(), crate::theme::ACCENT_COLOR);
+                    }
+                    let phx = origin_x + preview_position * w;
+                    let mut pb = PathBuilder::stroke(px(2.0));
+                    pb.move_to(point(px(phx), px(origin_y)));
+                    pb.line_to(point(px(phx), px(origin_y + height_f)));
+                    window.paint_path(pb.build().unwrap(), crate::theme::ACCENT_STUDIO);
+                },
+            )
+            .w_full()
+            .h_full(),
+        )
+        .on_click(move |event, _, cx| {
+            let Some(pos) = event.mouse_position() else { return; };
+            let norm_x: f32 = (pos.x.as_f32() / 260.0).clamp(0.0, 1.0);
+            let st = state(cx);
+            cx.update_entity(&st, |state, cx| {
+                state.explorer_state.preview_position = norm_x;
+                state.explorer_state.is_playing_preview = true;
+                if let Some(ref file) = state.explorer_state.selected_file {
+                    state.audio_proxy.send(GuiCommand::SetPreviewVolume(
+                        state.explorer_state.preview_volume,
+                    ));
+                    state.audio_proxy.send(GuiCommand::PreviewSample {
+                        path: file.to_string_lossy().to_string(),
+                        volume: state.explorer_state.preview_volume,
+                        speed: state.explorer_state.current_speed(project_bpm),
                     });
                 }
-            }
+                cx.notify();
+            });
+        })
+        .into_any_element();
 
-            if response.drag_started() {
-                *dragged_sample = Some(selected_path.clone());
-                if state.is_playing_preview {
-                    state.is_playing_preview = false;
-                    audio_proxy.send(GuiCommand::StopPreview);
-                }
-            }
-        } else {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Ningún sample seleccionado",
-                egui::FontId::proportional(11.0),
-                Color32::GRAY,
-            );
-        }
-    });
+    v_flex()
+        .id("file_explorer")
+        .size_full()
+        .bg(crate::theme::PANEL_BG)
+        .p(px(8.0))
+        .gap(px(6.0))
+        // 1. Navegación y Ruta Actual
+        .child(
+            h_flex()
+                .gap(px(4.0))
+                .child(
+                    Button::new("explorer_back")
+                        .label("⮜")
+                        .compact()
+                        .text_color(rgb(0xB0B0B0))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.explorer_state.go_back();
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("explorer_forward")
+                        .label("⮞")
+                        .compact()
+                        .text_color(rgb(0xB0B0B0))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.explorer_state.go_forward();
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("explorer_up")
+                        .label("⬆")
+                        .compact()
+                        .text_color(rgb(0xB0B0B0))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                if let Some(parent) = state.explorer_state.current_path.parent() {
+                                    state.explorer_state.navigate_to(parent.to_path_buf());
+                                }
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .h(px(24.0))
+                        .px(px(6.0))
+                        .flex()
+                        .items_center()
+                        .bg(crate::theme::SURFACE_BG)
+                        .rounded(px(3.0))
+                        .border_1()
+                        .border_color(crate::theme::BORDER_COLOR)
+                        .child(
+                            Label::new(path_input.clone())
+                                .text_xs()
+                                .text_color(crate::theme::TEXT_PRIMARY),
+                        ),
+                ),
+        )
+        // 2. Lista de Archivos / Carpetas con Scroll
+        .child(
+            div()
+                .flex_1()
+                .w_full()
+                .overflow_y_scrollbar()
+                .child(
+                    v_flex()
+                        .gap(px(2.0))
+                        .children(entries.into_iter().map(|(label, path, is_dir)| {
+                            let is_selected = selected_file.as_ref() == Some(&path);
+                            let label_clone = label.clone();
+                            let project_bpm = project_bpm;
+                            
+                            let bg_color = if is_selected {
+                                crate::theme::SLOT_ACTIVE_BG
+                            } else {
+                                crate::theme::SURFACE_BG
+                            };
+
+                            div()
+                                .id(format!("explorer_entry_{}", path.display()))
+                                .w_full()
+                                .h(px(22.0))
+                                .px(px(6.0))
+                                .flex()
+                                .items_center()
+                                .bg(bg_color)
+                                .rounded(px(3.0))
+                                .child(Label::new(label_clone).text_xs().text_color(crate::theme::TEXT_PRIMARY))
+                                .on_click(move |_, _, cx| {
+                                    let st = state(cx);
+                                    cx.update_entity(&st, |state, cx| {
+                                        if is_dir {
+                                            state.explorer_state.navigate_to(path.clone());
+                                        } else {
+                                            state.explorer_state.selected_file = Some(path.clone());
+                                            if !is_midi_file(&path) {
+                                                state.explorer_state.is_playing_preview = true;
+                                                state.explorer_state.preview_position = 0.0;
+                                                state.explorer_state.load_waveform_peaks(&path, 256);
+                                                if let Some(detected) =
+                                                    parse_bpm_from_filename(&path.to_string_lossy())
+                                                {
+                                                    state.explorer_state.sample_bpm = detected;
+                                                }
+                                                state.audio_proxy.send(GuiCommand::SetPreviewVolume(
+                                                    state.explorer_state.preview_volume,
+                                                ));
+                                                state.audio_proxy.send(GuiCommand::PreviewSample {
+                                                    path: path.to_string_lossy().to_string(),
+                                                    volume: state.explorer_state.preview_volume,
+                                                    speed: state
+                                                        .explorer_state
+                                                        .current_speed(project_bpm),
+                                                });
+                                            } else {
+                                                state.explorer_state.is_playing_preview = false;
+                                                state.audio_proxy.send(GuiCommand::StopPreview);
+                                            }
+                                        }
+                                        cx.notify();
+                                    });
+                                })
+                                .into_any_element()
+                        })),
+                ),
+        )
+        // 3. Controles de Reproducción y Preescucha (BPM / Sync / Vol)
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(
+                    Button::new("explorer_play")
+                        .label(if is_playing { "⏸" } else { "▶" })
+                        .compact()
+                        .text_color(rgb(0xB0B0B0))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.explorer_state.is_playing_preview =
+                                    !state.explorer_state.is_playing_preview;
+                                if state.explorer_state.is_playing_preview {
+                                    if let Some(ref file) = state.explorer_state.selected_file {
+                                        state.audio_proxy.send(GuiCommand::SetPreviewVolume(
+                                            state.explorer_state.preview_volume,
+                                        ));
+                                        state.audio_proxy.send(GuiCommand::PreviewSample {
+                                            path: file.to_string_lossy().to_string(),
+                                            volume: state.explorer_state.preview_volume,
+                                            speed: state
+                                                .explorer_state
+                                                .current_speed(project_bpm),
+                                        });
+                                    }
+                                } else {
+                                    state.audio_proxy.send(GuiCommand::StopPreview);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(Label::new("🔊").text_xs().text_color(crate::theme::TEXT_PRIMARY))
+                .child(
+                    div()
+                        .w(px(60.0))
+                        .h(px(10.0))
+                        .bg(crate::theme::SURFACE_BG)
+                        .rounded(px(3.0))
+                        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                            let x: f32 = event.position.x.as_f32() / 60.0;
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.explorer_state.preview_volume = x.clamp(0.0, 1.0);
+                                state.audio_proxy.send(GuiCommand::SetPreviewVolume(
+                                    state.explorer_state.preview_volume,
+                                ));
+                                cx.notify();
+                            });
+                        })
+                        .into_any_element(),
+                )
+                .child(
+                    Button::new("explorer_sync")
+                        .label("Sync")
+                        .compact()
+                        .text_color(rgb(0xB0B0B0))
+                        .when(is_synced, |b| b.text_color(crate::theme::ACCENT_COLOR))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.explorer_state.is_synced = !state.explorer_state.is_synced;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(Label::new(format!("{} BPM", sample_bpm as u32)).text_xs().text_color(crate::theme::TEXT_PRIMARY)),
+        )
+        // 4. Visualización de Formas de Onda (Waveform)
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            Label::new(selected_name)
+                                .text_xs()
+                                .text_color(crate::theme::TEXT_PRIMARY),
+                        ),
+                )
+                .child(wave_canvas),
+        )
+        .into_any_element()
 }
 
 pub fn is_supported_file(path: &PathBuf) -> bool {
@@ -451,8 +531,7 @@ pub fn is_midi_file(path: &PathBuf) -> bool {
 
 pub fn parse_bpm_from_filename(filename: &str) -> Option<f32> {
     let lower = filename.to_lowercase();
-    
-    // Busca patrones tipo "140bpm", "128 bpm", "95_bpm"
+
     if let Some(bpm_idx) = lower.find("bpm") {
         let prefix = &lower[..bpm_idx];
         let digits: String = prefix

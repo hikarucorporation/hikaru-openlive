@@ -1,0 +1,33 @@
+```Ingeniería de prompts (Yoshi)
+---
+
+> "Che OpenCode, antes de picar código como un animal, quiero que en el directorio `/docs` leas los logs de ayer a la noche. Ahí hay más de seis mil lineas de código en errores. **TU OBJETIVO** es buscar los errores más comunes y encontrar patrones repetitivos en los mismos. Porque anoche te la pasaste picando código como un animal, a pesar de que reduciste los errores de rustc/cargo de 700 a 400 aproximadamente; sigue sin compilar. Para eso sin falta tenemos que saber cuales son los errores más frecuentes en nuestra transición de egui a gpui-kit. Así, cuando nos aparezcan errores chiquitos, los podremos resolver al toque; PERO PRIMERO RESOLVAMOS LOS **ERRORES MÁS GROSOS Y FRECUENTES.**"
+
+---
+
+```Ingeniería de prompts (Gemini)
+
+---
+
+# DIRECTIVA DE AUDITORÍA Y RESOLUCIÓN MASIVA POR PATRONES (MIGRACIÓN GPUI-KIT)
+
+Hola OpenCode. Antes de modificar cualquier línea de código, vas a realizar una auditoría analítica del estado actual de la migración.
+
+## 1. FUENTE DE VERDAD
+Analizá el archivo de logs generado anoche: `hikaru_workspace_errors_log.txt` (o ejecutable mediante `cargo check --workspace`). Con más de 6,000 líneas de output, los errores restantes de rustc no son aleatorios; responden a patrones sintácticos y de ownership específicos.
+
+## 2. OBJETIVO PRIMARIO: CATALOGAR PATRONES
+Realizá un escaneo general sobre los logs y clasificá los errores en categorías de mayor a menor frecuencia (ej. Borrows que no cumplen `'static` en handlers de `.on_click`, firmas Mismatched Types en `Hsla` vs `Rgba`, métodos obsoletos de `Div`, etc.).
+
+## 3. PLAN DE EJECUCIÓN (TOP-DOWN)
+1. Reportame brevemente un resumen con los 3 patrones de error más repetidos y las soluciones idiomáticas de Rust/GPUI Kit que aplican para cada uno.
+2. Atacá PRIMERO las correcciones que resuelven los errores más repetidos de forma sistemática en todos los archivos de `crates/hikaru_gui/src/views/` (en lugar de resolver errores aislados archivo por archivo).
+3. Una vez erradicados los patrones masivos, limpiaremos los errores residuales o específicos.
+
+REGLA DE ORO: NO ejecutes scripts destructivos. Aplica las correcciones analizadas y verifica progresivamente corriendo `cargo check --workspace`.
+
+Empezá leyendo el log y mostrándome la lista de patrones detectados.
+
+---
+
+```

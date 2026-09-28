@@ -1,40 +1,32 @@
-// Copyright (C) Hikaru Corporation - 2026
-// GNU Affero General Public License v3
-// Hikaru OpenLive - Código fuente del Main
-// crates/hikaru_gui/src/main.rs
-
 use std::sync::mpsc::channel;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use hikaru_core::SampleRate;
-use hikaru_audio_engine::EngineMode; // <--- Importamos EngineMode
+use hikaru_audio_engine::EngineMode;
 use hikaru_gui::app::HikaruApp;
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
+use gpui_kit::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 
 static DEFAULT_WAVETABLE: [f32; 2048] = [0.0; 2048];
 
-fn main() -> eframe::Result<()> {
+fn main() {
     #[cfg(target_os = "linux")]
     {
-        // Force X11 backend via XWayland — Wayland native causes transparency/blur
-        // issues with KDE Plasma compositor and plugin X11 windows render incorrectly.
         std::env::set_var("WINIT_UNIX_BACKEND", "x11");
     }
-    
+
     let (tx, rx) = channel();
     let audio_proxy = AudioProxy::new(tx);
 
     let sample_rate = SampleRate::new(44100.0);
-    
-    // 1. Instanciamos el reloj atómico compartido
+
     let position_clock = Arc::new(AtomicU64::new(0));
 
-    // 2. Se lo pasamos a AudioEngine::new
     let engine = hikaru_audio_engine::AudioEngine::new(
-        sample_rate, 
-        &DEFAULT_WAVETABLE, 
-        position_clock.clone()
+        sample_rate,
+        &DEFAULT_WAVETABLE,
+        position_clock.clone(),
     );
     let engine_arc = Arc::new(Mutex::new(engine));
 
@@ -251,8 +243,6 @@ fn main() -> eframe::Result<()> {
                                 let cs = (ev.clip_start_secs.max(0.0) * target_sr) as u64;
                                 (ev.samples, cs)
                             };
-                            // Inicio en negativo (count-in): lo previo al 0 se
-                            // recorta, a partir del 0 suena idéntico.
                             if ev.clip_start_secs < 0.0 {
                                 let drop = ((-ev.clip_start_secs) * target_sr).round()
                                     as usize;
@@ -314,7 +304,6 @@ fn main() -> eframe::Result<()> {
                     }
                 }
 
-                // Los MIDI Clips porongos:
                 GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, notes } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         let converted_notes = notes
@@ -333,7 +322,6 @@ fn main() -> eframe::Result<()> {
                     }
                 }
 
-                // ─── OpenDMS Polyphonic Commands ───────────────────
                 GuiCommand::LoadDmsSample { pad_idx, path } => {
                     if let Ok(mut reader) = hound::WavReader::open(&path) {
                         let spec = reader.spec();
@@ -373,7 +361,7 @@ fn main() -> eframe::Result<()> {
                             sustain_level: sustain.clamp(0.0, 1.0),
                             release_rate: if release_ms > 0.0 { sustain / (release_ms * 0.001 * sr) } else { sr },
                         };
-                        engine.trigger_dms_note(pad_idx, gain, pan, velocity, play_speed, &adsr);
+                        engine.trigger_dms_note(pad_idx, gain, pan, velocity, play_speed, &adsr, 0);
                     }
                 }
                 GuiCommand::DmsNoteOff { pad_idx } => {
@@ -382,7 +370,6 @@ fn main() -> eframe::Result<()> {
                     }
                 }
 
-                // Antes del final `_ => {}`
                 _ => {}
             }
         }
@@ -409,39 +396,35 @@ fn main() -> eframe::Result<()> {
         .map(|engine| engine.output_level_bits.clone())
         .unwrap_or_else(|_| std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)));
 
-    use eframe::egui;
+    gpui_kit::application().run(move |cx| {
+        gpui_kit::init(cx);
 
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
-            .with_min_inner_size([800.0, 480.0]),
-        #[cfg(target_os = "windows")]
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "Hikaru OpenLive",
-        native_options,
-        Box::new(move |cc| {
-            // REGISTRAR LOADERS DE IMÁGENES (PNG / SVG)
-            egui_extras::install_image_loaders(&cc.egui_ctx);
-
-            // FORZAR MODO OSCURO EN EGUI INDEPENDIENTEMENTE DEL TEMA DEL SISTEMA OPERATIVO
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
-
-            let mut app = HikaruApp::new(
-                cc,
-                audio_proxy,
-                audio_stream,
-                position_clock,
-                output_level_bits,
-                Some(engine_arc.clone()),
-            );
-            app.sync_hardware_sample_rate(hardware_sr);
-            Box::new(app)
-        }),
-    )
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(1280.0), px(720.0)),
+                ))),
+                titlebar: None,
+                ..Default::default()
+            },
+            |_, cx| {
+                cx.new(|cx| {
+                    let mut app = HikaruApp::build(
+                        cx,
+                        audio_proxy,
+                        audio_stream,
+                        position_clock,
+                        output_level_bits,
+                        Some(engine_arc.clone()),
+                    );
+                    app.sync_hardware_sample_rate(cx, hardware_sr);
+                    app
+                })
+            },
+        )
+        .expect("failed to open window");
+    });
 }
 
 fn init_cpal_stream(
@@ -574,7 +557,6 @@ fn set_thread_realtime() {
 
 #[cfg(not(target_os = "linux"))]
 fn set_thread_realtime() {
-    // No-op en plataformas no-Linux (macOS/Windows usan APIs diferentes).
 }
 
 fn resample_linear(samples: &[f32], channels: usize, from_sr: f32, to_sr: f32) -> Vec<f32> {

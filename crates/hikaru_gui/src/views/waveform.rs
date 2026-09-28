@@ -1,21 +1,27 @@
-// crates/hikaru_gui/src/views/waveform.rs
-use egui::{Color32, Pos2, Rect, Stroke, Ui};
+use gpui_kit::*;
 
-pub fn draw_waveform(ui: &mut Ui, rect: Rect, pcm_data: &[f32], color: Color32) {
-    if pcm_data.is_empty() || rect.width() <= 0.0 || rect.height() <= 0.0 {
+pub fn draw_waveform_bounds(
+    window: &mut Window,
+    rect: Bounds<Pixels>,
+    pcm_data: &[f32],
+    color: Hsla,
+) {
+    let width: f32 = rect.size.width.into();
+    let height: f32 = rect.size.height.into();
+    if pcm_data.is_empty() || width <= 0.0 || height <= 0.0 {
         return;
     }
 
-    let painter = ui.painter();
-    let center_y = rect.center().y;
-    let half_height = (rect.height() / 2.0) * 0.95_f32; // 95% del canvas
-    let width_px = rect.width().floor() as usize;
+    let origin_x: f32 = rect.origin.x.into();
+    let origin_y: f32 = rect.origin.y.into();
+    let center_y = origin_y + height / 2.0;
+    let half_height = (height / 2.0) * 0.95_f32;
+    let width_px = width.floor() as usize;
 
     if width_px == 0 {
         return;
     }
 
-    // 1. Escaneo del pico absoluto para normalización visual completa
     let mut max_peak = 0.0_f32;
     for &sample in pcm_data {
         let abs_s = sample.abs();
@@ -24,20 +30,17 @@ pub fn draw_waveform(ui: &mut Ui, rect: Rect, pcm_data: &[f32], color: Color32) 
         }
     }
 
-    // Si es silencio absoluto
     if max_peak < 0.00001_f32 {
-        painter.line_segment(
-            [Pos2::new(rect.min.x, center_y), Pos2::new(rect.max.x, center_y)],
-            Stroke::new(1.0_f32, color.linear_multiply(0.3)),
-        );
+        let mut pb = PathBuilder::stroke(px(1.0));
+        pb.move_to(point(px(origin_x), px(center_y)));
+        pb.line_to(point(px(origin_x + width), px(center_y)));
+        window.paint_path(pb.build().unwrap(), color);
         return;
     }
 
-    // Escala de ganancia visual: fuerza que el pico máximo toque los bordes superior/inferior
     let norm_scale = 1.0_f32 / max_peak;
     let total_samples = pcm_data.len();
 
-    // 2. Trazado de min/max por cada píxel horizontal
     for x_idx in 0..width_px {
         let start_sample = (x_idx * total_samples) / width_px;
         let end_sample = (((x_idx + 1) * total_samples) / width_px).min(total_samples);
@@ -53,24 +56,23 @@ pub fn draw_waveform(ui: &mut Ui, rect: Rect, pcm_data: &[f32], color: Color32) 
 
         for &s in slice {
             let scaled = s * norm_scale;
-            if scaled < sample_min { sample_min = scaled; }
-            if scaled > sample_max { sample_max = scaled; }
+            if scaled < sample_min {
+                sample_min = scaled;
+            }
+            if scaled > sample_max {
+                sample_max = scaled;
+            }
         }
 
-        // Píxel en silencio absoluto: no dibujar nada. Antes se dibujaba
-        // un palito de 2px que formaba una "línea cyan rara" en los huecos
-        // (p. ej. al mover un evento se estiraba a la izquierda del clip).
         if sample_min == 0.0_f32 && sample_max == 0.0_f32 {
             continue;
         }
 
-        let x_pos = rect.min.x + x_idx as f32;
+        let x_pos = origin_x + x_idx as f32;
 
-        // Mapeo top-down en coordenadas de egui
         let y_top = center_y - (sample_max * half_height);
         let y_bottom = center_y - (sample_min * half_height);
 
-        // Garantizar al menos 2px de altura para picos muy breves o transitorios
         let y_min_final = y_top.min(y_bottom);
         let mut y_max_final = y_top.max(y_bottom);
 
@@ -78,9 +80,9 @@ pub fn draw_waveform(ui: &mut Ui, rect: Rect, pcm_data: &[f32], color: Color32) 
             y_max_final = y_min_final + 2.0;
         }
 
-        painter.line_segment(
-            [Pos2::new(x_pos, y_min_final), Pos2::new(x_pos, y_max_final)],
-            Stroke::new(1.0_f32, color),
-        );
+        let mut pb = PathBuilder::stroke(px(1.0));
+        pb.move_to(point(px(x_pos), px(y_min_final)));
+        pb.line_to(point(px(x_pos), px(y_max_final)));
+        window.paint_path(pb.build().unwrap(), color);
     }
 }

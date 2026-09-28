@@ -1,34 +1,77 @@
-use eframe::egui;
+// Hikaru OpenLive - Theme
+// GNU AGPLv3
+// crates/hikaru_gui/src/theme.rs
 
-pub const DARK_DEF: egui::Color32 = egui::Color32::from_rgb(16, 18, 22);
-pub const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(24, 26, 32);
-pub const BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(42, 45, 55);
-pub const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0, 240, 255);
-pub const NEON_GREEN: egui::Color32 = egui::Color32::from_rgb(57, 255, 20);
-pub const NEON_AMBER: egui::Color32 = egui::Color32::from_rgb(255, 183, 0);
+use gpui_kit::Hsla;
 
-pub fn setup_custom_theme(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    
-    visuals.panel_fill = DARK_DEF;
-    visuals.window_fill = PANEL_BG;
-    visuals.widgets.noninteractive.bg_fill = PANEL_BG;
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, BORDER_COLOR);
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_gray(180));
-    
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(38, 41, 51);
-    visuals.widgets.inactive.rounding = egui::Rounding::same(4.0);
-    
-    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(48, 51, 61);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT_CYAN);
-    
-    visuals.widgets.active.bg_fill = egui::Color32::from_rgb(58, 61, 71);
-    visuals.selection.bg_fill = ACCENT_CYAN.linear_multiply(0.3);
-    
-    ctx.set_visuals(visuals);
+// =========================================================================
+// PALETA BASE: ABLETON / BITWIG DARK THEME
+// =========================================================================
 
-    let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
-    ctx.set_style(style);
+// Fondos y Superficies
+pub const WINDOW_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.08, a: 1.0 };    // #141414 (Fondo principal)
+pub const PANEL_BG: Hsla  = Hsla { h: 0.0, s: 0.0, l: 0.12, a: 1.0 };    // #1f1f1f (Contenedores)
+pub const HEADER_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.10, a: 1.0 };    // #1a1a1a (Barra superior)
+pub const SURFACE_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.16, a: 1.0 };   // #292929 (Tarjetas y elementos)
+
+// Estados de Interacción (Botones / Items)
+pub const HOVER_BG: Hsla   = Hsla { h: 0.0, s: 0.0, l: 0.22, a: 1.0 };   // Highlight al pasar el mouse
+pub const ACTIVE_BG: Hsla  = Hsla { h: 0.0, s: 0.0, l: 0.28, a: 1.0 };   // Clic / Presionado
+pub const SELECTED_BG: Hsla = Hsla { h: 0.60, s: 0.35, l: 0.25, a: 1.0 }; // Selección activa de track/clip
+
+// Bordes y Divisores
+pub const BORDER_COLOR: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.18, a: 1.0 }; // Separadores sutiles
+pub const BORDER_FOCUS: Hsla = Hsla { h: 0.12, s: 1.0, l: 0.50, a: 1.0 }; // Borde activo al seleccionar
+
+// Texto
+pub const TEXT_PRIMARY: Hsla   = Hsla { h: 0.0, s: 0.0, l: 0.88, a: 1.0 }; // Blanco/Gris claro (#e0e0e0)
+pub const TEXT_MUTED: Hsla     = Hsla { h: 0.0, s: 0.0, l: 0.55, a: 1.0 }; // Gris medio para labels (#8c8c8c)
+pub const TEXT_DISABLED: Hsla  = Hsla { h: 0.0, s: 0.0, l: 0.35, a: 1.0 }; // Elementos desactivados
+
+// Acentos de DAW (Play, Record, Solo, Mute, Metrónomo)
+pub const PLAY_GREEN: Hsla  = Hsla { h: 0.38, s: 0.85, l: 0.50, a: 1.0 }; // Play / Activo (#1feb54)
+pub const REC_RED: Hsla     = Hsla { h: 0.00, s: 0.85, l: 0.55, a: 1.0 }; // Grabación (#f02a2a)
+pub const ACCENT_ORANGE: Hsla = Hsla { h: 0.08, s: 0.95, l: 0.55, a: 1.0 }; // Ableton Orange (#f26c0d)
+pub const SOLO_YELLOW: Hsla = Hsla { h: 0.14, s: 0.90, l: 0.50, a: 1.0 }; // Solo track
+pub const MUTE_BLUE: Hsla   = Hsla { h: 0.55, s: 0.80, l: 0.45, a: 1.0 }; // Mute track
+pub const ACCENT_COLOR: Hsla = Hsla { h: 0.08, s: 0.95, l: 0.55, a: 1.0 }; // Acento primario (naranja)
+pub const ACCENT_STUDIO: Hsla = Hsla { h: 0.55, s: 0.80, l: 0.50, a: 1.0 }; // Acento studio (azul)
+pub const SLOT_ACTIVE_BG: Hsla = Hsla { h: 0.60, s: 0.35, l: 0.25, a: 1.0 }; // Fondo de slot activo
+
+// =========================================================================
+// CONVERSORES RGB / RGBA
+// =========================================================================
+
+pub fn rgb(r: u8, g: u8, b: u8) -> Hsla {
+    let rf = r as f32 / 255.0;
+    let gf = g as f32 / 255.0;
+    let bf = b as f32 / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let l = (max + min) / 2.0;
+    let (h, s) = if (max - min).abs() < f32::EPSILON {
+        (0.0, 0.0)
+    } else {
+        let d = max - min;
+        let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+        let h = if (max - rf).abs() < f32::EPSILON {
+            ((gf - bf) / d + if gf < bf { 6.0 } else { 0.0 }) / 6.0
+        } else if (max - gf).abs() < f32::EPSILON {
+            ((bf - rf) / d + 2.0) / 6.0
+        } else {
+            ((rf - gf) / d + 4.0) / 6.0
+        };
+        (h, s)
+    };
+    Hsla { h, s, l, a: 1.0 }
+}
+
+pub fn rgba(r: u8, g: u8, b: u8, a: f32) -> Hsla {
+    let base = rgb(r, g, b);
+    Hsla {
+        h: base.h,
+        s: base.s,
+        l: base.l,
+        a,
+    }
 }

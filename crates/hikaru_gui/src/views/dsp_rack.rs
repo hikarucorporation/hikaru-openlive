@@ -1,360 +1,224 @@
-/*
- * Hikaru OpenLive - DSP Rack View
- * License: AGPL-3.0-or-later
- */
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
 
-use std::path::PathBuf;
-use egui::{Ui, RichText, Color32, ScrollArea, Frame, Stroke, Button, Align, Slider};
-use crate::views::mixer::{Track, DspSlot};
+use crate::app::{state, HikaruApp};
+use crate::views::mixer::DspSlot;
 use crate::views::open_dms;
-use crate::audio_proxy::AudioProxy;
 
-pub fn show(
-    ui: &mut egui::Ui,
-    tracks: &mut Vec<Track>,
-    selected_idx: usize,
-    selected_slot: &mut usize,
-    selected_matrix_slot: Option<(usize, usize)>, // <--- Agregamos la celda de la matriz (Track, Scene)
-    dragged_sample: &mut Option<PathBuf>,
-    audio_proxy: &AudioProxy,
-) {
-    if tracks.is_empty() {
-        ui.label(RichText::new("No active track selected.").color(Color32::GRAY));
-        return;
-    }
+pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let app = state(cx).read(cx);
+    let selected_idx = app.selected_track_index;
+    let selected_slot = app.selected_slot_index;
+    let selected_matrix_slot = app.matrix_state.selected_slot;
+    let dragged_sample = app.dragged_sample.clone();
+    let audio_proxy = app.audio_proxy.clone();
+    let tracks = match app.mode {
+        crate::app::AppMode::OpenLive => &app.live_tracks,
+        crate::app::AppMode::OpenStudio => &app.studio_tracks,
+    };
+    let track_idx = selected_idx.min(tracks.len().saturating_sub(1));
+    let track = &tracks[track_idx];
+    let track_name = track.name.clone();
+    let effects = track.effects.clone();
+    drop(app);
 
-    let track_idx = selected_idx.min(tracks.len() - 1);
-    let track = &mut tracks[track_idx];
-    let num_slots = track.effects.len();
-
-    let mut swap_action: Option<(usize, usize)> = None;
-    let mut should_scroll = false;
-
-    // Teclado: Navegación entre slots con Flecha Izquierda / Derecha (Shift para mover)
-    ui.input(|i| {
-        let shift = i.modifiers.shift;
-
-        if i.key_pressed(egui::Key::ArrowLeft) {
-            if shift && *selected_slot > 0 {
-                swap_action = Some((*selected_slot, *selected_slot - 1));
-                *selected_slot -= 1;
-                should_scroll = true;
-            } else if !shift && *selected_slot > 0 {
-                *selected_slot -= 1;
-                should_scroll = true;
-            }
-        }
-
-        if i.key_pressed(egui::Key::ArrowRight) {
-            if shift && *selected_slot + 1 < num_slots {
-                swap_action = Some((*selected_slot, *selected_slot + 1));
-                *selected_slot += 1;
-                should_scroll = true;
-            } else if !shift && *selected_slot + 1 < num_slots {
-                *selected_slot += 1;
-                should_scroll = true;
-            }
-        }
-    });
-
-    if let Some((from, to)) = swap_action {
-        track.effects.swap(from, to);
-    }
-
-    // Armamos la etiqueta con Track y Scene
-    let rack_title = if let Some((_t_idx, s_idx)) = selected_matrix_slot {
-        format!("DSP RACK: {} | Scene {}", track.name, s_idx + 1)
+    let rack_title = if let Some((_t, s)) = selected_matrix_slot {
+        format!("DSP RACK: {} | Scene {}", track_name, s + 1)
     } else {
-        format!("DSP RACK: {}", track.name)
-    };;
+        format!("DSP RACK: {}", track_name)
+    };
 
-    // Contenedor raíz: ScrollArea horizontal directamente sobre ui
-    ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            // Controles de cabecera a la izquierda
-            ui.vertical(|ui| {
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(rack_title)
-                        .strong()
-                        .size(14.0)
-                        .color(Color32::from_rgb(0, 255, 255))
-                );
-
-                ui.add_space(4.0);
-                if ui.button(RichText::new(" [ + ] Add Slot ").small().strong()).clicked() {
-                    let new_id = track.effects.len();
-                    track.effects.push(DspSlot::new(new_id, "Empty Slot".to_string()));
-                    *selected_slot = track.effects.len() - 1;
-                    should_scroll = true;
-                }
-
-                ui.set_enabled(!track.effects.is_empty());
-                if ui.button(RichText::new(" [ - ] Remove ").small().strong()).clicked() {
-                    track.effects.pop();
-                    if *selected_slot >= track.effects.len() && !track.effects.is_empty() {
-                        *selected_slot = track.effects.len() - 1;
-                    }
-                }
-                ui.set_enabled(true);
-            });
-
-            ui.separator();
-
-            // Cadena Horizontal de Dispositivos (Efectos / Sintes)
-            if track.effects.is_empty() {
-                ui.add_space(20.0);
-                ui.vertical_centered(|ui| {
-                    ui.add_space(15.0);
-                    ui.label(RichText::new("No modules in chain.").color(Color32::GRAY));
-                    ui.label(RichText::new("Click [+] Add Slot to insert plugins.").small().color(Color32::from_gray(60)));
-                });
-            } else {
-                let mut swap_to_trigger: Option<(usize, usize)> = None;
-                let total_slots = track.effects.len();
-
-                for (idx, slot) in track.effects.iter_mut().enumerate() {
-                    let is_selected = idx == *selected_slot;
-                    
-                    if let Some(swap) = render_slot_card(ui, slot, idx, total_slots, is_selected, selected_slot, should_scroll, dragged_sample, audio_proxy) {
-                        swap_to_trigger = Some(swap);
-                    }
-                    
-                    ui.add_space(6.0);
-                }
-
-                if let Some((from, to)) = swap_to_trigger {
-                    track.effects.swap(from, to);
-                }
-            }
-        });
-    });
-}
-
-fn render_slot_card(
-    ui: &mut Ui, 
-    slot: &mut DspSlot, 
-    idx: usize, 
-    total_slots: usize,
-    is_selected: bool, 
-    selected_slot: &mut usize,
-    should_scroll: bool,
-    dragged_sample: &mut Option<PathBuf>,
-    audio_proxy: &AudioProxy,
-) -> Option<(usize, usize)> {
-    let mut swap_req = None;
-    let border_color = if is_selected { Color32::from_rgb(255, 110, 0) } else { Color32::from_gray(50) };
-    let bg_color = if is_selected { Color32::from_rgb(40, 40, 45) } else { Color32::from_rgb(25, 25, 28) };
-
-    ui.push_id(slot.id, |ui| {
-        let frame_res = Frame::none()
-            .fill(bg_color)
-            .stroke(Stroke::new(1.0_f32, border_color))
-            .inner_margin(6.0)
-            .show(ui, |ui| {
-                // Adaptamos el ancho de la tarjeta según el tipo de dispositivo
-                let card_width = match slot.name.as_str() {
-                    "OpenWavetable" => 240.0,
-                    "Hikaru OpenDMS" => 540.0,
-                    "OpenSpectralFX" => 200.0,
-                    "Empty Slot" => 170.0,
-                    _ => 190.0,
-                };
-
-                ui.set_width(card_width);
-                let card_height = if slot.name == "Hikaru OpenDMS" { 220.0 } else { 100.0 };
-                ui.set_height(card_height);
-
-                ui.vertical(|ui| {
-                    // Cabecera: Controles de orden, índice, bypass y selector de plugin
-                    ui.horizontal(|ui| {
-                        ui.set_enabled(idx > 0);
-                        if ui.button(RichText::new("◀").small()).clicked() {
-                            swap_req = Some((idx, idx - 1));
-                            *selected_slot = idx - 1;
-                        }
-
-                        ui.set_enabled(idx + 1 < total_slots);
-                        if ui.button(RichText::new("▶").small()).clicked() {
-                            swap_req = Some((idx, idx + 1));
-                            *selected_slot = idx + 1;
-                        }
-                        ui.set_enabled(true);
-
-                        let num_btn = ui.add(
-                            Button::new(RichText::new(format!("{:02}", idx + 1)).color(Color32::from_rgb(0, 255, 255)).strong())
-                                .frame(false)
-                        );
-                        if num_btn.clicked() {
-                            *selected_slot = idx;
-                        }
-
-                        ui.menu_button(RichText::new("🔻").small(), |ui| {
-                            ui.set_min_width(180.0);
-
-                            ui.label(RichText::new("Native Generators").small().color(Color32::from_rgb(0, 255, 255)));
-                            ui.indent("hdr_native_gen", |ui| {
-                                ui.label(RichText::new("Synths").small().color(Color32::from_rgb(0, 200, 200)));
-                                if ui.button(" OpenWavetable").clicked() {
-                                    slot.name = "OpenWavetable".to_string();
-                                    *selected_slot = idx;
-                                    ui.close_menu();
+    h_flex()
+        .id("dsp_rack")
+        .size_full()
+        .bg(rgb(0x14141A))
+        .p(px(8.0))
+        .gap(px(8.0))
+        .child(
+            v_flex()
+                .gap(px(4.0))
+                .child(Label::new(rack_title).text_sm().font_weight(FontWeight::BOLD))
+                .child(
+                    Button::new("dsp_add_slot")
+                        .label(" [ + ] Add Slot ")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                let tracks = match state.mode {
+                                    crate::app::AppMode::OpenLive => &mut state.live_tracks,
+                                    crate::app::AppMode::OpenStudio => &mut state.studio_tracks,
+                                };
+                                if let Some(track) = tracks.get_mut(track_idx) {
+                                    let new_id = track.effects.len();
+                                    track.effects.push(DspSlot::new(new_id, "Empty Slot".to_string()));
+                                    state.selected_slot_index = track.effects.len() - 1;
                                 }
-                                ui.label(RichText::new("Drums").small().color(Color32::from_rgb(0, 200, 200)));
-                                if ui.button(" Hikaru OpenDMS").clicked() {
-                                    slot.name = "Hikaru OpenDMS".to_string();
-                                    *selected_slot = idx;
-                                    ui.close_menu();
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("dsp_remove_slot")
+                        .label(" [ - ] Remove ")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                let tracks = match state.mode {
+                                    crate::app::AppMode::OpenLive => &mut state.live_tracks,
+                                    crate::app::AppMode::OpenStudio => &mut state.studio_tracks,
+                                };
+                                if let Some(track) = tracks.get_mut(track_idx) {
+                                    track.effects.pop();
+                                    if state.selected_slot_index >= track.effects.len()
+                                        && !track.effects.is_empty()
+                                    {
+                                        state.selected_slot_index = track.effects.len() - 1;
+                                    }
                                 }
+                                cx.notify();
                             });
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_x_scrollbar()
+                .child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .children(effects.iter().enumerate().map(|(idx, slot)| {
+                            let is_sel = idx == selected_slot;
+                            let slot_name = slot.name.clone();
+                            let slot_active = slot.active;
+                            let slot_open = slot.is_open;
+                            let card_w = match slot.name.as_str() {
+                                "OpenWavetable" => 240.0,
+                                "Hikaru OpenDMS" => 540.0,
+                                "OpenSpectralFX" => 200.0,
+                                "Empty Slot" => 170.0,
+                                _ => 190.0,
+                            };
+                            let card_h = if slot.name == "Hikaru OpenDMS" { 220.0 } else { 100.0 };
 
-                            ui.separator();
-
-                            ui.label(RichText::new("Native FX").small().color(Color32::from_rgb(255, 110, 0)));
-                            if ui.button(" OpenSpectralFX").clicked() {
-                                slot.name = "OpenSpectralFX".to_string();
-                                *selected_slot = idx;
-                                ui.close_menu();
-                            }
-
-                            ui.separator();
-
-                            ui.label(RichText::new("VST3 / External").small().color(Color32::from_rgb(100, 200, 255)));
-                            if ui.button(" Vital (VST3)").clicked() {
-                                slot.name = "Vital (VST3)".to_string();
-                                *selected_slot = idx;
-                                ui.close_menu();
-                            }
-                            if ui.button(" External CLAP...").clicked() {
-                                slot.name = "CLAP Plugin".to_string();
-                                *selected_slot = idx;
-                                ui.close_menu();
-                            }
-                        });
-
-                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            let chk = ui.checkbox(&mut slot.active, "");
-                            if chk.clicked() {
-                                *selected_slot = idx;
-                            }
-
-                            if slot.name != "Empty Slot" {
-                                let icon_text = if slot.is_open { "▣" } else { "□" };
-                                let gui_btn = ui.add(
-                                    Button::new(RichText::new(icon_text).strong().size(13.0).color(Color32::from_rgb(0, 255, 255)))
-                                        .frame(false)
-                                );
-
-                                if gui_btn.clicked() {
-                                    slot.is_open = !slot.is_open;
-                                    *selected_slot = idx;
-                                }
-                            }
-                        });
-                    });
-
-                    ui.separator();
-
-                    // Renderizado dinámico de la UI integrada según el módulo cargado
-                    match slot.name.as_str() {
-                        "OpenWavetable" => {
-                            ui.label(RichText::new("Wavetable Synth").small().strong().color(Color32::from_rgb(0, 255, 255)));
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(RichText::new("WT Pos").size(10.0));
-                                    ui.add(Slider::new(&mut 0.5_f32, 0.0..=1.0).show_value(false));
-                                });
-                                ui.vertical(|ui| {
-                                    ui.label(RichText::new("Cutoff").size(10.0));
-                                    ui.add(Slider::new(&mut 0.8_f32, 0.0..=1.0).show_value(false));
-                                });
-                            });
-                        }
-                        "Hikaru OpenDMS" => {
-                            if slot.dms_state.is_none() {
-                                slot.dms_state = Some(open_dms::OpenDms::default());
-                            }
-                            if let Some(ref mut dms) = slot.dms_state {
-                                open_dms::render_dms_ui(ui, dms, 120.0, dragged_sample, audio_proxy);
-                            }
-                        }
-                        "OpenSpectralFX" => {
-                            ui.label(RichText::new("Spectral Processor").small().strong().color(Color32::from_rgb(255, 110, 0)));
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(RichText::new("FFT Size").size(10.0));
-                                    let _ = ui.button(RichText::new("2048").small());
-                                });
-                                ui.vertical(|ui| {
-                                    ui.label(RichText::new("Mix").size(10.0));
-                                    ui.add(Slider::new(&mut 0.5_f32, 0.0..=1.0).show_value(false));
-                                });
-                            });
-                        }
-                        "Empty Slot" => {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(10.0);
-                                ui.menu_button(RichText::new("Select Plugin 🔻").small().color(Color32::GRAY), |ui| {
-                                    ui.set_min_width(180.0);
-
-                                    ui.label(RichText::new("Native Generators").small().color(Color32::from_rgb(0, 255, 255)));
-                                    ui.indent("empty_native_gen", |ui| {
-                                        ui.label(RichText::new("Synths").small().color(Color32::from_rgb(0, 200, 200)));
-                                        if ui.button(" OpenWavetable").clicked() {
-                                            slot.name = "OpenWavetable".to_string();
-                                            *selected_slot = idx;
-                                            ui.close_menu();
+                            v_flex()
+                                .w(px(card_w))
+                                .h(px(card_h))
+                                .bg(if is_sel { rgb(0x28282D) } else { rgb(0x19191C) })
+                                .border_1()
+                                .border_color(if is_sel { rgb(0xFF6E00) } else { rgb(0x323232) })
+                                .rounded(px(4.0))
+                                .p(px(6.0))
+                                .gap(px(4.0))
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap(px(4.0))
+                                        .child(
+                                            Button::new(format!("dsp_slot_num_{}", idx))
+                                                .label(format!("{:02}", idx + 1))
+                                                .compact()
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |state, cx| {
+                                                        state.selected_slot_index = idx;
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .child(Label::new(slot_name.clone()).text_xs())
+                                        .child(div().flex_1())
+                                        .child(
+                                            Button::new(format!("dsp_slot_active_{}", idx))
+                                                .label(if slot_active { "●" } else { "○" })
+                                                .compact()
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |state, cx| {
+                                                        let tracks = match state.mode {
+                                                            crate::app::AppMode::OpenLive => &mut state.live_tracks,
+                                                            crate::app::AppMode::OpenStudio => &mut state.studio_tracks,
+                                                        };
+                                                        if let Some(track) = tracks.get_mut(track_idx) {
+                                                            if let Some(s) = track.effects.get_mut(idx) {
+                                                                s.active = !s.active;
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(format!("dsp_slot_open_{}", idx))
+                                                .label(if slot_open { "▣" } else { "□" })
+                                                .compact()
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |state, cx| {
+                                                        let tracks = match state.mode {
+                                                            crate::app::AppMode::OpenLive => &mut state.live_tracks,
+                                                            crate::app::AppMode::OpenStudio => &mut state.studio_tracks,
+                                                        };
+                                                        if let Some(track) = tracks.get_mut(track_idx) {
+                                                            if let Some(s) = track.effects.get_mut(idx) {
+                                                                s.is_open = !s.is_open;
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        ),
+                                )
+                                .child(match slot.name.as_str() {
+                                    "OpenWavetable" => v_flex()
+                                        .gap(px(2.0))
+                                        .child(Label::new("Wavetable Synth").text_xs())
+                                        .child(Label::new("WT Pos / Cutoff").text_xs())
+                                        .into_any_element(),
+                                    "Hikaru OpenDMS" => {
+                                        let dms_state = slot.dms_state.clone();
+                                        match dms_state {
+                                            Some(dms) => open_dms::render_dms_compact(cx, &dms, &dragged_sample, &audio_proxy),
+                                            None => Label::new("No DMS state").text_xs().into_any_element(),
                                         }
-                                        ui.label(RichText::new("Drums").small().color(Color32::from_rgb(0, 200, 200)));
-                                        if ui.button(" Hikaru OpenDMS").clicked() {
-                                            slot.name = "Hikaru OpenDMS".to_string();
-                                            *selected_slot = idx;
-                                            ui.close_menu();
-                                        }
-                                    });
-
-                                    ui.separator();
-
-                                    ui.label(RichText::new("Native FX").small().color(Color32::from_rgb(255, 110, 0)));
-                                    if ui.button(" OpenSpectralFX").clicked() {
-                                        slot.name = "OpenSpectralFX".to_string();
-                                        *selected_slot = idx;
-                                        ui.close_menu();
                                     }
-
-                                    ui.separator();
-
-                                    ui.label(RichText::new("VST3 / External").small().color(Color32::from_rgb(100, 200, 255)));
-                                    if ui.button(" Vital (VST3)").clicked() {
-                                        slot.name = "Vital (VST3)".to_string();
-                                        *selected_slot = idx;
-                                        ui.close_menu();
-                                    }
-                                    if ui.button(" External CLAP...").clicked() {
-                                        slot.name = "CLAP Plugin".to_string();
-                                        *selected_slot = idx;
-                                        ui.close_menu();
-                                    }
-                                });
-                            });
-                        }
-                        _ => {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&slot.name).small().strong().color(Color32::WHITE));
-                                ui.add_space(4.0);
-                                if ui.button(RichText::new("Open Floating Window").small()).clicked() {
-                                    slot.is_open = true;
-                                }
-                            });
-                        }
-                    }
-                });
-            });
-
-        if is_selected && should_scroll {
-            frame_res.response.scroll_to_me(Some(Align::Center));
-        }
-    });
-
-    swap_req
+                                    "OpenSpectralFX" => v_flex()
+                                        .gap(px(2.0))
+                                        .child(Label::new("Spectral Processor").text_xs())
+                                        .child(Label::new("FFT Size / Mix").text_xs())
+                                        .into_any_element(),
+                                    _ => v_flex()
+                                        .gap(px(2.0))
+                                        .child(Label::new("Empty Slot").text_xs())
+                                        .child(
+                                            Button::new("dsp_empty_select")
+                                                .label("Select Plugin")
+                                                .compact()
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |state, cx| {
+                                                        let tracks = match state.mode {
+                                                            crate::app::AppMode::OpenLive => &mut state.live_tracks,
+                                                            crate::app::AppMode::OpenStudio => &mut state.studio_tracks,
+                                                        };
+                                                        if let Some(track) = tracks.get_mut(track_idx) {
+                                                            if let Some(s) = track.effects.get_mut(idx) {
+                                                                s.name = "OpenWavetable".to_string();
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .into_any_element(),
+                                })
+                        })),
+                ),
+        )
 }

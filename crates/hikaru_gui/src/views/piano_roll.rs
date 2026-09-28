@@ -1,9 +1,14 @@
-// Copyright (C) Hikaru Corporation - 2026
-// GNU Affero General Public License v3
-// crates/hikaru_gui/src/views/piano_roll.rs
-
-use egui::*;
 use std::collections::{HashMap, HashSet};
+
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
+
+use crate::app::{state, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use super::open_dms::OpenDms;
 use super::mixer::Track;
@@ -38,64 +43,35 @@ pub struct PianoRollState {
     pub playhead_tick: u64,
     pub prev_playhead_tick: u64,
     triggered_notes: HashSet<(u8, u64)>,
-    /// Inicio de la selección de tiempo en ticks.
     pub selection_start_tick: u64,
-    /// Fin de la selección de tiempo en ticks.
     pub selection_end_tick: u64,
-    /// Si hay una selección de tiempo activa.
     pub selection_active: bool,
-    /// Estado temporal para dibujar la selección mientras se arrastra.
     pub selection_dragging: bool,
-    /// Selección visual (translúcida) mientras dura el Shift+Drag.
-    pub selection_preview_start_ticks: u64,
-    pub selection_preview_end_ticks: u64,
+    pub selection_preview_start_tick: u64,
+    pub selection_preview_end_tick: u64,
     pub selection_preview_active: bool,
-    /// Handle activo para redimensionar la selección.
     pub selection_drag_handle: SelectionDragHandle,
-    /// Si el loop de la selección está activado.
     pub loop_enabled: bool,
-    /// Tick del transporte cuando empezó el loop.
     pub loop_transport_start_tick: u64,
-    /// Timestamp del sistema (Instant) cuando empezó el loop.
     pub loop_start_instant: Option<std::time::Instant>,
-    /// Si hay un resize de nota en curso por uno de sus extremos.
     pub note_resize_active: bool,
-    /// Extremo que se está arrastrando (Left o Right).
     pub note_resize_handle: SelectionDragHandle,
-    /// Índice en `notes` de la nota cuyo extremo se agarró.
     pub note_resize_index: Option<usize>,
-    /// Notas afectadas por el resize multi: `(index, start_orig, duration_orig)`.
-    /// Si el grab estaba en la selección, son todas las seleccionadas; si no, solo esa.
     pub note_resize_targets: Vec<(usize, u64, u64)>,
-    /// Delta de start (handle Left), en ticks. Se aplica a cada target.
     pub note_resize_delta_start: i64,
-    /// Delta de duration (handle Right), en ticks. Se aplica a cada target.
     pub note_resize_delta_duration: i64,
-    /// Índices de notas seleccionadas (marquee con click derecho).
-    /// NO confundir con la Time Selection (que sirve para loopear).
     pub selected_notes: HashSet<usize>,
-    /// Si el marquee de selección de notas está en curso.
     pub note_marquee_active: bool,
-    /// Esquina de inicio del marquee (coords de contenido).
-    pub note_marquee_start: Option<Pos2>,
-    /// Esquina actual del marquee mientras se arrastra.
-    pub note_marquee_current: Option<Pos2>,
-    /// Si el marquee actual añade a la selección (Shift) o la reemplaza.
+    pub note_marquee_start: Option<gpui_kit::Point<gpui_kit::Pixels>>,
+    pub note_marquee_current: Option<gpui_kit::Point<gpui_kit::Pixels>>,
     pub note_marquee_additive: bool,
-    /// Slot del que se cargaron las notas (para invalidar la selección al cambiar).
     pub notes_source_slot: Option<(usize, usize)>,
-    /// Si hay un arrastre (mover) de notas seleccionadas en curso.
     pub note_move_active: bool,
-    /// Índice de la nota agarrada para iniciar el move.
     pub note_move_grab_index: Option<usize>,
-    /// Posiciones originales `(index, start_tick, pitch)` al iniciar el arrastre.
     pub note_move_orig: Vec<(usize, u64, u8)>,
-    /// Delta preview en ticks (ya cuantizado al Snap to Grid).
     pub note_move_preview_delta_ticks: i64,
-    /// Delta preview en filas (semitonos).
     pub note_move_preview_delta_rows: i32,
-    /// Puntero donde se originó el press del move (para delta acumulado).
-    pub note_move_origin_pointer: Option<Pos2>,
+    pub note_move_origin_pointer: Option<gpui_kit::Point<gpui_kit::Pixels>>,
 }
 
 impl Default for PianoRollState {
@@ -113,8 +89,8 @@ impl Default for PianoRollState {
             selection_end_tick: 0,
             selection_active: false,
             selection_dragging: false,
-            selection_preview_start_ticks: 0,
-            selection_preview_end_ticks: 0,
+            selection_preview_start_tick: 0,
+            selection_preview_end_tick: 0,
             selection_preview_active: false,
             selection_drag_handle: SelectionDragHandle::None,
             loop_enabled: false,
@@ -148,8 +124,8 @@ impl PianoRollState {
         self.selection_end_tick = 0;
         self.selection_active = false;
         self.selection_dragging = false;
-        self.selection_preview_start_ticks = 0;
-        self.selection_preview_end_ticks = 0;
+        self.selection_preview_start_tick = 0;
+        self.selection_preview_end_tick = 0;
         self.selection_preview_active = false;
         self.selection_drag_handle = SelectionDragHandle::None;
         self.loop_enabled = false;
@@ -169,7 +145,6 @@ impl PianoRollState {
         self.note_move_origin_pointer = None;
     }
 
-    /// Limpia solo la selección de NOTAS (marquee), sin tocar la Time Selection.
     pub fn clear_note_selection(&mut self) {
         self.selected_notes.clear();
         self.note_marquee_active = false;
@@ -212,17 +187,14 @@ fn find_opendms_in_track(track: &Track) -> Option<&OpenDms> {
     })
 }
 
-const QUANTIZE_TICKS: u64 = 240; // 1/16 note a 960 PPQ
+const QUANTIZE_TICKS: u64 = 240;
 const TICKS_PER_BEAT: u64 = 960;
-const TICKS_PER_BAR: u64 = 3840; // 4/4 a 960 PPQ
-const RULER_HEIGHT: f32 = 24.0;   // Altura fija de la regla de compases
+const TICKS_PER_BAR: u64 = 3840;
+const RULER_HEIGHT: f32 = 24.0;
 const NOTE_INSERT_VELOCITY: u8 = 100;
-/// Ancho en px de las hitboxes de resize en los extremos de cada nota.
 const NOTE_EDGE_HIT_W: f32 = 8.0;
-/// Duración mínima de una nota al redimensionar (1/16).
 const MIN_NOTE_DURATION_TICKS: u64 = QUANTIZE_TICKS;
 
-/// Cuantiza `tick` a múltiplos de `step` (hacia abajo), sin bajar de 0.
 fn quantize_tick(tick: u64, step: u64) -> u64 {
     if step == 0 {
         return tick;
@@ -230,8 +202,6 @@ fn quantize_tick(tick: u64, step: u64) -> u64 {
     (tick / step) * step
 }
 
-/// Redimensiona el extremo **izquierdo** de una nota.
-/// El extremo derecho queda anclado; se devuelve `(nuevo_start, nueva_duration)`.
 fn resize_note_left(orig_start: u64, orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
     let end = orig_start.saturating_add(orig_duration);
     let min_dur = MIN_NOTE_DURATION_TICKS;
@@ -243,8 +213,6 @@ fn resize_note_left(orig_start: u64, orig_duration: u64, pointer_tick: u64) -> (
     (new_start, new_duration)
 }
 
-/// Redimensiona el extremo **derecho** de una nota.
-/// El extremo izquierdo queda anclado; se devuelve `(start, nueva_duration)`.
 fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
     let min_dur = MIN_NOTE_DURATION_TICKS;
     let new_end = quantize_tick(pointer_tick, QUANTIZE_TICKS).max(orig_start + min_dur);
@@ -252,8 +220,6 @@ fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) ->
     (orig_start, new_duration)
 }
 
-/// Aplica un delta de start (handle Left) a una nota origen, anclando el final.
-/// Devuelve `(nuevo_start, nueva_duration)`.
 fn apply_resize_left_delta(orig_start: u64, orig_duration: u64, delta_start: i64) -> (u64, u64) {
     let end = orig_start.saturating_add(orig_duration);
     let min_end = orig_start.saturating_add(MIN_NOTE_DURATION_TICKS);
@@ -263,8 +229,6 @@ fn apply_resize_left_delta(orig_start: u64, orig_duration: u64, delta_start: i64
     (new_start, new_end.saturating_sub(new_start))
 }
 
-/// Aplica un delta de duration (handle Right) a una nota origen.
-/// El inicio queda anclado; se devuelve `(start, nueva_duration)`.
 fn apply_resize_right_delta(orig_start: u64, orig_duration: u64, delta_duration: i64) -> (u64, u64) {
     let raw_dur = (orig_duration as i64).saturating_add(delta_duration);
     let new_dur = (raw_dur.max(MIN_NOTE_DURATION_TICKS as i64) as u64)
@@ -272,9 +236,6 @@ fn apply_resize_right_delta(orig_start: u64, orig_duration: u64, delta_duration:
     (orig_start, new_dur)
 }
 
-/// Calcula el delta de start (izq) para resize multi: la nota grab mueve su
-/// extremo izquierdo; el resto de targets recibe el MISMO delta de start
-/// (cada uno ancla su propio final).
 fn compute_resize_left_delta(
     targets: &[(usize, u64, u64)],
     grab_index: usize,
@@ -288,8 +249,6 @@ fn compute_resize_left_delta(
     (new_start as i64) - (orig_start as i64)
 }
 
-/// Calcula el delta de duration (der) para resize multi: la nota grab mueve su
-/// extremo derecho; el resto de targets recibe el MISMO delta de duration.
 fn compute_resize_right_delta(
     targets: &[(usize, u64, u64)],
     grab_index: usize,
@@ -303,8 +262,6 @@ fn compute_resize_right_delta(
     (new_dur as i64) - (orig_duration as i64)
 }
 
-/// Arma la lista de targets al iniciar un resize: si el grab está en la
-/// selección (y hay más de una), todas las seleccionadas; si no, solo el grab.
 fn build_resize_targets(
     notes: &[MidiNote],
     grab_index: usize,
@@ -325,8 +282,6 @@ fn build_resize_targets(
         .collect()
 }
 
-/// Aplica un delta de arrastre a una nota original `(start, pitch)`.
-/// El pitch se desplaza por filas (semitonos) y se acota a `0..=127`.
 fn apply_move_delta(start_tick: u64, pitch: u8, delta_ticks: i64, delta_rows: i32) -> (u64, u8) {
     let new_start = if delta_ticks >= 0 {
         start_tick.saturating_add(delta_ticks as u64)
@@ -337,12 +292,6 @@ fn apply_move_delta(start_tick: u64, pitch: u8, delta_ticks: i64, delta_rows: i3
     (new_start, new_pitch)
 }
 
-/// Calcula los deltas ya saneados de un arrastre de notas.
-///
-/// - El delta horizontal se obtiene cuantizando la posición destino de la nota
-///   agarrada al Snap to Grid (`QUANTIZE_TICKS`), de modo que todas las notas
-///   seleccionadas se muevan juntas preservando sus offsets relativos.
-/// - Se acota para que ninguna nota salga de `start >= 0` ni de `pitch 0..=127`.
 fn compute_note_move_deltas(
     orig: &[(usize, u64, u8)],
     grab_index: usize,
@@ -371,16 +320,12 @@ fn compute_note_move_deltas(
         orig.iter().map(|(_, _, p)| i32::from(*p)).min(),
         orig.iter().map(|(_, _, p)| i32::from(*p)).max(),
     ) {
-        // new_pitch = pitch - delta_rows; acotar a 0..=127 para todas.
         delta_rows = delta_rows.clamp(max_pitch - 127, min_pitch);
     }
 
     (delta_ticks, delta_rows)
 }
 
-/// Selección de una nota al hacer click/arrastre sobre su cuerpo.
-/// `additive` (Shift) añade a la selección; si la nota ya está seleccionada
-/// y no es additive, se conserva la selección múltiple actual.
 fn select_note_set(selected: &mut HashSet<usize>, index: usize, additive: bool) {
     if additive {
         selected.insert(index);
@@ -390,132 +335,69 @@ fn select_note_set(selected: &mut HashSet<usize>, index: usize, additive: bool) 
     }
 }
 
-/// Hit-testing manual del **cuerpo** de una nota (excluye los extremos de
-/// resize). Devuelve el índice de la nota más arriba (última dibujada).
-/// Sin `ui.interact` por nota: así no compite por el pointer capture con el
-/// grid ni con los hitboxes de extremos (evita que el drag quede "trabado").
 fn hit_test_note_body(
     notes: &[MidiNote],
-    pos: Pos2,
-    grid_rect: Rect,
+    pos: Point<Pixels>,
+    grid_rect: Bounds<Pixels>,
     zoom_x: f32,
     key_height: f32,
 ) -> Option<usize> {
     let inset = NOTE_EDGE_HIT_W * 0.5;
     for (i, note) in notes.iter().enumerate().rev() {
         let rect = note_rect(grid_rect, note, zoom_x, key_height);
-        if !rect.intersects(grid_rect) || !rect.contains(pos) {
+        if !rect.intersects(&grid_rect) || !rect.contains(&pos) {
             continue;
         }
-        // Nota angosta: todo el rect es zona de extremos (resize).
-        if rect.width() <= NOTE_EDGE_HIT_W {
+        if rect.size.width.as_f32() <= NOTE_EDGE_HIT_W {
             return None;
         }
-        let body = Rect::from_min_max(
-            pos2(rect.min.x + inset, rect.min.y),
-            pos2(rect.max.x - inset, rect.max.y),
+        let body = Bounds::new(
+            point(rect.origin.x + px(inset), rect.origin.y),
+            size(rect.size.width - px(inset * 2.0), rect.size.height),
         );
-        if body.contains(pos) {
+        if body.contains(&pos) {
             return Some(i);
         }
     }
     None
 }
 
-/// Posición efectiva `(start, duration, pitch)` de una nota para dibujo:
-/// aplica el preview de move (si está activo) y el de resize.
-fn effective_note_view(state: &PianoRollState, index: usize, note: &MidiNote) -> (u64, u64, u8) {
-    let mut start = note.start_tick;
-    let mut duration = note.duration_ticks;
-    let mut pitch = note.pitch;
-
-    if state.note_move_active {
-        if let Some(&(_, orig_start, orig_pitch)) =
-            state.note_move_orig.iter().find(|(i, _, _)| *i == index)
-        {
-            let (ns, np) = apply_move_delta(
-                orig_start,
-                orig_pitch,
-                state.note_move_preview_delta_ticks,
-                state.note_move_preview_delta_rows,
-            );
-            start = ns;
-            pitch = np;
-        }
-    }
-    if state.note_resize_active {
-        if let Some(&(_, orig_start, orig_duration)) = state
-            .note_resize_targets
-            .iter()
-            .find(|(i, _, _)| *i == index)
-        {
-            match state.note_resize_handle {
-                SelectionDragHandle::Left => {
-                    let (ns, nd) =
-                        apply_resize_left_delta(orig_start, orig_duration, state.note_resize_delta_start);
-                    start = ns;
-                    duration = nd;
-                }
-                SelectionDragHandle::Right => {
-                    let (ns, nd) = apply_resize_right_delta(
-                        orig_start,
-                        orig_duration,
-                        state.note_resize_delta_duration,
-                    );
-                    start = ns;
-                    duration = nd;
-                }
-                SelectionDragHandle::None => {}
-            }
-        }
-    }
-
-    (start, duration, pitch)
-}
-
-/// Hit-testing del rect completo de una nota (incluye extremos de resize).
-/// Devuelve la nota más arriba (última dibujada) cuyo rect contiene `pos`.
 fn hit_test_note_full(
     notes: &[MidiNote],
-    pos: Pos2,
-    grid_rect: Rect,
+    pos: Point<Pixels>,
+    grid_rect: Bounds<Pixels>,
     zoom_x: f32,
     key_height: f32,
 ) -> Option<usize> {
     for (i, note) in notes.iter().enumerate().rev() {
         let rect = note_rect(grid_rect, note, zoom_x, key_height);
-        if rect.intersects(grid_rect) && rect.contains(pos) {
+        if rect.intersects(&grid_rect) && rect.contains(&pos) {
             return Some(i);
         }
     }
     None
 }
 
-/// Índices de las notas cuyo rectángulo intersecta `marquee` (en coords de contenido).
 fn notes_in_marquee(
     notes: &[MidiNote],
-    marquee: Rect,
-    grid_rect: Rect,
+    marquee: Bounds<Pixels>,
+    grid_rect: Bounds<Pixels>,
     zoom_x: f32,
     key_height: f32,
 ) -> HashSet<usize> {
     let mut out = HashSet::new();
     for (i, note) in notes.iter().enumerate() {
         let rect = note_rect(grid_rect, note, zoom_x, key_height);
-        if rect.intersects(marquee) {
+        if rect.intersects(&marquee) {
             out.insert(i);
         }
     }
     out
 }
 
-/// Elimina de `notes` todos los índices en `selected`.
-/// Devuelve cuántas notas se borraron. `selected` queda vacío.
 fn remove_selected_notes(notes: &mut Vec<MidiNote>, selected: &mut HashSet<usize>) -> usize {
     let sel = std::mem::take(selected);
     let before = notes.len();
-    // Índices de `notes` sin las seleccionadas (HashSet no itera en orden,
-    // así que reconstruimos por enumerate para no correr los índices a mano).
     *notes = std::mem::take(notes)
         .into_iter()
         .enumerate()
@@ -525,9 +407,6 @@ fn remove_selected_notes(notes: &mut Vec<MidiNote>, selected: &mut HashSet<usize
     before - notes.len()
 }
 
-/// Duplica las notas seleccionadas, colocándolas justo después del bloque
-/// que ocupan (mismo criterio que Ctrl+D en la Playlist).
-/// Devuelve las notas nuevas y sus índices tras insertarlas.
 fn duplicate_selected_notes(
     notes: &mut Vec<MidiNote>,
     selected: &HashSet<usize>,
@@ -567,1029 +446,6 @@ fn duplicate_selected_notes(
     new_indices
 }
 
-pub fn show(
-    ui: &mut Ui,
-    state: &mut PianoRollState,
-    tracks: &[Track],
-    selected_track_index: usize,
-    audio_proxy: &AudioProxy,
-    bpm: f64,
-    ppqn: u64,
-    is_playing: bool,
-) {
-    if let Some(track) = tracks.get(selected_track_index) {
-        let has_opendms = track.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
-        if has_opendms && state.mode == PianoRollMode::Keys && state.drum_map.is_empty() {
-            state.mode = PianoRollMode::Drums;
-        }
-    }
-
-    if let Some(track) = tracks.get(selected_track_index) {
-        if let Some(opendms) = find_opendms_in_track(track) {
-            sync_drum_map_from_opendms(state, opendms);
-        }
-    }
-
-    // Sanear selección de notas por si el clip cambió de tamaño.
-    state.selected_notes.retain(|&i| i < state.notes.len());
-
-    // Ctrl+D: duplicar notas seleccionadas por el marquee (click derecho+drag).
-    // Distinto del Ctrl+D de la Playlist (que duplica clips).
-    // consume_key evita que el atajo llegue también a la Playlist si está visible.
-    if !state.selected_notes.is_empty() {
-        let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-        if ctrl && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::D)) {
-            let new_indices = duplicate_selected_notes(&mut state.notes, &state.selected_notes);
-            state.selected_notes = new_indices.into_iter().collect();
-            ui.ctx().request_repaint();
-        }
-    }
-
-    // Escape: limpiar solo la selección de notas (no la Time Selection).
-    if !state.selected_notes.is_empty() && ui.input(|i| i.key_pressed(Key::Escape)) {
-        state.clear_note_selection();
-        ui.ctx().request_repaint();
-    }
-
-    // Supr/Backspace: borrar de una vez todas las notas seleccionadas.
-    // consume_key evita que el atajo llegue también a la Playlist si está visible.
-    if !state.selected_notes.is_empty()
-        && ui.input_mut(|i| {
-            i.consume_key(Modifiers::NONE, Key::Delete)
-                || i.consume_key(Modifiers::NONE, Key::Backspace)
-        })
-    {
-        // Si hay un move en curso, cancelarlo: los índices de
-        // `note_move_orig` dejarían de ser válidos tras el remove.
-        if state.note_move_active {
-            state.note_move_active = false;
-            state.note_move_grab_index = None;
-            state.note_move_orig.clear();
-            state.note_move_preview_delta_ticks = 0;
-            state.note_move_preview_delta_rows = 0;
-            state.note_move_origin_pointer = None;
-        }
-        remove_selected_notes(&mut state.notes, &mut state.selected_notes);
-        ui.ctx().request_repaint();
-    }
-
-    // Zoom con rueda: Ctrl = horizontal (zoom_x), Alt = vertical (key_height).
-    // Corre ANTES del ScrollArea y anula el scroll del frame, para que la
-    // rueda no paneée el viewport al mismo tiempo que zoomea.
-    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-        if ui.max_rect().contains(pos) {
-            let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-            let alt = ui.input(|i| i.modifiers.alt);
-            if ctrl || alt {
-                let mut zoom_delta = 0.0_f32;
-                ui.input(|i| {
-                    for event in &i.events {
-                        if let egui::Event::MouseWheel { delta, .. } = event {
-                            zoom_delta += delta.y;
-                        }
-                    }
-                });
-                if zoom_delta != 0.0 {
-                    let factor = if zoom_delta > 0.0 { 1.15 } else { 0.85 };
-                    if ctrl && !alt {
-                        state.zoom_x = (state.zoom_x * factor).clamp(0.02, 0.8);
-                    } else if alt && !ctrl {
-                        state.key_height = (state.key_height * factor).clamp(10.0, 28.0);
-                    } else {
-                        // Ctrl+Alt a la vez: aplicar ambos ejes.
-                        state.zoom_x = (state.zoom_x * factor).clamp(0.02, 0.8);
-                        state.key_height = (state.key_height * factor).clamp(10.0, 28.0);
-                    }
-                    ui.input_mut(|i| {
-                        i.smooth_scroll_delta = Vec2::ZERO;
-                        i.raw_scroll_delta = Vec2::ZERO;
-                    });
-                    ui.ctx().request_repaint();
-                }
-            }
-        }
-    }
-
-    ui.vertical(|ui| {
-        // --- 1. TOOLBAR ---
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut state.mode, PianoRollMode::Keys, "\u{1F3B9} Keys");
-            ui.selectable_value(&mut state.mode, PianoRollMode::Drums, "\u{1F941} Drums");
-            ui.separator();
-            ui.label(
-                RichText::new(format!("Zoom {:.2} / {}", state.zoom_x, state.key_height))
-                    .small()
-                    .color(Color32::GRAY),
-            )
-            .on_hover_text("Ctrl+Rueda: zoom horizontal · Alt+Rueda: zoom vertical");
-            ui.separator();
-
-            let bar = (state.playhead_tick / TICKS_PER_BAR) + 1;
-            let beat = ((state.playhead_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
-            ui.label(RichText::new(format!("Compás: {}.{} | Tick: {}", bar, beat, state.playhead_tick)).small());
-
-            if state.selection_active {
-                ui.separator();
-                let sel_start_bar = (state.selection_start_tick / TICKS_PER_BAR) + 1;
-                let sel_start_beat = ((state.selection_start_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
-                let sel_end_bar = (state.selection_end_tick / TICKS_PER_BAR) + 1;
-                let sel_end_beat = ((state.selection_end_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
-                ui.label(RichText::new(format!(
-                    "Sel: {}.{} -> {}.{}",
-                    sel_start_bar, sel_start_beat, sel_end_bar, sel_end_beat
-                )).small().color(Color32::LIGHT_BLUE));
-
-                let loop_text = if state.loop_enabled { "Loop ON" } else { "Loop OFF" };
-                let loop_color = if state.loop_enabled { Color32::LIGHT_GREEN } else { Color32::GRAY };
-                if ui.selectable_label(state.loop_enabled, RichText::new(loop_text).color(loop_color))
-                    .on_hover_text("Activar/desactivar loop de la selección")
-                    .clicked()
-                {
-                    state.loop_enabled = !state.loop_enabled;
-                }
-
-                if ui.small_button("X Sel").on_hover_text("Limpiar selección (Shift+Drag en regla para crear)").clicked() {
-                    state.clear_selection();
-                    state.loop_enabled = false;
-                }
-            }
-
-            if !state.selected_notes.is_empty() {
-                ui.separator();
-                ui.label(RichText::new(format!("Notas: {}", state.selected_notes.len()))
-                    .small()
-                    .color(Color32::YELLOW))
-                    .on_hover_text("Selección de notas (click derecho+drag). Arrastrá el cuerpo para moverlas (Snap to Grid). Ctrl+D duplica. Esc limpia.");
-                if ui.small_button("X Notas")
-                    .on_hover_text("Limpiar selección de notas (no toca la Time Selection)")
-                    .clicked()
-                {
-                    state.clear_note_selection();
-                    ui.ctx().request_repaint();
-                }
-            }
-        });
-
-        ui.separator();
-
-        let sidebar_width = 140.0;
-        let grid_height = 128.0 * state.key_height;
-
-        // Longitud dinámica de grilla
-        let max_note_tick = state
-            .notes
-            .iter()
-            .map(|n| n.start_tick + n.duration_ticks)
-            .max()
-            .unwrap_or(0);
-        
-        let min_default_ticks = TICKS_PER_BAR * 128;
-        let active_boundary = max_note_tick.max(state.playhead_tick);
-        let total_ticks = min_default_ticks.max(active_boundary + (TICKS_PER_BAR * 16));
-        let total_grid_width = total_ticks as f32 * state.zoom_x;
-
-        // --- 2. ÁREA DE CONTENIDO INTEGRADA (REGLA + GRILLA CON UN SOLO SCROLL H/V) ---
-        ScrollArea::both()
-            .id_source("piano_roll_body_scroll")
-            .show_viewport(ui, |ui, viewport| {
-                let content_width = (sidebar_width + total_grid_width).max(ui.available_width());
-                let total_content_height = RULER_HEIGHT + grid_height;
-
-                let (content_rect, _) = ui.allocate_exact_size(
-                    vec2(content_width, total_content_height),
-                    Sense::hover(),
-                );
-
-                // --- REGLA Y ESQUINA (Sticky Top con offset según el viewport de scroll) ---
-                // Ajuste para pegar la regla exactamente al borde superior sin flotado:
-                let ruler_y = (content_rect.min.y + viewport.min.y - 3.0).max(content_rect.min.y);
-                let corner_rect = Rect::from_min_size(
-                    pos2(content_rect.min.x + viewport.min.x, ruler_y),
-                    vec2(sidebar_width, RULER_HEIGHT),
-                );
-                
-                let ruler_rect = Rect::from_min_size(
-                    pos2(content_rect.min.x + sidebar_width, ruler_y),
-                    vec2(total_grid_width, RULER_HEIGHT),
-                );
-
-                // Dibujar el contenido de la grilla principal
-                let sidebar_rect = Rect::from_min_size(
-                    pos2(content_rect.min.x + viewport.min.x, content_rect.min.y + RULER_HEIGHT),
-                    vec2(sidebar_width, grid_height),
-                );
-
-                let grid_rect = Rect::from_min_size(
-                    pos2(content_rect.min.x + sidebar_width, content_rect.min.y + RULER_HEIGHT),
-                    vec2(total_grid_width, grid_height),
-                );
-
-                // Fondo de grilla y notas
-                if ui.is_rect_visible(grid_rect) {
-                    let painter = ui.painter_at(grid_rect);
-                    draw_grid_background(&painter, grid_rect, state.key_height, state.zoom_x);
-
-                    // Dibujar Time Selection sobre la grilla
-                    let (render_active, render_start, render_end) = if state.selection_dragging && state.selection_preview_active {
-                        (true, state.selection_preview_start_ticks, state.selection_preview_end_ticks)
-                    } else {
-                        (state.selection_active, state.selection_start_tick, state.selection_end_tick)
-                    };
-
-                    if render_active && render_end > render_start {
-                        let start_x = render_start as f32 * state.zoom_x;
-                        let end_x = render_end as f32 * state.zoom_x;
-                        let (min_x, max_x) = if start_x <= end_x { (start_x, end_x) } else { (end_x, start_x) };
-
-                        let selection_rect = Rect::from_min_max(
-                            pos2(grid_rect.min.x + min_x, grid_rect.min.y),
-                            pos2(grid_rect.min.x + max_x, grid_rect.max.y),
-                        );
-
-                        // Fondo translúcido de la selección
-                        painter.rect_filled(
-                            selection_rect,
-                            0.0,
-                            Color32::from_rgba_unmultiplied(100, 200, 255, 40),
-                        );
-
-                        // Corchetes de selección estilo REAPER
-                        let bracket_color = Color32::LIGHT_BLUE;
-                        let bracket_stroke = Stroke::new(2.0_f32, bracket_color);
-                        let tick_len = 6.0_f32;
-                        let top_y = grid_rect.min.y;
-                        let bottom_y = grid_rect.max.y;
-
-                        // Corchete izquierdo `[`
-                        painter.line_segment(
-                            [pos2(grid_rect.min.x + min_x, top_y), pos2(grid_rect.min.x + min_x, bottom_y)],
-                            bracket_stroke,
-                        );
-                        painter.line_segment(
-                            [pos2(grid_rect.min.x + min_x, top_y), pos2(grid_rect.min.x + min_x + tick_len, top_y)],
-                            bracket_stroke,
-                        );
-                        painter.line_segment(
-                            [pos2(grid_rect.min.x + min_x, bottom_y), pos2(grid_rect.min.x + min_x + tick_len, bottom_y)],
-                            bracket_stroke,
-                        );
-
-                        // Corchete derecho `]`
-                        painter.line_segment(
-                            [pos2(grid_rect.min.x + max_x, top_y), pos2(grid_rect.min.x + max_x, bottom_y)],
-                            bracket_stroke,
-                        );
-                        painter.line_segment(
-                            [pos2(grid_rect.min.x + max_x, top_y), pos2(grid_rect.min.x + max_x - tick_len, top_y)],
-                            bracket_stroke,
-                        );
-                        painter.line_segment(
-                            [pos2(grid_rect.min.x + max_x, bottom_y), pos2(grid_rect.min.x + max_x - tick_len, bottom_y)],
-                            bracket_stroke,
-                        );
-                    }
-
-                    for (i, note) in state.notes.iter().enumerate() {
-                        // Durante un resize/move se dibuja el preview en lugar
-                        // de los valores reales de la nota.
-                        let (start_tick, duration_ticks, pitch) =
-                            effective_note_view(state, i, note);
-                        let preview_note = MidiNote {
-                            pitch,
-                            start_tick,
-                            duration_ticks,
-                            velocity: note.velocity,
-                        };
-                        let rect = note_rect(grid_rect, &preview_note, state.zoom_x, state.key_height);
-                        if rect.intersects(grid_rect) {
-                            let is_selected = state.selected_notes.contains(&i);
-                            let body_color = if state.note_resize_active
-                                && state
-                                    .note_resize_targets
-                                    .iter()
-                                    .any(|(ti, _, _)| *ti == i)
-                            {
-                                Color32::from_rgb(255, 190, 60)
-                            } else if is_selected {
-                                Color32::from_rgb(255, 210, 60)
-                            } else {
-                                Color32::from_rgb(255, 140, 0)
-                            };
-                            painter.rect_filled(rect, 2.0, body_color);
-                            let (stroke_w, stroke_c) = if is_selected {
-                                (2.0_f32, Color32::from_rgb(255, 255, 160))
-                            } else {
-                                (1.0_f32, Color32::WHITE)
-                            };
-                            painter.rect_stroke(rect, 1.0, Stroke::new(stroke_w, stroke_c));
-                        }
-                    }
-                }
-
-                // Edición en la grilla
-                let grid_response = ui.interact(
-                    grid_rect,
-                    ui.id().with("piano_roll_grid_interaction"),
-                    Sense::click_and_drag(),
-                );
-
-                // --- RESIZE DE NOTAS POR LOS EXTREMOS (estilo DAW) ---
-                // Hitboxes en el borde izquierdo y derecho de cada nota
-                // visible. Prioridad sobre el grid: si el puntero está sobre
-                // un extremo no se crea/borra nota ni se muestra el ghost.
-                // PATRÓN PLAYLIST: durante `.dragged()` solo se toca el
-                // preview; la confirmación es SOLO en `drag_stopped()`.
-                let mut note_edge_active = false;
-                let mut commit_note_resize = false;
-                if ui.is_rect_visible(grid_rect) {
-                    for (i, note) in state.notes.iter().enumerate() {
-                        let (start_tick, duration_ticks, pitch) =
-                            effective_note_view(state, i, note);
-                        let preview_note = MidiNote {
-                            pitch,
-                            start_tick,
-                            duration_ticks,
-                            velocity: note.velocity,
-                        };
-                        let rect =
-                            note_rect(grid_rect, &preview_note, state.zoom_x, state.key_height);
-                        if !rect.intersects(grid_rect) {
-                            continue;
-                        }
-
-                        let edge_h = rect.height().max(state.key_height - 1.0);
-                        let left_hit = Rect::from_center_size(
-                            pos2(rect.min.x, rect.center().y),
-                            vec2(NOTE_EDGE_HIT_W, edge_h),
-                        );
-                        let right_hit = Rect::from_center_size(
-                            pos2(rect.max.x, rect.center().y),
-                            vec2(NOTE_EDGE_HIT_W, edge_h),
-                        );
-                        let left_id = ui.id().with(("note_resize_left", i));
-                        let right_id = ui.id().with(("note_resize_right", i));
-                        let l_resp = ui.interact(left_hit, left_id, Sense::drag());
-                        let r_resp = ui.interact(right_hit, right_id, Sense::drag());
-
-                        // Resize SOLO con botón izquierdo: el botón derecho queda
-                        // libre para el marquee de selección de notas.
-                        if l_resp.hovered() || l_resp.dragged_by(PointerButton::Primary) {
-                            note_edge_active = true;
-                            ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
-                        }
-                        if r_resp.hovered() || r_resp.dragged_by(PointerButton::Primary) {
-                            note_edge_active = true;
-                            ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
-                        }
-
-                        // Iniciar resize: sembrar targets y deltas desde 0.
-                        // Solo si no hay ya otro resize ni un move en curso.
-                        if !state.note_resize_active && !state.note_move_active {
-                            if l_resp.drag_started_by(PointerButton::Primary) {
-                                state.note_resize_active = true;
-                                state.note_resize_handle = SelectionDragHandle::Left;
-                                state.note_resize_index = Some(i);
-                                state.note_resize_targets = build_resize_targets(
-                                    &state.notes,
-                                    i,
-                                    &state.selected_notes,
-                                );
-                                state.note_resize_delta_start = 0;
-                                state.note_resize_delta_duration = 0;
-                                note_edge_active = true;
-                                ui.ctx().request_repaint();
-                            } else if r_resp.drag_started_by(PointerButton::Primary) {
-                                state.note_resize_active = true;
-                                state.note_resize_handle = SelectionDragHandle::Right;
-                                state.note_resize_index = Some(i);
-                                state.note_resize_targets = build_resize_targets(
-                                    &state.notes,
-                                    i,
-                                    &state.selected_notes,
-                                );
-                                state.note_resize_delta_start = 0;
-                                state.note_resize_delta_duration = 0;
-                                note_edge_active = true;
-                                ui.ctx().request_repaint();
-                            }
-                        }
-
-                        // Arrastrar el extremo activo de ESTA nota (la grab).
-                        if state.note_resize_active && state.note_resize_index == Some(i) {
-                            let resp = match state.note_resize_handle {
-                                SelectionDragHandle::Left => &l_resp,
-                                SelectionDragHandle::Right => &r_resp,
-                                SelectionDragHandle::None => continue,
-                            };
-                            note_edge_active = true;
-
-                            if resp.dragged_by(PointerButton::Primary) {
-                                if let Some(pointer_pos) = resp.interact_pointer_pos() {
-                                    let rel_x = (pointer_pos.x - grid_rect.min.x).max(0.0);
-                                    let raw_tick = (rel_x / state.zoom_x) as u64;
-                                    match state.note_resize_handle {
-                                        SelectionDragHandle::Left => {
-                                            state.note_resize_delta_start =
-                                                compute_resize_left_delta(
-                                                    &state.note_resize_targets,
-                                                    i,
-                                                    raw_tick,
-                                                );
-                                        }
-                                        SelectionDragHandle::Right => {
-                                            state.note_resize_delta_duration =
-                                                compute_resize_right_delta(
-                                                    &state.note_resize_targets,
-                                                    i,
-                                                    raw_tick,
-                                                );
-                                        }
-                                        SelectionDragHandle::None => {}
-                                    }
-                                    ui.ctx().request_repaint();
-                                }
-                            }
-
-                            // Confirmar al soltar (fuera del préstamo inmutable
-                            // de `note`: se marca y se aplica tras el bucle).
-                            if resp.drag_stopped_by(PointerButton::Primary) {
-                                commit_note_resize = true;
-                            }
-                        }
-                    }
-                }
-
-                // Aplicar el resize multi confirmado al soltar el puntero.
-                if commit_note_resize {
-                    let handle = state.note_resize_handle;
-                    let delta_start = state.note_resize_delta_start;
-                    let delta_duration = state.note_resize_delta_duration;
-                    for (idx, orig_start, orig_duration) in
-                        std::mem::take(&mut state.note_resize_targets)
-                    {
-                        if idx >= state.notes.len() {
-                            continue;
-                        }
-                        let (ns, nd) = match handle {
-                            SelectionDragHandle::Left => {
-                                apply_resize_left_delta(orig_start, orig_duration, delta_start)
-                            }
-                            SelectionDragHandle::Right => {
-                                apply_resize_right_delta(orig_start, orig_duration, delta_duration)
-                            }
-                            SelectionDragHandle::None => continue,
-                        };
-                        state.notes[idx].start_tick = ns;
-                        state.notes[idx].duration_ticks = nd.max(MIN_NOTE_DURATION_TICKS);
-                    }
-                    state.note_resize_active = false;
-                    state.note_resize_handle = SelectionDragHandle::None;
-                    state.note_resize_index = None;
-                    state.note_resize_delta_start = 0;
-                    state.note_resize_delta_duration = 0;
-                    note_edge_active = true;
-                    ui.ctx().request_repaint();
-                }
-
-                // Si el resize sigue activo, no procesar el grid.
-                if state.note_resize_active {
-                    note_edge_active = true;
-                }
-
-                // --- MOVE DE NOTAS: drag con botón izquierdo sobre el cuerpo ---
-                // Se resuelve SOLO con grid_response + hit-testing manual.
-                // NO se crean hitboxes por nota para el cuerpo: competirían por
-                // el pointer capture con el grid y con los extremos de resize,
-                // y el drag quedaba "trabado" o se perdía el commit.
-                //
-                // El delta es ACUMULADO desde `note_move_origin_pointer`
-                // (position del press). `Response::drag_delta()` solo da el
-                // movimiento del frame actual, con lo cual la nota "rebotaba"
-                // en lugar de seguir al puntero.
-                let primary = PointerButton::Primary;
-                let mut note_body_active = false;
-                let mut commit_note_move = false;
-                let mut just_started_move = false;
-
-                /// Delta acumulado del pointer desde el origen del press.
-                fn move_drag_delta(
-                    origin: Option<Pos2>,
-                    current: Option<Pos2>,
-                ) -> Vec2 {
-                    match (origin, current) {
-                        (Some(o), Some(c)) => c - o,
-                        _ => Vec2::ZERO,
-                    }
-                }
-
-                if state.note_resize_active {
-                    note_edge_active = true;
-                } else if state.note_move_active {
-                    note_body_active = true;
-                    if grid_response.dragged_by(primary) {
-                        let drag = move_drag_delta(
-                            state.note_move_origin_pointer,
-                            grid_response.interact_pointer_pos(),
-                        );
-                        let raw_ticks = (drag.x / state.zoom_x).round() as i64;
-                        let raw_rows = (drag.y / state.key_height).round() as i32;
-                        if let Some(grab) = state.note_move_grab_index {
-                            let (dt, dr) = compute_note_move_deltas(
-                                &state.note_move_orig,
-                                grab,
-                                raw_ticks,
-                                raw_rows,
-                            );
-                            state.note_move_preview_delta_ticks = dt;
-                            state.note_move_preview_delta_rows = dr;
-                            ui.ctx().request_repaint();
-                        }
-                    }
-                    // Commit en drag_stopped; fallback si se soltó fuera del área.
-                    if grid_response.drag_stopped_by(primary)
-                        || !ui.input(|i| i.pointer.primary_down())
-                    {
-                        commit_note_move = true;
-                    }
-                } else if !note_edge_active
-                    && ui.input(|i| i.pointer.primary_pressed())
-                    && grid_response.hovered()
-                {
-                    // Arranque en el MISMO frame del press (sin esperar el
-                    // drag threshold de egui): así el grab es fluido de una.
-                    // El hit-test usa press_origin (posición real del click),
-                    // no interact_pointer_pos, que ya se corrió al superar
-                    // el threshold y a veces queda fuera de la nota → fallaba
-                    // el hit y había que "reintentar" (doble click).
-                    let pos = ui
-                        .input(|i| i.pointer.press_origin())
-                        .or_else(|| grid_response.interact_pointer_pos())
-                        .or_else(|| grid_response.hover_pos());
-                    if let Some(pos) = pos {
-                        if let Some(grab) = hit_test_note_body(
-                            &state.notes,
-                            pos,
-                            grid_rect,
-                            state.zoom_x,
-                            state.key_height,
-                        ) {
-                            let shift = ui.input(|i| i.modifiers.shift);
-                            select_note_set(&mut state.selected_notes, grab, shift);
-                            let orig: Vec<(usize, u64, u8)> = state
-                                .selected_notes
-                                .iter()
-                                .filter_map(|&j| {
-                                    state.notes.get(j).map(|n| (j, n.start_tick, n.pitch))
-                                })
-                                .collect();
-                            if !orig.is_empty() {
-                                state.note_move_active = true;
-                                state.note_move_grab_index = Some(grab);
-                                state.note_move_orig = orig;
-                                state.note_move_preview_delta_ticks = 0;
-                                state.note_move_preview_delta_rows = 0;
-                                state.note_move_origin_pointer = Some(pos);
-                                note_body_active = true;
-                                just_started_move = true;
-                                ui.ctx().request_repaint();
-                            }
-                        }
-                    }
-                }
-
-                // Sembrar el preview en el mismo frame del drag_started
-                // (el press ya puede haberse movido un poco hasta superar el threshold).
-                if just_started_move && state.note_move_active {
-                    let drag = move_drag_delta(
-                        state.note_move_origin_pointer,
-                        grid_response.interact_pointer_pos(),
-                    );
-                    let raw_ticks = (drag.x / state.zoom_x).round() as i64;
-                    let raw_rows = (drag.y / state.key_height).round() as i32;
-                    if let Some(grab) = state.note_move_grab_index {
-                        let (dt, dr) = compute_note_move_deltas(
-                            &state.note_move_orig,
-                            grab,
-                            raw_ticks,
-                            raw_rows,
-                        );
-                        state.note_move_preview_delta_ticks = dt;
-                        state.note_move_preview_delta_rows = dr;
-                    }
-                }
-
-                // Aplicar el move confirmado al soltar el puntero.
-                if commit_note_move && state.note_move_active {
-                    let delta_ticks = state.note_move_preview_delta_ticks;
-                    let delta_rows = state.note_move_preview_delta_rows;
-                    let orig = std::mem::take(&mut state.note_move_orig);
-                    for (idx, orig_start, orig_pitch) in orig {
-                        if let Some(n) = state.notes.get_mut(idx) {
-                            let (ns, np) =
-                                apply_move_delta(orig_start, orig_pitch, delta_ticks, delta_rows);
-                            n.start_tick = ns;
-                            n.pitch = np;
-                        }
-                    }
-                    state.note_move_active = false;
-                    state.note_move_grab_index = None;
-                    state.note_move_preview_delta_ticks = 0;
-                    state.note_move_preview_delta_rows = 0;
-                    state.note_move_origin_pointer = None;
-                    note_body_active = true;
-                    ui.ctx().request_repaint();
-                }
-
-                if state.note_move_active {
-                    note_body_active = true;
-                    ui.output_mut(|o| o.cursor_icon = CursorIcon::Move);
-                }
-
-                // --- MARQUEE: selección de notas con click derecho + drag ---
-                // Distinto de la Time Selection (Shift+drag en la regla), que
-                // sirve para loopear. Este sirve para copiar/duplicar notas.
-                {
-                    let secondary = PointerButton::Secondary;
-                    if grid_response.drag_started_by(secondary)
-                        && !note_edge_active
-                        && !note_body_active
-                        && !state.note_move_active
-                    {
-                        if let Some(pos) = grid_response.interact_pointer_pos() {
-                            state.note_marquee_active = true;
-                            state.note_marquee_start = Some(pos);
-                            state.note_marquee_current = Some(pos);
-                            state.note_marquee_additive =
-                                ui.input(|i| i.modifiers.shift);
-                            if !state.note_marquee_additive {
-                                state.selected_notes.clear();
-                            }
-                            ui.ctx().request_repaint();
-                        }
-                    } else if state.note_marquee_active
-                        && grid_response.dragged_by(secondary)
-                    {
-                        state.note_marquee_current =
-                            grid_response.interact_pointer_pos();
-                        ui.ctx().request_repaint();
-                    } else if state.note_marquee_active
-                        && (grid_response.drag_stopped_by(secondary)
-                            || !ui.input(|i| i.pointer.secondary_down()))
-                    {
-                        // Confirmar al soltar el botón derecho.
-                        if let (Some(start), Some(current)) =
-                            (state.note_marquee_start, state.note_marquee_current)
-                        {
-                            let marquee = Rect::from_two_pos(start, current);
-                            if marquee.width() > 2.0 || marquee.height() > 2.0 {
-                                let found = notes_in_marquee(
-                                    &state.notes,
-                                    marquee,
-                                    grid_rect,
-                                    state.zoom_x,
-                                    state.key_height,
-                                );
-                                if state.note_marquee_additive {
-                                    state.selected_notes.extend(found);
-                                } else {
-                                    state.selected_notes = found;
-                                }
-                            }
-                        }
-                        state.note_marquee_active = false;
-                        state.note_marquee_start = None;
-                        state.note_marquee_current = None;
-                        state.note_marquee_additive = false;
-                        ui.ctx().request_repaint();
-                    }
-                }
-
-                // Dibujar el marquee encima de las notas (mismo frame del drag).
-                if state.note_marquee_active && ui.is_rect_visible(grid_rect) {
-                    if let (Some(start), Some(current)) =
-                        (state.note_marquee_start, state.note_marquee_current)
-                    {
-                        let marquee = Rect::from_two_pos(start, current);
-                        let p = ui.painter_at(grid_rect);
-                        p.rect_filled(
-                            marquee,
-                            0.0,
-                            Color32::from_rgba_unmultiplied(255, 200, 0, 35),
-                        );
-                        p.rect_stroke(
-                            marquee,
-                            0.0,
-                            Stroke::new(1.5_f32, Color32::from_rgb(255, 200, 0)),
-                        );
-                    }
-                }
-
-                if let Some(hover_pos) = grid_response.hover_pos() {
-                    let local_x = hover_pos.x - grid_rect.min.x;
-                    let local_y = hover_pos.y - grid_rect.min.y;
-                    let over_note_body = hit_test_note_body(
-                        &state.notes,
-                        hover_pos,
-                        grid_rect,
-                        state.zoom_x,
-                        state.key_height,
-                    )
-                    .is_some();
-                    let over_note_any = hit_test_note_full(
-                        &state.notes,
-                        hover_pos,
-                        grid_rect,
-                        state.zoom_x,
-                        state.key_height,
-                    )
-                    .is_some();
-
-                    let in_grid = local_x >= 0.0 && local_y >= 0.0;
-                    let idle = in_grid
-                        && !note_edge_active
-                        && !note_body_active
-                        && !state.note_move_active
-                        && !state.note_marquee_active;
-
-                    // --- Ghost + CREATE: solo en celda vacía (sin nota debajo) ---
-                    if idle && !over_note_any {
-                        let raw_tick = (local_x / state.zoom_x).max(0.0) as u64;
-                        let quantized_tick = (raw_tick / QUANTIZE_TICKS) * QUANTIZE_TICKS;
-                        let row = (local_y / state.key_height).max(0.0) as i32;
-                        let pitch = (127 - row).clamp(0, 127) as u8;
-
-                        if ui.is_rect_visible(grid_rect) {
-                            let ghost_rect = Rect::from_min_size(
-                                pos2(
-                                    grid_rect.min.x + (quantized_tick as f32 * state.zoom_x),
-                                    grid_rect.min.y + (row.clamp(0, 127) as f32 * state.key_height),
-                                ),
-                                vec2(QUANTIZE_TICKS as f32 * state.zoom_x, state.key_height - 1.0),
-                            );
-                            ui.painter_at(grid_rect).rect_filled(
-                                ghost_rect,
-                                2.0,
-                                Color32::from_rgba_premultiplied(255, 140, 0, 60),
-                            );
-                        }
-
-                        if grid_response.clicked() {
-                            let already_exists = state.notes.iter().any(|n| {
-                                n.pitch == pitch
-                                    && quantized_tick >= n.start_tick
-                                    && quantized_tick < n.start_tick + n.duration_ticks
-                            });
-
-                            if !already_exists {
-                                state.notes.push(MidiNote {
-                                    pitch,
-                                    start_tick: quantized_tick,
-                                    duration_ticks: QUANTIZE_TICKS,
-                                    velocity: NOTE_INSERT_VELOCITY,
-                                });
-                                ui.ctx().request_repaint();
-
-                                if state.mode == PianoRollMode::Drums {
-                                    preview_drum_pad(tracks, selected_track_index, pitch, 1.0, audio_proxy);
-                                }
-                            }
-                        }
-                    }
-
-                    // --- DELETE: click derecho SIN drag ---
-                    // Funciona SOBRE la nota (cuerpo o extremo) y también en
-                    // celda vacía (limpia la selección). Por eso vive FUERA del
-                    // guard `!over_note_body`: antes, right-click sobre una nota
-                    // nunca entraba al bloque y el borrado no ejecutaba.
-                    // Tampoco depende de `!note_edge_active`: los extremos usan
-                    // Sense::drag con Primary; Secondary debe poder borrar.
-                    // (Con drag se crea el marquee; egui no dispara
-                    // secondary_clicked si hubo un drag decidedly.)
-                    if in_grid
-                        && !note_body_active
-                        && !state.note_move_active
-                        && !state.note_marquee_active
-                        && grid_response.secondary_clicked()
-                    {
-                        let hit_pos = grid_response
-                            .interact_pointer_pos()
-                            .or(grid_response.hover_pos());
-                        if let Some(pos) = hit_pos {
-                            if let Some(idx) = hit_test_note_full(
-                                &state.notes,
-                                pos,
-                                grid_rect,
-                                state.zoom_x,
-                                state.key_height,
-                            ) {
-                                state.notes.remove(idx);
-                                // Reajustar índices de la selección de notas.
-                                state.selected_notes = state
-                                    .selected_notes
-                                    .iter()
-                                    .filter_map(|&i| {
-                                        if i == idx {
-                                            None
-                                        } else if i > idx {
-                                            Some(i - 1)
-                                        } else {
-                                            Some(i)
-                                        }
-                                    })
-                                    .collect();
-                                ui.ctx().request_repaint();
-                            } else {
-                                // Click derecho en zona vacía: limpiar solo
-                                // la selección de notas (no la Time Selection).
-                                if !state.selected_notes.is_empty() {
-                                    state.clear_note_selection();
-                                    ui.ctx().request_repaint();
-                                }
-                            }
-                        }
-                    }
-
-                    // --- SELECT: click izquierdo SOBRE el cuerpo de una nota ---
-                    // El create solo corre en celda vacía (`!over_note_any`), así
-                    // que acá no compite: si hay cuerpo, seleccionamos.
-                    if idle && grid_response.clicked() && over_note_body {
-                        let hit_pos = grid_response
-                            .interact_pointer_pos()
-                            .or(grid_response.hover_pos());
-                        if let Some(pos) = hit_pos {
-                            if let Some(idx) = hit_test_note_body(
-                                &state.notes,
-                                pos,
-                                grid_rect,
-                                state.zoom_x,
-                                state.key_height,
-                            ) {
-                                let shift = ui.input(|i| i.modifiers.shift);
-                                select_note_set(&mut state.selected_notes, idx, shift);
-                                ui.ctx().request_repaint();
-                            }
-                        }
-                    }
-                }
-
-                // Línea de Playhead
-                let playhead_x = grid_rect.min.x + (state.playhead_tick as f32 * state.zoom_x);
-                if ui.is_rect_visible(grid_rect) {
-                    let grid_p = ui.painter_at(grid_rect);
-                    grid_p.line_segment(
-                        [pos2(playhead_x, grid_rect.min.y), pos2(playhead_x, grid_rect.max.y)],
-                        Stroke::new(2.0_f32, Color32::from_rgb(0, 200, 255)),
-                    );
-                }
-
-                // Teclado lateral
-                let sidebar_clicked_pitch = draw_sidebar(ui, sidebar_rect, state);
-                if let Some(clicked_pitch) = sidebar_clicked_pitch {
-                    preview_drum_pad(tracks, selected_track_index, clicked_pitch, 1.0, audio_proxy);
-                }
-
-                // --- DIBUJAR LA REGLA Y LA ESQUINA POR ENCIMA (CAPA SUPERIOR) ---
-                if ui.is_rect_visible(corner_rect) {
-                    let p = ui.painter_at(corner_rect);
-                    p.rect_filled(corner_rect, 0.0, Color32::from_rgb(20, 20, 24));
-                    p.line_segment([corner_rect.left_bottom(), corner_rect.right_bottom()], Stroke::new(1.0_f32, Color32::from_gray(50)));
-                    p.line_segment([corner_rect.right_top(), corner_rect.right_bottom()], Stroke::new(1.0_f32, Color32::from_gray(50)));
-                }
-
-                if ui.is_rect_visible(ruler_rect) {
-                    let ruler_painter = ui.painter_at(ruler_rect);
-                    draw_bar_ruler(&ruler_painter, ruler_rect, state.zoom_x, total_ticks);
-
-                    // Dibujar Time Selection en la regla
-                    let (render_active, render_start, render_end) = if state.selection_dragging && state.selection_preview_active {
-                        (true, state.selection_preview_start_ticks, state.selection_preview_end_ticks)
-                    } else {
-                        (state.selection_active, state.selection_start_tick, state.selection_end_tick)
-                    };
-
-                    if render_active && render_end > render_start {
-                        let start_x = ruler_rect.min.x + (render_start as f32 * state.zoom_x);
-                        let end_x = ruler_rect.min.x + (render_end as f32 * state.zoom_x);
-                        let (min_x, max_x) = if start_x <= end_x { (start_x, end_x) } else { (end_x, start_x) };
-
-                        let selection_rect = Rect::from_min_max(
-                            pos2(min_x, ruler_rect.min.y),
-                            pos2(max_x, ruler_rect.max.y),
-                        );
-
-                        // Fondo translúcido en la regla
-                        ruler_painter.rect_filled(
-                            selection_rect,
-                            0.0,
-                            Color32::from_rgba_unmultiplied(100, 200, 255, 60),
-                        );
-
-                        // Corchetes de selección en la regla
-                        let bracket_color = Color32::LIGHT_BLUE;
-                        let bracket_stroke = Stroke::new(2.0_f32, bracket_color);
-                        let tick_len = 5.0_f32;
-                        let top_y = ruler_rect.min.y + 1.0;
-                        let bottom_y = ruler_rect.max.y - 1.0;
-
-                        // `[` izquierdo
-                        ruler_painter.line_segment(
-                            [pos2(min_x, top_y), pos2(min_x, bottom_y)],
-                            bracket_stroke,
-                        );
-                        ruler_painter.line_segment(
-                            [pos2(min_x, top_y), pos2(min_x + tick_len, top_y)],
-                            bracket_stroke,
-                        );
-                        ruler_painter.line_segment(
-                            [pos2(min_x, bottom_y), pos2(min_x + tick_len, bottom_y)],
-                            bracket_stroke,
-                        );
-
-                        // `]` derecho
-                        ruler_painter.line_segment(
-                            [pos2(max_x, top_y), pos2(max_x, bottom_y)],
-                            bracket_stroke,
-                        );
-                        ruler_painter.line_segment(
-                            [pos2(max_x, top_y), pos2(max_x - tick_len, top_y)],
-                            bracket_stroke,
-                        );
-                        ruler_painter.line_segment(
-                            [pos2(max_x, bottom_y), pos2(max_x - tick_len, bottom_y)],
-                            bracket_stroke,
-                        );
-                    }
-
-                    // Indicador Playhead en la regla
-                    let ruler_playhead_x = ruler_rect.min.x + (state.playhead_tick as f32 * state.zoom_x);
-                    let head_size = 6.0_f32;
-                    let head_triangle = vec![
-                        pos2(ruler_playhead_x - head_size, ruler_rect.min.y),
-                        pos2(ruler_playhead_x + head_size, ruler_rect.min.y),
-                        pos2(ruler_playhead_x, ruler_rect.max.y),
-                    ];
-                    ruler_painter.add(Shape::convex_polygon(
-                        head_triangle,
-                        Color32::from_rgb(0, 200, 255),
-                        Stroke::NONE,
-                    ));
-                }
-
-                let ruler_response = ui.interact(
-                    ruler_rect,
-                    ui.id().with("piano_roll_ruler_interaction"),
-                    Sense::click_and_drag(),
-                );
-
-                let shift = ui.input(|i| i.modifiers.shift);
-                let pointer_pos = ruler_response.interact_pointer_pos();
-
-                if let Some(pos) = pointer_pos {
-                    let local_x = pos.x - ruler_rect.min.x;
-                    let raw_tick = (local_x / state.zoom_x).max(0.0) as u64;
-                    let tick = (raw_tick / QUANTIZE_TICKS) * QUANTIZE_TICKS;
-
-                    if ruler_response.drag_started() && shift {
-                        state.selection_dragging = true;
-                        state.selection_preview_active = true;
-                        state.selection_preview_start_ticks = tick;
-                        state.selection_preview_end_ticks = tick;
-                        ui.ctx().request_repaint();
-                    } else if ruler_response.dragged() && state.selection_dragging && shift {
-                        state.selection_preview_end_ticks = tick;
-                        ui.ctx().request_repaint();
-                    } else if ruler_response.drag_stopped() && state.selection_dragging {
-                        let start = state.selection_preview_start_ticks.min(state.selection_preview_end_ticks);
-                        let end = state.selection_preview_start_ticks.max(state.selection_preview_end_ticks);
-                        if end > start {
-                            state.selection_start_tick = start;
-                            state.selection_end_tick = end;
-                            state.selection_active = true;
-                        } else {
-                            state.selection_active = false;
-                        }
-                        state.selection_dragging = false;
-                        state.selection_preview_active = false;
-                        state.selection_preview_start_ticks = 0;
-                        state.selection_preview_end_ticks = 0;
-                        ui.ctx().request_repaint();
-                    } else if ruler_response.clicked() && !shift {
-                        state.playhead_tick = tick;
-                        state.loop_start_instant = None;
-                        ui.ctx().request_repaint();
-                    }
-                }
-
-            });
-    });
-}
-
-/// Dispara las notas cruzadas por el playhead.
-///
-/// Se llama cada frame desde el app **independientemente de si el panel del
-/// Piano Roll está visible**. Antes este código vivía dentro de `show()`, por
-/// lo que minimizar el panel cortaba el único productor de eventos de nota
-/// y los clips MIDI dejaban de sonar.
 pub fn trigger_playhead_notes(
     state: &mut PianoRollState,
     tracks: &[Track],
@@ -1617,79 +473,20 @@ pub fn trigger_playhead_notes(
     state.prev_playhead_tick = state.playhead_tick;
 }
 
-/// `true` si el playhead cruzó `start_tick` en este frame.
-///
-/// - Avance normal: `prev < start <= current` dentro de la ventana de 240 ticks.
-/// - Wrap de loop o seek hacia atrás: `prev > current` y el destino cae en la ventana.
-///
-/// Usa `<` (no `<=`): si `prev == start`, el frame anterior ya disparó la nota;
-/// con `<=` se re-dispararía dentro de la ventana y sonaría duplicada.
 fn note_just_crossed(prev_tick: u64, current_tick: u64, start_tick: u64) -> bool {
     (prev_tick < start_tick || prev_tick > current_tick)
         && current_tick >= start_tick
         && current_tick < start_tick + 240
 }
 
-fn draw_bar_ruler(painter: &Painter, ruler_rect: Rect, zoom_x: f32, total_ticks: u64) {
-    painter.rect_filled(ruler_rect, 0.0, Color32::from_rgb(28, 28, 32));
-    painter.line_segment(
-        [ruler_rect.left_bottom(), ruler_rect.right_bottom()],
-        Stroke::new(1.0_f32, Color32::from_gray(60)),
-    );
-
-    let bar_step_px = TICKS_PER_BAR as f32 * zoom_x;
-    let mut tick = 0u64;
-    let mut bar_number = 1;
-
-    while tick <= total_ticks {
-        let x = ruler_rect.min.x + (tick as f32 * zoom_x);
-
-        if x > ruler_rect.max.x {
-            break;
-        }
-
-        if x >= ruler_rect.min.x {
-            painter.line_segment(
-                [pos2(x, ruler_rect.min.y + 4.0), pos2(x, ruler_rect.max.y)],
-                Stroke::new(1.5_f32, Color32::from_gray(140)),
-            );
-
-            painter.text(
-                pos2(x + 5.0, ruler_rect.min.y + 3.0),
-                Align2::LEFT_TOP,
-                bar_number.to_string(),
-                FontId::proportional(11.0),
-                Color32::from_gray(210),
-            );
-
-            if bar_step_px > 30.0 {
-                for b in 1..4 {
-                    let beat_tick = tick + (b * TICKS_PER_BEAT);
-                    let beat_x = ruler_rect.min.x + (beat_tick as f32 * zoom_x);
-
-                    if beat_x >= ruler_rect.min.x && beat_x <= ruler_rect.max.x {
-                        painter.line_segment(
-                            [pos2(beat_x, ruler_rect.min.y + 14.0), pos2(beat_x, ruler_rect.max.y)],
-                            Stroke::new(0.8_f32, Color32::from_gray(80)),
-                        );
-                    }
-                }
-            }
-        }
-
-        tick += TICKS_PER_BAR;
-        bar_number += 1;
-    }
-}
-
-fn note_rect(grid_rect: Rect, note: &MidiNote, zoom_x: f32, key_height: f32) -> Rect {
-    let x = grid_rect.min.x + (note.start_tick as f32 * zoom_x);
-    let y = grid_rect.min.y + ((127 - note.pitch) as f32 * key_height);
-    Rect::from_min_size(
-        pos2(x, y),
-        vec2(
-            (note.duration_ticks as f32 * zoom_x).max(4.0),
-            key_height - 1.0,
+fn note_rect(grid_rect: Bounds<Pixels>, note: &MidiNote, zoom_x: f32, key_height: f32) -> Bounds<Pixels> {
+    let x = grid_rect.origin.x + px(note.start_tick as f32 * zoom_x);
+    let y = grid_rect.origin.y + px((127 - note.pitch) as f32 * key_height);
+    Bounds::new(
+        point(x, y),
+        size(
+            px((note.duration_ticks as f32 * zoom_x).max(4.0)),
+            px(key_height - 1.0),
         ),
     )
 }
@@ -1724,563 +521,461 @@ fn preview_drum_pad(
     }
 }
 
-fn draw_sidebar(
-    ui: &mut Ui,
-    sidebar_rect: Rect,
-    state: &PianoRollState,
-) -> Option<u8> {
-    let mut clicked_pitch = None;
-
-    if ui.is_rect_visible(sidebar_rect) {
-        let painter = ui.painter_at(sidebar_rect);
-
-        painter.rect_filled(sidebar_rect, 0.0, Color32::from_rgb(25, 25, 28));
-        
-        painter.line_segment(
-            [sidebar_rect.right_top(), sidebar_rect.right_bottom()],
-            Stroke::new(1.0_f32, Color32::from_gray(50)),
-        );
-
-        for row in 0..128 {
-            let pitch = (127 - row) as u8;
-            let row_y = sidebar_rect.min.y + (row as f32 * state.key_height);
-            let row_rect = Rect::from_min_size(
-                pos2(sidebar_rect.min.x, row_y),
-                vec2(sidebar_rect.width(), state.key_height),
-            );
-
-            if !row_rect.intersects(sidebar_rect) {
-                continue;
-            }
-
-            let is_black_key = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
-            let bg_color = match state.mode {
-                PianoRollMode::Keys => {
-                    if is_black_key {
-                        Color32::from_rgb(40, 40, 45)
-                    } else {
-                        Color32::from_rgb(220, 220, 225)
-                    }
-                }
-                PianoRollMode::Drums => Color32::from_rgb(35, 35, 40),
-            };
-
-            let text_color = match state.mode {
-                PianoRollMode::Keys => {
-                    if is_black_key {
-                        Color32::WHITE
-                    } else {
-                        Color32::BLACK
-                    }
-                }
-                PianoRollMode::Drums => Color32::from_rgb(200, 200, 200),
-            };
-
-            painter.rect_filled(row_rect, 0.0, bg_color);
-            painter.rect_stroke(
-                row_rect,
-                0.0,
-                Stroke::new(0.5_f32, Color32::from_gray(60)),
-            );
-
-            let label = match state.mode {
-                PianoRollMode::Keys => {
-                    let note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-                    let octave = (pitch / 12) as i32 - 1;
-                    format!("{}{}", note_names[(pitch % 12) as usize], octave)
-                }
-                PianoRollMode::Drums => {
-                    if let Some(name) = state.drum_map.get(&pitch) {
-                        format!("{} ({})", name, pitch)
-                    } else {
-                        format!("Pad {}", pitch)
-                    }
-                }
-            };
-
-            painter.text(
-                pos2(row_rect.min.x + 6.0, row_rect.center().y),
-                Align2::LEFT_CENTER,
-                label,
-                FontId::proportional((state.key_height * 0.65).clamp(8.0, 12.0)),
-                text_color,
-            );
-
-            let row_response = ui.interact(
-                row_rect,
-                ui.id().with(("sidebar_row", pitch)),
-                Sense::click(),
-            );
-
-            if row_response.clicked() {
-                clicked_pitch = Some(pitch);
-            }
-        }
-    }
-
-    clicked_pitch
-}
-
-fn draw_grid_background(
-    painter: &Painter,
-    grid_rect: Rect,
-    key_height: f32,
-    zoom_x: f32,
-) {
-    painter.rect_filled(grid_rect, 0.0, Color32::from_rgb(18, 18, 20));
-
-    for row in 0..128 {
-        let pitch = (127 - row) as u8;
-        let y = grid_rect.min.y + (row as f32 * key_height);
-        let is_black_key = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
-
-        if is_black_key {
-            let row_rect = Rect::from_min_size(
-                pos2(grid_rect.min.x, y),
-                vec2(grid_rect.width(), key_height),
-            );
-            painter.rect_filled(row_rect, 0.0, Color32::from_rgba_premultiplied(0, 0, 0, 40));
-        }
-
-        painter.line_segment(
-            [pos2(grid_rect.min.x, y), pos2(grid_rect.max.x, y)],
-            Stroke::new(0.5_f32, Color32::from_gray(30)),
-        );
-    }
-
-    let subdivision_ticks = QUANTIZE_TICKS; // 240 ticks (1/16)
-    let step_px = subdivision_ticks as f32 * zoom_x;
-
-    if step_px > 3.0 {
-        let mut x = grid_rect.min.x;
-        let mut tick = 0u64;
-
-        while x < grid_rect.max.x {
-            let is_bar = tick % TICKS_PER_BAR == 0;
-            let is_beat = tick % TICKS_PER_BEAT == 0;
-
-            let (stroke_width, color) = if is_bar {
-                (1.5_f32, Color32::from_gray(80))
-            } else if is_beat {
-                (1.0_f32, Color32::from_gray(50))
-            } else {
-                (0.5_f32, Color32::from_gray(32))
-            };
-
-            painter.line_segment(
-                [pos2(x, grid_rect.min.y), pos2(x, grid_rect.max.y)],
-                Stroke::new(stroke_width, color),
-            );
-
-            tick += subdivision_ticks;
-            x += step_px;
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        apply_move_delta, apply_resize_left_delta, apply_resize_right_delta,
-        build_resize_targets, compute_note_move_deltas, compute_resize_left_delta,
-        compute_resize_right_delta, duplicate_selected_notes, hit_test_note_body,
-        hit_test_note_full, note_just_crossed, notes_in_marquee, quantize_tick,
-        remove_selected_notes, resize_note_left, resize_note_right, select_note_set,
-        MidiNote, MIN_NOTE_DURATION_TICKS, QUANTIZE_TICKS,
+pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
+    let app = state(cx).read(cx);
+    let prs = &app.piano_roll_state;
+    let mode = prs.mode;
+    let zoom_x = prs.zoom_x;
+    let key_height = prs.key_height;
+    let notes_count = prs.notes.len();
+    let playhead_tick = prs.playhead_tick;
+    let sel_active = prs.selection_active;
+    let sel_start = prs.selection_start_tick;
+    let sel_end = prs.selection_end_tick;
+    let loop_enabled = prs.loop_enabled;
+    let sel_notes = prs.selected_notes.len();
+    let selected_track = app.selected_track_index;
+    let is_playing = app.transport.playback_state == hikaru_transport::transport_state::TransportPlaybackState::Playing;
+    let tracks = match app.mode {
+        crate::app::AppMode::OpenLive => &app.live_tracks,
+        crate::app::AppMode::OpenStudio => &app.studio_tracks,
     };
-    use egui::{pos2, Rect};
-    use std::collections::HashSet;
+    let has_opendms = tracks.get(selected_track).map(|t| t.effects.iter().any(|s| s.name == "Hikaru OpenDMS")).unwrap_or(false);
+    let audio_proxy = app.audio_proxy.clone();
+    drop(app);
 
-    #[test]
-    fn crosses_note_start_from_below() {
-        assert!(note_just_crossed(239, 240, 240));
-        assert!(note_just_crossed(200, 280, 240));
-    }
+    let sidebar_width = 140.0;
+    let max_note_tick = prs
+        .notes
+        .iter()
+        .map(|n| n.start_tick + n.duration_ticks)
+        .max()
+        .unwrap_or(0);
+    let total_ticks = (TICKS_PER_BAR * 128).max(max_note_tick.max(playhead_tick) + TICKS_PER_BAR * 16);
+    let grid_h = 128.0 * key_height;
+    let canvas_w = sidebar_width + total_ticks as f32 * zoom_x;
 
-    #[test]
-    fn does_not_refire_when_prev_lands_exactly_on_start() {
-        // Frame anterior ya disparó al llegar a start; este frame no debe re-disparar.
-        assert!(!note_just_crossed(240, 274, 240));
-        assert!(!note_just_crossed(0, 34, 0));
-    }
-
-    #[test]
-    fn fires_once_on_loop_wrap_to_note_at_start() {
-        // Wrap: playhead salta del final del loop al inicio.
-        assert!(note_just_crossed(3839, 0, 0));
-        // Frame siguiente con prev exacto en start: no duplica.
-        assert!(!note_just_crossed(0, 34, 0));
-    }
-
-    #[test]
-    fn misses_note_further_than_window() {
-        assert!(!note_just_crossed(0, 480, 240));
-    }
-
-    #[test]
-    fn does_not_fire_when_stationary() {
-        assert!(!note_just_crossed(240, 240, 240));
-        assert!(!note_just_crossed(100, 100, 240));
-    }
-
-    #[test]
-    fn resize_right_extends_note() {
-        // Nota en start=0, dur=240; arrastrar el extremo derecho a tick 960.
-        let (start, dur) = resize_note_right(0, 240, 960);
-        assert_eq!(start, 0);
-        assert_eq!(dur, 960);
-    }
-
-    #[test]
-    fn resize_right_snaps_to_quantize() {
-        // Pointer en 1000 se cuantiza hacia abajo a 960.
-        let (start, dur) = resize_note_right(0, 240, 1000);
-        assert_eq!(start, 0);
-        assert_eq!(dur, 960);
-        // Pointer en 959 → 720.
-        let (_, dur) = resize_note_right(0, 240, 959);
-        assert_eq!(dur, 720);
-    }
-
-    #[test]
-    fn resize_right_enforces_min_duration() {
-        // No se puede achicar por debajo de 1/16.
-        let (start, dur) = resize_note_right(480, 960, 100);
-        assert_eq!(start, 480);
-        assert_eq!(dur, MIN_NOTE_DURATION_TICKS);
-    }
-
-    #[test]
-    fn resize_left_extends_backwards() {
-        // Nota start=480, dur=240 (end=720); arrastrar izq a tick 0.
-        let (start, dur) = resize_note_left(480, 240, 0);
-        assert_eq!(start, 0);
-        assert_eq!(dur, 720);
-    }
-
-    #[test]
-    fn resize_left_keeps_end_anchored() {
-        // end = 480+960 = 1440; nuevo start cuantizado 720 → dur 720.
-        let (start, dur) = resize_note_left(480, 960, 730);
-        assert_eq!(start, 720);
-        assert_eq!(dur, 1440 - 720);
-    }
-
-    #[test]
-    fn resize_left_enforces_min_duration() {
-        // end = 480+960 = 1440; min start = 1440-240 = 1200.
-        // Pointer más allá del extremo derecho: se acota a min duration.
-        let (start, dur) = resize_note_left(480, 960, 2000);
-        assert_eq!(start, 1200);
-        assert_eq!(dur, MIN_NOTE_DURATION_TICKS);
-        // Pointer en 0 con nota start=240, dur=240 (end=480): extiende a 0.
-        let (start, dur) = resize_note_left(240, 240, 0);
-        assert_eq!(start, 0);
-        assert_eq!(dur, 480);
-    }
-
-    #[test]
-    fn resize_left_snaps_to_quantize() {
-        // Pointer en 500 → 480.
-        // end = 480+720 = 1200; start=480 → dur=720.
-        let (start, dur) = resize_note_left(480, 720, 500);
-        assert_eq!(start, 480);
-        assert_eq!(dur, 720);
-    }
-
-    #[test]
-    fn quantize_rounds_down() {
-        assert_eq!(quantize_tick(0, QUANTIZE_TICKS), 0);
-        assert_eq!(quantize_tick(239, QUANTIZE_TICKS), 0);
-        assert_eq!(quantize_tick(240, QUANTIZE_TICKS), 240);
-        assert_eq!(quantize_tick(479, QUANTIZE_TICKS), 240);
-    }
-
-    #[test]
-    fn marquee_selects_intersecting_notes() {
-        // grid en (0,0), key_height=16, zoom=1.0
-        let grid = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 128.0 * 16.0));
-        let notes = vec![
-            // pitch 60 (C4) -> row = 127-60 = 67 -> y = 67*16 = 1072
-            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
-            // pitch 60, lejos en el tiempo
-            MidiNote { pitch: 60, start_tick: 9600, duration_ticks: 240, velocity: 100 },
-        ];
-        // Marquee que solo cubre la primera nota (x 0..100, y toda la grilla)
-        let marquee = Rect::from_min_size(pos2(0.0, 1000.0), egui::vec2(100.0, 100.0));
-        let sel = notes_in_marquee(&notes, marquee, grid, 1.0, 16.0);
-        assert!(sel.contains(&0));
-        assert!(!sel.contains(&1));
-    }
-
-    #[test]
-    fn marquee_empty_when_no_intersection() {
-        let grid = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 128.0 * 16.0));
-        let notes = vec![MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 }];
-        // Marquee arriba del todo (pitch alto, fuera de la nota)
-        let marquee = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(50.0, 50.0));
-        let sel = notes_in_marquee(&notes, marquee, grid, 1.0, 16.0);
-        assert!(sel.is_empty());
-    }
-
-    #[test]
-    fn duplicate_places_block_after_selection() {
-        let mut notes = vec![
-            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
-            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 240, velocity: 100 },
-            MidiNote { pitch: 64, start_tick: 960, duration_ticks: 240, velocity: 100 }, // no seleccionada
-        ];
-        let mut selected = HashSet::new();
-        selected.insert(0);
-        selected.insert(1);
-
-        let new_idx = duplicate_selected_notes(&mut notes, &selected);
-        assert_eq!(notes.len(), 5);
-        assert_eq!(new_idx.len(), 2);
-
-        // Bloque original: 0..480 -> duration_block = 480
-        // Duplicados en 480 y 720
-        let d0 = &notes[new_idx[0]];
-        let d1 = &notes[new_idx[1]];
-        assert_eq!(d0.start_tick, 480);
-        assert_eq!(d1.start_tick, 720);
-        assert_eq!(d0.pitch, 60);
-        assert_eq!(d1.pitch, 62);
-        // La nota no seleccionada no se duplica
-        assert_eq!(notes[2].start_tick, 960);
-    }
-
-    #[test]
-    fn duplicate_empty_selection_is_noop() {
-        let mut notes = vec![MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 }];
-        let selected = HashSet::new();
-        let new_idx = duplicate_selected_notes(&mut notes, &selected);
-        assert!(new_idx.is_empty());
-        assert_eq!(notes.len(), 1);
-    }
-
-    #[test]
-    fn apply_move_delta_horizontal_and_vertical() {
-        let (start, pitch) = apply_move_delta(240, 60, 480, 2);
-        assert_eq!(start, 720);
-        assert_eq!(pitch, 58);
-        let (start, pitch) = apply_move_delta(100, 60, -500, -2);
-        assert_eq!(start, 0);
-        assert_eq!(pitch, 62);
-        let (_, pitch) = apply_move_delta(0, 120, 0, -50);
-        assert_eq!(pitch, 127);
-    }
-
-    #[test]
-    fn move_delta_snaps_grabbed_note_to_grid() {
-        let orig = vec![(0, 480, 60), (1, 720, 62)];
-        let (dt, dr) = compute_note_move_deltas(&orig, 0, 300, 0);
-        assert_eq!(dt, 240);
-        assert_eq!(dr, 0);
-        let (s1, p1) = apply_move_delta(720, 62, dt, dr);
-        assert_eq!(s1, 960);
-        assert_eq!(p1, 62);
-    }
-
-    #[test]
-    fn move_delta_does_not_push_notes_before_zero() {
-        let orig = vec![(0, 240, 60)];
-        let (dt, _) = compute_note_move_deltas(&orig, 0, -10_000, 0);
-        assert_eq!(dt, -240);
-        let (start, _) = apply_move_delta(240, 60, dt, 0);
-        assert_eq!(start, 0);
-    }
-
-    #[test]
-    fn move_delta_clamps_pitch_rows() {
-        let orig = vec![(0, 0, 120)];
-        let (_, dr) = compute_note_move_deltas(&orig, 0, 0, -50);
-        assert_eq!(dr, -7);
-        let (_, pitch) = apply_move_delta(0, 120, 0, dr);
-        assert_eq!(pitch, 127);
-
-        let orig = vec![(0, 0, 10)];
-        let (_, dr) = compute_note_move_deltas(&orig, 0, 0, 99);
-        assert_eq!(dr, 10);
-        let (_, pitch) = apply_move_delta(0, 10, 0, dr);
-        assert_eq!(pitch, 0);
-    }
-
-    #[test]
-    fn select_note_set_replaces_or_adds() {
-        let mut sel = HashSet::new();
-        sel.insert(0);
-        select_note_set(&mut sel, 2, false);
-        assert_eq!(sel.len(), 1);
-        assert!(sel.contains(&2));
-        select_note_set(&mut sel, 5, true);
-        assert_eq!(sel.len(), 2);
-        assert!(sel.contains(&5));
-        select_note_set(&mut sel, 2, false);
-        assert_eq!(sel.len(), 2);
-    }
-
-    #[test]
-    fn hit_test_body_finds_note_and_skips_edges() {
-        let grid = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 128.0 * 16.0));
-        let notes = vec![MidiNote {
-            pitch: 60,
-            start_tick: 0,
-            duration_ticks: 960,
-            velocity: 100,
-        }];
-        // pitch 60 → row = 67 → y = 67*16 = 1072; rect x=0..960 (zoom=1)
-        // Centro del cuerpo: lejos de los extremos de 8px.
-        let center = pos2(480.0, 1072.0 + 8.0);
-        assert_eq!(
-            hit_test_note_body(&notes, center, grid, 1.0, 16.0),
-            Some(0)
+    let mut note_rects: Vec<AnyElement> = Vec::new();
+    for (i, note) in prs.notes.iter().enumerate() {
+        let (st, dur, pitch) = {
+            let n = &prs.notes[i];
+            let mut s = n.start_tick;
+            let mut d = n.duration_ticks;
+            let mut p = n.pitch;
+            if prs.note_move_active {
+                if let Some(&(_, os, op)) = prs.note_move_orig.iter().find(|(j, _, _)| *j == i) {
+                    let (ns, np) = apply_move_delta(os, op, prs.note_move_preview_delta_ticks, prs.note_move_preview_delta_rows);
+                    s = ns;
+                    p = np;
+                }
+            }
+            if prs.note_resize_active {
+                if let Some(&(_, os, od)) = prs.note_resize_targets.iter().find(|(j, _, _)| *j == i) {
+                    match prs.note_resize_handle {
+                        SelectionDragHandle::Left => {
+                            let (ns, nd) = apply_resize_left_delta(os, od, prs.note_resize_delta_start);
+                            s = ns;
+                            d = nd;
+                        }
+                        SelectionDragHandle::Right => {
+                            let (_, nd) = apply_resize_right_delta(os, od, prs.note_resize_delta_duration);
+                            d = nd;
+                        }
+                        SelectionDragHandle::None => {}
+                    }
+                }
+            }
+            (s, d, p)
+        };
+        let is_sel = prs.selected_notes.contains(&i);
+        let nx = sidebar_width + st as f32 * zoom_x;
+        let ny = (127 - pitch) as f32 * key_height;
+        let nw = (dur as f32 * zoom_x).max(4.0);
+        let body_color = if prs.note_resize_active
+            && prs.note_resize_targets.iter().any(|(j, _, _)| *j == i)
+        {
+            rgb(0xFFBE3C)
+        } else if is_sel {
+            rgb(0xFFD23C)
+        } else {
+            rgb(0xFF8C00)
+        };
+        note_rects.push(
+            div()
+                .absolute()
+                .left(px(nx))
+                .top(px(ny + RULER_HEIGHT))
+                .w(px(nw))
+                .h(px(key_height - 1.0))
+                .bg(body_color)
+                .border_1()
+                .border_color(if is_sel { rgb(0xFFFFA0) } else { rgb(0xFFFFFF) })
+                .id(format!("pr_note_{}", i))
+                .on_click(move |event, _, cx| {
+                    let shift = event.modifiers().shift;
+                    let st2 = state(cx);
+                    st2.update(cx, |state, cx| {
+                        let prs = &mut state.piano_roll_state;
+                        let grab = i;
+                        select_note_set(&mut prs.selected_notes, grab, shift);
+                        cx.notify();
+                    });
+                })
+                .into_any_element(),
         );
-        // Sobre el extremo izquierdo (zona de resize): no es body.
-        let edge = pos2(2.0, 1072.0 + 8.0);
-        assert_eq!(hit_test_note_body(&notes, edge, grid, 1.0, 16.0), None);
-        // Fuera de la nota.
-        let outside = pos2(480.0, 0.0);
-        assert_eq!(hit_test_note_body(&notes, outside, grid, 1.0, 16.0), None);
     }
 
-    #[test]
-    fn hit_test_full_includes_edges() {
-        let grid = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 128.0 * 16.0));
-        let notes = vec![MidiNote {
-            pitch: 60,
-            start_tick: 0,
-            duration_ticks: 960,
-            velocity: 100,
-        }];
-        // Centro del cuerpo.
-        let center = pos2(480.0, 1072.0 + 8.0);
-        assert_eq!(
-            hit_test_note_full(&notes, center, grid, 1.0, 16.0),
-            Some(0)
+    let mut grid_bg: Vec<AnyElement> = Vec::new();
+    for row in 0..128 {
+        let pitch = 127 - row;
+        let y = row as f32 * key_height;
+        let is_black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
+        if is_black {
+            grid_bg.push(
+                div()
+                    .absolute()
+                    .left(px(0.0))
+                    .top(px(RULER_HEIGHT + y))
+                    .w(px(canvas_w))
+                    .h(px(key_height))
+                    .bg(rgba(0x00000026))
+                    .into_any_element(),
+            );
+        }
+        grid_bg.push(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let yy = bounds.origin.y + px(y);
+                    let mut path = PathBuilder::stroke(px(0.5));
+                    path.move_to(point(bounds.origin.x, yy));
+                    path.line_to(point(bounds.origin.x + bounds.size.width, yy));
+                    window.paint_path(path.build().unwrap(), rgb(0x1E1E1E));
+                },
+            )
+            .absolute()
+            .left(px(0.0))
+            .top(px(RULER_HEIGHT))
+            .w(px(canvas_w))
+            .h(px(grid_h))
+            .into_any_element(),
         );
-        // Extremo izquierdo: body lo rechaza, full lo acepta (delete debe poder borrar ahí).
-        let edge = pos2(2.0, 1072.0 + 8.0);
-        assert_eq!(hit_test_note_body(&notes, edge, grid, 1.0, 16.0), None);
-        assert_eq!(hit_test_note_full(&notes, edge, grid, 1.0, 16.0), Some(0));
-        // Extremo derecho.
-        let right_edge = pos2(958.0, 1072.0 + 8.0);
-        assert_eq!(
-            hit_test_note_full(&notes, right_edge, grid, 1.0, 16.0),
-            Some(0)
+    }
+
+    let mut sidebar_rows: Vec<AnyElement> = Vec::new();
+    for row in 0..128 {
+        let pitch = 127 - row;
+        let y = row as f32 * key_height;
+        let is_black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
+        let (bg, tc) = match mode {
+            PianoRollMode::Keys => {
+                if is_black {
+                    (rgb(0x28282D), rgb(0xFFFFFF))
+                } else {
+                    (rgb(0xDCDCE1), rgb(0x000000))
+                }
+            }
+            PianoRollMode::Drums => (rgb(0x232328), rgb(0xC8C8C8)),
+        };
+        let label = match mode {
+            PianoRollMode::Keys => {
+                let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+                let octave = (pitch / 12) as i32 - 1;
+                format!("{}{}", names[(pitch % 12) as usize], octave)
+            }
+            PianoRollMode::Drums => {
+                if let Some(name) = prs.drum_map.get(&pitch) {
+                    format!("{} ({})", name, pitch)
+                } else {
+                    format!("Pad {}", pitch)
+                }
+            }
+        };
+        sidebar_rows.push(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .top(px(RULER_HEIGHT + y))
+                .w(px(sidebar_width))
+                .h(px(key_height))
+                .bg(bg)
+                .border_r_1()
+                .border_color(rgb(0x323232))
+                .child(
+                    Label::new(label)
+                        .text_xs()
+                        .text_color(tc)
+                        .pl(px(6.0)),
+                )
+                .id(format!("pr_key_{}", pitch))
+                .on_click(move |_, _, cx| {
+                    let st2 = state(cx);
+                    st2.update(cx, |state, _| {
+                        preview_drum_pad(
+                            &state.live_tracks,
+                            state.selected_track_index,
+                            pitch,
+                            1.0,
+                            &state.audio_proxy,
+                        );
+                    });
+                })
+                .into_any_element(),
         );
-        // Fuera de la nota.
-        let outside = pos2(480.0, 0.0);
-        assert_eq!(hit_test_note_full(&notes, outside, grid, 1.0, 16.0), None);
     }
 
-    #[test]
-    fn remove_selected_notes_deletes_only_marked() {
-        let mut notes = vec![
-            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
-            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 240, velocity: 100 },
-            MidiNote { pitch: 64, start_tick: 480, duration_ticks: 240, velocity: 100 },
-        ];
-        let mut selected = HashSet::new();
-        selected.insert(0);
-        selected.insert(2);
+    let sel_canvas = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            if sel_active && sel_end > sel_start {
+                let sx0 = bounds.origin.x + px(sel_start as f32 * zoom_x);
+                let sx1 = bounds.origin.x + px(sel_end as f32 * zoom_x);
+                let mx0 = sx0.min(sx1);
+                let mx1 = sx0.max(sx1);
+                let sel_rect = Bounds::new(
+                    point(mx0, bounds.origin.y),
+                    size(mx1 - mx0, bounds.size.height),
+                );
+                window.paint_quad(PaintQuad {
+                    bounds: sel_rect,
+                    background: rgba(0x64C8FF26).into(),
+                    border_color: rgba(0x64C8FF00).into(),
+                    corner_radii: gpui_kit::Corners::default(),
+                    border_widths: gpui_kit::Edges::default(),
+                    border_style: BorderStyle::default(),
+                });
+                let bracket = rgb(0x00C8FF);
+                for bx in [mx0, mx1] {
+                    let mut path = PathBuilder::stroke(px(2.0));
+                    path.move_to(point(bx, bounds.origin.y));
+                    path.line_to(point(bx, bounds.origin.y + bounds.size.height));
+                    window.paint_path(path.build().unwrap(), bracket);
+                }
+            }
+        },
+    )
+    .absolute()
+    .left(px(sidebar_width))
+    .top(px(RULER_HEIGHT))
+    .w(px(canvas_w - sidebar_width))
+    .h(px(grid_h));
 
-        let removed = remove_selected_notes(&mut notes, &mut selected);
-        assert_eq!(removed, 2);
-        assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0].pitch, 62);
-        assert!(selected.is_empty());
-    }
+    let playhead_canvas = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let phx = bounds.origin.x + px(playhead_tick as f32 * zoom_x);
+            let mut path = PathBuilder::stroke(px(2.0));
+            path.move_to(point(phx, bounds.origin.y));
+            path.line_to(point(phx, bounds.origin.y + bounds.size.height));
+            window.paint_path(path.build().unwrap(), rgb(0x00C8FF));
+        },
+    )
+    .absolute()
+    .left(px(sidebar_width))
+    .top(px(RULER_HEIGHT))
+    .w(px(canvas_w - sidebar_width))
+    .h(px(grid_h));
 
-    #[test]
-    fn remove_selected_notes_all_or_nothing() {
-        let mut notes = vec![MidiNote {
-            pitch: 60,
-            start_tick: 0,
-            duration_ticks: 240,
-            velocity: 100,
-        }];
-        let mut empty = HashSet::new();
-        assert_eq!(remove_selected_notes(&mut notes, &mut empty), 0);
-        assert_eq!(notes.len(), 1);
+    let grid_interaction = div()
+        .absolute()
+        .left(px(sidebar_width))
+        .top(px(RULER_HEIGHT))
+        .w(px(canvas_w - sidebar_width))
+        .h(px(grid_h))
+        .id("pr_grid_interaction")
+        .on_click(move |event, _, cx| {
+            let Some(pos) = event.mouse_position() else {
+                return;
+            };
+            let st2 = state(cx);
+            st2.update(cx, |state, cx| {
+                let prs = &mut state.piano_roll_state;
+                let local_x = pos.x.as_f32() - sidebar_width;
+                let local_y = pos.y.as_f32() - RULER_HEIGHT;
+                let raw_tick = (local_x / zoom_x).max(0.0) as u64;
+                let q_tick = quantize_tick(raw_tick, QUANTIZE_TICKS);
+                let row = (local_y / key_height).max(0.0) as i32;
+                let pitch = (127 - row).clamp(0, 127) as u8;
+                let already = prs.notes.iter().any(|n| {
+                    n.pitch == pitch
+                        && q_tick >= n.start_tick
+                        && q_tick < n.start_tick + n.duration_ticks
+                });
+                if !already {
+                    prs.notes.push(MidiNote {
+                        pitch,
+                        start_tick: q_tick,
+                        duration_ticks: QUANTIZE_TICKS,
+                        velocity: NOTE_INSERT_VELOCITY,
+                    });
+                    if prs.mode == PianoRollMode::Drums {
+                        preview_drum_pad(
+                            &state.live_tracks,
+                            state.selected_track_index,
+                            pitch,
+                            1.0,
+                            &state.audio_proxy,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        });
 
-        let mut all = HashSet::new();
-        all.insert(0);
-        assert_eq!(remove_selected_notes(&mut notes, &mut all), 1);
-        assert!(notes.is_empty());
-    }
+    let bar = (playhead_tick / TICKS_PER_BAR) + 1;
+    let beat = ((playhead_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
 
-    #[test]
-    fn build_resize_targets_uses_selection_when_grab_selected() {
-        let notes = vec![
-            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
-            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 480, velocity: 100 },
-            MidiNote { pitch: 64, start_tick: 960, duration_ticks: 240, velocity: 100 },
-        ];
-        let mut sel = HashSet::new();
-        sel.insert(0);
-        sel.insert(1);
-        // Grab 0 está seleccionado → targets = {0, 1} (no la 2).
-        let t = build_resize_targets(&notes, 0, &sel);
-        assert_eq!(t.len(), 2);
-        assert!(t.iter().any(|(i, _, _)| *i == 0));
-        assert!(t.iter().any(|(i, _, _)| *i == 1));
-        assert!(!t.iter().any(|(i, _, _)| *i == 2));
-    }
-
-    #[test]
-    fn build_resize_targets_single_when_grab_not_selected() {
-        let notes = vec![
-            MidiNote { pitch: 60, start_tick: 0, duration_ticks: 240, velocity: 100 },
-            MidiNote { pitch: 62, start_tick: 240, duration_ticks: 480, velocity: 100 },
-        ];
-        let mut sel = HashSet::new();
-        sel.insert(1);
-        // Grab 0 NO está seleccionado → solo el grab.
-        let t = build_resize_targets(&notes, 0, &sel);
-        assert_eq!(t.len(), 1);
-        assert_eq!(t[0].0, 0);
-    }
-
-    #[test]
-    fn resize_multi_right_same_duration_delta() {
-        // Grab (0): dur 240 → pointer en 720 → new_dur=720 → delta=+480.
-        // Target (1): dur 480 → 480+480=960. Start anclado.
-        let targets = vec![(0, 0, 240), (1, 0, 480)];
-        let delta = compute_resize_right_delta(&targets, 0, 720);
-        assert_eq!(delta, 480);
-
-        let (_, d0) = apply_resize_right_delta(0, 240, delta);
-        let (_, d1) = apply_resize_right_delta(0, 480, delta);
-        assert_eq!(d0, 720);
-        assert_eq!(d1, 960);
-    }
-
-    #[test]
-    fn resize_multi_left_same_start_delta_anchors_ends() {
-        // Grab (0): start 480, dur 240 (end=720); pointer en 240 → new_start=240 → delta=-240.
-        // Target (1): start 480, dur 480 (end=960) → start=240, end sigue 960 → dur=720.
-        let targets = vec![(0, 480, 240), (1, 480, 480)];
-        let delta = compute_resize_left_delta(&targets, 0, 240);
-        assert_eq!(delta, -240);
-
-        let (s0, d0) = apply_resize_left_delta(480, 240, delta);
-        let (s1, d1) = apply_resize_left_delta(480, 480, delta);
-        assert_eq!(s0, 240);
-        assert_eq!(d0, 480); // end=720, start=240
-        assert_eq!(s1, 240);
-        assert_eq!(d1, 720); // end=960, start=240
-    }
-
-    #[test]
-    fn resize_multi_left_clamps_at_zero_and_min_duration() {
-        // Delta muy negativo: start no baja de 0 y duration no baja de min.
-        let (s, d) = apply_resize_left_delta(240, 240, -10_000);
-        assert_eq!(s, 0);
-        assert_eq!(d, 480); // end=480 anclado
-
-        let (s, d) = apply_resize_right_delta(0, 240, -10_000);
-        assert_eq!(d, MIN_NOTE_DURATION_TICKS);
-        assert_eq!(s, 0);
-    }
+    v_flex()
+        .id("piano_roll")
+        .size_full()
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(6.0))
+                .h(px(28.0))
+                .bg(rgb(0x181A20))
+                .px(px(8.0))
+                .child(
+                    Button::new("pr_mode_keys")
+                        .label("🎹 Keys")
+                        .compact()
+                        .when(mode == PianoRollMode::Keys, |b| b.text_color(rgb(0x00B4D8)))
+                        .on_click(move |_, _, cx| {
+                            let st2 = state(cx);
+                            st2.update(cx, |state, cx| {
+                                state.piano_roll_state.mode = PianoRollMode::Keys;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("pr_mode_drums")
+                        .label("🥁 Drums")
+                        .compact()
+                        .when(mode == PianoRollMode::Drums, |b| b.text_color(rgb(0x00B4D8)))
+                        .on_click(move |_, _, cx| {
+                            let st2 = state(cx);
+                            st2.update(cx, |state, cx| {
+                                state.piano_roll_state.mode = PianoRollMode::Drums;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(Label::new(format!("Zoom {:.2}", zoom_x)).text_xs())
+                .child(Label::new(format!("Compás: {}.{} | Tick: {}", bar, beat, playhead_tick)).text_xs())
+                .when(sel_active, |this| {
+                    this.child(Label::new(format!("Sel: {} -> {}", sel_start, sel_end)).text_xs())
+                        .child(
+                            Button::new("pr_loop_toggle")
+                                .label(if loop_enabled { "Loop ON" } else { "Loop OFF" })
+                                .compact()
+                                .when(loop_enabled, |b| b.text_color(rgb(0x39FF14)))
+                                .on_click(move |_, _, cx| {
+                                    let st2 = state(cx);
+                                    st2.update(cx, |state, cx| {
+                                        state.piano_roll_state.loop_enabled =
+                                            !state.piano_roll_state.loop_enabled;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("pr_clear_sel")
+                                .label("X Sel")
+                                .compact()
+                                .on_click(move |_, _, cx| {
+                                    let st2 = state(cx);
+                                    st2.update(cx, |state, cx| {
+                                        state.piano_roll_state.clear_selection();
+                                        state.piano_roll_state.loop_enabled = false;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                })
+                .when(sel_notes > 0, |this| {
+                    this.child(Label::new(format!("Notas: {}", sel_notes)).text_xs())
+                        .child(
+                            Button::new("pr_clear_notes")
+                                .label("X Notas")
+                                .compact()
+                                .on_click(move |_, _, cx| {
+                                    let st2 = state(cx);
+                                    st2.update(cx, |state, cx| {
+                                        state.piano_roll_state.clear_note_selection();
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_x_scrollbar()
+                .child(
+                    div()
+                        .w(px(canvas_w))
+                        .h(px(RULER_HEIGHT + grid_h))
+                        .relative()
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(0.0))
+                                .top(px(0.0))
+                                .w(px(sidebar_width))
+                                .h(px(RULER_HEIGHT))
+                                .bg(rgb(0x141418))
+                                .into_any_element(),
+                        )
+                        .child(
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    let rx = bounds.origin.x + px(sidebar_width);
+                                    let rw = bounds.size.width - px(sidebar_width);
+                                    let mut tick = 0u64;
+                                    let mut bar_number = 1u32;
+                                    while tick <= total_ticks {
+                                        let x = rx + px(tick as f32 * zoom_x);
+                                        if x > bounds.origin.x + bounds.size.width {
+                                            break;
+                                        }
+                                        if x >= rx {
+                                            let mut tick_path = PathBuilder::stroke(px(1.5));
+                                            tick_path.move_to(point(x, bounds.origin.y + px(4.0)));
+                                            tick_path.line_to(point(
+                                                x,
+                                                bounds.origin.y + bounds.size.height,
+                                            ));
+                                            window.paint_path(tick_path.build().unwrap(), rgb(0x8C8C8C));
+                                            let mut bar_path = PathBuilder::fill();
+                                            bar_path.move_to(point(x + px(5.0), bounds.origin.y + px(3.0)));
+                                            bar_path.line_to(point(x + px(13.0), bounds.origin.y + px(3.0)));
+                                            bar_path.line_to(point(x + px(13.0), bounds.origin.y + px(13.0)));
+                                            bar_path.line_to(point(x + px(5.0), bounds.origin.y + px(13.0)));
+                                            bar_path.close();
+                                            window.paint_path(bar_path.build().unwrap(), rgb(0xD2D2D2));
+                                            bar_number += 1;
+                                        }
+                                        tick += TICKS_PER_BAR;
+                                    }
+                                },
+                            )
+                            .absolute()
+                            .left(px(0.0))
+                            .top(px(0.0))
+                            .w(px(canvas_w))
+                            .h(px(RULER_HEIGHT))
+                            .into_any_element(),
+                        )
+                        .children(sidebar_rows)
+                        .children(grid_bg)
+                        .child(sel_canvas.into_any_element())
+                        .child(playhead_canvas.into_any_element())
+                        .children(note_rects)
+                        .child(grid_interaction.into_any_element()),
+                ),
+        )
+        .into_any_element()
 }

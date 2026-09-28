@@ -105,14 +105,22 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ---
 
-# 🗺️ Roadmap & Próximos Pasos (para cambiar el framework grafico de **`egui`** a **`gpui-kit`**)
+### 🗺️ Roadmap & Próximos Pasos (para cambiar el framework grafico de **`egui`** a **`gpui-kit`**)
 
+```
+/*
 1. **Loopeo bugeado arreglado**: Creo que se rompió el crate `hikaru_audio_engine` y por eso el loopeo funciona como el ojete. **[LISTO]**
 2. **Piano Roll Arreglado**: Porque el Piano Roll actual está rotisimo **[LISTO]**
 3. **Input MIDI Virtual desde el Piano Roll**: eso **[LISTO]**
 4. **Sintesis y Efectos Wavetable y Espectral**: eso tambien
 5. **Hikaru OpenDMS arreglado como la gente**: Ahora está re bugeado XD **[LISTO]**
 6. **Clips de Automatizaciones**: Medio parecidos al del FL Studio pero bueno jaja
+*/
+```
+
+# Nota: La transición de `egui` a `gpui-kit` fue completada.
+
+Ahora el Hikaru OpenLive tendrá una renderización de su interfaz (GUI/UI/UX) mediante GPU como sí fuera un DAW propietario sin renunciar al software libre y de código abierto.
 
 ---
 
@@ -122,6 +130,11 @@ Un agradecimiento especial a los gordos contribuyentes y a la comunidad de softw
 
 * **Contributors:** [Ver lista de contribuyentes directos](https://github.com/hikarucorporation/hikaru-openlive/graphs/contributors)
 * **Forks y derivados:** [Explorar forks de la comunidad](https://github.com/hikarucorporation/hikaru-openlive/network/members)
+
+Creadores:
+
+* [Hikaru Corporation](https://github.com/hikarucorporation)
+* [DTG](https://github.com/doujintechnologicsgroup)
 
 ¿Querés aportar? ¡Los Pull Requests son más que bienvenidos! (Soporte MIDI, controladores físicos, timestretching y arreglos de bugs son prioridad total).
 
@@ -133,4 +146,4 @@ Este programa es software libre bajo los términos de la **GNU Affero General Pu
 
 ### Posdata:
 
-Nota Personal: Cambiar el framework grafico de **`egui`** a **`gpui-kit`** cuando hagas la gran mayoría de cosas en **`egui`**
+Nota Personal: Cambiar el framework grafico de **`egui`** a **`gpui-kit`** cuando hagas la gran mayoría de cosas en **`egui`**: **COMPLETADO**

@@ -1,141 +1,184 @@
-/*
- * Hikaru OpenLive - Global Menu Bar
- * License: AGPL-3.0-or-later
- */
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
 
-use egui::Ui;
-use crate::app::{HikaruApp, AppMode};
+use crate::app::{state, AppMode, HikaruApp, OpenLiveView, update_state};
 
-pub fn show(ui: &mut Ui, app: &mut HikaruApp) {
-    egui::menu::bar(ui, |ui| {
-        ui.style_mut().visuals.button_frame = false;
+struct MenuState {
+    open: Option<usize>,
+}
 
-        // --- FILE ---
-        ui.menu_button("FILE", |ui| {
-            if ui.button("📄 New Project").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("📂 Open Project...").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("💾 Save").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("💾 Save As...").clicked() {
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("🎵 Export Audio (WAV/FLAC)...").clicked() {
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("❌ Exit").clicked() {
-                std::process::exit(0);
-            }
-        });
+impl MenuState {
+    fn toggle(&mut self, idx: usize) {
+        self.open = if self.open == Some(idx) { None } else { Some(idx) };
+    }
+}
 
-        // --- EDIT ---
-        ui.menu_button("EDIT", |ui| {
-            if ui.button("↩ Undo").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("↪ Redo").clicked() {
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("✂ Cut").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("📋 Copy").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("📋 Paste").clicked() {
-                ui.close_menu();
-            }
-        });
+pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let menu_state = cx.new(|_| MenuState { open: None });
 
-        // --- VIEW ---
-        ui.menu_button("VIEW", |ui| {
-            // Submenú OpenLive (Ableton-style workflow)
-            ui.menu_button("🎛 OpenLive View", |ui| {
-                if ui.button("🔲 Session Matrix (Tab)").clicked() {
-                    app.mode = AppMode::OpenLive;
-                    // TODO: Activar pestaña Session Matrix
-                    ui.close_menu();
-                }
-                if ui.button("🎼 Arranger View (Tab)").clicked() {
-                    app.mode = AppMode::OpenLive;
-                    // TODO: Activar pestaña Arranger View
-                    ui.close_menu();
-                }
-            });
+    let items = ["FILE", "EDIT", "VIEW", "SETTINGS", "HELP"];
 
-            // Submenú OpenStudio (FL Studio/Traditional workflow)
-            ui.menu_button("🎧 OpenStudio View", |ui| {
-                if ui.button("🎹 Playlist / Timeline (F5)").clicked() {
-                    app.mode = AppMode::OpenStudio;
-                    ui.close_menu();
-                }
-            });
+    h_flex()
+        .id("menu_bar")
+        .bg(rgb(0x2A2A2A))
+        .px(px(4.0))
+        .pb(px(2.0))
+        .children(items.iter().enumerate().map(|(idx, label)| {
+            let menu_state = menu_state.clone();
+            let menu_state_click = menu_state.clone();
+            let open = menu_state.read(cx).open == Some(idx);
+            let label = label.to_string();
+            div()
+                .relative()
+                .child(
+                    Button::new(format!("menu_{}", label.to_lowercase()))
+                        .label(label.clone())
+                        .compact()
+                        .bg(rgb(0x3D3D3D))
+                        .text_color(rgb(0xE0E0E0))
+                        .on_click(move |_, _, cx| {
+                            menu_state_click.update(cx, |state, cx| {
+                                state.toggle(idx);
+                                cx.notify();
+                            });
+                        }),
+                )
+                .when(open, |this| this.child(render_dropdown(menu_state.clone(), idx, cx)))
+        }))
+}
 
-            ui.separator();
+fn render_dropdown(
+    menu_state: Entity<MenuState>,
+    idx: usize,
+    cx: &mut Context<HikaruApp>,
+) -> AnyElement {
+    let mode = state(cx).read(cx).mode;
 
-            if ui.button("🎛 Mixer (F9)").clicked() {
-                app.show_mixer = !app.show_mixer;
-                ui.close_menu();
-            }
-            if ui.button("🎚 DSP Rack (F10)").clicked() {
-                app.show_dsp_rack = !app.show_dsp_rack;
-                ui.close_menu();
-            }
-            if ui.button("🎹 Piano Roll (F4)").clicked() {
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("🔄 Reset Layout").clicked() {
-                ui.close_menu();
-            }
-        });
-
-        // --- SETTINGS ---
-        ui.menu_button("SETTINGS", |ui| {
-            if ui.button("🔊 Audio Setup (JACK/ALSA/PipeWire)...").clicked() {
-                // Abrimos el modal nativo de Audio Setup
-                app.audio_settings_state.is_open = true;
-                ui.close_menu();
-            }
-            if ui.button("🎹 MIDI Devices...").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("🔌 External VST3 / CLAP Plugin Settings...").clicked() {
-                app.plugin_settings_state.is_open = true; // <-- Asignar true y cerrar con punto y coma ';'
-                // ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("🎨 Interface & Themes").clicked() {
-                ui.close_menu();
-            }
-        });
-
-        // --- HELP ---
-        ui.menu_button("HELP", |ui| {
-            if ui.button("📖 Manual / Docs").clicked() {
-                ui.close_menu();
-            }
-            if ui.button("⌨ Keyboard Shortcuts").clicked() {
-                ui.close_menu();
-            }
-            ui.separator();
-
-            let about_label = match app.mode {
+    let items: Vec<(&str, Box<dyn Fn(&mut App)>)> = match idx {
+        0 => vec![
+            ("📄 New Project", Box::new(|_| {})),
+            ("📂 Open Project...", Box::new(|_| {})),
+            ("💾 Save", Box::new(|_| {})),
+            ("💾 Save As...", Box::new(|_| {})),
+            ("🎵 Export Audio (WAV/FLAC)...", Box::new(|_| {})),
+            ("❌ Exit", Box::new(|_| std::process::exit(0))),
+        ],
+        1 => vec![
+            ("↩ Undo", Box::new(|_| {})),
+            ("↪ Redo", Box::new(|_| {})),
+            ("✂ Cut", Box::new(|_| {})),
+            ("📋 Copy", Box::new(|_| {})),
+            ("📋 Paste", Box::new(|_| {})),
+        ],
+        2 => vec![
+            (
+                "🔲 Session Matrix (Tab)",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.mode = AppMode::OpenLive;
+                        state.openlive_view = OpenLiveView::SessionMatrix;
+                    });
+                }),
+            ),
+            (
+                "🎼 Arranger View (Tab)",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.mode = AppMode::OpenLive;
+                        state.openlive_view = OpenLiveView::ArrangerView;
+                    });
+                }),
+            ),
+            (
+                "🎹 Playlist / Timeline",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.mode = AppMode::OpenStudio;
+                    });
+                }),
+            ),
+            (
+                "🎛 Mixer (F9)",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.show_mixer = !state.show_mixer;
+                    });
+                }),
+            ),
+            (
+                "🎚 DSP Rack (F10)",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.show_dsp_rack = !state.show_dsp_rack;
+                    });
+                }),
+            ),
+        ],
+        3 => vec![
+            (
+                "🔊 Audio Setup (JACK/ALSA/PipeWire)...",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.audio_settings_state.is_open = true;
+                    });
+                }),
+            ),
+            (
+                "🔌 External VST3 / CLAP Plugin Settings...",
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.plugin_settings_state.is_open = true;
+                    });
+                }),
+            ),
+        ],
+        _ => {
+            let about_label = match mode {
                 AppMode::OpenLive => "ℹ About Hikaru OpenLive",
                 AppMode::OpenStudio => "ℹ About Hikaru OpenStudio",
             };
+            vec![(
+                about_label,
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.show_about = true;
+                    });
+                }),
+            )]
+        }
+    };
 
-            if ui.button(about_label).clicked() {
-                app.show_about = true;
-                ui.close_menu();
-            }
-        });
-    });
+    div()
+        .absolute()
+        .top(px(24.0))
+        .left(px(0.0))
+        .w(px(220.0))
+        .bg(rgb(0x1C1E24))
+        .border_1()
+        .border_color(rgb(0x2A2D37))
+        .rounded(px(4.0))
+        .p(px(4.0))
+        .children(items.into_iter().map(|(label, action)| {
+            let menu_state = menu_state.clone();
+            div()
+                .w_full()
+                .child(
+                    Button::new(format!("menu_item_{}", label))
+                        .label(label)
+                        .compact()
+                        .w_full()
+                        .on_click(move |_, _, cx| {
+                            action(cx);
+                            menu_state.update(cx, |state, cx| {
+                                state.open = None;
+                                cx.notify();
+                            });
+                        }),
+                )
+        }))
+        .into_any_element()
 }

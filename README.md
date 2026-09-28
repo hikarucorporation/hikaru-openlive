@@ -105,14 +105,22 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ---
 
-# 🗺️ Roadmap & Next Steps (to switch graphics framework from **`egui`** to **`gpui-kit`**)
+### 🗺️ Roadmap & Next Steps (to switch graphics framework from **`egui`** to **`gpui-kit`**)
 
+```
+/*
 1. **Fixed buggy looping**: I think the `hikaru_audio_engine` crate broke and that's why looping works like crap. **[DONE]**
 2. **Fixed Piano Roll**: Because the current Piano Roll is totally broken **[DONE]**
 3. **Virtual MIDI Input from Piano Roll**: that **[DONE]**
 4. **Wavetable and Spectral Synthesis and Effects**: that too
 5. **Hikaru OpenDMS properly fixed**: Right now it's super buggy lol **[DONE]**
 6. **Automation Clips**: Kind of similar to FL Studio's but well haha
+*/
+```
+
+# Note: The transition from `egui` to `gpui-kit` has been completed.
+
+Hikaru OpenLive will now have GPU-based rendering of its interface (GUI/UI/UX) as if it were a proprietary DAW, without giving up free and open-source software.
 
 ---
 
@@ -121,7 +129,12 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 Special thanks to all the contributors and the open-source community supporting **Hikaru OpenLive**:
 
 * **Contributors:** [View direct contributors list](https://github.com/hikarucorporation/hikaru-openlive/graphs/contributors)
-* **Forks & Extensions:** [Explore community forks](https://github.com/hikarucorporation/hikaru-openlive/forks?period=2+years&repository_type=All)
+* **Forks & Extensions:** [Explore community forks](https://github.com/hikarucorporation/hikaru-openlive/network/members)
+
+Creators:
+
+* [Hikaru Corporation](https://github.com/hikarucorporation)
+* [DTG](https://github.com/doujintechnologicsgroup)
 
 Want to contribute? Pull Requests are highly welcome! (MIDI controller mapping, physical hardware support, real-time timestretching, and bug fixes are top priority).
 
@@ -135,4 +148,4 @@ This program is free software under the terms of the **GNU Affero General Public
 
 ### P.S.:
 
-Personal note: Switch graphics framework from **`egui`** to **`gpui-kit`** once you've done most of the stuff in **`egui`**
+Personal note: Switch the graphics framework from **`egui`** to **`gpui-kit`** when you've done most of the stuff in **`egui`**: **COMPLETED**

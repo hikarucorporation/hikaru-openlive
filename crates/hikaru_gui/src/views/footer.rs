@@ -1,55 +1,98 @@
-// crates/hikaru_gui/src/views/footer.rs
-use egui::{Align, Layout, RichText, Ui};
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
 
-pub fn show(
-    ui: &mut Ui,
-    cpu_usage: f32,
-    show_clip_editor: &mut bool,
-    show_piano_roll: &mut bool,
-    show_dsp_rack: &mut bool,
-) {
-    ui.horizontal(|ui| {
-        // Toggle Clip Editor
-        let clip_icon = if *show_clip_editor { "🎛 CLIP EDITOR [▼]" } else { "🎛 CLIP EDITOR [▲]" };
-        if ui.selectable_label(*show_clip_editor, RichText::new(clip_icon).small().strong()).clicked() {
-            *show_clip_editor = !*show_clip_editor;
-            if *show_clip_editor {
-                *show_piano_roll = false;
-                *show_dsp_rack = false;
-            }
-        }
+use crate::app::{state, HikaruApp};
 
-        ui.separator();
+pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let app = state(cx).read(cx);
 
-        // Toggle Piano Roll / Drum Sequencer
-        let pr_icon = if *show_piano_roll { "🎹 PIANO ROLL [▼]" } else { "🎹 PIANO ROLL [▲]" };
-        if ui.selectable_label(*show_piano_roll, RichText::new(pr_icon).small().strong()).clicked() {
-            *show_piano_roll = !*show_piano_roll;
-            if *show_piano_roll {
-                *show_clip_editor = false;
-                *show_dsp_rack = false;
-            }
-        }
+    let clip_icon = if app.matrix_state.show_editor {
+        "🎛 CLIP EDITOR [▼]"
+    } else {
+        "🎛 CLIP EDITOR [▲]"
+    };
+    let pr_icon = if app.show_piano_roll {
+        "🎹 PIANO ROLL [▼]"
+    } else {
+        "🎹 PIANO ROLL [▲]"
+    };
+    let dsp_icon = if app.show_dsp_rack {
+        "🎚 DSP RACK [▼]"
+    } else {
+        "🎚 DSP RACK [▲]"
+    };
 
-        ui.separator();
+    let cpu_usage = app.cpu_usage;
+    drop(app);
 
-        // Toggle DSP FX Rack
-        let dsp_icon = if *show_dsp_rack { "🎚 DSP RACK [▼]" } else { "🎚 DSP RACK [▲]" };
-        if ui.selectable_label(*show_dsp_rack, RichText::new(dsp_icon).small().strong()).clicked() {
-            *show_dsp_rack = !*show_dsp_rack;
-            if *show_dsp_rack {
-                *show_clip_editor = false;
-                *show_piano_roll = false;
-            }
-        }
-
-        ui.separator();
-        ui.label(RichText::new("Hikaru OpenLive | AGPLv3").small());
-        ui.separator();
-        ui.label(RichText::new(format!("CPU: {:.1}%", cpu_usage * 100.0)).small());
-
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new("ENGINE: IDLE").small());
-        });
-    });
+    h_flex()
+        .id("footer_bar")
+        .h(px(24.0))
+        .bg(rgb(0x2A2A2A))
+        .border_t_1()
+        .border_color(rgb(0x3D3D3D))
+        .items_center()
+        .px(px(6.0))
+        .gap(px(4.0))
+        .child(
+            Button::new("footer_clip_editor")
+                .label(clip_icon)
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .text_color(rgb(0xE0E0E0))
+                .on_click(move |_, _, cx| {
+                    let state = state(cx);
+                    state.update(cx, |state, cx| {
+                        state.matrix_state.show_editor = !state.matrix_state.show_editor;
+                        if state.matrix_state.show_editor {
+                            state.show_piano_roll = false;
+                            state.show_dsp_rack = false;
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            Button::new("footer_piano_roll")
+                .label(pr_icon)
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .text_color(rgb(0xE0E0E0))
+                .on_click(move |_, _, cx| {
+                    let state = state(cx);
+                    state.update(cx, |state, cx| {
+                        state.show_piano_roll = !state.show_piano_roll;
+                        if state.show_piano_roll {
+                            state.matrix_state.show_editor = false;
+                            state.show_dsp_rack = false;
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            Button::new("footer_dsp_rack")
+                .label(dsp_icon)
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .text_color(rgb(0xE0E0E0))
+                .on_click(move |_, _, cx| {
+                    let state = state(cx);
+                    state.update(cx, |state, cx| {
+                        state.show_dsp_rack = !state.show_dsp_rack;
+                        if state.show_dsp_rack {
+                            state.matrix_state.show_editor = false;
+                            state.show_piano_roll = false;
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(Label::new("Hikaru OpenLive | AGPLv3").text_xs().text_color(rgb(0xE0E0E0)))
+        .child(Label::new(format!("CPU: {:.1}%", cpu_usage * 100.0)).text_xs().text_color(rgb(0xE0E0E0)))
+        .child(div().flex_1())
+        .child(Label::new("ENGINE: IDLE").text_xs().text_color(rgb(0xE0E0E0)))
 }

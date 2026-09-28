@@ -1,15 +1,16 @@
-/*
- * Hikaru OpenStudio - Pro Dynamic Mixer (Standard Event Architecture)
- * License: AGPL-3.0-or-later
- */
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::Styled as _;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
 
-use egui::{Ui, Vec2, Color32, RichText, Stroke, Frame, Rect, Pos2, Sense, Button, ScrollArea, TextEdit, Align};
-use std::f32::consts::PI;
-use crate::app::{PanMode, AppMode};
+use crate::app::{state, AppMode, HikaruApp};
+use crate::audio_proxy::GuiCommand;
 use crate::views::open_wavetable::{WavetableOscillator, ModulatorNode};
 use crate::views::open_dms::OpenDms;
-
-// --- DATA STRUCTURES ---
 
 #[derive(Clone, Debug)]
 pub struct DspSlot {
@@ -35,32 +36,34 @@ impl DspSlot {
             cam_x: 0.35,
             cam_y: 0.0,
             cam_z: 0.5,
-            wavetable_oscillators: vec![
-                WavetableOscillator::new(0, "OSC A", egui::Pos2::new(40.0, 60.0)),
-            ],
+            wavetable_oscillators: vec![WavetableOscillator::new(
+                0,
+                "OSC A",
+                point(px(40.0), px(60.0)),
+            )],
             modulators: Vec::new(),
             dms_state: None,
         }
     }
 }
 
-#[derive(Clone, Debug)] // <--- AGREGAR AQUÍ
+#[derive(Clone, Debug)]
 pub struct SendConnection {
     pub target_id: usize,
-    pub amount: f32, 
+    pub amount: f32,
 }
 
 #[derive(Clone, Debug)]
 pub struct Track {
-    pub id: usize, 
+    pub id: usize,
     pub name: String,
     pub volume: f32,
     pub pan: f32,
-    pub pan_mode: PanMode,
+    pub pan_mode: crate::app::PanMode,
     pub mute: bool,
     pub solo: bool,
     pub is_master: bool,
-    pub route_destination_id: usize, 
+    pub route_destination_id: usize,
     pub sends: Vec<SendConnection>,
     pub effects: Vec<DspSlot>,
     pub matrix_idx: Option<usize>,
@@ -69,8 +72,14 @@ pub struct Track {
 impl Track {
     pub fn new(id: usize, name: String, is_master: bool) -> Self {
         Self {
-            id, name, volume: 0.75, pan: 0.0, pan_mode: PanMode::Stereo,
-            mute: false, solo: false, is_master,
+            id,
+            name,
+            volume: 0.75,
+            pan: 0.0,
+            pan_mode: crate::app::PanMode::Stereo,
+            mute: false,
+            solo: false,
+            is_master,
             route_destination_id: 0,
             sends: Vec::new(),
             effects: Vec::new(),
@@ -79,390 +88,390 @@ impl Track {
     }
 }
 
-// --- MAIN MIXER RENDER ---
-
-pub fn show(ui: &mut Ui, tracks: &mut Vec<Track>, selected_idx: &mut usize, current_mode: &mut AppMode, output_level: f32, track_peaks: &[f32; 16]) {
-    let shift_pressed = ui.input(|i| i.modifiers.shift);
-
-    let left_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
-    let right_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
-    let nav_event = left_pressed || right_pressed;
-
-    // FLECHA IZQUIERDA
-    if left_pressed {
-        if shift_pressed {
-            if *selected_idx > 1 {
-                tracks.swap(*selected_idx, *selected_idx - 1);
-                *selected_idx -= 1;
-            }
-        } else if *selected_idx > 0 {
-            *selected_idx -= 1;
-        }
-    }
-
-    // FLECHA DERECHA
-    if right_pressed {
-        if shift_pressed {
-            if *selected_idx > 0 && *selected_idx < tracks.len() - 1 {
-                tracks.swap(*selected_idx, *selected_idx + 1);
-                *selected_idx += 1;
-            }
-        } else if *selected_idx < tracks.len() - 1 {
-            *selected_idx += 1;
-        }
-    }
-
-    let tracks_map: Vec<(usize, String)> = tracks.iter()
-        .map(|t| (t.id, t.name.clone()))
-        .collect();
-
-    // Alto total disponible en la ventana actual
-    let total_h = ui.available_height();
-    // Restamos el padding y los widgets fijos (labels, knobs, mute/solo, routing)
-    // Se usa max(40.0) para garantizar que los faders se adapten bien al achicar
-    let fader_height = (total_h - 270.0).max(10.0);
-
-    ui.vertical(|ui| {
-        // --- TOOLBAR SUPERIOR ---
-        ui.horizontal(|ui| {
-            ui.add_space(5.0);
-
-            // TOGGLE SINCRONIZADO OPENLIVE / OPENSTUDIO
-            let is_live = *current_mode == AppMode::OpenLive;
-            let live_bg = if is_live { Color32::from_rgb(0, 180, 216) } else { Color32::from_gray(35) };
-            let live_txt = if is_live { Color32::BLACK } else { Color32::GRAY };
-
-            if ui.add(Button::new(RichText::new("OPENLIVE").strong().size(10.0).color(live_txt)).fill(live_bg)).clicked() {
-                *current_mode = AppMode::OpenLive;
-            }
-
-            let is_studio = *current_mode == AppMode::OpenStudio;
-            let studio_bg = if is_studio { Color32::from_rgb(255, 110, 0) } else { Color32::from_gray(35) };
-            let studio_txt = if is_studio { Color32::BLACK } else { Color32::GRAY };
-
-            if ui.add(Button::new(RichText::new("OPENSTUDIO").strong().size(10.0).color(studio_txt)).fill(studio_bg)).clicked() {
-                *current_mode = AppMode::OpenStudio;
-            }
-
-            ui.separator();
-
-            if ui.button(RichText::new(" [ + ] ").strong()).clicked() {
-                let new_id = tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-                tracks.push(Track::new(new_id, format!("Track {:02}", new_id), false));
-            }
-            ui.set_enabled(tracks.len() > 1);
-            if ui.button(RichText::new(" [ - ] ").strong()).clicked() {
-                tracks.pop();
-                if *selected_idx >= tracks.len() { *selected_idx = tracks.len() - 1; }
-            }
-            ui.set_enabled(true);
-
-            ui.separator();
-            
-            // --- INDICADOR & EDICIÓN DEL TRACK ACTIVO EN TOOLBAR ---
-            if let Some(current_track) = tracks.get_mut(*selected_idx) {
-                let toolbar_editing_id = ui.id().with(("toolbar_editing_track", current_track.id));
-                let is_editing_toolbar = ui.data_mut(|d| d.get_temp::<bool>(toolbar_editing_id).unwrap_or(false));
-
-                if is_editing_toolbar {
-                    let text_res = ui.add(
-                        TextEdit::singleline(&mut current_track.name)
-                            .frame(true)
-                            .desired_width(160.0)
-                            .font(egui::FontId::proportional(12.0))
-                    );
-
-                    if text_res.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        ui.data_mut(|d| d.insert_temp(toolbar_editing_id, false));
-                        ui.memory_mut(|m| m.stop_text_input());
-                    }
-                } else {
-                    let track_prefix = if current_track.is_master { "MASTER".to_string() } else { format!("TRK {:02}", current_track.id) };
-                    let lbl_text = format!("[ {}: {} ]", track_prefix, current_track.name);
-                    
-                    let lbl_res = ui.add(
-                        Button::new(
-                            RichText::new(lbl_text)
-                                .strong()
-                                .color(Color32::from_rgb(255, 110, 0))
-                        )
-                        .frame(false)
-                    );
-
-                    if lbl_res.double_clicked() {
-                        ui.data_mut(|d| d.insert_temp(toolbar_editing_id, true));
-                    }
-                }
-            } else {
-                ui.label(RichText::new("[ --- ]").strong().color(Color32::GRAY));
-            }
-
-            ui.separator();
-            ui.label(RichText::new(format!("TOTAL: {}", tracks.len())).small().color(Color32::GRAY));
-        });
-
-        ui.add_space(5.0);
-        ui.separator();
-
-        // --- MIXER BODY ---
-        // El vúmetro del MASTER muestra el pico REAL del engine
-        // (`output_level`: 0.0 == -inf dB en silencio). Antes dibujaba
-        // `track.volume` (el fader) y mentía en compases sin audio.
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-            if let Some(master) = tracks.get_mut(0) {
-                render_channel_strip(ui, master, fader_height, &tracks_map, *selected_idx == 0, selected_idx, 0, nav_event, output_level);
-            }
-
-            ui.add_space(2.0);
-            ui.separator();
-            ui.add_space(2.0);
-
-            ScrollArea::horizontal()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        for i in 1..tracks.len() {
-                            if let Some(track) = tracks.get_mut(i) {
-                                // VU meter por pista: peak Aislado de esa pista
-                                // (el engine calcula el peak ANTES del master fader).
-                                let ch_level = if let Some(mx_idx) = track.matrix_idx {
-                                    track_peaks.get(mx_idx).copied().unwrap_or(0.0)
-                                } else {
-                                    0.0
-                                };
-                                render_channel_strip(ui, track, fader_height, &tracks_map, i == *selected_idx, selected_idx, i, nav_event, ch_level);
-                                ui.add_space(4.0);
-                            }
-                        }
-                    });
-                });
-        });
-    });
+fn db_text(volume: f32) -> String {
+    let db_val = if volume <= 0.0 {
+        -60.0
+    } else if volume <= 0.75 {
+        -60.0 + (volume / 0.75) * 60.0
+    } else {
+        ((volume - 0.75) / 0.25) * 6.0
+    };
+    format!("{:.1} dB", db_val)
 }
 
-fn render_channel_strip(
-    ui: &mut Ui, 
-    track: &mut Track, 
-    fader_h: f32, 
-    tracks_map: &[(usize, String)], 
-    is_selected: bool, 
-    selected_idx: &mut usize, 
-    current_idx: usize,
-    should_scroll: bool,
-    vu_level: f32,
-) {
-    let border_color = if is_selected { Color32::from_rgb(255, 110, 0) } else { Color32::from_gray(40) };
-    let bg_color = if track.is_master { Color32::from_rgb(30, 30, 45) } else if is_selected { Color32::from_rgb(35, 35, 35) } else { Color32::from_rgb(25, 25, 30) };
+pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let app = state(cx).read(cx);
+    let mode = app.mode;
+    let selected_idx = app.selected_track_index;
+    let tracks = match mode {
+        AppMode::OpenLive => &app.live_tracks,
+        AppMode::OpenStudio => &app.studio_tracks,
+    };
+    let raw_master = f32::from_bits(app.output_level_bits.load(std::sync::atomic::Ordering::Relaxed));
+    let master_level = if raw_master.is_finite() { raw_master } else { 0.0 };
+    let mut track_peaks = [0.0f32; 16];
+    for (i, arc) in app.track_peak_bits.iter().enumerate().take(16) {
+        let raw = f32::from_bits(arc.load(std::sync::atomic::Ordering::Relaxed));
+        let raw = if raw.is_finite() { raw } else { 0.0 };
+        track_peaks[i] = raw;
+    }
+    drop(app);
 
-    ui.push_id(track.id, |ui| {
-        let frame_res = Frame::none()
-            .fill(bg_color)
-            .stroke(Stroke::new(1.0_f32, border_color))
-            .inner_margin(8.0)
-            .show(ui, |ui| {
-                ui.set_width(85.0);
-                ui.vertical_centered(|ui| {
-                    
-                    // --- CABECERA DE CANAL LIMPIA (TRK XX: Name) ---
-                    let strip_label = if track.is_master {
-                        "MASTER".to_string()
-                    } else {
-                        format!("TRK {:02}: {}", track.id, track.name)
-                    };
+    let is_live = mode == AppMode::OpenLive;
 
-                    let is_this_selected = current_idx == *selected_idx;
-                    let label_res = ui.add_sized(
-                        Vec2::new(85.0, 20.0),
-                        Button::new(
-                            RichText::new(strip_label)
-                                .strong()
-                                .size(11.0)
-                                .color(if is_this_selected { Color32::WHITE } else { Color32::from_gray(200) })
-                        )
-                        .fill(if is_this_selected { Color32::from_rgb(0, 120, 215) } else { Color32::TRANSPARENT })
-                        .frame(false)
-                    );
-
-                    if label_res.clicked() {
-                        *selected_idx = current_idx;
-                    }
-
-                    ui.separator();
-
-                    // PAN MODE & KNOB
-                    ui.add_space(2.0);
-                    let is_ms = track.pan_mode == PanMode::MidSide;
-                    let pm_color = if is_ms { Color32::from_rgb(0, 255, 255) } else { Color32::GRAY };
-                    if ui.button(RichText::new(if is_ms { "M/S" } else { "L/R" }).small().color(pm_color)).clicked() {
-                        track.pan_mode = if is_ms { PanMode::Stereo } else { PanMode::MidSide };
-                    }
-                    
-                    // --- EN render_channel_strip() ---
-
-                    // Perilla de paneo adaptada al rango normalizado -1.0..=1.0
-                    custom_knob(ui, &mut track.pan, -1.0..=1.0);
-
-                    let p_dv = ui.add(
-                        egui::DragValue::new(&mut track.pan)
-                            .speed(0.01)
-                            .clamp_range(-1.0..=1.0)
-                            .fixed_decimals(2)
-                            .custom_formatter(|n, _| {
-                                let val = (n * 100.0).round() as i32;
-                                if val == 0 {
-                                    "C".to_string()
-                                } else if val < 0 {
-                                    format!("{}L", val.abs())
-                                } else {
-                                    format!("{}R", val)
+    v_flex()
+        .id("mixer")
+        .size_full()
+        .bg(rgb(0x14141A))
+        .p(px(8.0))
+        .gap(px(6.0))
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(
+                    Button::new("mixer_openlive")
+                        .label("OPENLIVE")
+                        .compact()
+                        .when(is_live, |b| b.text_color(rgb(0x00B4D8)))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, _| {
+                                state.mode = AppMode::OpenLive;
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("mixer_openstudio")
+                        .label("OPENSTUDIO")
+                        .compact()
+                        .when(!is_live, |b| b.text_color(rgb(0xFF6E00)))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, _| {
+                                state.mode = AppMode::OpenStudio;
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("mixer_add_track")
+                        .label(" [ + ] ")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                let new_id = state
+                                    .live_tracks
+                                    .iter()
+                                    .map(|t| t.id)
+                                    .max()
+                                    .unwrap_or(0)
+                                    + 1;
+                                state
+                                    .live_tracks
+                                    .push(Track::new(new_id, format!("Track {:02}", new_id), false));
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("mixer_remove_track")
+                        .label(" [ - ] ")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                if state.live_tracks.len() > 1 {
+                                    state.live_tracks.pop();
                                 }
-                            })
-                            .custom_parser(|s| {
-                                let s = s.trim().to_uppercase();
-                                if s == "C" {
-                                    Some(0.0)
-                                } else if s.ends_with('L') {
-                                    s[..s.len() - 1].parse::<f64>().ok().map(|v| -v / 100.0)
-                                } else if s.ends_with('R') {
-                                    s[..s.len() - 1].parse::<f64>().ok().map(|v| v / 100.0)
-                                } else {
-                                    s.parse::<f64>().ok().map(|v| v / 100.0)
-                                }
-                            })
-                    );
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(Label::new(format!("TOTAL: {}", tracks.len())).text_xs()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_x_scrollbar()
+                .child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .children(tracks.iter().enumerate().map(|(idx, track)| {
+                            let is_sel = idx == selected_idx;
+                            let is_master = track.is_master;
+                            let name = track.name.clone();
+                            let volume = track.volume;
+                            let pan = track.pan;
+                            let mute = track.mute;
+                            let solo = track.solo;
+                            let vu = if is_master {
+                                master_level
+                            } else if let Some(mx) = track.matrix_idx {
+                                track_peaks.get(mx).copied().unwrap_or(0.0)
+                            } else {
+                                0.0
+                            };
 
-                    if p_dv.double_clicked() { 
-                        track.pan = 0.0; 
-                    }
-
-                    if p_dv.double_clicked() { 
-                        track.pan = 0.0; 
-                    }
-
-                    ui.add_space(5.0);
-
-                    // FADER & VU: el VU muestra señal REAL, no el fader.
-                    // En silencio (compás sin audio) vu_level == 0.0 == -inf.
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        draw_vu_meter(ui, vu_level, fader_h);
-                        custom_v_fader(ui, &mut track.volume, Vec2::new(35.0, fader_h));
-                    });
-
-                    ui.add_space(5.0);
-
-                    // DB DISPLAY
-                    let mut db_val = if track.volume <= 0.0 { -60.0 } else if track.volume <= 0.75 { -60.0 + (track.volume / 0.75) * 60.0 } else { ((track.volume - 0.75) / 0.25) * 6.0 };
-                    let db_dv = ui.add(egui::DragValue::new(&mut db_val).speed(0.2).clamp_range(-60.0..=6.0).suffix(" dB").fixed_decimals(1));
-                    
-                    if db_dv.double_clicked() {
-                        track.volume = 0.75; 
-                    } else if db_dv.changed() {
-                        if db_val <= 0.0 { track.volume = ((db_val + 60.0) / 60.0 * 0.75).clamp(0.0, 0.75); } else { track.volume = ((db_val / 6.0 * 0.25) + 0.75).clamp(0.75, 1.0); }
-                    }
-
-                    ui.add_space(5.0);
-
-                    // MUTE / SOLO
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        let b_size = Vec2::new(32.0, 22.0);
-                        if ui.add_sized(b_size, Button::new("M").fill(if track.mute { Color32::from_rgb(200, 0, 0) } else { Color32::from_gray(40) })).clicked() { track.mute = !track.mute; }
-                        if ui.add_sized(b_size, Button::new("S").fill(if track.solo { Color32::from_rgb(200, 160, 0) } else { Color32::from_gray(40) })).clicked() { track.solo = !track.solo; }
-                    });
-
-                    ui.add_space(5.0);
-                    ui.separator();
-
-                    // ROUTE
-                    if track.is_master {
-                        ui.add_space(6.0);
-                        ui.label(RichText::new("MASTER OUT").strong().size(10.0).color(Color32::from_gray(100)));
-                        ui.add_space(6.0);
-                    } else {
-                        ui.menu_button(RichText::new("󰒄 ROUTE").small(), |ui| {
-                            ui.set_min_width(180.0);
-                            for (id, name) in tracks_map {
-                                if *id == track.id { continue; } 
-                                let label = if name.is_empty() || name.starts_with("Track") { format!("Track {}", id) } else { format!("Track {}: {}", id, name) };
-                                if ui.selectable_label(track.route_destination_id == *id, label).clicked() {
-                                    track.route_destination_id = *id;
-                                    ui.close_menu();
-                                }
-                            }
-                        });
-                        let dest_label = if track.route_destination_id == 0 { "-> MASTER".to_string() } else { format!("-> TRK {:02}", track.route_destination_id) };
-                        ui.label(RichText::new(dest_label).size(9.0).color(Color32::from_rgb(100, 150, 255)));
-                    }
-                });
-            });
-
-        if is_selected && should_scroll {
-            frame_res.response.scroll_to_me(Some(Align::Center));
-        }
-    });
-}
-
-// --- WIDGETS CUSTOM ---
-
-fn custom_knob(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
-    let size = Vec2::splat(28.0);
-    let (rect, response) = ui.allocate_at_least(size, Sense::click_and_drag());
-
-    let min = *range.start();
-    let max = *range.end();
-    let span = max - min;
-
-    if response.double_clicked() {
-        *value = 0.0;
-    } else if response.dragged() {
-        let delta = response.drag_delta().x - response.drag_delta().y;
-        let change = (delta / 150.0) * span;
-        *value = (*value + change).clamp(min, max);
-    }
-
-    let painter = ui.painter();
-    painter.circle_filled(rect.center(), 10.0, Color32::from_gray(15));
-
-    let normalized = ((*value - min) / span).clamp(0.0, 1.0);
-    let angle = (normalized - 0.5) * (PI * 1.5);
-
-    let handle_pos = rect.center() + Vec2::new(angle.sin(), -angle.cos()) * 9.0;
-    let center_pos = rect.center() + Vec2::new(angle.sin(), -angle.cos()) * 4.0;
-    painter.line_segment([center_pos, handle_pos], Stroke::new(2.0_f32, Color32::from_rgb(255, 110, 0)));
-}
-
-fn custom_v_fader(ui: &mut Ui, value: &mut f32, size: Vec2) {
-    let (rect, response) = ui.allocate_at_least(size, Sense::click_and_drag());
-    
-    if response.double_clicked() {
-        *value = 0.75; 
-    } else if response.dragged() {
-        let delta_y = response.drag_delta().y;
-        *value = (*value - delta_y / rect.height()).clamp(0.0, 1.0);
-    } else if response.clicked() {
-        if let Some(mouse_pos) = response.interact_pointer_pos() {
-            *value = ((rect.bottom() - mouse_pos.y) / rect.height()).clamp(0.0, 1.0);
-        }
-    }
-
-    let painter = ui.painter();
-    painter.rect_filled(Rect::from_center_size(rect.center(), Vec2::new(16.0, rect.height())), 1.0, Color32::from_gray(10));
-    
-    // CORRECCIÓN: Validamos que min_y <= max_y para prevenir el panic (min > max) al achicar la ventana
-    let min_y = (rect.top() + 9.0).min(rect.bottom());
-    let max_y = (rect.bottom() - 9.0).max(min_y);
-    let target_y = (rect.bottom() - (*value * rect.height())).clamp(min_y, max_y);
-
-    let cap_rect = Rect::from_center_size(Pos2::new(rect.center().x, target_y), Vec2::new(size.x, 40.0));
-    painter.rect_filled(cap_rect, 2.0, if response.dragged() { Color32::from_gray(200) } else { Color32::from_gray(160) });
-    painter.rect_stroke(cap_rect, 1.5_f32, Stroke::new(1.0_f32, Color32::BLACK));
-    painter.rect_filled(Rect::from_center_size(cap_rect.center(), Vec2::new(cap_rect.width() - 16.0, 1.5_f32)), 0.0, Color32::BLACK);
-}
-
-fn draw_vu_meter(ui: &mut Ui, level: f32, height: f32) {
-    let (rect, _) = ui.allocate_at_least(Vec2::new(14.0, height), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 1.0, Color32::from_rgb(10, 10, 10));
-    let signal_rect = Rect::from_min_max(Pos2::new(rect.min.x, rect.max.y - (level.clamp(0.0, 1.0) * rect.height())), rect.max);
-    ui.painter().rect_filled(signal_rect, 1.0, if level > 0.9 { Color32::RED } else if level > 0.75 { Color32::from_rgb(255, 200, 0) } else { Color32::from_rgb(0, 255, 100) });
+                            v_flex()
+                                .w(px(85.0))
+                                .h_full()
+                                 .bg(if is_master {
+                                     rgb(0x1E1E2D)
+                                 } else if is_sel {
+                                     rgb(0x232323)
+                                 } else {
+                                     rgb(0x19191E)
+                                 })
+                                 .border_1()
+                                 .border_color(if is_sel {
+                                     rgb(0xFF6E00)
+                                 } else {
+                                     rgb(0x282828)
+                                })
+                                .rounded(px(4.0))
+                                .p(px(8.0))
+                                .gap(px(4.0))
+                                .items_center()
+                                .child(
+                                    Button::new(format!("mixer_sel_{}", idx))
+                                        .label(if is_master {
+                                            "MASTER".to_string()
+                                        } else {
+                                            format!("TRK {:02}: {}", track.id, name)
+                                        })
+                                        .compact()
+                                        .w_full()
+                                        .when(is_sel, |b| b.text_color(rgb(0x0078D7)))
+                                        .on_click(move |_, _, cx| {
+                                            let st = state(cx);
+                                            st.update(cx, |state, cx| {
+                                                state.selected_track_index = idx;
+                                                cx.notify();
+                                            });
+                                        }),
+                                )
+                                .child(
+                                    Button::new(format!("mixer_panmode_{}", idx))
+                                        .label(if track.pan_mode == crate::app::PanMode::MidSide {
+                                            "M/S"
+                                        } else {
+                                            "L/R"
+                                        })
+                                        .compact()
+                                        .on_click(move |_, _, cx| {
+                                            let st = state(cx);
+                                            st.update(cx, |state, cx| {
+                                                let t = if idx < state.live_tracks.len() {
+                                                    Some(&mut state.live_tracks[idx])
+                                                } else {
+                                                    None
+                                                };
+                                                if let Some(t) = t {
+                                                    t.pan_mode = match t.pan_mode {
+                                                        crate::app::PanMode::MidSide => crate::app::PanMode::Stereo,
+                                                        crate::app::PanMode::Stereo => crate::app::PanMode::MidSide,
+                                                    };
+                                                }
+                                                cx.notify();
+                                            });
+                                        }),
+                                )
+                                .child(
+                                    canvas(
+                                        |_, _, _| {},
+                                        move |bounds, _, window, _| {
+                                            let cx0 = bounds.origin.x + px(bounds.size.width.as_f32() / 2.0);
+                                            let cy = bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
+                                            let r = px(bounds.size.width.as_f32().min(bounds.size.height.as_f32()) / 2.0 - px(2.0).as_f32());
+                                            let mut path = PathBuilder::stroke(px(1.5));
+                                            path.arc_to(
+                                                point(r, r),
+                                                px(0.0),
+                                                false,
+                                                true,
+                                                point(cx0, cy),
+                                            );
+                                            window.paint_path(path.build().unwrap(), rgb(0x505055));
+                                            let norm = ((pan.clamp(-1.0, 1.0) + 1.0) / 2.0).clamp(0.0, 1.0);
+                                            let angle = (norm - 0.5) * (std::f32::consts::PI * 1.5);
+                                            let hx = cx0 + px(angle.sin() * (r.as_f32() - px(4.0).as_f32()));
+                                            let hy = cy - px(angle.cos() * (r.as_f32() - px(4.0).as_f32()));
+                                            let mut path2 = PathBuilder::stroke(px(2.0));
+                                            path2.move_to(point(cx0, cy));
+                                            path2.line_to(point(hx, hy));
+                                            window.paint_path(path2.build().unwrap(), rgb(0xFF6E00));
+                                        },
+                                    )
+                                    .w(px(28.0))
+                                    .h(px(28.0))
+                                    .into_any_element(),
+                                )
+                                .child(Label::new(format!("{:+.0}", pan * 100.0)).text_xs())
+                                .child(
+                                    canvas(
+                                        |_, _, _| {},
+                                        move |bounds, _, window, _| {
+                                            let fx = bounds.origin.x;
+                                            let fy = bounds.origin.y;
+                                            let fw = bounds.size.width;
+                                            let fh = bounds.size.height;
+                                            window.paint_quad(PaintQuad {
+                                                bounds: Bounds::new(
+                                                    point(fx, fy),
+                                                    size(fw, fh),
+                                                ),
+                                                background: rgb(0x0A0A0A).into(),
+                                                border_color: Hsla::default(),
+                                                corner_radii: gpui_kit::Corners::default(),
+                                                border_widths: gpui_kit::Edges::default(),
+                                                border_style: BorderStyle::default(),
+                                            });
+                                            let level = vu.clamp(0.0, 1.0);
+                                            let sig_h = fh * level;
+                                            let col = if level > 0.9 {
+                                                rgb(0xFF3C3C)
+                                            } else if level > 0.75 {
+                                                rgb(0xFFC800)
+                                            } else {
+                                                rgb(0x00FF64)
+                                            };
+                                            window.paint_quad(PaintQuad {
+                                                bounds: Bounds::new(
+                                                    point(fx, fy + fh - sig_h),
+                                                    size(fw, sig_h),
+                                                ),
+                                                background: col.into(),
+                                                border_color: Hsla::default(),
+                                                corner_radii: gpui_kit::Corners::default(),
+                                                border_widths: gpui_kit::Edges::default(),
+                                                border_style: BorderStyle::default(),
+                                            });
+                                        },
+                                    )
+                                    .w(px(14.0))
+                                    .h_full()
+                                    .min_h(px(80.0))
+                                    .into_any_element(),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(24.0))
+                                        .h_full()
+                                        .min_h(px(120.0))
+                                        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                                            let y = event.position.y.as_f32();
+                                            let fh = 120.0_f32;
+                                            let vol = (1.0 - (y / fh)).clamp(0.0, 1.0);
+                                            let st = state(cx);
+                                            st.update(&mut *cx, |state, cx| {
+                                                let t = if idx < state.live_tracks.len() {
+                                                    Some(&mut state.live_tracks[idx])
+                                                } else {
+                                                    None
+                                                };
+                                                if let Some(t) = t {
+                                                    t.volume = vol;
+                                                }
+                                                cx.notify();
+                                            });
+                                        })
+                                        .child(
+                                            canvas(
+                                                |_, _, _| {},
+                                                move |bounds, _, window, _| {
+                                                    let fx = bounds.origin.x;
+                                                    let fw = bounds.size.width;
+                                                    let fh = bounds.size.height;
+                                                    window.paint_quad(PaintQuad {
+                                                        bounds,
+                                                        background: rgb(0x2D2D2D).into(),
+                                                        border_color: Hsla::default(),
+                                                        corner_radii: gpui_kit::Corners::default(),
+                                                        border_widths: gpui_kit::Edges::default(),
+                                                        border_style: BorderStyle::default(),
+                                                    });
+                                                    let ty = fx + fh - volume.clamp(0.0, 1.0) * fh;
+                                                    window.paint_quad(PaintQuad {
+                                                        bounds: Bounds::new(
+                                                            point(fx, ty),
+                                                            size(fw, fh - (ty - fx)),
+                                                        ),
+                                                        background: rgb(0x0096BE).into(),
+                                                        border_color: Hsla::default(),
+                                                        corner_radii: gpui_kit::Corners::default(),
+                                                        border_widths: gpui_kit::Edges::default(),
+                                                        border_style: BorderStyle::default(),
+                                                    });
+                                                    window.paint_quad(PaintQuad {
+                                                        bounds: Bounds::new(
+                                                            point(fx - px(4.0), ty),
+                                                            size(fw + px(8.0), px(8.0)),
+                                                        ),
+                                                        background: rgb(0x00A2E8).into(),
+                                                        border_color: Hsla::default(),
+                                                        corner_radii: gpui_kit::Corners::default(),
+                                                        border_widths: gpui_kit::Edges::default(),
+                                                        border_style: BorderStyle::default(),
+                                                    });
+                                                },
+                                            )
+                                        ),
+                                )
+                                .child(Label::new(db_text(volume)).text_xs())
+                                .child(
+                                    h_flex()
+                                        .gap(px(4.0))
+                                        .child(
+                                            Button::new(format!("mixer_mute_{}", idx))
+                                                .label("M")
+                                                .compact()
+                                                .when(mute, |b| b.text_color(rgb(0xC80000)))
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |state, cx| {
+                                                        let t = if idx < state.live_tracks.len() {
+                                                            Some(&mut state.live_tracks[idx])
+                                                        } else {
+                                                            None
+                                                        };
+                                                        if let Some(t) = t {
+                                                            t.mute = !t.mute;
+                                                            state.audio_proxy.send(GuiCommand::SetTrackMute {
+                                                                track_idx: idx,
+                                                                mute: t.mute,
+                                                            });
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(format!("mixer_solo_{}", idx))
+                                                .label("S")
+                                                .compact()
+                                                .when(solo, |b| b.text_color(rgb(0xC8A000)))
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |state, cx| {
+                                                        let t = if idx < state.live_tracks.len() {
+                                                            Some(&mut state.live_tracks[idx])
+                                                        } else {
+                                                            None
+                                                        };
+                                                        if let Some(t) = t {
+                                                            t.solo = !t.solo;
+                                                            state.audio_proxy.send(GuiCommand::SetTrackSolo {
+                                                                track_idx: idx,
+                                                                solo: t.solo,
+                                                            });
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        ),
+                                )
+                        })),
+                ),
+        )
 }

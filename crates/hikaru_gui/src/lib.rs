@@ -10,7 +10,8 @@
 
 pub mod app;
 pub mod views;
+pub mod theme;
 
 pub use app::HikaruApp;
 
-pub mod audio_proxy; // ya puse esta PORONGA de acá
+pub mod audio_proxy;

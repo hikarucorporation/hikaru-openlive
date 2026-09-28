@@ -1,0 +1,229 @@
+error[E0432]: unresolved import `crate::theme`
+  --> crates/hikaru_gui/src/views/arranger_view.rs:10:5
+   |
+10 | use crate::theme;
+   |     ^^^^^^^^^^^^ no `theme` in the root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/app.rs:613:24
+    |
+613 |             .bg(crate::theme::WINDOW_BG)
+    |                        ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/app.rs:637:54
+    |
+637 | ...                   .border_color(crate::theme::BORDER_COLOR)
+    |                                            ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/app.rs:638:44
+    |
+638 | ...                   .bg(crate::theme::PANEL_BG)
+    |                                  ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/app.rs:666:62
+    |
+666 | ...                   .border_color(crate::theme::BORDER_COLOR)
+    |                                            ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/app.rs:678:62
+    |
+678 | ...                   .border_color(crate::theme::BORDER_COLOR)
+    |                                            ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/app.rs:690:62
+    |
+690 | ...                   .border_color(crate::theme::BORDER_COLOR)
+    |                                            ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:206:37
+    |
+206 |                     let bg = crate::theme::SURFACE_BG;
+    |                                     ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:231:71
+    |
+231 |                         window.paint_path(pb.build().unwrap(), crate::theme::ACCENT_COLOR);
+    |                                                                       ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:237:67
+    |
+237 |                     window.paint_path(pb.build().unwrap(), crate::theme::ACCENT_STUDIO);
+    |                                                                   ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:268:20
+    |
+268 |         .bg(crate::theme::PANEL_BG)
+    |                    ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:335:40
+    |
+335 | ...                   crate::theme::SLOT_ACTIVE_BG
+    |                              ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:337:40
+    |
+337 | ...                   crate::theme::SURFACE_BG
+    |                              ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:426:36
+    |
+426 |                         .bg(crate::theme::SURFACE_BG)
+    |                                    ^^^^^ could not find `theme` in the crate root
+
+error[E0433]: cannot find `theme` in `crate`
+   --> crates/hikaru_gui/src/views/explorer.rs:445:66
+    |
+445 |                         .when(is_synced, |b| b.text_color(crate::theme::ACCENT_COLOR))
+    |                                                                  ^^^^^ could not find `theme` in the crate root
+
+error[E0425]: cannot find value `PANEL_BG` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:206:28
+    |
+206 |                 .bg(theme::PANEL_BG)
+    |                            ^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `BORDER_COLOR` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:208:38
+    |
+208 |                 .border_color(theme::BORDER_COLOR)
+    |                                      ^^^^^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `SURFACE_BG` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:288:28
+    |
+288 |                 .bg(theme::SURFACE_BG)
+    |                            ^^^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `BORDER_COLOR` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:290:38
+    |
+290 |                 .border_color(theme::BORDER_COLOR)
+    |                                      ^^^^^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `WINDOW_BG` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:303:20
+    |
+303 |         .bg(theme::WINDOW_BG)
+    |                    ^^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `PANEL_BG` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:347:60
+    |
+347 |                         .child(div().h(px(24.0)).bg(theme::PANEL_BG))
+    |                                                            ^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `PANEL_BG` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:358:44
+    |
+358 | ...                   .bg(theme::PANEL_BG)
+    |                                  ^^^^^^^^ not found in `theme`
+
+error[E0425]: cannot find value `BORDER_COLOR` in module `theme`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:360:54
+    |
+360 | ...                   .border_color(theme::BORDER_COLOR)
+    |                                            ^^^^^^^^^^^^ not found in `theme`
+
+warning: unused import: `std::time::Duration`
+ --> crates/hikaru_gui/src/app.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+--
+error[E0609]: no field `arranger_state` on type `&AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:184:25
+    |
+184 |     let arranger = &app.arranger_state;
+    |                         ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:227:53
+    |
+227 | ...                   app.arranger_state.tracks[track_idx].soloed =
+    |                           ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:228:58
+    |
+228 | ...                   !app.arranger_state.tracks[track_idx].soloed;
+    |                            ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:231:63
+    |
+231 | ...                   solo: app.arranger_state.tracks[track_idx].soloed,
+    |                                 ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:245:53
+    |
+245 | ...                   app.arranger_state.tracks[track_idx].muted =
+    |                           ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:246:58
+    |
+246 | ...                   !app.arranger_state.tracks[track_idx].muted;
+    |                            ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:249:63
+    |
+249 | ...                   mute: app.arranger_state.tracks[track_idx].muted,
+    |                                 ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:275:33
+    |
+275 | ...                   app.arranger_state.selected_clip = Some((track_idx, clip_idx));
+    |                           ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:321:45
+    |
+321 | ...                   app.arranger_state.add_track();
+    |                           ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+error[E0609]: no field `arranger_state` on type `&mut AppState`
+   --> crates/hikaru_gui/src/views/arranger_view.rs:333:45
+    |
+333 | ...                   app.arranger_state.remove_track();
+    |                           ^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `mode`, `transport`, `position_clock`, `output_level_bits`, `audio_proxy` ... and 28 others
+
+warning: unused import: `StatefulInteractiveElement`
+ --> crates/hikaru_gui/src/views/clip_editor.rs:7:41
+  |
+--
+error: could not compile `hikaru_gui` (lib) due to 33 previous errors; 97 warnings emitted

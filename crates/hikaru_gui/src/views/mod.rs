@@ -6,14 +6,17 @@ pub mod dsp_rack;
 pub mod open_wavetable;
 pub mod playlist;
 pub mod menu_bar;
-pub mod about; // <-- AGREGAR
+pub mod about;
 pub mod arranger_view;
 pub mod explorer;
 pub mod audio_settings;
 pub mod clipboard;
 pub mod waveform;
 pub mod clip_editor;
-pub mod piano_roll; // <--- AGREGAR ESTA LÍNEA
+pub mod piano_roll;
 pub mod external_plugins_settings;
 pub mod open_dms;
 pub mod open_dms_sampler;
+mod live_canvas;
+
+pub use live_canvas::LiveCanvas;

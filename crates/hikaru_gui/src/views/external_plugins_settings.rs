@@ -1,13 +1,15 @@
-// Copyright (C) Hikaru Corporation - 2026
-// GNU Affero General Public License v3
-// VST3 / CLAP Plugins Settings
-
-use egui::Context;
-use hikaru_plugin_host::{ClapInstance, PluginInstance, Vst3Instance};
-use raw_window_handle::RawWindowHandle;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
+
+use crate::app::{state, HikaruApp};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PluginFormat {
@@ -28,7 +30,6 @@ enum ScanMessage {
     Finished(usize),
 }
 
-/// Notification from a plugin thread that its window was closed.
 struct PluginClosedNotification {
     name: String,
 }
@@ -43,11 +44,8 @@ pub struct PluginSettingsState {
     tx: Sender<ScanMessage>,
     rx: Receiver<ScanMessage>,
 
-    /// Map of plugin name → thread handle. When the thread finishes, the plugin window was closed.
     open_plugins: HashMap<String, std::thread::JoinHandle<()>>,
-    /// Receiver for close notifications from plugin threads.
     close_rx: Receiver<PluginClosedNotification>,
-    /// Sender to pass to plugin threads so they can notify when they close.
     close_tx: Sender<PluginClosedNotification>,
 }
 
@@ -157,7 +155,6 @@ impl PluginSettingsState {
             }
         }
 
-        // Collect closed plugin names first to avoid borrow issues
         let mut closed_names = Vec::new();
         while let Ok(notif) = self.close_rx.try_recv() {
             closed_names.push(notif.name);
@@ -168,7 +165,12 @@ impl PluginSettingsState {
         }
     }
 
-    fn open_plugin(&mut self, plugin: &DiscoveredPlugin) {
+
+    pub fn open_plugin_names(&self) -> Vec<String> {
+        self.open_plugins.keys().cloned().collect()
+    }
+
+    pub fn open_plugin(&mut self, plugin: &DiscoveredPlugin) {
         if self.open_plugins.contains_key(&plugin.name) {
             println!(
                 "[PluginSettings] '{}' ya tiene una ventana abierta",
@@ -189,21 +191,15 @@ impl PluginSettingsState {
         self.open_plugins.insert(plugin.name.clone(), handle);
     }
 
-    #[allow(dead_code)]
-    fn close_plugin(&mut self, name: &str) {
+    pub fn close_plugin(&mut self, name: &str) {
         if let Some(handle) = self.open_plugins.remove(name) {
-            // The thread will finish when the winit window is closed.
-            // We can't forcefully kill a thread in Rust, but the window close
-            // event will cause the event loop to exit.
             println!("[PluginSettings] Closing plugin '{}' (thread will exit)", name);
-            // Don't block on join - the thread will finish on its own
             let _ = handle;
         }
     }
+
 }
 
-/// Run a plugin GUI in its own raw X11 window on a dedicated thread.
-/// This blocks until the window is closed.
 fn run_plugin_window(
     plugin_path: PathBuf,
     plugin_name: String,
@@ -215,7 +211,6 @@ fn run_plugin_window(
     use x11rb::protocol::xproto::*;
     use x11rb::protocol::Event;
 
-    // Connect to X11 display (XWayland if on Wayland)
     let (conn, screen_num) = match x11rb::rust_connection::RustConnection::connect(None) {
         Ok(c) => c,
         Err(e) => {
@@ -233,7 +228,6 @@ fn run_plugin_window(
     let screen = &conn.setup().roots[screen_num];
     let root = screen.root;
 
-    // Create the window
     let window = match conn.generate_id() {
         Ok(id) => id,
         Err(e) => {
@@ -282,7 +276,6 @@ fn run_plugin_window(
         return;
     }
 
-    // Set window title via WM_NAME
     if let Ok(cookie) = conn.intern_atom(true, b"WM_NAME") {
         if let Ok(reply) = cookie.reply() {
             let title = format!("{} - Hikaru", plugin_name);
@@ -298,7 +291,6 @@ fn run_plugin_window(
         }
     }
 
-    // Set WM_DELETE_WINDOW protocol
     if let Ok(proto_cookie) = conn.intern_atom(true, b"WM_PROTOCOLS") {
         if let Ok(delete_cookie) = conn.intern_atom(true, b"WM_DELETE_WINDOW") {
             if let (Ok(proto_reply), Ok(delete_reply)) = (proto_cookie.reply(), delete_cookie.reply())
@@ -317,7 +309,6 @@ fn run_plugin_window(
         }
     }
 
-    // Map (show) the window
     if let Err(e) = conn.map_window(window) {
         eprintln!(
             "[PluginWindow] Failed to map window for '{}': {:?}",
@@ -330,16 +321,10 @@ fn run_plugin_window(
     }
 
     if let Err(e) = conn.flush() {
-        eprintln!(
-            "[PluginWindow] Failed to flush for '{}': {:?}",
-            plugin_name, e
-        );
+        eprintln!("[PluginWindow] Failed to flush for '{}': {:?}", plugin_name, e);
     }
 
-    // Give X11 time to fully map the window and process decorations
     std::thread::sleep(std::time::Duration::from_millis(250));
-
-    // Flush any pending X11 requests
     let _ = conn.flush();
 
     println!(
@@ -347,13 +332,11 @@ fn run_plugin_window(
         window, plugin_name, width, height
     );
 
-    // Create RawWindowHandle for the plugin
     let xlib_handle = XlibWindowHandle::new(window as u64);
     let raw_handle = RawWindowHandle::Xlib(xlib_handle);
 
-    // 1. Cargar la instancia del plugin
-    let instance: Option<Box<dyn PluginInstance>> = match format {
-        PluginFormat::CLAP => match ClapInstance::load(&plugin_path) {
+    let instance: Option<Box<dyn hikaru_plugin_host::PluginInstance>> = match format {
+        PluginFormat::CLAP => match hikaru_plugin_host::ClapInstance::load(&plugin_path) {
             Ok(inst) => {
                 println!("[PluginWindow] CLAP cargado para '{}'", plugin_name);
                 Some(Box::new(inst))
@@ -363,7 +346,7 @@ fn run_plugin_window(
                 None
             }
         },
-        PluginFormat::VST3 => match Vst3Instance::load(&plugin_path) {
+        PluginFormat::VST3 => match hikaru_plugin_host::Vst3Instance::load(&plugin_path) {
             Ok(inst) => {
                 println!("[PluginWindow] VST3 cargado para '{}'", plugin_name);
                 Some(Box::new(inst))
@@ -386,7 +369,6 @@ fn run_plugin_window(
         }
     };
 
-    // 2. Si el plugin reporta un tamaño preferido, ajustar la ventana X11 ANTES de embeber
     if let Some((pref_w, pref_h)) = inst.get_gui_size() {
         if pref_w > 0 && pref_h > 0 {
             let values = ConfigureWindowAux::new()
@@ -398,11 +380,8 @@ fn run_plugin_window(
         }
     }
 
-    // 3. Vincular e iniciar el renderizado FFI
     inst.show_gui_embedded(raw_handle);
 
-    // 4. Post-embed: query the actual preferred size and resize the X11 window to match.
-    //    Some plugins (like Vital) only report the correct size after the GUI is attached.
     if let Some((actual_w, actual_h)) = inst.notify_gui_embedded() {
         if actual_w > 0 && actual_h > 0 && (actual_w != width as u32 || actual_h != height as u32) {
             let values = ConfigureWindowAux::new()
@@ -417,13 +396,9 @@ fn run_plugin_window(
         }
     }
 
-    // Dar tiempo a la superficie X11 para inicializar los buffers de pintado
     std::thread::sleep(std::time::Duration::from_millis(100));
     let _ = conn.flush();
 
-    // 4. Run X11 event loop — keep the plugin instance alive until the window is closed.
-    //    Without this loop the function returns immediately, dropping `inst` and destroying
-    //    the plugin GUI before the user can interact with it.
     let wm_delete = {
         let cookie = conn.intern_atom(true, b"WM_DELETE_WINDOW").unwrap();
         cookie.reply().unwrap().atom
@@ -460,125 +435,162 @@ fn run_plugin_window(
         }
     }
 
-    // Cleanup: drop the plugin instance (calls hide_gui / close_editor / dlclose)
     drop(inst);
     let _ = conn.destroy_window(window);
     let _ = conn.flush();
 
-    // Notify that this plugin window is closed
     let _ = close_tx.send(PluginClosedNotification {
         name: plugin_name,
     });
 }
 
-pub fn render(
-    ctx: &Context,
-    state: &mut PluginSettingsState,
-    _parent_handle: Option<RawWindowHandle>,
-) {
-    if !state.is_open {
-        return;
+pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
+    let app = state(cx).read(cx);
+    let is_open = app.plugin_settings_state.is_open;
+    let paths = app.plugin_settings_state.custom_paths.clone();
+    let status = app.plugin_settings_state.status_message.clone();
+    let is_scanning = app.plugin_settings_state.is_scanning;
+    let plugins = app.plugin_settings_state.discovered_plugins.clone();
+    let open_names: Vec<String> = app
+        .plugin_settings_state
+        .open_plugin_names();
+    drop(app);
+
+    if !is_open {
+        return div().into_any_element();
     }
 
-    state.poll_updates();
+    let mut path_rows: Vec<AnyElement> = Vec::new();
+    for (idx, p) in paths.iter().enumerate() {
+        path_rows.push(
+            h_flex()
+                .gap(px(4.0))
+                .child(Label::new("-").text_xs())
+                .child(Label::new(p.clone()).text_xs())
+                .child(
+                    Button::new(format!("plugin_path_remove_{}", idx))
+                        .label("X")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.plugin_settings_state.custom_paths.remove(idx);
+                                cx.notify();
+                            });
+                        }),
+                )
+                .into_any_element(),
+        );
+    }
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        ui.heading("Rutas de Busqueda");
-        ui.add_space(6.0);
+    let mut plugin_rows: Vec<AnyElement> = Vec::new();
+    for plugin in plugins.iter() {
+        let is_open = open_names.contains(&plugin.name);
+        let badge = match plugin.format {
+            PluginFormat::CLAP => "[CLAP]",
+            PluginFormat::VST3 => "[VST3]",
+        };
+        let badge_col = match plugin.format {
+            PluginFormat::CLAP => rgb(0xB464FF),
+            PluginFormat::VST3 => rgb(0x64B4FF),
+        };
+        let name = plugin.name.clone();
+        let plugin = plugin.clone();
+        plugin_rows.push(
+            h_flex()
+                .gap(px(6.0))
+                .items_center()
+                .child(Label::new(badge).text_xs().text_color(badge_col))
+                .child(Label::new(name.clone()).text_xs())
+                .child(div().flex_1())
+                .child(
+                    Button::new(format!("plugin_open_{}", name))
+                        .label(if is_open { "Abierto" } else { "Abrir Plugin" })
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.plugin_settings_state.open_plugin(&plugin);
+                                cx.notify();
+                            });
+                        }),
+                )
+                .into_any_element(),
+        );
+    }
 
-        let mut to_remove = None;
-        for (idx, path) in state.custom_paths.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label("-");
-                ui.monospace(path);
-                if ui.button("X").clicked() {
-                    to_remove = Some(idx);
-                }
-            });
-        }
-
-        if let Some(idx) = to_remove {
-            state.custom_paths.remove(idx);
-        }
-
-        ui.add_space(6.0);
-        if ui.button("+ Agregar Ruta...").clicked() {
-            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                state.custom_paths.push(folder.display().to_string());
-            }
-        }
-
-        ui.separator();
-
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!state.is_scanning, egui::Button::new("Rescan Plugins"))
-                .clicked()
-            {
-                state.start_scan();
-            }
-
-            if state.is_scanning {
-                ui.spinner();
-            }
-
-            ui.label(&state.status_message);
-        });
-
-        ui.separator();
-
-        // Show open plugins
-        if !state.open_plugins.is_empty() {
-            ui.heading("Plugins Abiertos");
-            ui.add_space(4.0);
-            for (name, _) in &state.open_plugins {
-                ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::GREEN, format!("* {}", name));
-                    if ui.button("Cerrar").clicked() {
-                        // Mark for removal (can't modify during iteration)
+    v_flex()
+        .id("plugin_settings")
+        .absolute()
+        .left(px(20.0))
+        .top(px(80.0))
+        .w(px(520.0))
+        .h(px(380.0))
+        .bg(rgb(0x181A20))
+        .border_1()
+        .border_color(rgb(0x2A2D37))
+        .rounded(px(6.0))
+        .p(px(12.0))
+        .gap(px(8.0))
+        .child(Label::new("Rutas de Busqueda").text_sm().font_weight(FontWeight::BOLD))
+        .children(path_rows)
+        .child(
+            Button::new("plugin_add_path")
+                .label("+ Agregar Ruta...")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        let st = state(cx);
+                        cx.update_entity(&st, |state, cx| {
+                            state
+                                .plugin_settings_state
+                                .custom_paths
+                                .push(folder.display().to_string());
+                            cx.notify();
+                        });
                     }
-                });
-            }
-            ui.separator();
-        }
-
-        ui.heading("Plugins Encontrados");
-        ui.add_space(6.0);
-
-        // Collect close requests to avoid borrow issues
-        let mut close_request = None;
-
-        egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
-            if state.discovered_plugins.is_empty() {
-                ui.label("No se han detectado plugins VST3 o CLAP.");
-            } else {
-                for plugin in &state.discovered_plugins {
-                    ui.horizontal(|ui| {
-                        let (badge_text, badge_color) = match plugin.format {
-                            PluginFormat::CLAP => ("[CLAP]", egui::Color32::from_rgb(180, 100, 255)),
-                            PluginFormat::VST3 => ("[VST3]", egui::Color32::from_rgb(100, 180, 255)),
-                        };
-
-                        ui.colored_label(badge_color, badge_text);
-                        ui.label(&plugin.name);
-
-                        let is_open = state.open_plugins.contains_key(&plugin.name);
-                        let button_text = if is_open { "Abierto" } else { "Abrir Plugin" };
-
-                        if ui
-                            .add_enabled(!is_open, egui::Button::new(button_text))
-                            .clicked()
-                        {
-                            close_request = Some(plugin.clone());
-                        }
+                }),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .items_center()
+                .child(
+                    Button::new("plugin_rescan")
+                        .label("Rescan Plugins")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            cx.update_entity(&st, |state, cx| {
+                                state.plugin_settings_state.start_scan();
+                                cx.notify();
+                            });
+                        }),
+                )
+                .when(is_scanning, |this| {
+                    this.child(Label::new("Escaneando...").text_xs())
+                })
+                .when(!is_scanning, |this| {
+                    this.child(Label::new(status.clone()).text_xs())
+                }),
+        )
+        .child(
+            v_flex()
+                .gap(px(4.0))
+                .child(Label::new("Plugins Encontrados").text_sm().font_weight(FontWeight::BOLD))
+                .children(plugin_rows),
+        )
+        .child(
+            Button::new("plugin_close")
+                .label("Cerrar")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    cx.update_entity(&st, |state, cx| {
+                        state.plugin_settings_state.is_open = false;
+                        cx.notify();
                     });
-                }
-            }
-        });
-
-        // Handle open request outside the scroll area borrow
-        if let Some(plugin) = close_request {
-            state.open_plugin(&plugin);
-        }
-    });
+                }),
+        )
+        .into_any_element()
 }

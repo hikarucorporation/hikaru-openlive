@@ -1,9 +1,11 @@
-/*
- * Hikaru OpenStudio - Audio Setup Window
- * License: AGPL-3.0-or-later
- */
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::label::Label;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
 
-use egui::{ComboBox, Grid, RichText, Color32, Ui};
+use crate::app::{state, HikaruApp};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AudioBackend {
@@ -27,10 +29,10 @@ impl Default for AudioSettingsState {
     fn default() -> Self {
         Self {
             is_open: false,
-            selected_backend: AudioBackend::HikaruNative, // <-- Ponelo como predeterminado acá
+            selected_backend: AudioBackend::HikaruNative,
             selected_device: "Hikaru Low-Latency Engine".to_string(),
             sample_rate: 44100,
-            buffer_size: 128, // Para respuesta ultra rápida sin microtirones
+            buffer_size: 128,
             available_devices: vec![
                 "Hikaru Low-Latency Engine".to_string(),
                 "Default Output Device".to_string(),
@@ -41,91 +43,144 @@ impl Default for AudioSettingsState {
     }
 }
 
-pub fn show(ui: &mut Ui, state: &mut AudioSettingsState) {
-    ui.add_space(4.0);
-    ui.label(RichText::new("CONFIGURACIÓN DE AUDIO & HARDWARE").strong().color(Color32::from_rgb(0, 255, 255)));
-    ui.separator();
-    ui.add_space(6.0);
+pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
+    let app = state(cx).read(cx);
+    let st = &app.audio_settings_state;
+    let backend = st.selected_backend.clone();
+    let device = st.selected_device.clone();
+    let sample_rate = st.sample_rate;
+    let buffer_size = st.buffer_size;
+    let devices = st.available_devices.clone();
+    drop(app);
 
-    // 1. BACKEND SELECTION
-    ui.horizontal(|ui| {
-        ui.label("Driver / Subsistema:");
-        ComboBox::from_id_source("audio_backend_combo")
-            .selected_text(format!("{:?}", state.selected_backend))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut state.selected_backend, 
-                    AudioBackend::HikaruNative, 
-                    "Hikaru Native Audio Driver (Recomendado por el fabricante)"
-                );
-                ui.selectable_value(&mut state.selected_backend, AudioBackend::PipeWire, "PipeWire");
-                ui.selectable_value(&mut state.selected_backend, AudioBackend::Jack, "JACK (Baja Latencia)");
-                ui.selectable_value(&mut state.selected_backend, AudioBackend::Alsa, "ALSA (Nativo Linux)");
-                ui.selectable_value(&mut state.selected_backend, AudioBackend::PulseAudio, "PulseAudio");
-            });
-    });
-
-    ui.add_space(4.0);
-
-    // 2. DEVICE SELECTION
-    ui.horizontal(|ui| {
-        ui.label("Dispositivo de Salida:");
-        ComboBox::from_id_source("audio_device_combo")
-            .selected_text(&state.selected_device)
-            .show_ui(ui, |ui| {
-                for dev in &state.available_devices {
-                    ui.selectable_value(&mut state.selected_device, dev.clone(), dev);
-                }
-            });
-    });
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.add_space(8.0);
-
-    // 3. SAMPLE RATE & BUFFER SIZE
-    Grid::new("audio_params_grid")
-        .spacing([12.0, 8.0])
-        .show(ui, |ui| {
-            ui.label("Sample Rate:");
-            ComboBox::from_id_source("sample_rate_combo")
-                .selected_text(format!("{} Hz", state.sample_rate))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut state.sample_rate, 44100, "44100 Hz (CD)");
-                    ui.selectable_value(&mut state.sample_rate, 48000, "48000 Hz (Pro/Estándar)");
-                    ui.selectable_value(&mut state.sample_rate, 88200, "88200 Hz");
-                    ui.selectable_value(&mut state.sample_rate, 96000, "96000 Hz (Hi-Res)");
-                });
-            ui.end_row();
-
-            ui.label("Buffer Size (Latencia):");
-            ComboBox::from_id_source("buffer_size_combo")
-                .selected_text(format!("{} samples", state.buffer_size))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut state.buffer_size, 128, "128 samples (~2.9 ms)");
-                    ui.selectable_value(&mut state.buffer_size, 256, "256 samples (~5.8 ms)");
-                    ui.selectable_value(&mut state.buffer_size, 512, "512 samples (~11.6 ms)");
-                    ui.selectable_value(&mut state.buffer_size, 1024, "1024 samples (~23.2 ms)");
-                    ui.selectable_value(&mut state.buffer_size, 2048, "2048 samples (~46.4 ms)");
-                    ui.selectable_value(&mut state.buffer_size, 4096, "4096 samples (~92.8 ms - Safe Mode)");
-                });
-            ui.end_row();
-        });
-
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(6.0);
-
-    // 4. ACTION BUTTONS
-    ui.horizontal(|ui| {
-        if ui.button("Reiniciar Driver Audio").clicked() {
-            // Re-inicialización de cpal / stream
-        }
-        
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Cerrar").clicked() {
-                state.is_open = false;
-            }
-        });
-    });
+    v_flex()
+        .id("audio_settings")
+        .absolute()
+        .left(px(20.0))
+        .top(px(80.0))
+        .w(px(440.0))
+        .h(px(320.0))
+        .bg(rgb(0x181A20))
+        .border_1()
+        .border_color(rgb(0x2A2D37))
+        .rounded(px(6.0))
+        .p(px(12.0))
+        .gap(px(8.0))
+        .child(Label::new("CONFIGURACIÓN DE AUDIO & HARDWARE").text_sm().font_weight(FontWeight::BOLD).text_color(rgb(0x00FFFF)))
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .child(Label::new("Driver / Subsistema:").text_xs())
+                .child(
+                    Button::new("audio_backend_btn")
+                        .label(format!("{:?}", backend))
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.audio_settings_state.selected_backend = match state.audio_settings_state.selected_backend {
+                                    AudioBackend::HikaruNative => AudioBackend::PipeWire,
+                                    AudioBackend::PipeWire => AudioBackend::Jack,
+                                    AudioBackend::Jack => AudioBackend::Alsa,
+                                    AudioBackend::Alsa => AudioBackend::PulseAudio,
+                                    AudioBackend::PulseAudio => AudioBackend::HikaruNative,
+                                };
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .child(Label::new("Dispositivo de Salida:").text_xs())
+                .child(
+                    Button::new("audio_device_btn")
+                        .label(device.clone())
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                let devs = &state.audio_settings_state.available_devices;
+                                if !devs.is_empty() {
+                                    let idx = devs.iter().position(|d| *d == device).unwrap_or(0);
+                                    let next = devs[(idx + 1) % devs.len()].clone();
+                                    state.audio_settings_state.selected_device = next;
+                                }
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .child(Label::new("Sample Rate:").text_xs())
+                .child(
+                    Button::new("audio_sr_btn")
+                        .label(format!("{} Hz", sample_rate))
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.audio_settings_state.sample_rate = match state.audio_settings_state.sample_rate {
+                                    44100 => 48000,
+                                    48000 => 88200,
+                                    88200 => 96000,
+                                    _ => 44100,
+                                };
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .child(Label::new("Buffer Size:").text_xs())
+                .child(
+                    Button::new("audio_buf_btn")
+                        .label(format!("{} samples", buffer_size))
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.audio_settings_state.buffer_size = match state.audio_settings_state.buffer_size {
+                                    128 => 256,
+                                    256 => 512,
+                                    512 => 1024,
+                                    1024 => 2048,
+                                    2048 => 4096,
+                                    _ => 128,
+                                };
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        .child(div().flex_1())
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .child(
+                    Button::new("audio_restart")
+                        .label("Reiniciar Driver Audio")
+                        .compact()
+                        .on_click(move |_, _, _| {}),
+                )
+                .child(div().flex_1())
+                .child(
+                    Button::new("audio_close")
+                        .label("Cerrar")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.audio_settings_state.is_open = false;
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        .into_any_element()
 }
