@@ -10,12 +10,22 @@ members = [
     "crates/hikaru_midi",
     "crates/hikaru_gui",
     "crates/hikaru_audio_drivers",
+    "crates/hikaru_render",
 ]
 
 [workspace.dependencies]
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log"] }
 vst3-host = "0.1"
+# La versión DEBE coincidir exactamente con la que usa `gpui-pre-wgpu`
+# (transitiva de gpui-kit). Si se desvía, cargo compila dos copias de wgpu en
+# el mismo binario y los tipos no son intercambiables entre crates.
+wgpu = "29.0.4"
+# Ya viene en el grafo por wgpu/wgpu-core; declararlo explícito sólo para
+# derivar `Pod`/`Zeroable` y empaquetar buffers sin `unsafe` a mano.
+bytemuck = { version = "1.25", features = ["derive"] }
+# Sólo para los tests: valida los shaders WGSL sin necesitar una GPU.
+naga = { version = "29.0", features = ["wgsl-in"] }
 
 [profile.dev]
 debug = 1

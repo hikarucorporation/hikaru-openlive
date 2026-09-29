@@ -10,6 +10,10 @@ hikaru_core = { path = "../hikaru_core" }
 hikaru_audio_engine = { path = "../hikaru_audio_engine" }
 hikaru_transport = { path = "../hikaru_transport" }
 hikaru_plugin_host = { path = "../hikaru_plugin_host" }
+# Render GPU offscreen (sprite sheets 2D y malla 3D de la Wavetable).
+# Comparte la misma versión de wgpu que gpui-kit a través del workspace, así
+# que no se compilan dos copias del backend.
+hikaru_render = { path = "../hikaru_render" }
 gpui-kit = "0.6.6"
 hound = "3.5"
 cpal = { version = "0.18.2", features = ["pulseaudio"] }

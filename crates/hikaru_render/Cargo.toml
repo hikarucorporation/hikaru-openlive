@@ -1,0 +1,14 @@
+[package]
+name = "hikaru_render"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-later"
+
+[dependencies]
+# Ver el comentario en `[workspace.dependencies]` del Cargo.toml raíz: la
+# versión tiene que quedar unificada con la de `gpui-pre-wgpu`.
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+
+[dev-dependencies]
+naga = { workspace = true }
