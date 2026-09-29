@@ -20,7 +20,7 @@
 //!
 //! - la geometría (cinta cerrada con normales y UVs),
 //! - el pipeline con depth test y blending normal,
-//! - una matriz de view-projection con helpers de look-at y perspectiva,
+//! - la cámara y la matriz de view-projection (módulo [`crate::camera`]),
 //!
 //! y falta: animación, colores por oscilador, overlay de morph entre wavetables
 //! y composición sobre el fondo 2D. Esas piezas se agregan encima sin cambiar
@@ -38,7 +38,9 @@ const MESH_SHADER: &str = r#"
 struct Uniforms {
     // view * projection, en columna mayor.
     view_proj: mat4x4<f32>,
-    // Dirección de la luz, normalizada, en espacio de vista.
+    // Dirección de la luz, normalizada, en espacio LOCAL (no de vista): la
+    // normal del vértice no pasa por la view matrix, así que la luz tiene que
+    // venir des-rotada por la cámara. Ver `Camera::local_light_dir`.
     light_dir: vec3<f32>,
     // Intensidad de la luz, 0..1.
     light_intensity: f32,
@@ -50,7 +52,7 @@ struct Uniforms {
 
 struct VsOut {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) world_normal: vec3<f32>,
+    @location(0) local_normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
 };
 
@@ -59,25 +61,32 @@ fn vs_main(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
            @location(2) uv: vec2<f32>) -> VsOut {
     var out: VsOut;
     out.clip_position = uniforms.view_proj * vec4<f32>(position, 1.0);
-    out.world_normal = normal;
+    out.local_normal = normal;
     out.uv = uv;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let normal = normalize(in.world_normal);
+    let normal = normalize(in.local_normal);
     let light = normalize(uniforms.light_dir);
 
     // Lambert clásico, con `max` para que la cara opuesta a la luz no se hunda.
     let diffuse = max(dot(normal, light), 0.0) * uniforms.light_intensity;
 
-    // Rim: mantiene el contorno visible cuando la cara mira lejos de la luz,
-    // que es justo lo que pasa en la silueta de la cinta.
+    // Rim contra el eje del thickness (Z local): la cinta es una lámina a lo
+    // largo de Z, así que las caras que lo ven de perfil son la silueta y es
+    // justo lo que el rim tiene que resaltar.
     let rim = pow(1.0 - abs(dot(normal, vec3<f32>(0.0, 0.0, 1.0))), 2.0);
 
+    // Brillo por vértice. El `uv.y` lo usa [`WavetableMesh::from_table`] como
+    // factor de realce: 1.0 en el ciclo que está mirando el knob de índice y
+    // menos en el resto, que es lo que da la lectura de "estoy parado en el
+    // frame 7 de 64" sin rotular nada sobre la imagen.
+    let shade = in.uv.y;
+
     let lit = 0.25 + 0.75 * diffuse;
-    let color = vec4<f32>(uniforms.tint.rgb * (lit + 0.35 * rim), uniforms.tint.a);
+    let color = vec4<f32>(uniforms.tint.rgb * (lit + 0.35 * rim) * shade, uniforms.tint.a);
     return color;
 }
 "#;
@@ -90,7 +99,9 @@ pub struct MeshVertex {
     pub position: [f32; 3],
     /// Normal. Se calcula al construir la malla, no se interpola.
     pub normal: [f32; 3],
-    /// UV: `x` recorre la forma de onda, `y` recorre el thickness.
+    /// UV. `x` recorre el lazo de la forma de onda; `y` es el factor de brillo
+    /// del ciclo, 1.0 para el que está seleccionado (ver
+    /// [`WavetableMesh::from_table`]).
     pub uv: [f32; 2],
 }
 
@@ -111,14 +122,46 @@ impl Default for WavetableMeshParams {
     }
 }
 
+/// Brillo del ciclo que está bajo el knob de índice.
+const ACTIVE_SHADE: f32 = 1.0;
+
+/// Brillo de los ciclos alejados del seleccionado.
+///
+/// Deliberadamente no es cero: los ciclos de alrededor tienen que seguir siendo
+/// legibles, porque son los que muestran que la tabla tiene más de un frame y
+/// hacia dónde se está moviendo el knob.
+const DIM_SHADE: f32 = 0.32;
+
+/// Distancia, en cantidad de ciclos, a la que el realce se apaga del todo.
+///
+/// Con 1.5 se superponen los halos de dos ciclos vecinos, así que mover el knob
+/// de a un frame no produce un salto de brillo sino un barrido continuo.
+const SHADE_FALLOFF: f32 = 1.5;
+
+/// Porción del hueco entre ciclos que ocupa el espesor de cada cinta.
+///
+/// El resto es aire: es lo que hace que dos ciclos se lean como dos volúmenes
+/// y no como una sola capa.
+const RIBBON_FILL: f32 = 0.55;
+
 /// Malla triangulada en la GPU.
 pub struct GpuMesh {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
+    pub(crate) vertex_buffer: wgpu::Buffer,
+    pub(crate) index_buffer: wgpu::Buffer,
     index_count: u32,
 }
 
 impl GpuMesh {
+    /// Enlaza los buffers de una malla ya subida.
+    ///
+    /// Lo usa [`crate::knob`], que tiene su propia geometría pero comparte el
+    /// layout de vértice con la malla de la Wavetable: mantener los buffers
+    /// accesibles entre módulos es lo que evita que el layout se desincronice.
+    pub(crate) fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+    }
+
     /// Sube una malla a la GPU.
     pub fn new(
         ctx: &GpuContext,
@@ -141,7 +184,22 @@ impl GpuMesh {
             label,
         );
 
-        Ok(Self { vertex_buffer, index_buffer, index_count: indices.len() as u32 })
+        Ok(Self::from_buffers(vertex_buffer, index_buffer, indices.len() as u32))
+    }
+
+    /// Envuelve buffers ya subidos, sin volver a crearlos.
+    ///
+    /// Lo usa [`crate::knob`], que construye su propia geometría pero comparte el
+    /// pipeline (y por lo tanto el layout de vértice) con la malla de la
+    /// Wavetable. Duplicar el struct obligaría a que los dos buffers de vértice
+    /// compartieran el layout, que es justo lo que no puede cambiar sin romper
+    /// los dos.
+    pub fn from_buffers(
+        vertex_buffer: wgpu::Buffer,
+        index_buffer: wgpu::Buffer,
+        index_count: u32,
+    ) -> Self {
+        Self { vertex_buffer, index_buffer, index_count }
     }
 
     /// Cantidad de índices que se van a dibujar.
@@ -185,54 +243,135 @@ impl WavetableMesh {
         }
         // Con 2 columnas se forma un único cuadrilátero cerrado, que es el
         // mínimo para que la cinta tenga volumen.
-        let columns = frame_width.max(2);
+        let columns = frame_width.max(2) as usize;
 
-        let half_width = params.width * 0.5;
-        let half_height = params.height * 0.5;
-        let half_depth = params.thickness * 0.5;
+        let mut vertices = Vec::with_capacity((columns + 1) * 2);
+        let mut indices = Vec::with_capacity(columns * 6);
 
-        // Escala para que el pico a pico del waveform llene la caja, con un
-        // pequeño margen para que un sample a 1.0 no quede pegado al borde.
-        let peak = waveform
-            .iter()
-            .fold(0.0f32, |acc, sample| acc.max(sample.abs()))
-            .max(f32::EPSILON);
+        push_ribbon(
+            &mut vertices,
+            &mut indices,
+            waveform,
+            columns,
+            params,
+            0.0,
+            params.thickness,
+            ACTIVE_SHADE,
+        );
 
-        // Malla de (columns + 1) x 2: la última columna repite la primera para
-        // cerrar el lazo.
-        let ring = columns as usize + 1;
-        let mut vertices = Vec::with_capacity(ring * 2);
+        Ok(Self { vertices, indices })
+    }
 
-        for column in 0..ring {
-            // La UV recorre el lazo completo, de 0 a 1, para que la última
-            // columna tenga `uv.x == 1.0` y la textura no muestre una costura.
-            let uv_u = column as f32 / columns as f32;
-            // La posición y la muestra, en cambio, dan la vuelta: la última
-            // columna vuelve al principio. Si `u` valiera 1.0, la cinta
-            // terminaría en `+width/2` y el lazo quedaría abierto con un
-            // segmento de más.
-            let phase_u = (column % columns as usize) as f32 / columns as f32;
+    /// Apila los ciclos reales de una wavetable a lo largo del eje Z.
+    ///
+    /// Es la vista que muestran Serum, Vital y Bitwig: no un ciclo suelto, sino
+    /// la matriz completa con el frame seleccionado destacado. El eje Z *es* el
+    /// índice del frame, así que la profundidad de la pila dice cuántas formas
+    /// distintas tiene la tabla.
+    ///
+    /// # Cómo se reparten
+    ///
+    /// `table` es la tabla entera tal como la entrega
+    /// `wavetable_io`: `frames` bloques consecutivos de `frame_len` muestras.
+    /// Se apilan como máximo `max_frames` de ellos, repartidos de forma uniforme
+    /// en `params.thickness`: el hueco entre ciclos es lo que hace legible la
+    /// profundidad, y un hueco de un píxel no se ve.
+    ///
+    /// Con más ciclos que `max_frames` no se dibujan todos, y los que se dibujan
+    /// representan la tabla completa: se reparte el rango, no se recortan los
+    /// primeros. Un archivo de dos minutos son 2000 ciclos, y 2000 cintas de 256
+    /// columnas no entran en un panel de 500 píxeles ni aportan algo que se pueda
+    /// distinguir.
+    ///
+    /// # El realce
+    ///
+    /// `active` es la posición continua del frame que se está mirando, no un
+    /// índice: el halo de luz sigue al knob de morph de forma continua, así que
+    /// barrer la matriz se ve como un barrido y no como una serie de saltos. El
+    /// brillo viaja en `uv.y` (ver [`ACTIVE_SHADE`]) y lo aplica el fragment
+    /// shader.
+    pub fn from_table(
+        table: &[f32],
+        frame_len: usize,
+        active: f32,
+        max_frames: usize,
+        frame_width: u32,
+        params: WavetableMeshParams,
+    ) -> Result<Self, MeshError> {
+        if table.is_empty() || frame_len == 0 {
+            return Err(MeshError::WaveformTooShort);
+        }
+        let columns = frame_width.max(2) as usize;
+        let available = table.len() / frame_len;
+        let count = available.max(1).min(max_frames.max(1));
 
-            let sample = resample(waveform, phase_u);
-            let x = -half_width + phase_u * params.width;
-            // Normalizado a -1..1, centrando la forma de onda en la caja.
-            let amplitude = sample / peak * 0.9;
-            let y = amplitude * half_height;
+        let mut vertices = Vec::with_capacity(count * (columns + 1) * 2);
+        let mut indices = Vec::with_capacity(count * columns * 6);
 
-            // Cara delantera y trasera. El `v` de la UV recorre el thickness.
-            vertices.push(MeshVertex {
-                position: [x, y, -half_depth],
-                normal: [0.0, 0.0, -1.0],
-                uv: [uv_u, 0.0],
-            });
-            vertices.push(MeshVertex {
-                position: [x, y, half_depth],
-                normal: [0.0, 0.0, 1.0],
-                uv: [uv_u, 1.0],
-            });
+        // La tabla completa se mapea sobre `count` filas: si hay más ciclos de
+        // los que entran, cada fila representa un salto de la tabla real en vez
+        // de ser un ciclo contiguo.
+        let stride = available as f32 / count as f32;
+        let spacing = if count > 1 { params.thickness / count as f32 } else { params.thickness };
+        let depth = (spacing * RIBBON_FILL).max(f32::EPSILON);
+        let active = if active.is_finite() { active.clamp(0.0, (available - 1).max(0) as f32) } else { 0.0 };
+
+        for slot in 0..count {
+            // El frame se toma de la tabla real, redondeando al ciclo que le
+            // toca: es el mismo criterio con el que el knob de índice recorre
+            // la matriz, así que lo que brilla y lo que se ve coinciden.
+            let source = (slot as f32 * stride).floor() as usize;
+            let start = (source * frame_len).min(table.len());
+            let end = (start + frame_len).min(table.len());
+            let Some(frame) = table.get(start..end) else {
+                break;
+            };
+            if frame.is_empty() {
+                continue;
+            }
+
+            // El ciclo seleccionado va al frente del volumen y el último al
+            // fondo: con la cámara inclinada 30° se ve la pila completa, y el
+            // realce marca en qué punto de la matriz se está.
+            let t = if count > 1 { slot as f32 / (count - 1) as f32 } else { 0.0 };
+            let z_center = -params.thickness * 0.5 + t * params.thickness;
+
+            // `active` viene en ciclos de la tabla real (0..available-1) y las
+            // filas son un muestreo de `count` puntos. Se mapea el rango
+            // **completo** al rango de filas, y no dividiendo por el paso.
+            //
+            // La diferencia importa en los extremos: con 256 ciclos muestreados
+            // a 24 filas el paso es 10.67, y `active / paso` llega a 23.9 en el
+            // último ciclo. Ninguna fila está a 23.9, así que la fila 23 queda
+            // a distancia 0.9 y el realce nunca llega al máximo: el último ciclo
+            // se veía al 59% y era indistinguible del penúltimo. Con el mapeo
+            // proporcional, el último ciclo cae exacto en la última fila.
+            let row_of_active = if available > 1 && count > 1 {
+                active / (available - 1) as f32 * (count - 1) as f32
+            } else {
+                0.0
+            };
+            let distance = (slot as f32 - row_of_active).abs();
+            let shade = ACTIVE_SHADE
+                + (DIM_SHADE - ACTIVE_SHADE) * (distance / SHADE_FALLOFF).clamp(0.0, 1.0);
+
+            push_ribbon(
+                &mut vertices,
+                &mut indices,
+                frame,
+                columns,
+                params,
+                z_center,
+                depth,
+                shade,
+            );
         }
 
-        Ok(Self { vertices, indices: build_ribbon_indices(columns) })
+        if vertices.is_empty() {
+            return Err(MeshError::Empty);
+        }
+
+        Ok(Self { vertices, indices })
     }
 
     /// Sube la cinta a la GPU.
@@ -279,38 +418,100 @@ fn resample(waveform: &[f32], u: f32) -> f32 {
     waveform[index0] * (1.0 - fraction) + waveform[index1] * fraction
 }
 
-/// Genera los tripletes de índices de la cinta.
+/// Agrega una cinta cerrada a los buffers de la malla.
 ///
-/// Cada segmento del lazo aporta dos triángulos que unen la cara delantera con
-/// la trasera. El orden de los vértices es irrelevante porque el pipeline no
-/// hace culling (ver [`MeshRenderer::new`]), pero se mantiene consistente para
-/// que un futuro cierre de la cinta no requiera reordenar.
-fn build_ribbon_indices(columns: u32) -> Vec<u32> {
-    let mut indices = Vec::with_capacity(columns as usize * 6);
-    let ring = columns as usize + 1;
+/// La geometría está en unidades locales, con el centro de la cinta en el
+/// origen: la pila de [`WavetableMesh::from_table`] la corre después con
+/// `z_center`, así que el `peak` de la forma de onda es el de su propio ciclo y
+/// no el de la tabla entera. Normalizar contra el pico global haría que un
+/// frame casi en silencio se viera plano al lado de uno fuerte, que es
+/// justamente el detalle que un selector de wavetable tiene que mostrar.
+///
+/// `z_center` y `depth` separan la cinta de las demás en el eje Z; `shade` es
+/// el factor de brillo que aplica el fragment shader.
+fn push_ribbon(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    waveform: &[f32],
+    columns: usize,
+    params: WavetableMeshParams,
+    z_center: f32,
+    depth: f32,
+    shade: f32,
+) {
+    let half_width = params.width * 0.5;
+    let half_height = params.height * 0.5;
+    let half_depth = depth * 0.5;
 
-    for column in 0..columns as usize {
+    // Escala para que el pico a pico del waveform llene la caja, con un
+    // pequeño margen para que un sample a 1.0 no quede pegado al borde.
+    let peak = waveform
+        .iter()
+        .fold(0.0f32, |acc, sample| acc.max(sample.abs()))
+        .max(f32::EPSILON);
+
+    let base = vertices.len() as u32;
+    // Malla de (columns + 1) x 2: la última columna repite la primera para
+    // cerrar el lazo.
+    for column in 0..=columns {
+        // La UV recorre el lazo completo, de 0 a 1, para que la última columna
+        // tenga `uv.x == 1.0` y la textura no muestre una costura.
+        let uv_u = column as f32 / columns as f32;
+        // La posición y la muestra, en cambio, dan la vuelta: la última
+        // columna vuelve al principio. Si `u` valiera 1.0, la cinta terminaría
+        // en `+width/2` y el lazo quedaría abierto con un segmento de más.
+        let phase_u = (column % columns) as f32 / columns as f32;
+
+        let sample = resample(waveform, phase_u);
+        let x = -half_width + phase_u * params.width;
+        // Normalizado a -1..1, centrando la forma de onda en la caja.
+        let y = sample / peak * 0.9 * half_height;
+
+        // Cara delantera y trasera.
+        vertices.push(MeshVertex {
+            position: [x, y, z_center - half_depth],
+            normal: [0.0, 0.0, -1.0],
+            uv: [uv_u, shade],
+        });
+        vertices.push(MeshVertex {
+            position: [x, y, z_center + half_depth],
+            normal: [0.0, 0.0, 1.0],
+            uv: [uv_u, shade],
+        });
+    }
+
+    // Cada segmento del lazo aporta dos triángulos que unen la cara delantera
+    // con la trasera. El orden de los vértices es irrelevante porque el pipeline
+    // no hace culling (ver [`MeshRenderer::new`]).
+    let ring = columns + 1;
+    for column in 0..columns {
         let next = (column + 1) % ring;
-        // Cada columna aporta un par de vértices (frontal, posterior).
-        let front_a = (column * 2) as u32;
+        // Cada columna aporta un par de vértices (frontal, posterior), corridos
+        // por `base` porque la pila mete varias cintas en el mismo buffer.
+        let front_a = base + (column as u32) * 2;
         let back_a = front_a + 1;
-        let front_b = (next * 2) as u32;
+        let front_b = base + (next as u32) * 2;
         let back_b = front_b + 1;
 
         indices.extend_from_slice(&[front_a, back_a, front_b]);
         indices.extend_from_slice(&[front_b, back_a, back_b]);
     }
-
-    indices
 }
 
 /// Buffers de uniforms del pipeline de malla.
+///
+/// El layout tiene que seguir en sync con el `struct Uniforms` del WGSL: 64
+/// bytes de matriz, 16 de luz y 16 de tinte. Agregar un campo lo cambia de
+/// tamaño, y como `min_binding_size` es `None` en el layout, un desfasaje no lo
+/// detecta wgpu: el shader lee floats desplazados y la malla sale con la
+/// iluminación corrida.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct MeshUniforms {
-    /// Matriz `view * projection`, en columna mayor.
+    /// Matriz `projection * view`, en columna mayor. La arma
+    /// [`crate::camera::Camera::view_proj`].
     pub view_proj: [[f32; 4]; 4],
-    /// Dirección de la luz en espacio de vista.
+    /// Dirección de la luz, normalizada, en espacio **local** de la malla.
     pub light_dir: [f32; 3],
     /// Intensidad de la luz.
     pub light_intensity: f32,
@@ -319,13 +520,24 @@ pub struct MeshUniforms {
 }
 
 impl Default for MeshUniforms {
+    /// Defaults con la cámara de frente, no con la matriz identidad.
+    ///
+    /// La identidad "funciona" (el shader no falla) pero aplana la cinta contra
+    /// el plano z = 0: se ve una línea, no un volumen. La cámara de frente
+    /// hace que el estado neutro ya sea algo que se pueda mirar.
     fn default() -> Self {
-        Self {
-            view_proj: identity(),
-            light_dir: normalize([0.4, 0.6, 1.0]),
-            light_intensity: 1.0,
-            tint: [0.35, 0.85, 1.0, 1.0],
-        }
+        crate::camera::Camera::front().uniforms(1.0, [0.35, 0.85, 1.0, 1.0])
+    }
+}
+
+impl MeshUniforms {
+    /// U uniforms para una cámara y un viewport de `aspect` (ancho / alto).
+    pub fn with_camera(
+        camera: &crate::camera::Camera,
+        aspect: f32,
+        tint: [f32; 4],
+    ) -> Self {
+        camera.uniforms(aspect, tint)
     }
 }
 
@@ -495,8 +707,7 @@ impl MeshRenderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            mesh.bind(&mut pass);
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
         }
 
@@ -564,25 +775,6 @@ impl std::fmt::Display for MeshError {
 }
 
 impl std::error::Error for MeshError {}
-
-/// Matriz identidad 4x4, en columna mayor.
-fn identity() -> [[f32; 4]; 4] {
-    [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
-}
-
-/// Normaliza un vector 3D.
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if length <= f32::EPSILON {
-        return [0.0, 0.0, 1.0];
-    }
-    [v[0] / length, v[1] / length, v[2] / length]
-}
 
 #[cfg(test)]
 mod tests {
@@ -717,5 +909,26 @@ mod tests {
         let params = WavetableMeshParams::default();
         assert_eq!(params.width, 320.0);
         assert_eq!(params.height, 200.0);
+    }
+
+    #[test]
+    fn uniform_buffer_matches_the_wgsl_struct() {
+        // mat4x4 (64) + vec3 + f32 (16) + vec4 (16) = 96 bytes. Con
+        // `min_binding_size: None` en el layout, wgpu no valida esto: el
+        // síntoma es iluminación corrida.
+        assert_eq!(std::mem::size_of::<MeshUniforms>(), 96);
+    }
+
+    #[test]
+    fn default_uniforms_are_a_real_camera_not_the_identity() {
+        // Con la identidad la cinta se aplana contra el plano z = 0 y se ve
+        // una línea. El default tiene que ser una cámara usable.
+        let uniforms = MeshUniforms::default();
+        assert_ne!(uniforms.view_proj, crate::camera::identity());
+
+        // Y el origen tiene que caer dentro de la pantalla con ella.
+        let (clip, w) = crate::camera::transform_point(&uniforms.view_proj, [0.0; 3]);
+        assert!(w > 0.0, "el origen quedó detrás de la cámara");
+        assert!(clip[0].abs() < w && clip[1].abs() < w, "{clip:?} / {w}");
     }
 }

@@ -23,21 +23,30 @@
 //!
 //! # Estado actual
 //!
-//! - [`context`]: ciclo de vida de la GPU y formatos de render.
+//! - [`context`]: ciclo de vida de la GPU, formatos de render y readback.
 //! - [`quad`]: quads 2D texturizados, para los sprite sheets de los controles.
 //! - [`mesh`]: pipeline 3D inicial, para la malla de la Wavetable.
+//! - [`camera`]: matemática de cámara (órbita, perspectiva, view-projection).
+//! - [`knob`]: knob 3D, un disco con relieve que gira con el valor.
 //!
 //! Todos los renderers son **offscreen**: dibujan a texturas en memoria, sin
-//! ventana asociada. La presentación en pantalla queda para una etapa posterior,
-//! cuando se defina cómo se integra `hikaru_render` con la superficie que ya
-//! maneja GPUI Kit.
+//! ventana asociada. Para llevar el resultado a pantalla, [`context`] ofrece
+//! [`GpuContext::read_color_rgba8`], que devuelve los píxeles del target como
+//! RGBA8 y es lo que usa `hikaru_gui` para componer el render 3D dentro del
+//! layout 2D de GPUI Kit.
 
+pub mod camera;
 pub mod context;
+pub mod knob;
 pub mod mesh;
 pub mod quad;
 
-pub use context::{GpuContext, RenderTarget};
-pub use mesh::{GpuMesh, MeshRenderer, MeshUniforms, WavetableMesh};
+pub use camera::{Camera, Mat4};
+pub use knob::{
+    upload_knob, KnobMesh, KnobMeshParams, KnobRenderer, KnobUniforms, KNOB_RESOLUTION,
+};
+pub use context::{GpuContext, ReadbackError, RenderTarget};
+pub use mesh::{GpuMesh, MeshRenderer, MeshUniforms, WavetableMesh, WavetableMeshParams};
 pub use quad::{
     QuadError, QuadInstance, QuadRenderer, SpriteLayout, SpriteSheet, SpriteSheetResources,
     UvRect,

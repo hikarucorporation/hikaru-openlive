@@ -17,6 +17,7 @@ use hikaru_transport::{TransportPlaybackState, TransportPosition};
 use hikaru_plugin_host::{spawn_floating_gui, PluginFormat, PluginInstance};
 
 use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::render::WavetableViewportHandle;
 use crate::views::{
     about, arranger_view, audio_settings, dsp_rack, explorer, external_plugins_settings, footer,
     header, matrix, menu_bar, mixer, piano_roll, playlist,
@@ -202,6 +203,14 @@ pub struct AppState {
     pub matrix_state: matrix::SessionMatrixState,
     pub matrix_clipboard: matrix::MatrixClipboard,
     pub dragged_sample: Option<PathBuf>,
+    /// Slot del rack al que va la próxima wavetable que se elija en el
+    /// explorer, como `(pista, slot)`.
+    ///
+    /// Es un par de índices y no un flag porque el explorer es el que decide si
+    /// el click sobre un archivo arma un clip o carga una tabla, y para eso
+    /// necesita saber en qué slot del rack escribir. Vive en el estado y no en
+    /// la vista porque el click se resuelve en otro módulo.
+    pub pending_wavetable_slot: Option<(usize, usize)>,
 
     pub live_tracks: Vec<mixer::Track>,
     pub studio_tracks: Vec<mixer::Track>,
@@ -225,6 +234,77 @@ pub struct AppStateHandle(pub Entity<AppState>);
 
 impl Global for AppStateHandle {}
 
+/// Las pistas del modo activo.
+impl AppState {
+    /// Las pistas según el modo: el rack, el mixer y el editor de plugins
+    /// siempre trabajan sobre el set que se está viendo.
+    pub fn tracks(&self) -> &Vec<mixer::Track> {
+        match self.mode {
+            AppMode::OpenLive => &self.live_tracks,
+            AppMode::OpenStudio => &self.studio_tracks,
+        }
+    }
+
+    /// Lo mismo, para escritura.
+    pub fn tracks_mut(&mut self) -> &mut Vec<mixer::Track> {
+        match self.mode {
+            AppMode::OpenLive => &mut self.live_tracks,
+            AppMode::OpenStudio => &mut self.studio_tracks,
+        }
+    }
+
+    /// Índice de pista seguro: el layout trabaja con un índice guardado que
+    /// puede quedar fuera de rango al borrar pistas.
+    pub fn safe_track_index(&self) -> usize {
+        self.selected_track_index.min(self.tracks().len().saturating_sub(1))
+    }
+
+    /// El slot de DSP que está seleccionado, si existe.
+    ///
+    /// Es el acceso canónico al slot desde cualquier vista: todas pasan por acá
+    /// en vez de repetir el `tracks()` + `get()` + `get()`, que es donde aparece
+    /// el `unwrap` que rompe la ventana cuando el índice quedó viejo.
+    pub fn selected_slot(&self) -> Option<&mixer::DspSlot> {
+        self.tracks().get(self.safe_track_index())?.effects.get(self.selected_slot_index)
+    }
+
+    /// El slot de DSP seleccionado, para escritura.
+    pub fn selected_slot_mut(&mut self) -> Option<&mut mixer::DspSlot> {
+        // El índice se copia antes de tomar el `&mut`: si se leyera después, el
+        // borrow del vector impediría volver a tocar `self`.
+        let track = self.selected_track_index.min(self.tracks().len().saturating_sub(1));
+        let slot = self.selected_slot_index;
+        self.tracks_mut().get_mut(track)?.effects.get_mut(slot)
+    }
+
+    /// El slot de un track y un índice concretos, para lectura.
+    ///
+    /// Los editores reciben `track_idx` y `slot_idx` en vez de leer el estado
+    /// global: así el panel sigue siendo correcto si el rack cambia de pista
+    /// mientras se dibuja.
+    pub fn slot(&self, track_idx: usize, slot_idx: usize) -> Option<&mixer::DspSlot> {
+        self.tracks().get(track_idx)?.effects.get(slot_idx)
+    }
+
+    /// Igual que [`AppState::slot`], para escritura.
+    pub fn slot_mut(&mut self, track_idx: usize, slot_idx: usize) -> Option<&mut mixer::DspSlot> {
+        self.tracks_mut().get_mut(track_idx)?.effects.get_mut(slot_idx)
+    }
+
+    /// Pad del sampler que está seleccionado en un slot dado.
+    ///
+    /// El diálogo de carga de WAV se abre desde un handler y necesita el pad
+    /// destino *antes* de tomar el lock de escritura. Además el índice se
+    /// acota al rango real de pads: el layout 16/32/64 puede dejar
+    /// `selected_pad` apuntando más allá del vector de pads.
+    pub fn selected_slot_pad(&self, track_idx: usize, slot_idx: usize) -> usize {
+        self.slot(track_idx, slot_idx)
+            .and_then(|slot| slot.dms_state.as_ref())
+            .map(|dms| dms.selected_pad.min(dms.pads.len().saturating_sub(1)))
+            .unwrap_or(0)
+    }
+}
+
 pub fn state(cx: &App) -> Entity<AppState> {
     cx.global::<AppStateHandle>().0.clone()
 }
@@ -242,6 +322,10 @@ pub struct HikaruApp {
     pub _audio_stream: Option<cpal::Stream>,
     /// Mantiene viva la suscripción a `InputEvent` de la caja de BPM.
     _bpm_input_sub: Subscription,
+    /// Viewport 3D de la Wavetable. Se guarda como campo además de publicarse
+    /// como `Global` para que quede atado al ciclo de vida de la entidad: si
+    /// sólo fuera un global, el renderer offscreen sobreviviría a la ventana.
+    pub wavetable_viewport: WavetableViewportHandle,
 }
 
 pub fn handle_global_key(key: &str, cx: &mut App) {
@@ -381,6 +465,7 @@ impl HikaruApp {
             matrix_state,
             matrix_clipboard: matrix::MatrixClipboard::default(),
             dragged_sample: None,
+            pending_wavetable_slot: None,
             live_tracks,
             studio_tracks,
             selected_track_index: 1,
@@ -422,11 +507,22 @@ impl HikaruApp {
             });
         });
 
+        let wavetable_viewport = WavetableViewportHandle::new();
+        // El renderer offscreen se levanta una vez por sesión. La conexión es
+        // asíncrona (pedir adapter y device a wgpu lo es) y va en un `spawn`
+        // desde el arranque: si se hiciera acá, la ventana no abriría hasta que
+        // el driver respondiera, y en una máquina sin GPU no abriría nunca.
+        // La vista del editor pide la imagen y, si todavía no está, muestra su
+        // placeholder.
+        cx.set_global(wavetable_viewport.clone());
+        wavetable_viewport.spawn_connect(cx);
+
         HikaruApp {
             state,
             focus_handle: cx.focus_handle(),
             _audio_stream: audio_stream,
             _bpm_input_sub: bpm_input_sub,
+            wavetable_viewport,
         }
     }
 
@@ -725,6 +821,18 @@ impl Render for HikaruApp {
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
         let show_mixer = app_state.show_mixer;
         let dragged_sample = app_state.dragged_sample.clone();
+        // El alto del rack depende de si hay un editor desplegado. Con el alto
+        // de la tira sola (200px) el editor se dibujaba pero quedaba recortado
+        // por el `overflow_hidden` del panel: el canvas 3D quedaba con unos
+        // pocos píxeles y la cinta se veía como una línea.
+        let dsp_rack_height = match app_state
+            .tracks()
+            .get(app_state.safe_track_index())
+            .map(|track| dsp_rack::editor_for(&track.effects, app_state.selected_slot_index))
+        {
+            Some(_) => dsp_rack::RACK_HEIGHT_OPENED,
+            None => dsp_rack::RACK_HEIGHT_CLOSED,
+        };
         drop(app_state);
 
         div()
@@ -795,8 +903,9 @@ impl Render for HikaruApp {
                             .when(show_dsp_rack, |this| {
                                 this.child(
                                     div()
-                                        .h(px(200.0))
+                                        .h(px(dsp_rack_height))
                                         .w_full()
+                                        .flex_shrink_0()
                                         .border_t_1()
                                         .border_color(crate::theme::BORDER_COLOR)
                                         .child(dsp_rack::render(cx)),

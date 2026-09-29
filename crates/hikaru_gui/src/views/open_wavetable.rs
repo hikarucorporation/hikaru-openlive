@@ -1,400 +1,1112 @@
-use std::f32::consts::PI;
+// crates/hikaru_gui/src/views/open_wavetable.rs
+
+//! Editor del sintetizador de Wavetable, en tira horizontal.
+//!
+//! # La forma
+//!
+//! Es un panel bajo y ancho, no un rack de perillas: el mismo criterio que el
+//! `DSP Rack`, y por la misma razón. La primera versión de este editor era un
+//! panel de 460px con columnas de perillas, envolvente y moduladores, y lo que
+//! ganaba en controles lo perdía en la única cosa que importa cuando se está
+//! programando un sonido: **mirar la forma de onda**. Acá la pila 3D se lleva
+//! el centro del panel y todo lo demás lo rodea en
+//! [`EDITOR_HEIGHT`] de alto.
+//!
+//! ```
+//! ┌────────────────────────────┐
+//! │ OpenWavetable       64 cic │
+//! │ [WAVETABLE ▾] Bender      │
+//! │ ┌────────────────────────┐ │
+//! │ │      ╱▔▔▔╲            │ │
+//! │ │     ╱  pila 3D  ╲      │ │
+//! │ └────────────────────────┘ │
+//! │ (◉)WT POS     7 / 64  < >  │
+//! │            ▁▂▃▅ espectro  │
+//! └────────────────────────────┘
+//! ```
+//!
+//! # La pila de ciclos
+//!
+//! El visor no muestra un ciclo suelto: muestra la **tabla entera**, con un
+//! ciclo por fila de la pila en el eje Z, que es la vista de Serum, Vital y
+//! Bitwig. Los ciclos salen de [`wavetable_io`], que parte el `.wav` en bloques
+//! de [`wavetable_io::FRAME_SAMPLES`] muestras, y el que está bajo el knob de
+//! índice queda encendido. Por eso el knob de morph recorre la matriz y no
+//! interpola una forma nueva: mueve el realce a lo largo de la profundidad.
+//!
+//! # Los dos knobs
+//!
+//! Los dos son geometría 3D de `hikaru_render` ([`hikaru_render::knob`]), no
+//! diales pintados: son discos con relieve que giran con el valor, y la marca
+//! sube con él. Un dial 2D comunica el número; uno con volumen comunica el gesto.
+//!
+//! - **MORPH**: posición continua dentro de la tabla. Recorre la matriz de
+//!   ciclos y el realce de la pila lo sigue de forma continua.
+//! - **INDEX**: qué frame se está mirando, de `1` a `frames`.
+//!
+//! Con una wavetable de un solo ciclo (que es lo que se descarga de internet en
+//! la mayoría de los casos) `INDEX` queda en 1/1 y no hace nada: no hay frames
+//! que recorrer. Es el comportamiento honesto, y en cuanto se carga un archivo
+//! de varios ciclos el knob cobra vida.
+//!
+//! # El knob `WT POS`
+//!
+//! Es el control que recorre la matriz de ciclos, y el único que mueve el
+//! realce de la pila. Se arrastra en vertical: [`DRAG_RANGE_PX`] píxeles
+//! recorren la tabla entera, y con Shift apretado el recorrido es un
+//! [`FINE_TUNE_FACTOR`] de eso.
+//!
+//! El arrastre es relativo al punto de agarre, no absoluto: ver
+//! [`WavetableEditor::begin_drag`]. Y el knob se apaga visiblemente cuando la
+//! tabla tiene un solo ciclo, porque no hay a dónde ir.
+//!
+//! # Dónde se cargan las wavetables
+//!
+//! El rótulo `WAVETABLE ▾` de la izquierda abre el menú de la tabla. Desde ahí
+//! se puede ir al explorador, que ya sabe navegar los directorios de Linux, o
+//! usar el diálogo nativo del sistema. La lectura del archivo está en
+//! [`crate::views::wavetable_io`].
+
+use std::path::PathBuf;
 
 use gpui_kit::component::*;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonRounded};
 use gpui_kit::component::label::Label;
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
+use hikaru_render::Camera;
 
 use crate::app::{state, HikaruApp};
+use crate::render::{
+    ViewerRequest, WavetableView, WavetableViewRequest, WavetableViewportHandle,
+    WAVETABLE_VIEWPORT,
+};
+use crate::views::wavetable_io::{self, Wavetable};
 
-const GRID_SIZE: f32 = 20.0;
+/// Lado del módulo, en píxeles.
+///
+/// El editor es un **bloque cuadrado**, no una banda. Antes ocupaba el ancho
+/// completo del rack con 132 de alto, y en una pantalla ancha eso era un rectángulo
+/// de 1600x132 con un visor angosto en el medio y el resto en negro: mucho ancho
+/// para una sola forma de onda.
+///
+/// Cuadrado y con ancho fijo hace dos cosas: entra en la cadena de módulos del
+/// rack al lado de los demás sin empujar al que sigue, y el visor queda cerca de
+/// cuadrado, que es el aspecto que hace legible la pila de ciclos.
+pub const MODULE_SIZE: f32 = 264.0;
 
+/// Ancho del módulo. Igual a [`MODULE_SIZE`]; existe con nombre propio para que
+/// quien lo useno se pregunte por qué un cuadrado tiene ancho.
+pub const EDITOR_WIDTH: f32 = MODULE_SIZE;
+
+/// Alto del módulo. Lo lee `dsp_rack` para calcular el alto del rack, así que
+/// tiene que ser el valor real del `div`, no una estimación.
+pub const EDITOR_HEIGHT: f32 = MODULE_SIZE;
+
+/// Padding interno del módulo.
+const MODULE_PADDING: f32 = 5.0;
+
+/// Separación entre las cuatro bandas verticales: header, selector, visor y pie.
+const MODULE_GAP: f32 = 5.0;
+
+/// Alto de la fila del header con el nombre del plugin.
+const HEADER_HEIGHT: f32 = 18.0;
+
+/// Alto de la fila del selector de wavetable.
+const SELECTOR_HEIGHT: f32 = 32.0;
+
+/// Alto del pie: el knob, el contador de ciclos y los botones de paso.
+const FOOTER_HEIGHT: f32 = 54.0;
+
+/// Lado del knob en pantalla. El target offscreen es de 96px y el `img` escala
+/// con `Contain`, así que el knob se ve con la resolución de la pantalla.
+///
+/// Va en el pie, no sobre el visor: como elemento de la cadena ocupa su lugar en
+/// el layout, y el visor queda libre entero para la pila de ciclos.
+const KNOB_SIZE: f32 = 48.0;
+
+/// Caja de la malla 3D.
+///
+/// El visor ya no es una banda ancha y baja, así que la caja se acerca a
+/// cuadrada. Un `thickness` alto sigue siendo lo que hace que la pila de ciclos
+/// se lea en Z: 100 unidades de profundidad con 24 ciclos dejan aire real entre
+/// formas, que es lo que las distingue de un canto sólido.
+const MESH_WIDTH: f32 = 320.0;
+const MESH_HEIGHT: f32 = 130.0;
+const MESH_THICKNESS: f32 = 100.0;
+
+/// Ciclos que se dibujan como máximo en la pila.
+///
+/// 24 es el punto en el que un ciclo deja de ocupar un píxel de ancho en el
+/// visor. Más que eso es geometría que no se ve: el `WAVETABLE_MAX_FRAMES` de la
+/// lectura pone el tope de 64 ciclos en memoria, y acá se elige cuántos de esos
+/// se dibujan.
+const MAX_STACK_FRAMES: usize = 24;
+
+/// Frames máximos que se leen de un archivo.
+///
+/// Un `.wav` de dos minutos son 2000 ciclos: 16 MB por slot del rack. Con 64
+/// alcanza para cualquier tabla de verdad y el archivo se lee entero en
+/// memoria una vez.
+const MAX_FRAMES: usize = 64;
+
+/// Colores de los knobs, en el espacio que espera el shader (lineal 0..1).
+const KNOB_BODY: [f32; 4] = [0.13, 0.14, 0.17, 1.0];
+const KNOB_MARKER: [f32; 4] = [1.0, 0.43, 0.0, 1.0];
+
+/// Color de la cinta: el mismo naranja de la marca de selección del rack, para
+/// que el visor se lea como parte del plugin y no como un recuadro suelto.
+const VIEWER_TINT: [f32; 4] = [1.0, 0.55, 0.15, 1.0];
+
+/// Estado del editor de un slot de Wavetable.
 #[derive(Clone, Debug)]
-pub enum EffectModule {
-    WarpBend(f32),
-    WarpSync(f32),
-    WarpPW(f32),
-    WarpAsymmetry(f32),
-    ModRing(f32),
-    ModFM(f32),
-    ModAM(f32),
-    CrossfadeSmooth(f32),
+pub struct WavetableEditor {
+    /// La tabla cargada. Es la fuente de verdad de la forma de onda: el visor
+    /// 3D dibuja de acá y no de un waveform sintetizado.
+    pub table: Wavetable,
+    /// Posición continua dentro de la tabla, 0..1.
+    pub morph: f32,
+    /// Frame que se está mirando, como índice. El knob lo muestra 1-based.
+    pub frame: usize,
+    /// Si el morph interpola entre frames o salta de uno en uno.
+    pub smooth: bool,
+    /// Cámara del visor 3D.
+    pub camera: Camera,
+    /// Si el selector de wavetables está abierto.
+    pub menu_open: bool,
+    /// Si el botón izquierdo está apretado sobre el knob.
+    ///
+    /// Es lo que hace que el `on_mouse_move` del módulo no mueva el knob cuando
+    /// el cursor pasa por encima: sin esta guarda, cruzar el módulo con el ratón
+    /// de mover el WT POS.
+    pub dragging: bool,
+    /// Posición normalizada del knob en el instante del `mouse down`.
+    ///
+    /// El arrastre es **relativo** a este valor, no absoluto. Es la diferencia
+    /// entre un knob usable y uno que salta: con arrastre absoluto, agarrar el
+    /// knob en cualquier parte del recorrido lo teletransporta a ese punto, y
+    /// un toque de 2 píxeles con un error de 1 píxel ya mueve 3 ciclos.
+    drag_grab: f32,
+    /// coordenada Y de la ventana donde se apretó el botón, en píxeles.
+    ///
+    /// En coordenadas de ventana y no del elemento: el `on_mouse_move` que
+    /// calcula el delta está en el módulo, que puede estar en otra posición
+    /// dentro de la ventana si el layout se mueve durante el arrastre.
+    drag_origin_y: f32,
 }
 
-impl EffectModule {
-    pub fn name_and_range(&mut self) -> (&'static str, &mut f32, f32, f32) {
-        match self {
-            EffectModule::WarpBend(val) => ("Bend", val, -100.0, 100.0),
-            EffectModule::WarpSync(val) => ("Sync", val, 0.0, 100.0),
-            EffectModule::WarpPW(val) => ("PW", val, -50.0, 50.0),
-            EffectModule::WarpAsymmetry(val) => ("Asym", val, -100.0, 100.0),
-            EffectModule::ModRing(val) => ("Ring", val, 0.0, 100.0),
-            EffectModule::ModFM(val) => ("FM", val, 0.0, 100.0),
-            EffectModule::ModAM(val) => ("AM", val, 0.0, 100.0),
-            EffectModule::CrossfadeSmooth(val) => ("Smooth", val, 0.0, 100.0),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct WavetableOscillator {
-    pub id: usize,
-    pub name: String,
-    pub wt_pos: f32,
-    pub pos: Point<Pixels>,
-    pub size: Point<Pixels>,
-    pub colors: Vec<Hsla>,
-}
-
-impl WavetableOscillator {
-    pub fn new(id: usize, name: &str, initial_pos: Point<Pixels>) -> Self {
+impl Default for WavetableEditor {
+    fn default() -> Self {
         Self {
-            id,
-            name: name.to_string(),
-            wt_pos: 0.0,
-            pos: initial_pos,
-            size: point(px(320.0), px(200.0)),
-            colors: vec![rgb(0x00FFFF).into(), rgb(0xFF00B4).into()],
+            // La tabla de fábrica, de 256 ciclos. Con el seno de un solo ciclo
+            // el `WT POS` arrancaba apagado y sin recorrido, y el módulo se
+            // veía roto en el primer arranque.
+            table: Wavetable::default_table(),
+            morph: 0.0,
+            frame: 0,
+            smooth: true,
+            camera: Camera::default(),
+            menu_open: false,
+            dragging: false,
+            drag_grab: 0.0,
+            drag_origin_y: 0.0,
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ModulatorNode {
-    pub id: usize,
-    pub target_osc_id: usize,
-    pub effect: EffectModule,
-    pub pos: Point<Pixels>,
-}
+impl WavetableEditor {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-impl ModulatorNode {
-    pub fn new(id: usize, target_osc_id: usize, effect: EffectModule, pos: Point<Pixels>) -> Self {
-        Self {
-            id,
-            target_osc_id,
-            effect,
-            pos,
+    /// Un editor con la tabla dada, en la posición inicial.
+    ///
+    /// Existe para no exponer los campos privados de arrastre: armar el struct
+    /// literal desde afuera obligaría a que `drag_grab` y `drag_origin_y` fueran
+    /// `pub`, que es estado de una interacción en curso y no de la tabla.
+    pub fn with_table(table: Wavetable) -> Self {
+        Self { table, ..Self::default() }
+    }
+
+    /// Posición normalizada en la matriz, 0..1.
+    ///
+    /// Es lo que muestran la rotación del knob y la malla 3D a la vez, y por eso
+    /// las dos cosas no pueden desincronizarse: leen la misma función.
+    ///
+    /// Antes el knob mostraba `morph`, que es sólo la fracción entre dos ciclos,
+    /// y no la posición absoluta. Con 64 ciclos, arrastrar el knob de abajo
+    /// arriba movía la fracción entre el frame 0 y el 1 y se recorrían 64 ciclos
+    /// en la primera vuelta para después no volver a moverse: el knob no
+    /// representaba lo que estaba haciendo.
+    pub fn position(&self) -> f32 {
+        let frames = self.table.selectable_frames();
+        if frames <= 1 {
+            return 0.0;
         }
+        (self.active_cycle() / (frames - 1) as f32).clamp(0.0, 1.0)
+    }
+
+    /// Fija la posición normalizada en la matriz, repartiendo entre `frame` y
+    /// `morph`.
+    ///
+    /// Se guardan las dos partes porque son las que ya usan el resto del editor:
+    /// el contador del pie muestra `frame` y la malla interpola con `morph`.
+    pub fn set_position(&mut self, position: f32) {
+        let frames = self.table.selectable_frames();
+        if frames <= 1 {
+            self.frame = 0;
+            self.morph = 0.0;
+            return;
+        }
+
+        let last = (frames - 1) as f32;
+        // Un `NaN` no se puede acotar con `clamp`: todas las comparaciones con
+        // `NaN` dan false y el valor se propaga al uniforme de la malla.
+        let position = if position.is_finite() { position.clamp(0.0, 1.0) } else { 0.0 };
+        let cycle = (position * last).clamp(0.0, last);
+
+        self.frame = cycle.floor() as usize;
+        // Con `floor`, la fracción nunca llega a 1.0, así que `morph` queda en
+        // [0, 1) y no se solapa con el `frame` siguiente.
+        self.morph = cycle - self.frame as f32;
+    }
+
+    /// Comienza un arrastre en `window_y`.
+    pub fn begin_drag(&mut self, window_y: f32) {
+        self.dragging = true;
+        self.drag_grab = self.position();
+        self.drag_origin_y = if window_y.is_finite() { window_y } else { 0.0 };
+    }
+
+    /// Continúa un arrastre que está en `window_y` y devuelve la posición nueva.
+    ///
+    /// Devolver el valor evita tener que leer el estado otra vez desde el
+    /// handler, que ya tiene el lock tomado.
+    pub fn drag_to(&mut self, window_y: f32, fine: bool) -> f32 {
+        if !self.dragging || !window_y.is_finite() {
+            return self.position();
+        }
+
+        // Hacia arriba sube el valor, que es la convención de todos los faders
+        // verticales: se arrastra hacia donde uno quiere que vaya.
+        let delta_px = self.drag_origin_y - window_y;
+        let mut value = self.drag_grab + delta_px / DRAG_RANGE_PX * value_gain(fine);
+
+        if !value.is_finite() {
+            value = self.drag_grab;
+        }
+        self.set_position(value);
+        self.position()
+    }
+
+    /// Termina el arrastre.
+    pub fn end_drag(&mut self) {
+        self.dragging = false;
+    }
+
+    /// Cuántos frames hay, para el rótulo `3 / 64`.
+    pub fn frame_count(&self) -> usize {
+        self.table.selectable_frames()
+    }
+
+    /// El frame que se dibuja, ya interpolado si corresponde.
+    pub fn current_samples(&self) -> Vec<f32> {
+        let position = self.active_cycle();
+        self.table.frame(position, self.smooth)
+    }
+
+    /// Posición continua dentro de la tabla, en unidades de ciclo.
+    ///
+    /// Es lo que recorre el knob de morph (la fracción entre dos frames) y lo
+    /// que la malla 3D usa para saber qué ciclo de la pila deja encendido. Las
+    /// dos cosas leen el mismo número, así que el realce de la pila y el valor
+    /// del knob no pueden desincronizarse.
+    pub fn active_cycle(&self) -> f32 {
+        let frames = self.table.selectable_frames();
+        if frames <= 1 {
+            return 0.0;
+        }
+        ((self.frame as f32 + self.morph) / (frames - 1) as f32).clamp(0.0, 1.0)
+            * (frames - 1) as f32
+    }
+
+    /// La tabla entera, para la malla 3D.
+    ///
+    /// La pila se arma con la tabla completa y no con un solo ciclo: el eje Z
+    /// es el índice del frame, así que ver la matriz es ver los ciclos reales
+    /// que parseó [`wavetable_io`] y no una forma sintetizada aparte.
+    pub fn table_samples(&self) -> &[f32] {
+        &self.table.samples
+    }
+
+    /// Samples por ciclo de la tabla cargada.
+    pub fn frame_len(&self) -> usize {
+        wavetable_io::FRAME_SAMPLES
+    }
+
+    /// Mueve el morph un paso, respecting los límites de la tabla.
+    pub fn nudge_morph(&mut self, delta: f32) {
+        let frames = self.table.selectable_frames();
+        if frames <= 1 {
+            return;
+        }
+        let last = (frames - 1) as f32;
+        self.morph = (self.morph + delta * last).clamp(0.0, 1.0);
+    }
+
+    /// Mueve el frame de a un paso.
+    pub fn step_frame(&mut self, delta: i32) {
+        let frames = self.table.selectable_frames();
+        if frames <= 1 {
+            return;
+        }
+        self.frame = (self.frame as i32 + delta).clamp(0, frames as i32 - 1) as usize;
+    }
+
+    /// Reemplaza la tabla cargada.
+    ///
+    /// Al cargar una tabla nueva el morph y el frame se van a 0: dejarlos donde
+    /// estaban llevaría a un frame que en la tabla nueva no existe, y el knob
+    /// mostraría una posición que no corresponde.
+    pub fn load(&mut self, table: Wavetable) {
+        self.table = table;
+        self.morph = 0.0;
+        self.frame = 0;
+        // Un arrastre en curso sobre la tabla anterior no puede seguir vivo: su
+        // `drag_grab` era una posición de una matriz que ya no existe, y al
+        // primer movimiento saltaría a un frame arbitrario de la nueva.
+        self.end_drag();
     }
 }
 
-fn snap_to_grid(val: f32, grid_size: f32) -> f32 {
-    (val / grid_size).round() * grid_size
+/// Píxeles de arrastre vertical que recorren la matriz entera.
+///
+/// 160px y no el alto del knob: con los 48 del knob, un pixel de error del
+/// cursor son 3% de la matriz, o dos ciclos de una tabla de 64, y el control se
+/// siente pegajoso. A 160, el mismo error es medio ciclo.
+pub const DRAG_RANGE_PX: f32 = 160.0;
+
+/// Factor de sensibilidad con Shift apretado.
+///
+/// Un cuarto de la velocidad normal, que es el orden de magnitud con el que
+/// funcionan los faders de audio en fine-tune: permite llevar el realce a un
+/// ciclo concreto de una tabla de 64, que a velocidad normal es imposible.
+const FINE_TUNE_FACTOR: f32 = 0.25;
+
+/// Ganancia del arrastre según el modificador.
+fn value_gain(fine: bool) -> f32 {
+    if fine { FINE_TUNE_FACTOR } else { 1.0 }
 }
 
-pub fn render(
+/// El módulo completo.
+///
+/// Cuatro bandas verticales dentro de un cuadrado: header, selector, visor y pie.
+/// El visor toma lo que sobra con `flex_1`, así que el alto de las otras tres
+/// bandas es lo único que hay que mantener en cuenta.
+pub fn render(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) -> AnyElement {
+    let editor = {
+        let app = state(cx).read(cx);
+        match app.slot(track_idx, slot_idx) {
+            // Se clona y se suelta el guard antes de seguir: los handlers de la
+            // vista necesitan el lock de escritura y un `read` vivo lo
+            // bloquearía.
+            Some(slot) => slot.wavetable.clone(),
+            None => return loading_panel().into_any_element(),
+        }
+    };
+
+    // El render 3D se pide una sola vez acá y sus dos imágenes se reparten entre
+    // el visor y el pie. Pedirlas por separado tomaría el lock dos veces por
+    // frame y podría pintar el knob con el valor viejo junto a la pila nueva.
+    let view = request_view(cx, &editor);
+
+    v_flex()
+        .id("open_wavetable_editor")
+        .w(px(EDITOR_WIDTH))
+        .h(px(EDITOR_HEIGHT))
+        .p(px(MODULE_PADDING))
+        .gap(px(MODULE_GAP))
+        .bg(rgb(0x0E0F13))
+        .border_1()
+        .border_color(rgb(0x2A2E3A))
+        .rounded(px(4.0))
+        // `relative` para que el canvas del keepalive se posicione contra el
+        // módulo y no contra la ventana entera. Sin esto, un `absolute()` sin
+        // ancestro posicionado se ancla al viewport y el canvas ocuparía toda la
+        // pantalla. Hoy no molesta (no dibuja nada y no tiene hitbox), pero es
+        // un acoplamiento silencioso al layout.
+        .relative()
+        .overflow_hidden()
+        // Fin del arrastre, con los dos handlers de elemento.
+        //
+        // `on_mouse_up` sólo dispara con el cursor **dentro** del módulo, así que
+        // hace falta también el `_out`. Son disjuntos por construcción
+        // (`is_hovered` y `!is_hovered`), así que entre los dos el arrastre
+        // termina siempre, se suelte el botón donde se suelte.
+        //
+        // Van en el elemento y no en el listener de ventana de `on_mouse_event`
+        // a propósito: los listeners de elemento se reinstalan en cada paint del
+        // módulo, o sea que están vivos de forma continua. Los de ventana se
+        // borran en cada frame, así que si el fin del arrastre dependiera de
+        // ellos habría una ventana de un frame en la que un clic rápido
+        // (apretar y soltar antes del siguiente render) los dejaría pasar y el
+        // knob quedaría con `dragging` en `true` para siempre.
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
+        })
+        .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
+        })
+        .child(render_header(&editor))
+        .child(render_table_selector(cx, track_idx, slot_idx, &editor))
+        .child(render_viewport(&view))
+        .child(render_footer(cx, track_idx, slot_idx, &editor, &view))
+        // Red de seguridad del seguimiento del arrastre. Va al final para que
+        // quede por encima: es invisible y no registra hitbox, así que no
+        // intercepta el mouse del knob.
+        .child(drag_keepalive(track_idx, slot_idx))
+        .into_any_element()
+}
+
+/// Si el knob de este slot tiene un arrastre en curso.
+///
+/// Lee por `&App` compartido, a diferencia de [`with_editor`], que pide el lock
+/// de escritura: el seguimiento consulta el flag en cada movimiento del mouse y
+/// no puede tomar un write lock para eso.
+fn knob_dragging(cx: &gpui_kit::App, track_idx: usize, slot_idx: usize) -> bool {
+    let app = state(cx).read(cx);
+    app.slot(track_idx, slot_idx).is_some_and(|slot| slot.wavetable.dragging)
+}
+
+/// Registra el seguimiento del arrastre a nivel de ventana.
+///
+/// # Por qué no `on_mouse_move` de un elemento
+///
+/// Los listeners de elemento de GPUI Kit se despachan **sólo si el hitbox del
+/// elemento está bajo el cursor** (en `on_mouse_move`, el closure arranca con
+/// `if ... && hitbox.is_hovered(window)`). Arrastrar el knob hacia abajo lo saca
+/// del módulo en cuestión de píxeles, el listener deja de dispararse y el valor
+/// queda congelado a mitad de camino: el gesto se cortaba a los ~40px y con 256
+/// ciclos el contador se clavaba en el 67 en vez de llegar al 0.
+///
+/// `Window::on_mouse_event` no lleva esa condición, así que el seguimiento va por
+/// ahí y el arrastre sigue aunque el cursor salga del módulo, de la ventana o de
+/// la pantalla.
+///
+/// # Sólo el movimiento
+///
+/// El `mouse up` se resuelve con los handlers de elemento del módulo
+/// (`on_mouse_up` y `on_mouse_up_out`). Esos no necesitan re-registrarse: cada
+/// paint del módulo los vuelve a instalar, así que están vivos de forma continua
+/// y no hay ventana de un frame en la que se puedan perder. Este listener sí se
+/// borra frame a frame, y esa es exactamente la razón por la que el fin del
+/// arrastre no debe depender de él.
+fn register_drag_tracking(
+    window: &mut gpui_kit::Window,
+    track_idx: usize,
+    slot_idx: usize,
+) {
+    window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+        with_editor(cx, track_idx, slot_idx, |editor| {
+            if !editor.dragging {
+                return;
+            }
+            editor.drag_to(event.position.y.as_f32(), event.modifiers.shift);
+        });
+    });
+}
+
+/// Canvas invisible que mantiene vivo el seguimiento del arrastre.
+///
+/// `Window::on_mouse_event` borra sus listeners en cada frame renderizado, así
+/// que hay que volver a registrar en cada frame mientras haya arrastre. Este
+/// canvas lo hace desde su fase de **paint**.
+///
+/// # Por qué el closure de paint y no el de prepaint
+///
+/// `Window::on_mouse_event` hace `debug_assert!` de que la fase de dibujo sea
+/// `DrawPhase::Paint`, y no `Prepaint`. Registrar el listener desde el prepaint
+/// de este canvas entraba en panic igual que hacerlo desde `on_mouse_down`. El
+/// panic sale como `recursion`-style assert en `window.rs`, lejos de la causa.
+///
+/// El invariante que sostiene el gesto: si se renderizó un frame, el paint de
+/// este canvas corrió y el listener quedó registrado de nuevo; y si no se
+/// renderizó ningún frame, entonces no se borró ningún listener. No hay forma
+/// de quedarse sin seguimiento a mitad de arrastre.
+///
+/// No tiene hitbox (no registra interactividad), así que no intercepta el mouse
+/// del knob ni de los botones.
+fn drag_keepalive(track_idx: usize, slot_idx: usize) -> AnyElement {
+    canvas(
+        |_bounds, _window, _cx| {},
+        move |_bounds, _state, window, cx| {
+            if knob_dragging(cx, track_idx, slot_idx) {
+                register_drag_tracking(window, track_idx, slot_idx);
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+    .into_any_element()
+}
+
+/// La banda de arriba: el nombre del plugin y qué tabla tiene cargada.
+///
+/// Es un header y no un rótulo suelto porque dentro de una cadena de módulos es
+/// lo único que dice *qué* dispositivo es cuál: sin él, tres módulos cuadrados
+/// iguales en fila son indistinguibles.
+fn render_header(editor: &WavetableEditor) -> AnyElement {
+    h_flex()
+        .w_full()
+        .h(px(HEADER_HEIGHT))
+        .items_center()
+        .justify_between()
+        .gap(px(4.0))
+        .child(
+            Label::new("OpenWavetable")
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0xE8EAF0)),
+        )
+        .child(
+            Label::new(format!("{} {}", editor.frame_count(), plural(editor.frame_count(), "ciclo")))
+                .text_xs()
+                .text_color(rgb(0x6A7080)),
+        )
+        .into_any_element()
+}
+
+/// Un número y su sustantivo, para los rótulos de conteo.
+///
+/// "1 ciclos" en el header era la señal de que la tabla tenía un solo ciclo, que
+/// es justo el caso que el usuario necesita ver escrito bien.
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 { noun.to_string() } else { format!("{noun}s") }
+}
+
+/// Panel de transición, mientras el slot cambia o se está deseleccionando.
+fn loading_panel() -> AnyElement {
+    v_flex()
+        .w(px(EDITOR_WIDTH))
+        .h(px(EDITOR_HEIGHT))
+        .items_center()
+        .justify_center()
+        .bg(rgb(0x0E0F13))
+        .child(Label::new("Abriendo editor...").text_xs().text_color(rgb(0x6A7080)))
+        .into_any_element()
+}
+
+/// La banda del selector: el botón `WAVETABLE ▾` y el nombre de la tabla.
+///
+/// En una fila, porque el módulo es angosto: con el rótulo arriba y el nombre
+/// abajo, el nombre larga se parte en dos líneas y empuja al visor.
+///
+/// El menú es una lista de archivos ya cargados más las dos entradas que abren
+/// un selector. No se arma un `Menu` de gpui-kit: hace falta un popover
+/// posicionado, y con dos entradas y una lista cortita un `v_flex` condicional
+/// alcanza y no depende de dónde esté la ventana.
+fn render_table_selector(
     cx: &mut Context<HikaruApp>,
-    oscillators: &mut Vec<WavetableOscillator>,
-    modulators: &mut Vec<ModulatorNode>,
-    cam_x: &mut f32,
-    cam_y: &mut f32,
-    cam_z: &mut f32,
+    track_idx: usize,
+    slot_idx: usize,
+    editor: &WavetableEditor,
 ) -> AnyElement {
-    let oscs = oscillators.clone();
-    let mods = modulators.clone();
-    let cx_val = *cam_x;
-    let cy_val = *cam_y;
-    let cz_val = *cam_z;
+    let _ = cx;
 
-    let mut osc_elems: Vec<AnyElement> = Vec::new();
-    for osc in &oscs {
-        let osc_id = osc.id;
-        let name = osc.name.clone();
-        let wt_pos = osc.wt_pos;
-        let colors = osc.colors.clone();
-        osc_elems.push(
-            v_flex()
-                .w(px(320.0))
-                .h(px(200.0))
-                .bg(rgb(0x12141A))
-                .border_1()
-                .border_color(rgb(0x2D3241))
-                .rounded(px(6.0))
-                .p(px(6.0))
-                .gap(px(4.0))
-                .child(Label::new(name.clone()).text_xs())
+    h_flex()
+        .w_full()
+        .h(px(SELECTOR_HEIGHT))
+        .items_center()
+        .gap(px(4.0))
+        .child(
+            Button::new(format!("wt_table_menu_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("WAVETABLE")
+                .compact()
+                .text_color(rgb(0xFF6E00))
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.menu_open = !editor.menu_open;
+                    });
+                }),
+        )
+        // El triángulo es la única señal de que el rótulo es un botón. Sin ella
+        // el usuario no sabe que hay una lista abajo.
+        .child(
+            Label::new(if editor.menu_open { "▲" } else { "▼" })
+                .text_xs()
+                .text_color(rgb(0x6A7080)),
+        )
+        // El nombre de la tabla. Se trunca a un ancho fijo en vez de dejar que
+        // la fila estire: un nombre largo no puede empujar al visor fuera del
+        // cuadrado.
+        .child(
+            div()
+                .min_w(px(0.0))
+                .flex_1()
+                .overflow_hidden()
                 .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            let cx0 = bounds.origin.x;
-                            let cy = bounds.origin.y + px(bounds.size.height.as_f32() / 2.0 - (cy_val * 0.4) as f32);
-                            let total_frames = 256.0;
-                            let rendered = 24;
-                            let wave_w = bounds.size.width.as_f32() * 0.7;
-                            let depth = 90.0;
-                            let h_scale = 32.0;
-                            let cos_y = cz_val.cos();
-                            let sin_y = cz_val.sin();
-                            let cos_p = cx_val.cos();
-                            let sin_p = cx_val.sin();
-                            let active = ((wt_pos / (total_frames - 1.0)) * (rendered - 1) as f32).round() as usize;
-                            let draw_order: Vec<usize> = if cos_y >= 0.0 {
-                                (0..rendered).rev().collect()
-                            } else {
-                                (0..rendered).collect()
-                            };
-                            for &z in &draw_order {
-                                let zf = z as f32;
-                                let morph = zf / (rendered - 1) as f32;
-                                let is_sel = z == active;
-                                let mut pts: Vec<Point<Pixels>> = Vec::new();
-                                for i in 0..=32 {
-                                    let nx = i as f32 / 32.0;
-                                    let phase = nx * PI * 2.0;
-                                    let wave = phase.sin() * (1.0 - morph)
-                                        + (phase * 3.0).sin() * 0.3 * (morph * PI).sin()
-                                        + (phase * 5.0).sin() * 0.2 * morph;
-                                    let xl = (nx - 0.5) * wave_w;
-                                    let zl = (zf / (rendered - 1) as f32 - 0.5) * depth;
-                                    let yl = wave * h_scale;
-                                    let rx = xl * cos_y - zl * sin_y;
-                                    let rz = xl * sin_y + zl * cos_y;
-                                    let fy = yl * cos_p - rz * sin_p;
-                                    let fz = yl * sin_p + rz * cos_p;
-                                    pts.push(point(cx0 + px(rx), cy + px(-fy + (fz * 0.25) as f32)));
-                                }
-                                let col = if is_sel {
-                                    rgb(0xFFFFFF).into()
-                                } else {
-                                    let t = morph.clamp(0.0, 1.0);
-                                    let n = colors.len();
-                                    if n == 0 {
-                                        rgb(0xFFFFFF).into()
-                                    } else if n == 1 {
-                                        colors[0]
-                                    } else {
-                                        let idx = (t * (n - 1) as f32).floor() as usize;
-                                        let idx = idx.min(n - 2);
-                                        let lt = t * (n - 1) as f32 - idx as f32;
-                                        let c1 = colors[idx];
-                                        let c2 = colors[idx + 1];
-                                        Hsla {
-                                            h: c1.h + (c2.h - c1.h) * lt,
-                                            s: c1.s + (c2.s - c1.s) * lt,
-                                            l: c1.l + (c2.l - c1.l) * lt,
-                                            a: c1.a + (c2.a - c1.a) * lt,
-                                        }
-                                    }
-                                };
-                                let mut pb = PathBuilder::stroke(px(if is_sel { 2.2 } else { 0.9 }));
-                                for (i, p) in pts.iter().enumerate() {
-                                    if i == 0 {
-                                        pb.move_to(*p);
-                                    } else {
-                                        pb.line_to(*p);
-                                    }
-                                }
-                                if let Ok(path) = pb.build() {
-                                    window.paint_path(path, col);
-                                }
-                            }
-                        },
+                    Label::new(editor.table.name.clone())
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xE8EAF0)),
+                ),
+        )
+        .when(editor.menu_open, |this| {
+            this.child(
+                v_flex()
+                    .absolute()
+                    .left(px(0.0))
+                    .top(px(MODULE_PADDING + HEADER_HEIGHT + MODULE_GAP))
+                    .w(px(MODULE_SIZE - 2.0 * MODULE_PADDING))
+                    .p(px(4.0))
+                    .gap(px(2.0))
+                    .bg(rgb(0x181B22))
+                    .border_1()
+                    .border_color(rgb(0x3A4152))
+                    .rounded(px(3.0))
+                    .child(
+                        Button::new(format!("wt_browse_explorer_{track_idx}_{slot_idx}"))
+                            .rounded(ButtonRounded::None)
+                            .label("Buscar en el Explorer (F11)")
+                            .compact()
+                            .w_full()
+                            .on_click(move |_, _, cx| {
+                                // El explorer es el browse de la app: ya
+                                // recorre los directorios de Linux, con
+                                // historial y atajo a `/`. Se le pasa el slot
+                                // para que sepa dónde dejar la wavetable.
+                                crate::views::explorer::begin_wavetable_pick(cx, track_idx, slot_idx);
+                            }),
                     )
-                    .w_full()
-                    .h(px(140.0))
-                    .into_any_element(),
+                    .child(
+                        Button::new(format!("wt_browse_native_{track_idx}_{slot_idx}"))
+                            .rounded(ButtonRounded::None)
+                            .label("Buscar archivo...")
+                            .compact()
+                            .w_full()
+                            .on_click(move |_, _, cx| {
+                                pick_wavetable_with_native_dialog(cx, track_idx, slot_idx);
+                            }),
+                    )
+                    .child(
+                        Button::new(format!("wt_use_sine_{track_idx}_{slot_idx}"))
+                            .rounded(ButtonRounded::None)
+                            // Carga la tabla de fábrica y no el seno de un ciclo.
+                            // Con el seno el `WT POS` se apagaba y el módulo
+                            // quedaba sin control, y ese botón era la única
+                            // forma de volver a perderlo.
+                            .label(format!("Volver a la tabla de fábrica ({} ciclos)", wavetable_io::DEFAULT_CYCLES))
+                            .compact()
+                            .w_full()
+                            .on_click(move |_, _, cx| {
+                                with_editor(cx, track_idx, slot_idx, |editor| {
+                                    editor.load(Wavetable::default_table());
+                                    editor.menu_open = false;
+                                });
+                            }),
+                    ),
+            )
+        })
+        .into_any_element()
+}
+
+/// La banda de abajo: el knob `WT POS` y, al lado, el ciclo y su navegación.
+///
+/// # Por qué un solo knob
+///
+/// Antes había dos: MORPH e INDEX. Los dos movían lo mismo —la posición en la
+/// matriz de ciclos— por dos caminos distintos, y con el mismo valor el módulo
+/// mostraba dos perillas idénticas sin que se supiera cuál mandar. El knob es
+/// de recorrido continuo y los botones de paso de a uno quedan como atajos.
+///
+/// El knob va como elemento del layout y no superpuesto sobre el visor: dentro
+/// de un módulo cuadrado no hay ancho de sobra, y tapar la imagen con una
+/// perilla es justo lo que hay que evitar cuando la imagen es de 135px de alto.
+fn render_footer(
+    cx: &mut Context<HikaruApp>,
+    track_idx: usize,
+    slot_idx: usize,
+    editor: &WavetableEditor,
+    view: &WavetableView,
+) -> AnyElement {
+    // `cx` no se usa directo: los handlers de los botones pasan por
+    // `with_editor`, que toma el lock del estado por su cuenta.
+    let _ = cx;
+    let frames = editor.frame_count();
+
+    h_flex()
+        .w_full()
+        .h(px(FOOTER_HEIGHT))
+        .items_center()
+        .gap(px(6.0))
+        .child(
+            v_flex()
+                .items_center()
+                .justify_center()
+                .gap(px(1.0))
+                .child(knob_image(track_idx, slot_idx, &editor, view.knob.clone()))
+                .child(
+                    Label::new("WT POS")
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xFF6E00)),
+                ),
+        )
+        .child(
+            v_flex()
+                .min_w(px(0.0))
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .gap(px(3.0))
+                // `frame + 1` porque el rótulo va 1-based, como el número de un
+                // track.
+                .child(
+                    Label::new(format!("{} / {}", editor.frame + 1, frames))
+                        .text_xs()
+                        .text_color(rgb(0x8A90A0)),
                 )
                 .child(
                     h_flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .child(Label::new("WT POS").text_xs())
+                        .gap(px(3.0))
                         .child(
-                            Button::new(format!("osc_wt_{}", osc_id)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label(format!("{:.0}", wt_pos))
+                            Button::new(format!("wt_frame_prev_{track_idx}_{slot_idx}"))
+                                .rounded(ButtonRounded::None)
+                                .label("<")
                                 .compact()
                                 .on_click(move |_, _, cx| {
-                                    let st = state(cx);
-                                    st.update(cx, |state, cx| {
-                                        if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                                            if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "OpenWavetable") {
-                                                if let Some(o) = slot.wavetable_oscillators.iter_mut().find(|o| o.id == osc_id) {
-                                                    o.wt_pos = (o.wt_pos + 8.0).min(255.0);
-                                                }
-                                            }
-                                        }
-                                        cx.notify();
+                                    with_editor(cx, track_idx, slot_idx, |editor| {
+                                        editor.step_frame(-1)
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new(format!("wt_frame_next_{track_idx}_{slot_idx}"))
+                                .rounded(ButtonRounded::None)
+                                .label(">")
+                                .compact()
+                                .on_click(move |_, _, cx| {
+                                    with_editor(cx, track_idx, slot_idx, |editor| {
+                                        editor.step_frame(1)
                                     });
                                 }),
                         ),
                 )
-                .into_any_element(),
-        );
-    }
-
-    let mut mod_elems: Vec<AnyElement> = Vec::new();
-    for m in &mods {
-        let mod_id = m.id;
-        let (name, val, min, max) = {
-            let mut eff = m.effect.clone();
-            let (n, v, mn, mx) = eff.name_and_range();
-            (n.to_string(), *v, mn, mx)
-        };
-        mod_elems.push(
-            v_flex()
-                .w(px(80.0))
-                .h(px(80.0))
-                .bg(rgb(0x181410))
-                .border_1()
-                .border_color(rgb(0x503C1E))
-                .rounded(px(4.0))
-                .p(px(4.0))
-                .gap(px(2.0))
-                .items_center()
-                .child(Label::new(name.clone()).text_xs())
-                .child(
-                            Button::new(format!("mod_val_{}", mod_id)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label(format!("{:.0}", val))
-                                .compact()
-                                .on_click(move |_, _, cx| {
-                                    let st = state(cx);
-                                    st.update(cx, |state, cx| {
-                                        if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                                            if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "OpenWavetable") {
-                                                if let Some(md) = slot.modulators.iter_mut().find(|md| md.id == mod_id) {
-                                                    let (_n, v, mn, mx) = md.effect.name_and_range();
-                                                    *v = (*v + (mx - mn) / 10.0).min(mx);
-                                        }
-                                    }
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .into_any_element(),
-        );
-    }
-
-    v_flex()
-        .id("open_wavetable")
-        .size_full()
-        .gap(px(4.0))
-        .child(
-            h_flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(Label::new("3D VIEW:").text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x00FFFF)))
-                .child(Label::new("X").text_xs().text_color(rgb(0xFF6464)))
-                .child(
-                    Button::new("cam_x_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(format!("{:.2}", cx_val))
-                        .compact()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                                    if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "OpenWavetable") {
-                                        slot.cam_x = (slot.cam_x + 0.1).min(PI * 0.45);
-                                    }
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(Label::new("Y").text_xs().text_color(rgb(0x64B464)))
-                .child(
-                    Button::new("cam_y_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(format!("{:.0}", cy_val))
-                        .compact()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                                    if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "OpenWavetable") {
-                                        slot.cam_y = (slot.cam_y + 5.0).min(100.0);
-                                    }
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(Label::new("Z").text_xs().text_color(rgb(0x64B4FF)))
-                .child(
-                    Button::new("cam_z_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(format!("{:.2}", cz_val))
-                        .compact()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                                    if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "OpenWavetable") {
-                                        slot.cam_z = (slot.cam_z + 0.1).min(PI);
-                                    }
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(div().flex_1())
-                .child(
-                    Button::new("wt_add_osc").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("+ Osc")
-                        .compact()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                                    if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "OpenWavetable") {
-                                        let count = slot.wavetable_oscillators.len();
-                                        let letter = (b'A' + count as u8) as char;
-                                        slot.wavetable_oscillators.push(WavetableOscillator::new(
-                                            count,
-                                            &format!("OSC {}", letter),
-                                            point(px(20.0 + count as f32 * 30.0), px(50.0 + count as f32 * 30.0)),
-                                        ));
-                                    }
-                                }
-                                cx.notify();
-                            });
-                        }),
-                ),
-        )
-        .child(
-            div()
-                .flex_1()
-                .relative()
-                .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            window.paint_quad(PaintQuad {
-                                bounds,
-                                background: rgb(0x0C0D11).into(),
-                                border_color: Hsla::default(),
-                                corner_radii: gpui_kit::Corners::default(),
-                                border_widths: gpui_kit::Edges::default(),
-                                border_style: BorderStyle::default(),
-                            });
-                            let mut x = bounds.origin.x;
-                            while x < bounds.origin.x + bounds.size.width {
-                                let mut path = PathBuilder::stroke(px(1.0));
-                                path.move_to(point(x, bounds.origin.y));
-                                path.line_to(point(x, bounds.origin.y + bounds.size.height));
-                                window.paint_path(path.build().unwrap(), rgb(0x161921));
-                                x += px(GRID_SIZE);
-                            }
-                            let mut y = bounds.origin.y;
-                            while y < bounds.origin.y + bounds.size.height {
-                                let mut path = PathBuilder::stroke(px(1.0));
-                                path.move_to(point(bounds.origin.x, y));
-                                path.line_to(point(bounds.origin.x + bounds.size.width, y));
-                                window.paint_path(path.build().unwrap(), rgb(0x161921));
-                                y += px(GRID_SIZE);
-                            }
-                        },
-                    )
-                    .absolute()
-                    .left(px(0.0))
-                    .top(px(0.0))
-                    .w_full()
-                    .h_full()
-                    .into_any_element(),
-                )
-                .children(osc_elems)
-                .children(mod_elems),
+                // El espectro de la tabla actual, como la barrita de armónicos de
+                // Bitwig: muestra qué tan brillante es la forma sin abrir nada.
+                .child(spectrum(&editor.current_samples(), rgb(0xFF6E00))),
         )
         .into_any_element()
 }
+
+/// El knob 3D, con su `mouse down` para empezar el arrastre.
+///
+/// El disco se dibuja con fondo transparente, así que va sobre el fondo del
+/// módulo sin un recuadro alrededor.
+///
+/// # El mouse down no salta el valor
+///
+/// Se guarda el punto de agarre ([`WavetableEditor::begin_drag`]) en vez de
+/// poner el knob en la posición del cursor. Es la diferencia entre un knob
+/// usable y uno que se teletransporta: si el click fuera absoluto, un error de
+/// dos píxeles al agarrar el knob movería la matriz varios ciclos, y más en una
+/// tabla de 64.
+///
+/// # Sin ciclos no hay knob
+///
+/// Con una tabla de un solo ciclo no hay a dónde ir: `position()` devuelve 0
+/// siempre. Un knob que acepta el arrastre y no se mueve parece roto, así que
+/// en ese caso no se registra el `mouse down` y el disco queda atenuado. El
+/// contador del pie dice `1 / 1`, que es la explicación.
+///
+/// # El cursor
+///
+/// El `mouse down` con botón izquierdo no captura el puntero: el del elemento
+/// sigue siendo la flecha, y una flecha no dice que el control se arrastra. Sin
+/// una API de captura en GPUI Kit no hay más opción; el anillo naranja de abajo
+/// es la señal explícita de que el knob está activo.
+fn knob_image(
+    track_idx: usize,
+    slot_idx: usize,
+    editor: &WavetableEditor,
+    image: Option<std::sync::Arc<RenderImage>>,
+) -> AnyElement {
+    // Con un solo ciclo no hay recorrido, así que el control se apaga.
+    let enabled = editor.frame_count() > 1;
+
+    let knob = div()
+        .id("wt_knob_pos")
+        .w(px(KNOB_SIZE))
+        .h(px(KNOB_SIZE))
+        .relative()
+        .rounded(px(KNOB_SIZE / 2.0))
+        .border_1()
+        .border_color(match (enabled, editor.dragging) {
+            (true, true) => rgb(0xFF6E00),
+            (true, false) => rgb(0x2A2E3A),
+            // Apagado: el mismo borde, pero el disco va atenuado abajo.
+            (false, _) => rgb(0x1E212B),
+        })
+        .child(match image {
+            Some(image) => img(image)
+                .id("wt_knob_pos_img")
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .w_full()
+                .h_full()
+                // El `opacity` es lo que comunica que el control no anda: un
+                // disco normal con un solo ciclo se lee como roto.
+                .opacity(if enabled { 1.0 } else { 0.35 })
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => div().w_full().h_full().into_any_element(),
+        });
+
+    // `on_mouse_down` se registra sólo cuando hay recorrido. Es condicional
+    // porque el builder se consume: aplicarlo siempre y dejar que el handler no
+    // haga nada igual cobraría el `on_mouse_move` de cada movimiento del cursor
+    // sobre el módulo.
+    if enabled {
+        knob
+            .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
+                // Sólo se guarda el punto de agarre. El seguimiento del
+                // movimiento lo registra `drag_keepalive` desde la fase de
+                // paint: `Window::on_mouse_event` hace `debug_assert!` de que la
+                // fase sea `DrawPhase::Paint`, y un `mouse down` corre en
+                // dispatch de eventos, así que llamarlo desde acá entraba en
+                // panic al primer click sobre el knob.
+                with_editor(cx, track_idx, slot_idx, |editor| {
+                    editor.begin_drag(event.position.y.as_f32());
+                });
+            })
+            .into_any_element()
+    } else {
+        knob.into_any_element()
+    }
+}
+
+/// Pide las imágenes del módulo al viewport offscreen.
+///
+/// Va separado de [`render_viewport`] porque el render alimenta dos bandas del
+/// layout —el visor y el pie— y pedirlo por separado en cada una tomaría el lock
+/// dos veces por frame.
+fn request_view(cx: &mut Context<HikaruApp>, editor: &WavetableEditor) -> WavetableView {
+    let handle = cx.global::<WavetableViewportHandle>().clone();
+    handle.spawn_connect(cx);
+
+    handle.view(&WavetableViewRequest {
+        viewer: ViewerRequest {
+            size: WAVETABLE_VIEWPORT,
+            // La cámara viene fija del `hikaru_render` (`Camera::wavetable_viewer`,
+            // 30° de inclinación). El visor ya no tiene controles de yaw/pitch:
+            // la perspectiva es la que hace legible la pila de ciclos.
+            camera: editor.camera,
+            // La tabla entera, para que la malla apile los ciclos reales en Z.
+            waveform: editor.table_samples(),
+            frame_len: editor.frame_len(),
+            active: editor.active_cycle(),
+            max_frames: MAX_STACK_FRAMES,
+            mesh_params: mesh_params(),
+            tint: VIEWER_TINT,
+            background: hikaru_render::wgpu::Color::TRANSPARENT,
+        },
+        // El `fill` del knob y el `active` de la malla salen del mismo estado y
+        // son la misma posición en dos escalas: `position()` es 0..1 sobre la
+        // matriz y `active_cycle()` son ciclos absolutos. Los dos leen
+        // `WavetableEditor`, así que el disco no puede girar a un lado mientras
+        // el realce de la pila se ilumina en otro.
+        morph: editor.position(),
+        knob_body: KNOB_BODY,
+        knob_marker: KNOB_MARKER,
+        knob_camera: Camera::knob(),
+    })
+}
+
+/// La banda del centro: el mini-canvas con la pila de ciclos.
+///
+/// Es la única banda con `flex_1`, así que su alto es el que sobra del cuadrado
+/// menos las otras tres. El `img` va con `ObjectFit::Contain`: la imagen offscreen
+/// tiene su propio aspect y encajarla a la fuerza la deformaría.
+fn render_viewport(view: &WavetableView) -> AnyElement {
+    div()
+        .flex_1()
+        .min_h(px(0.0))
+        .w_full()
+        .relative()
+        .bg(rgb(0x07080B))
+        .border_1()
+        .border_color(rgb(0x2A2E3A))
+        .rounded(px(3.0))
+        .overflow_hidden()
+        .child(match &view.viewer {
+            Some(image) => img(image.clone())
+                .id("wt_viewport_3d")
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .w_full()
+                .h_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => viewport_placeholder(view.error.as_deref()),
+        })
+        .into_any_element()
+}
+
+/// Placeholder cuando todavía no hay imagen.
+///
+/// Distingue los dos casos que se ven igual desde afuera: la GPU todavía no está
+/// y el render falló con un motivo concreto.
+fn viewport_placeholder(error: Option<&str>) -> AnyElement {
+    let message = match error {
+        Some(error) => error.to_string(),
+        None => "Iniciando render 3D...".to_string(),
+    };
+
+    v_flex()
+        .absolute()
+        .left(px(0.0))
+        .top(px(0.0))
+        .w_full()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .child(Label::new(message).text_xs().text_color(rgb(0x6A7080)))
+        .into_any_element()
+}
+
+/// Espectro de la tabla: barras con la energía por banda.
+///
+/// Es la barrita de armónicos de Bitwig. Se calcula con una FFT ingenua porque
+/// son 64 bandas sobre 2048 samples y sólo se hace una vez por frame: con
+/// 2048 * 64 multiplicaciones a 60 Hz son 8 millones, que es nada al lado de un
+/// readback de la GPU.
+fn spectrum(samples: &[f32], color: Rgba) -> AnyElement {
+    const BANDS: usize = 32;
+    let mut peaks = [0.0f32; BANDS];
+
+    // Ventana de Hann: sin ella, el leakage de la rectangular hace que todas las
+    // bandas parezcan iguales.
+    let window: Vec<f32> = (0..samples.len())
+        .map(|index| {
+            let phase = index as f32 / samples.len() as f32 * std::f32::consts::TAU;
+            0.5 - 0.5 * phase.cos()
+        })
+        .collect();
+
+    for band in 1..BANDS {
+        // Se omiten las dos primeras bandas: son la componente de continua y el
+        // primer armónico, que domina siempre.
+        let bin = band * (samples.len() / BANDS);
+        if bin >= samples.len() / 2 {
+            break;
+        }
+
+        let mut real = 0.0;
+        let mut imaginary = 0.0;
+        for (index, sample) in samples.iter().enumerate() {
+            let phase = 2.0 * std::f32::consts::PI * bin as f32 * index as f32 / samples.len() as f32;
+            let value = sample * window[index];
+            real += value * phase.cos();
+            imaginary -= value * phase.sin();
+        }
+
+        peaks[band] = (real * real + imaginary * imaginary).sqrt() / samples.len() as f32;
+    }
+
+    // Normalizar contra la banda más fuerte: si no, el volumen de la tabla
+    // decide el alto de todas las barras y dos wavetables se ven iguales.
+    let loudest = peaks.iter().copied().fold(0.0f32, f32::max).max(1.0e-6);
+
+    h_flex()
+        .w_full()
+        .h(px(20.0))
+        .items_end()
+        .gap(px(1.0))
+        .children((0..BANDS).map(|band| {
+            let height = (peaks[band] / loudest).clamp(0.0, 1.0);
+            div()
+                .flex_1()
+                .h(px(2.0 + height * 18.0))
+                .bg(if height > 0.001 { color } else { rgb(0x1A1D26) })
+                .rounded(px(1.0))
+        }))
+        .into_any_element()
+}
+
+/// Abre el diálogo nativo para elegir un `.wav`.
+///
+/// El diálogo arranca en el home del usuario y no en `/`: buscar una wavetable
+/// en la raíz del filesystem es una forma de no encontrar nunca nada.
+fn pick_wavetable_with_native_dialog(
+    cx: &mut gpui_kit::App,
+    track_idx: usize,
+    slot_idx: usize,
+) {
+    let start = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"));
+
+    let Some(path) = rfd::FileDialog::new()
+        .set_directory(&start)
+        .add_filter("Wavetable", &wavetable_io::WAVETABLE_EXTENSIONS)
+        .pick_file()
+    else {
+        return;
+    };
+
+    load_into_slot(cx, track_idx, slot_idx, &path);
+}
+
+/// Carga el archivo en el slot y avisa el resultado.
+///
+/// Separado de los dos caminos de entrada (explorer y diálogo) para que el
+/// manejo del error y del aviso quede en un solo lugar.
+fn load_into_slot(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, path: &std::path::Path) {
+    match wavetable_io::load_wavetable(path, MAX_FRAMES) {
+        Ok(table) => with_editor(cx, track_idx, slot_idx, |editor| {
+            editor.load(table);
+            editor.menu_open = false;
+        }),
+        Err(error) => {
+            eprintln!("[Hikaru] No se pudo cargar la wavetable: {error}");
+        }
+    }
+}
+
+/// Aplica un cambio al editor del slot y pide redibujar.
+///
+/// Es el único camino de escritura del panel: todas las perillas y botones pasan
+/// por acá, así que hay un solo lugar donde se toma el lock del estado y se
+/// llama a `notify`.
+pub fn with_editor(
+    cx: &mut gpui_kit::App,
+    track_idx: usize,
+    slot_idx: usize,
+    change: impl FnOnce(&mut WavetableEditor),
+) {
+    state(cx).update(cx, |state, cx| {
+        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+            change(&mut slot.wavetable);
+        }
+        cx.notify();
+    });
+}
+
+/// Carga una wavetable desde una ruta, para el camino del explorer.
+pub fn load_wavetable_from_path(
+    cx: &mut gpui_kit::App,
+    track_idx: usize,
+    slot_idx: usize,
+    path: &std::path::Path,
+) {
+    load_into_slot(cx, track_idx, slot_idx, path);
+}
+
+/// La caja de la cinta del visor.
+fn mesh_params() -> hikaru_render::WavetableMeshParams {
+    hikaru_render::WavetableMeshParams { width: MESH_WIDTH, height: MESH_HEIGHT, thickness: MESH_THICKNESS }
+}
+
+

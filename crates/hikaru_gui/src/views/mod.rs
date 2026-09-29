@@ -2,8 +2,13 @@ pub mod header;
 pub mod footer;
 pub mod matrix;
 pub mod mixer;
+pub mod controls;
+pub mod util;
+pub mod wavetable_io;
 pub mod dsp_rack;
 pub mod open_wavetable;
+#[cfg(test)]
+mod open_wavetable_tests;
 pub mod playlist;
 pub mod menu_bar;
 pub mod about;

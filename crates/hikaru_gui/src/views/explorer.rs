@@ -153,6 +153,36 @@ impl FileExplorerState {
     }
 }
 
+/// Abre el explorador en modo "elegir una wavetable para este slot".
+///
+/// El editor de Wavetable llama a esto en vez de armar su propio navegador: el
+/// explorer ya recorre los directorios de Linux con historial, barra de ruta y
+/// atajo a la raíz, y duplicar todo eso para elegir un archivo sería mantener
+/// dos navegadores que se desincronizan.
+///
+/// El modo se guarda como un slot pendiente en el estado: el click sobre un
+/// archivo consulta esa bandera y, si está, carga la wavetable en vez de armar
+/// un clip. Un flag y no un closure, porque el click se resuelve en otra vista.
+pub fn begin_wavetable_pick(cx: &mut App, track_idx: usize, slot_idx: usize) {
+    state(cx).update(cx, |state, cx| {
+        state.pending_wavetable_slot = Some((track_idx, slot_idx));
+        state.show_explorer = true;
+        cx.notify();
+    });
+}
+
+/// Directorio en el que arranca el explorador.
+///
+/// El home del usuario, no `/`: la raíz del filesystem es el peor lugar para
+/// buscar una wavetable, y desde ahí hay que navegar hacia abajo en cada
+/// intento. Si el home no existe (contenedor, servicio), se cae a la raíz.
+pub fn default_start_path() -> PathBuf {
+    match std::env::var("HOME") {
+        Ok(home) if PathBuf::from(&home).is_dir() => PathBuf::from(home),
+        _ => PathBuf::from("/"),
+    }
+}
+
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
     let ex = &app.explorer_state;
@@ -380,6 +410,24 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     cx.update_entity(&st, |state, cx| {
                                         if is_dir {
                                             state.explorer_state.navigate_to(path.clone());
+                                        } else if let Some((track_idx, slot_idx)) =
+                                            state.pending_wavetable_slot
+                                        {
+                                            // Modo "elegir wavetable": el archivo
+                                            // va al slot del rack y no al proyecto,
+                                            // y el modo se cierra para que el
+                                            // siguiente click sea el normal.
+                                            state.pending_wavetable_slot = None;
+                                            let wavetable_path = path.clone();
+                                            let st = st.clone();
+                                            cx.update_entity(&st, |state, cx| {
+                                                crate::views::open_wavetable::load_wavetable_from_path(
+                                                    cx,
+                                                    track_idx,
+                                                    slot_idx,
+                                                    &wavetable_path,
+                                                );
+                                            });
                                         } else {
                                             state.explorer_state.selected_file = Some(path.clone());
                                             if !is_midi_file(&path) {

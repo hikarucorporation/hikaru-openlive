@@ -107,6 +107,24 @@ impl GpuContext {
     /// Concentrar acá el `TextureDescriptor` evita que cada renderer
     /// ([`crate::quad`], [`crate::mesh`]) olvide un usage y se encuentre con un
     /// `AccessError` en la primera sesión de la GUI.
+    ///
+    /// La textura de color lleva siempre `COPY_SRC`: es lo que permite
+    /// leerla de vuelta con [`GpuContext::read_color_rgba8`] y así llevar el
+    /// render a un `RenderImage` de GPUI Kit. Cuesta nada si nadie la lee, y
+    /// agregar el usage más tarde obligaría a recrear todos los targets.
+    ///
+    /// # Dimensiones
+    ///
+    /// El ancho y el alto se amoldan a un mínimo de 1. wgpu rechaza una textura
+    /// 0x0 con un error de validación opaco que no dice qué dimensión es el
+    /// problema, y un tamaño 0 puede entrar por el camino real del layout: un
+    /// panel que todavía no tiene tamaño en el primer frame del layout, o un
+    /// viewport redimensionado a cero durante un minimize.
+    ///
+    /// Un target de 1x1 es inútil pero perfectamente válido: el pipeline de
+    /// render se comporta igual y se lee como una imagen diminuta en vez de
+    /// romper el contexto. El recorte real a 0x0 lo hace quien pide el render,
+    /// que sí puede decidir qué hacer con un tamaño sin sentido.
     pub fn create_render_target(
         &self,
         label: &str,
@@ -114,6 +132,9 @@ impl GpuContext {
         height: u32,
         with_depth: bool,
     ) -> RenderTarget {
+        let width = width.max(1);
+        let height = height.max(1);
+
         let color = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -121,7 +142,9 @@ impl GpuContext {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: Self::preferred_texture_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
@@ -143,8 +166,119 @@ impl GpuContext {
             depth_view: depth
                 .as_ref()
                 .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default())),
+            color,
+            depth,
             color_format: Self::preferred_texture_format(),
+            size: (width, height),
         }
+    }
+
+    /// Lee la textura de color de un target y la devuelve como bytes RGBA8.
+    ///
+    /// Es el puente entre el render offscreen y la GUI: GPUI Kit compone sus
+    /// elementos sobre su propia superficie y no expone un `TextureView` de
+    /// wgpu arbitrario, así que la única forma de meter un render 3D en el
+    /// layout 2D es leer los píxeles y subirlos como imagen.
+    ///
+    /// El formato del target es `Rgba8UnormSrgb` (ver
+    /// [`GpuContext::preferred_texture_format`]), así que los bytes vuelven en
+    /// **RGBA, codificados en sRGB**: es exactamente lo que espera un decoder
+    /// de imágenes, sin ninguna conversión de espacio de color de por medio.
+    ///
+    /// # Bloquea el hilo
+    ///
+    /// `map_async` es asíncrono, pero el readback se fuerza acá con
+    /// `device.poll(PollType::wait())`. Es deliberado: el llamador es el hilo
+    /// de UI de GPUI, y el render es de unos pocos KiB (una cinta de
+    /// 320x200 RGBA son 256 KB), así que la espera es del orden del
+    /// milisegundo. Encadenarlo como future obligaría a pumping manual del
+    /// executor de GPUI desde el render, que es bastante más frágil.
+    ///
+    /// Los errores de validación de wgpu no se detectan acá: si la copia está
+    /// mal declarada, el error llega por el scope del device y el buffer
+    /// aparece sin inicializar. Por eso los tests de humo envuelven el render
+    /// en un error scope.
+    pub fn read_color_rgba8(&self, target: &RenderTarget) -> Result<Vec<u8>, ReadbackError> {
+        let (width, height) = target.size;
+        if width == 0 || height == 0 {
+            return Err(ReadbackError::DegenerateSize { width, height });
+        }
+
+        let unpadded_bytes_per_row = width as usize * 4;
+        // wgpu exige que `bytes_per_row` sea múltiplo de 256. Con anchos que no
+        // lo son (cualquiera que no sea múltiplo de 64 píxeles) hay que
+        // sobre-reservar y des-padear al copiar.
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
+
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hikaru_render::readback"),
+            size: (padded_bytes_per_row * height as usize) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("hikaru_render::readback::copy"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.color,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(Some(encoder.finish()));
+
+        // El callback del map corre en un hilo de wgpu: se pasa el resultado por
+        // un canal y se fuerza el device a avanzar hasta que llegue.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            // Si el poll cortó antes por timeout, el receiver ya no está y el
+            // envío falla: se ignora, el error de abajo ya se/reportó.
+            let _ = sender.send(result);
+        });
+
+        // El timeout es lo que evita que un driver colgado congele la GUI de
+        // forma indefinida: peor un frame sin la imagen 3D que un freeze.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(MAP_TIMEOUT),
+            })
+            .map_err(ReadbackError::Poll)?;
+
+        // Tras un poll OK los callbacks ya se invocaron, así que el recv no
+        // debería bloquear; el timeout es sólo una red por si el backend
+        // WebGPU (donde el poll no bloquea) llega a este camino.
+        match receiver.recv_timeout(MAP_TIMEOUT) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(ReadbackError::Map(error)),
+            Err(_) => return Err(ReadbackError::MapAborted),
+        }
+
+        let mapped = buffer.slice(..).get_mapped_range();
+        // Se des-padea fila por fila: el padding es basura de alineamiento y no
+        // forma parte de la imagen.
+        let mut pixels = Vec::with_capacity(unpadded_bytes_per_row * height as usize);
+        for row in 0..height as usize {
+            let start = row * padded_bytes_per_row;
+            pixels.extend_from_slice(&mapped[start..start + unpadded_bytes_per_row]);
+        }
+        drop(mapped);
+        buffer.unmap();
+
+        Ok(pixels)
     }
 }
 
@@ -154,9 +288,60 @@ pub struct RenderTarget {
     pub color_view: wgpu::TextureView,
     /// Vista de profundidad, si se pidió.
     pub depth_view: Option<wgpu::TextureView>,
+    /// Textura de color. Se guarda además de la vista porque sólo desde la
+    /// textura se puede pedir un `copy_texture_to_buffer`: una `TextureView` no
+    /// conserva el handle de la textura.
+    pub color: wgpu::Texture,
+    /// Textura de profundidad, si se pidió. Vive acá por el mismo motivo que
+    /// [`RenderTarget::color`]: permite recrear el target conservando los
+    /// recursos, en vez de dejarlos al GC de wgpu.
+    pub depth: Option<wgpu::Texture>,
     /// Formato de la textura de color, para armar el render pass.
     pub color_format: wgpu::TextureFormat,
+    /// Tamaño del target en píxeles. Lo necesita el readback para saber
+    /// cuántas filas tiene que des-padear.
+    pub size: (u32, u32),
 }
+
+/// Errores al leer un target de vuelta a CPU.
+#[derive(Debug)]
+pub enum ReadbackError {
+    /// El target tiene dimensión cero, que es lo único que wgpu acepta.
+    DegenerateSize {
+        /// Ancho del target.
+        width: u32,
+        /// Alto del target.
+        height: u32,
+    },
+    /// El device no terminó el trabajo pendiente.
+    Poll(wgpu::PollError),
+    /// El map del buffer falló.
+    Map(wgpu::BufferAsyncError),
+    /// El device terminó el poll sin que el map se completara.
+    MapAborted,
+}
+
+impl std::fmt::Display for ReadbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadbackError::DegenerateSize { width, height } => {
+                write!(f, "el target mide {width}x{height}, no se puede leer")
+            }
+            ReadbackError::Poll(error) => write!(f, "el poll del device falló: {error}"),
+            ReadbackError::Map(error) => write!(f, "no se pudo mapear el buffer: {error}"),
+            ReadbackError::MapAborted => {
+                write!(f, "el map se abortó antes de completarse")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReadbackError {}
+
+/// Tope de espera del readback. La GUI llama a
+/// [`GpuContext::read_color_rgba8`] desde el hilo de UI, así que un driver
+/// colgado no puede dejar la espera abierta para siempre.
+const MAP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Errores al armar el contexto de GPU.
 #[derive(Debug)]

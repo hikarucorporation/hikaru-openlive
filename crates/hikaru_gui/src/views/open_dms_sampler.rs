@@ -8,7 +8,7 @@ use gpui_kit::*;
 use crate::app::{state, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdsrEnvelope {
     pub attack: f32,
     pub decay: f32,

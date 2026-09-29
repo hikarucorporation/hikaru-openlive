@@ -9,20 +9,22 @@ use gpui_kit::*;
 
 use crate::app::{state, AppMode, HikaruApp};
 use crate::audio_proxy::GuiCommand;
-use crate::views::open_wavetable::{WavetableOscillator, ModulatorNode};
 use crate::views::open_dms::OpenDms;
+use crate::views::open_wavetable::WavetableEditor;
 
 #[derive(Clone, Debug)]
 pub struct DspSlot {
     pub id: usize,
     pub name: String,
+    /// Si el slot pasa audio.
     pub active: bool,
+    /// Si el editor extendido está desplegado en el rack.
     pub is_open: bool,
-    pub cam_x: f32,
-    pub cam_y: f32,
-    pub cam_z: f32,
-    pub wavetable_oscillators: Vec<WavetableOscillator>,
-    pub modulators: Vec<ModulatorNode>,
+    /// Estado del sintetizador de Wavetable. Vive anidado y no plano en el slot
+    /// porque el editor tiene demasiado estado (osciladores, moduladores,
+    /// cámara, envolvente, filtro, FX) como para que una lista plana siga
+    /// siendo legible.
+    pub wavetable: WavetableEditor,
     pub dms_state: Option<OpenDms>,
 }
 
@@ -33,17 +35,18 @@ impl DspSlot {
             name,
             active: true,
             is_open: false,
-            cam_x: 0.35,
-            cam_y: 0.0,
-            cam_z: 0.5,
-            wavetable_oscillators: vec![WavetableOscillator::new(
-                0,
-                "OSC A",
-                point(px(40.0), px(60.0)),
-            )],
-            modulators: Vec::new(),
+            wavetable: WavetableEditor::new(),
             dms_state: None,
         }
+    }
+
+    /// ¿Es un slot que tiene un editor extendido detrás?
+    ///
+    /// La decisión de qué panel mostrar la toma el rack, y tiene que estar de
+    /// acuerdo con el nombre del plugin: un slot vacío no tiene editor, así que
+    /// seleccionarlo no puede abrir un panel en blanco.
+    pub fn has_editor(&self) -> bool {
+        matches!(self.name.as_str(), "OpenWavetable" | "Hikaru OpenDMS")
     }
 }
 

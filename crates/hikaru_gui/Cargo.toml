@@ -15,6 +15,10 @@ hikaru_plugin_host = { path = "../hikaru_plugin_host" }
 # que no se compilan dos copias del backend.
 hikaru_render = { path = "../hikaru_render" }
 gpui-kit = "0.6.6"
+# `RenderImage::new` (el tipo que usa el elemento `img` de GPUI Kit) toma un
+# `image::Frame`. GPUI no lo reexporta, así que hay que declarar el crate. La
+# versión tiene que ser la misma que usa `gpui-pre` o el tipo no coincide.
+image = "0.25.1"
 hound = "3.5"
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
 raw-window-handle = "0.6.2"
