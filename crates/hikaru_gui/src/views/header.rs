@@ -1,12 +1,17 @@
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::Size;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::*;
+use gpui_kit::base::{Button as BaseButton, NumberInput as BaseNumberInput};
 
-use crate::app::{state, AppMode, HikaruApp};
+use crate::app::{format_bpm, state, AppMode, HikaruApp};
 use crate::audio_proxy::{AudioClipData, GuiCommand};
+use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::playlist::ClipType;
 use hikaru_transport::transport_state::TransportPlaybackState;
 
@@ -22,7 +27,57 @@ fn format_timecode(bars: f32, bpm: f64) -> String {
     format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
 }
 
-pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+/// Botón de paso (− / +) de la caja de BPM.
+///
+/// Se arma a mano en vez de usar el `NumberInput` de gpui-component porque
+/// éste mete íconos SVG de Lucide, y el renderer de GPUI los rasteriza como
+/// bloques opacos: los botones salían blancos y mudos, igual que el texto.
+fn bpm_step_button(button: BaseButton, glyph: &'static str) -> BaseButton {
+    button
+        .flex_none()
+        .h_full()
+        .w(px(22.0))
+        .items_center()
+        .justify_center()
+        .text_color(rgb(0xE0E0E0))
+        .hover(|this| this.bg(rgb(0x4D4D4D)))
+        .active(|this| this.bg(rgb(0x5A5A5A)))
+        .child(glyph)
+}
+
+fn render_bpm_spinbox(bpm_input: &Entity<InputState>) -> impl IntoElement {
+    TextStyleScope::text_color(
+        rgb(0xE0E0E0),
+        div()
+            .flex()
+            .h(px(24.0))
+            .w(px(96.0))
+            .rounded(px(3.0))
+            .border_1()
+            .border_color(rgb(0x4D4D4D))
+            .bg(rgb(0x2E2E2E))
+            .overflow_hidden()
+            .child(
+                BaseNumberInput::new(bpm_input)
+                    .size_full()
+                    .decrement_button(|button| bpm_step_button(button, "−"))
+                    .increment_button(|button| bpm_step_button(button, "+"))
+                    .input(
+                        Input::new(bpm_input)
+                            .appearance(false)
+                            .bordered(false)
+                            .h_full()
+                            .w_full()
+                            .gap_0()
+                            .rounded_none()
+                            .text_align(TextAlign::Center)
+                            .with_size(Size::XSmall),
+                    ),
+            ),
+    )
+}
+
+pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElement {
     let app = state(cx).read(cx);
     let transport = &app.transport;
     let is_playing = transport.playback_state == TransportPlaybackState::Playing;
@@ -35,11 +90,27 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
     let show_dsp_rack = app.show_dsp_rack;
     let show_explorer = app.show_explorer;
     let bpm = transport.bpm;
+    let bpm_input = app.bpm_input.clone();
     let samples_per_beat = (transport.sample_rate.get() as f64 * 60.0) / transport.bpm;
     let samples_per_bar = samples_per_beat * transport.beats_per_bar as f64;
     let current_bar = 1.0 + (transport.sample_count as f64 / samples_per_bar) as f32;
     let audio_proxy = app.audio_proxy.clone();
     drop(app);
+
+    // La caja manda mientras el usuario escribe; el resto del tiempo refleja
+    // `transport.bpm`, que es lo que consume el resto de la app.
+    let bpm_text = format_bpm(bpm);
+    let bpm_editing = bpm_input
+        .read(cx)
+        .focus_handle(cx)
+        .is_focused(window);
+    if !bpm_editing {
+        let shown = bpm_input.read(cx).value();
+        if shown.as_ref() != bpm_text {
+            let text = bpm_text.clone();
+            bpm_input.update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+    }
 
     h_flex()
         .id("header_bar")
@@ -318,20 +389,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(Label::new("BPM").text_xs().text_color(rgb(0xE0E0E0)))
-        .child(
-            Button::new("bpm_display").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label(format!("{:.0}", bpm))
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(rgb(0xE0E0E0))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.transport.bpm = (state.transport.bpm + 1.0).min(300.0);
-                        state.audio_proxy.send(GuiCommand::SetBpm(state.transport.bpm as f32));
-                    });
-                }),
-        )
+        .child(render_bpm_spinbox(&bpm_input))
         .child(div().flex_1())
         .child(
             Button::new("toggle_mixer").rounded(gpui_kit::component::button::ButtonRounded::None)

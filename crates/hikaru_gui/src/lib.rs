@@ -11,6 +11,7 @@
 pub mod app;
 pub mod views;
 pub mod theme;
+pub mod ui;
 
 pub use app::HikaruApp;
 

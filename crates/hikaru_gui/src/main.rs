@@ -396,8 +396,21 @@ fn main() {
         .map(|engine| engine.output_level_bits.clone())
         .unwrap_or_else(|_| std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)));
 
+    // OJO: NO registrar `.with_assets(...)` por ahora. Los SVG de Lucide traen
+    // `stroke="currentColor"`, que el renderer de GPUI no resuelve: con la
+    // fuente de assets activa los íconos se rasterizan como bloques opacos
+    // (cuadrados blancos). Los controles que los necesitan dibujan glifos de
+    // texto mientras tanto.
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        // La app es oscura de punta a punta; los componentes de gpui-kit que no
+        // se re-colorean a mano (la caja numérica de BPM, menús, tooltips)
+        // necesitan el tema oscuro para no abrir agujeros blancos en pantalla.
+        gpui_kit::component::theme::Theme::change(
+            gpui_kit::component::theme::ThemeMode::Dark,
+            None,
+            cx,
+        );
 
         cx.open_window(
             WindowOptions {
@@ -411,9 +424,10 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| {
+            |window, cx| {
                 cx.new(|cx| {
                     let mut app = HikaruApp::build(
+                        window,
                         cx,
                         audio_proxy,
                         audio_stream,

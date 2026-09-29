@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::*;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::label::Label;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -151,6 +152,27 @@ pub enum PanMode {
     MidSide,
 }
 
+/// Rango del BPM del transport. El motor descarta valores `<= 0.0`
+/// (`TransportPosition::set_bpm`) y toda la matemática de ticks asume un
+/// tempo positivo, así que la caja numérica se acota aquí.
+pub const BPM_MIN: f64 = 40.0;
+pub const BPM_MAX: f64 = 300.0;
+
+/// Texto de la caja numérica de BPM: enteros sin decimales, fracciones con
+/// los ceros sobrantes recortados (`140`, `87.5`).
+pub fn format_bpm(bpm: f64) -> String {
+    if !bpm.is_finite() {
+        return format!("{BPM_MIN:.0}");
+    }
+    let rounded = (bpm * 100.0).round() / 100.0;
+    if (rounded - rounded.trunc()).abs() < f64::EPSILON {
+        format!("{rounded:.0}")
+    } else {
+        let text = format!("{rounded:.2}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 pub struct AppState {
     pub mode: AppMode,
     pub transport: TransportPosition,
@@ -160,6 +182,10 @@ pub struct AppState {
     pub is_looping: bool,
     pub cpu_usage: f32,
     pub bpm_synced_to_engine: f64,
+    /// Caja numérica de BPM del transport. Es la fuente de la edición del
+    /// usuario; `transport.bpm` sigue siendo el valor con el que trabaja el
+    /// resto de la app.
+    pub bpm_input: Entity<InputState>,
     pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
     pub show_mixer: bool,
     pub show_dsp_rack: bool,
@@ -214,6 +240,8 @@ pub struct HikaruApp {
     pub state: Entity<AppState>,
     pub focus_handle: FocusHandle,
     pub _audio_stream: Option<cpal::Stream>,
+    /// Mantiene viva la suscripción a `InputEvent` de la caja de BPM.
+    _bpm_input_sub: Subscription,
 }
 
 pub fn handle_global_key(key: &str, cx: &mut App) {
@@ -262,6 +290,7 @@ pub fn handle_global_key(key: &str, cx: &mut App) {
 
 impl HikaruApp {
     pub fn build(
+        window: &mut Window,
         cx: &mut Context<HikaruApp>,
         audio_proxy: AudioProxy,
         audio_stream: Option<cpal::Stream>,
@@ -313,6 +342,20 @@ impl HikaruApp {
                 .collect()
         };
 
+        // Caja numérica de BPM (el sustituto moderno del `egui::DragValue` que
+        // usaba la UI legacy): se escribe con el teclado, con las flechas
+        // arriba/abajo o con los botones +/-, y se acota al perder el foco.
+        let initial_bpm = transport.bpm;
+        let bpm_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .step(1.0)
+                .min(BPM_MIN)
+                .max(BPM_MAX)
+        });
+        bpm_input.update(cx, |input, cx| {
+            input.set_value(format_bpm(initial_bpm), window, cx)
+        });
+
         let state = cx.new(|_| AppState {
             mode: AppMode::OpenLive,
             transport,
@@ -322,6 +365,7 @@ impl HikaruApp {
             is_looping: false,
             cpu_usage: 0.12,
             bpm_synced_to_engine: -1.0,
+            bpm_input: bpm_input.clone(),
             global_loop_synced_to_engine: None,
             show_mixer: false,
             show_dsp_rack: false,
@@ -355,10 +399,34 @@ impl HikaruApp {
             cx.notify();
         });
 
+        // La caja escribe el BPM; el transport lo propaga al motor. `Blur`
+        // hace falta porque al perder el foco el input reescribe el texto con
+        // el valor acotado, y ese `Change` no lo emite el setter.
+        let bpm_input_sub = cx.subscribe(&bpm_input, |_, input, event, cx| {
+            if !matches!(event, InputEvent::Change | InputEvent::Blur) {
+                return;
+            }
+            let text = input.read(cx).value();
+            let Ok(parsed) = text.trim().parse::<f64>() else {
+                return;
+            };
+            if !parsed.is_finite() {
+                return;
+            }
+            let bpm = parsed.clamp(BPM_MIN, BPM_MAX);
+            update_state(cx, |state| {
+                if (state.transport.bpm - bpm).abs() > f64::EPSILON {
+                    state.transport.bpm = bpm;
+                    state.audio_proxy.send(GuiCommand::SetBpm(bpm as f32));
+                }
+            });
+        });
+
         HikaruApp {
             state,
             focus_handle: cx.focus_handle(),
             _audio_stream: audio_stream,
+            _bpm_input_sub: bpm_input_sub,
         }
     }
 
@@ -672,7 +740,7 @@ impl Render for HikaruApp {
                 v_flex()
                     .w_full()
                     .child(menu_bar::render(cx))
-                    .child(header::render(cx)),
+                    .child(header::render(window, cx)),
             )
             
             // 2. ÁREA CENTRAL WORKSPACE (LAYOUT HORIZONTAL + VERTICAL)
@@ -764,7 +832,16 @@ impl Render for HikaruApp {
             
             // SHORTCUTS: el foco vive en el div raíz, por eso capture_key_down
             // los recibe sin importar qué control interno esté enfocado.
-            .capture_key_down(move |event, _, cx| {
+            .capture_key_down(move |event, window, cx| {
+                // Salvo la caja de BPM: es el único campo de texto de la app,
+                // y mientras edita el tempo las teclas le pertenecen a ella
+                // (si no, `backspace` borraría clips del playlist).
+                let app = state(cx).read(cx);
+                let bpm_input = app.bpm_input.clone();
+                drop(app);
+                if bpm_input.read(cx).focus_handle(cx).is_focused(window) {
+                    return;
+                }
                 let key = event.keystroke.key.as_str().to_lowercase();
                 handle_global_key(&key, cx);
             })
