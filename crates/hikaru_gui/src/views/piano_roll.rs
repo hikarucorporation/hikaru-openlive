@@ -836,7 +836,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .bg(rgb(0x181A20))
                 .px(px(8.0))
                 .child(
-                    Button::new("pr_mode_keys")
+                    Button::new("pr_mode_keys").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("🎹 Keys")
                         .compact()
                         .when(mode == PianoRollMode::Keys, |b| b.text_color(rgb(0x00B4D8)))
@@ -849,7 +849,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("pr_mode_drums")
+                    Button::new("pr_mode_drums").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("🥁 Drums")
                         .compact()
                         .when(mode == PianoRollMode::Drums, |b| b.text_color(rgb(0x00B4D8)))
@@ -866,7 +866,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .when(sel_active, |this| {
                     this.child(Label::new(format!("Sel: {} -> {}", sel_start, sel_end)).text_xs())
                         .child(
-                            Button::new("pr_loop_toggle")
+                            Button::new("pr_loop_toggle").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label(if loop_enabled { "Loop ON" } else { "Loop OFF" })
                                 .compact()
                                 .when(loop_enabled, |b| b.text_color(rgb(0x39FF14)))
@@ -880,7 +880,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 }),
                         )
                         .child(
-                            Button::new("pr_clear_sel")
+                            Button::new("pr_clear_sel").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label("X Sel")
                                 .compact()
                                 .on_click(move |_, _, cx| {
@@ -896,7 +896,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .when(sel_notes > 0, |this| {
                     this.child(Label::new(format!("Notas: {}", sel_notes)).text_xs())
                         .child(
-                            Button::new("pr_clear_notes")
+                            Button::new("pr_clear_notes").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label("X Notas")
                                 .compact()
                                 .on_click(move |_, _, cx| {

@@ -6,7 +6,7 @@ use hikaru_core::SampleRate;
 use hikaru_audio_engine::EngineMode;
 use hikaru_gui::app::HikaruApp;
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
-use gpui_kit::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 static DEFAULT_WAVETABLE: [f32; 2048] = [0.0; 2048];
 
@@ -405,7 +405,10 @@ fn main() {
                     Default::default(),
                     size(px(1280.0), px(720.0)),
                 ))),
-                titlebar: None,
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Hikaru OpenLive".into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             |_, cx| {

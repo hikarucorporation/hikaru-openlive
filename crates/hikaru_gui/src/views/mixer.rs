@@ -130,7 +130,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .items_center()
                 .gap(px(6.0))
                 .child(
-                    Button::new("mixer_openlive")
+                    Button::new("mixer_openlive").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("OPENLIVE")
                         .compact()
                         .when(is_live, |b| b.text_color(rgb(0x00B4D8)))
@@ -142,7 +142,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                         }),
                 )
                 .child(
-                    Button::new("mixer_openstudio")
+                    Button::new("mixer_openstudio").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("OPENSTUDIO")
                         .compact()
                         .when(!is_live, |b| b.text_color(rgb(0xFF6E00)))
@@ -154,7 +154,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                         }),
                 )
                 .child(
-                    Button::new("mixer_add_track")
+                    Button::new("mixer_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(" [ + ] ")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -175,7 +175,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                         }),
                 )
                 .child(
-                    Button::new("mixer_remove_track")
+                    Button::new("mixer_remove_track").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(" [ - ] ")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -234,7 +234,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                 .gap(px(4.0))
                                 .items_center()
                                 .child(
-                                    Button::new(format!("mixer_sel_{}", idx))
+                                    Button::new(format!("mixer_sel_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label(if is_master {
                                             "MASTER".to_string()
                                         } else {
@@ -252,7 +252,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                         }),
                                 )
                                 .child(
-                                    Button::new(format!("mixer_panmode_{}", idx))
+                                    Button::new(format!("mixer_panmode_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label(if track.pan_mode == crate::app::PanMode::MidSide {
                                             "M/S"
                                         } else {
@@ -423,7 +423,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                     h_flex()
                                         .gap(px(4.0))
                                         .child(
-                                            Button::new(format!("mixer_mute_{}", idx))
+                                            Button::new(format!("mixer_mute_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label("M")
                                                 .compact()
                                                 .when(mute, |b| b.text_color(rgb(0xC80000)))
@@ -447,7 +447,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                                 }),
                                         )
                                         .child(
-                                            Button::new(format!("mixer_solo_{}", idx))
+                                            Button::new(format!("mixer_solo_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label("S")
                                                 .compact()
                                                 .when(solo, |b| b.text_color(rgb(0xC8A000)))

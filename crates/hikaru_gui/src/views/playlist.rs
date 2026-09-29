@@ -471,7 +471,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             h_flex()
                                 .gap(px(2.0))
                                 .child(
-                                    Button::new(format!("pl_track_solo_{}", tid))
+                                    Button::new(format!("pl_track_solo_{}", tid)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label("S")
                                         .compact()
                                         .when(tsolo, |b| b.text_color(rgb(0xC8A000)))
@@ -489,7 +489,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                         }),
                                 )
                                 .child(
-                                    Button::new(format!("pl_track_mute_{}", tid))
+                                    Button::new(format!("pl_track_mute_{}", tid)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label("M")
                                         .compact()
                                         .when(tmute, |b| b.text_color(rgb(0xC80000)))
@@ -887,7 +887,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         h_flex()
             .gap(px(4.0))
             .child(
-                Button::new("pl_add_track")
+                Button::new("pl_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
                     .label("[ + ]")
                     .compact()
                     .on_click(move |_, _, cx| {
@@ -911,7 +911,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     }),
             )
             .child(
-                Button::new("pl_remove_track")
+                Button::new("pl_remove_track").rounded(gpui_kit::component::button::ButtonRounded::None)
                     .label("[ - ]")
                     .compact()
                     .on_click(move |_, _, cx| {

@@ -468,7 +468,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .child(Label::new("-").text_xs())
                 .child(Label::new(p.clone()).text_xs())
                 .child(
-                    Button::new(format!("plugin_path_remove_{}", idx))
+                    Button::new(format!("plugin_path_remove_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("X")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -504,7 +504,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .child(Label::new(name.clone()).text_xs())
                 .child(div().flex_1())
                 .child(
-                    Button::new(format!("plugin_open_{}", name))
+                    Button::new(format!("plugin_open_{}", name)).rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(if is_open { "Abierto" } else { "Abrir Plugin" })
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -535,7 +535,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .child(Label::new("Rutas de Busqueda").text_sm().font_weight(FontWeight::BOLD))
         .children(path_rows)
         .child(
-            Button::new("plugin_add_path")
+            Button::new("plugin_add_path").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("+ Agregar Ruta...")
                 .compact()
                 .on_click(move |_, _, cx| {
@@ -556,7 +556,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .gap(px(6.0))
                 .items_center()
                 .child(
-                    Button::new("plugin_rescan")
+                    Button::new("plugin_rescan").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("Rescan Plugins")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -581,7 +581,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .children(plugin_rows),
         )
         .child(
-            Button::new("plugin_close")
+            Button::new("plugin_close").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("Cerrar")
                 .compact()
                 .on_click(move |_, _, cx| {

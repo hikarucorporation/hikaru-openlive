@@ -43,7 +43,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .gap(px(4.0))
                 .child(Label::new(rack_title).text_sm().font_weight(FontWeight::BOLD))
                 .child(
-                    Button::new("dsp_add_slot")
+                    Button::new("dsp_add_slot").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(" [ + ] Add Slot ")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -63,7 +63,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                         }),
                 )
                 .child(
-                    Button::new("dsp_remove_slot")
+                    Button::new("dsp_remove_slot").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(" [ - ] Remove ")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -121,7 +121,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                         .items_center()
                                         .gap(px(4.0))
                                         .child(
-                                            Button::new(format!("dsp_slot_num_{}", idx))
+                                            Button::new(format!("dsp_slot_num_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label(format!("{:02}", idx + 1))
                                                 .compact()
                                                 .on_click(move |_, _, cx| {
@@ -135,7 +135,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                         .child(Label::new(slot_name.clone()).text_xs())
                                         .child(div().flex_1())
                                         .child(
-                                            Button::new(format!("dsp_slot_active_{}", idx))
+                                            Button::new(format!("dsp_slot_active_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label(if slot_active { "●" } else { "○" })
                                                 .compact()
                                                 .on_click(move |_, _, cx| {
@@ -155,7 +155,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                                 }),
                                         )
                                         .child(
-                                            Button::new(format!("dsp_slot_open_{}", idx))
+                                            Button::new(format!("dsp_slot_open_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label(if slot_open { "▣" } else { "□" })
                                                 .compact()
                                                 .on_click(move |_, _, cx| {
@@ -197,7 +197,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                         .gap(px(2.0))
                                         .child(Label::new("Empty Slot").text_xs())
                                         .child(
-                                            Button::new("dsp_empty_select")
+                                            Button::new("dsp_empty_select").rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label("Select Plugin")
                                                 .compact()
                                                 .on_click(move |_, _, cx| {

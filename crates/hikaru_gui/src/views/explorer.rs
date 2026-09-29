@@ -287,7 +287,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             h_flex()
                 .gap(px(4.0))
                 .child(
-                    Button::new("explorer_back")
+                    Button::new("explorer_back").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("⮜")
                         .compact()
                         .text_color(rgb(0xB0B0B0))
@@ -300,7 +300,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("explorer_forward")
+                    Button::new("explorer_forward").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("⮞")
                         .compact()
                         .text_color(rgb(0xB0B0B0))
@@ -313,7 +313,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("explorer_up")
+                    Button::new("explorer_up").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("⬆")
                         .compact()
                         .text_color(rgb(0xB0B0B0))
@@ -419,7 +419,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .items_center()
                 .gap(px(6.0))
                 .child(
-                    Button::new("explorer_play")
+                    Button::new("explorer_play").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(if is_playing { "⏸" } else { "▶" })
                         .compact()
                         .text_color(rgb(0xB0B0B0))
@@ -469,7 +469,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .into_any_element(),
                 )
                 .child(
-                    Button::new("explorer_sync")
+                    Button::new("explorer_sync").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("Sync")
                         .compact()
                         .text_color(rgb(0xB0B0B0))

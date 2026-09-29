@@ -38,7 +38,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         .px(px(6.0))
         .gap(px(4.0))
         .child(
-            Button::new("footer_clip_editor")
+            Button::new("footer_clip_editor").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label(clip_icon)
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -56,7 +56,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("footer_piano_roll")
+            Button::new("footer_piano_roll").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label(pr_icon)
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -74,7 +74,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("footer_dsp_rack")
+            Button::new("footer_dsp_rack").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label(dsp_icon)
                 .compact()
                 .bg(rgb(0x3D3D3D))

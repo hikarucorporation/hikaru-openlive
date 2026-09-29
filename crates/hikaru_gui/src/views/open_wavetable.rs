@@ -203,7 +203,7 @@ pub fn render(
                         .gap(px(4.0))
                         .child(Label::new("WT POS").text_xs())
                         .child(
-                            Button::new(format!("osc_wt_{}", osc_id))
+                            Button::new(format!("osc_wt_{}", osc_id)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label(format!("{:.0}", wt_pos))
                                 .compact()
                                 .on_click(move |_, _, cx| {
@@ -246,7 +246,7 @@ pub fn render(
                 .items_center()
                 .child(Label::new(name.clone()).text_xs())
                 .child(
-                            Button::new(format!("mod_val_{}", mod_id))
+                            Button::new(format!("mod_val_{}", mod_id)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label(format!("{:.0}", val))
                                 .compact()
                                 .on_click(move |_, _, cx| {
@@ -279,7 +279,7 @@ pub fn render(
                 .child(Label::new("3D VIEW:").text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x00FFFF)))
                 .child(Label::new("X").text_xs().text_color(rgb(0xFF6464)))
                 .child(
-                    Button::new("cam_x_btn")
+                    Button::new("cam_x_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("{:.2}", cx_val))
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -296,7 +296,7 @@ pub fn render(
                 )
                 .child(Label::new("Y").text_xs().text_color(rgb(0x64B464)))
                 .child(
-                    Button::new("cam_y_btn")
+                    Button::new("cam_y_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("{:.0}", cy_val))
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -313,7 +313,7 @@ pub fn render(
                 )
                 .child(Label::new("Z").text_xs().text_color(rgb(0x64B4FF)))
                 .child(
-                    Button::new("cam_z_btn")
+                    Button::new("cam_z_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("{:.2}", cz_val))
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -330,7 +330,7 @@ pub fn render(
                 )
                 .child(div().flex_1())
                 .child(
-                    Button::new("wt_add_osc")
+                    Button::new("wt_add_osc").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("+ Osc")
                         .compact()
                         .on_click(move |_, _, cx| {

@@ -960,7 +960,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     h_flex()
                                         .gap(px(2.0))
                                         .child(
-                                            Button::new(format!("track_solo_{}", track_idx))
+                                            Button::new(format!("track_solo_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label("S")
                                                 .compact()
                                                 .bg(rgb(0x3D3D3D))
@@ -980,7 +980,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                 }),
                                         )
                                         .child(
-                                            Button::new(format!("track_mute_{}", track_idx))
+                                            Button::new(format!("track_mute_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                                 .label("M")
                                                 .compact()
                                                 .bg(rgb(0x3D3D3D))
@@ -1019,7 +1019,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .items_center()
                 .justify_center()
                 .child(
-                    Button::new(format!("scene_btn_{}", scene_idx))
+                    Button::new(format!("scene_btn_{}", scene_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("▶ {}", name))
                         .w_full()
                         .bg(rgb(0x3D3D3D))
@@ -1049,7 +1049,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .py(px(4.0))
                 .child(Label::new("SESSION MATRIX").text_sm().font_weight(FontWeight::BOLD).text_color(rgb(0xE0E0E0)))
                 .child(
-                    Button::new("matrix_add_track")
+                    Button::new("matrix_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("➕")
                         .compact()
                         .bg(rgb(0x3D3D3D))
@@ -1063,7 +1063,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("matrix_remove_track")
+                    Button::new("matrix_remove_track").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("➖")
                         .compact()
                         .bg(rgb(0x3D3D3D))
@@ -1077,7 +1077,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("matrix_add_scene")
+                    Button::new("matrix_add_scene").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("➕ Scene")
                         .compact()
                         .bg(rgb(0x3D3D3D))
@@ -1091,7 +1091,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("matrix_remove_scene")
+                    Button::new("matrix_remove_scene").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("➖ Scene")
                         .compact()
                         .bg(rgb(0x3D3D3D))

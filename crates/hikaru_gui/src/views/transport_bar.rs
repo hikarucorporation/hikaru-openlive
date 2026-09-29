@@ -16,7 +16,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         .gap(px(4.0))
         .items_center()
         .child(
-            Button::new("tb_start")
+            Button::new("tb_start").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏮")
                 .compact()
                 .on_click(move |_, _, cx| {
@@ -27,7 +27,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("tb_play")
+            Button::new("tb_play").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("▶")
                 .compact()
                 .when(is_playing, |b| b.color(rgb(0x28B450)))
@@ -40,7 +40,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("tb_stop")
+            Button::new("tb_stop").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏹")
                 .compact()
                 .on_click(move |_, _, cx| {
@@ -52,7 +52,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("tb_rec")
+            Button::new("tb_rec").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏺")
                 .compact()
                 .when(is_recording, |b| b.color(rgb(0xDC1E1E)))

@@ -86,7 +86,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                                     .into_any_element(),
                                 )
                                 .child(
-                                    Button::new(format!("mv_mute_{}", idx))
+                                    Button::new(format!("mv_mute_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label("M")
                                         .compact()
                                         .when(tmuted, |b| b.color(rgb(0xC80000)))

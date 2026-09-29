@@ -65,7 +65,7 @@ pub fn render_sampler_ui(
         .gap(px(4.0))
         .items_center()
         .child(
-            Button::new("dms_load_wav")
+            Button::new("dms_load_wav").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("Load WAV")
                 .compact()
                 .on_click(move |_, _, cx| {
@@ -85,7 +85,7 @@ pub fn render_sampler_ui(
                 }),
         )
         .child(
-            Button::new("dms_sync_tempo")
+            Button::new("dms_sync_tempo").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("Sync Tempo")
                 .compact()
                 .when(sampler.sync_tempo, |b| b.text_color(rgb(0x00FFC8)))
@@ -105,7 +105,7 @@ pub fn render_sampler_ui(
         )
         .child(Label::new("BPM:").text_xs())
         .child(
-            Button::new("dpm_bpm_btn")
+            Button::new("dpm_bpm_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label(format!("{:.0}", sampler.sample_bpm))
                 .compact()
                 .on_click(move |_, _, cx| {

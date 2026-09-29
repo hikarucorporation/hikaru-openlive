@@ -50,7 +50,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .child(Label::new("Copyright © Hikaru Corporation - 2026").text_xs())
         .child(Label::new("This is a free software protected by GNU AGPLv3:").text_xs())
         .child(
-            Button::new("about-license")
+            Button::new("about-license").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("GNU AGPLv3 License")
                 .compact()
                 .on_click(move |_, _, _| {}),
@@ -66,7 +66,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .child(Label::new(format!("Compiled by {} | Version {}", BUILDER_NAME, BUILD_VERSION)).text_xs()),
         )
         .child(
-            Button::new("about_close")
+            Button::new("about_close").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("Cerrar")
                 .compact()
                 .on_click(move |_, _, cx| {

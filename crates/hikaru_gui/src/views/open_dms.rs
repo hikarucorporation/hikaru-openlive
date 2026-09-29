@@ -203,7 +203,7 @@ pub fn render_dms_compact(
                 .gap(px(4.0))
                 .child(Label::new("OpenDMS").text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x00FFC8)))
                 .child(
-                    Button::new("dms_16")
+                    Button::new("dms_16").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("16")
                         .compact()
                         .when(pad_count == 16, |b| b.text_color(rgb(0x00FFFF)))
@@ -222,7 +222,7 @@ pub fn render_dms_compact(
                         }),
                 )
                 .child(
-                    Button::new("dms_32")
+                    Button::new("dms_32").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("32")
                         .compact()
                         .when(pad_count == 32, |b| b.text_color(rgb(0x00FFFF)))
@@ -241,7 +241,7 @@ pub fn render_dms_compact(
                         }),
                 )
                 .child(
-                    Button::new("dms_64")
+                    Button::new("dms_64").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("64")
                         .compact()
                         .when(pad_count == 64, |b| b.text_color(rgb(0x00FFFF)))

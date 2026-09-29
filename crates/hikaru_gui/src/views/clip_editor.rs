@@ -132,7 +132,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .child(Label::new(format!("({:.2}s)", duration)).text_xs())
                 .child(div().flex_1())
                 .child(
-                    Button::new("ce_loop_toggle")
+                    Button::new("ce_loop_toggle").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("🔁 Loop")
                         .compact()
                         .when(loop_enabled, |b| b.text_color(rgb(0x00B4DC)))
@@ -156,7 +156,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .gap(px(6.0))
                 .child(Label::new(format!("🧩 Events: {}", events_count)).text_xs())
                 .child(
-                    Button::new("ce_add")
+                    Button::new("ce_add").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("➕ Add")
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -193,25 +193,25 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .gap(px(4.0))
                         .child(Label::new("Inspector").text_xs().font_weight(FontWeight::BOLD))
                         .child(
-                            Button::new("ce_tool_events")
+                            Button::new("ce_tool_events").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label("Audio Events")
                                 .compact()
                                 .w_full(),
                         )
                         .child(
-                            Button::new("ce_tool_comping")
+                            Button::new("ce_tool_comping").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label("Comping")
                                 .compact()
                                 .w_full(),
                         )
                         .child(
-                            Button::new("ce_tool_stretch")
+                            Button::new("ce_tool_stretch").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label("Stretch")
                                 .compact()
                                 .w_full(),
                         )
                         .child(
-                            Button::new("ce_tool_onsets")
+                            Button::new("ce_tool_onsets").rounded(gpui_kit::component::button::ButtonRounded::None)
                                 .label("Onsets")
                                 .compact()
                                 .w_full(),
@@ -227,20 +227,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 .gap(px(6.0))
                                 .child(Label::new("🔍").text_xs())
                                 .child(
-                                    Button::new("ce_zoom_out")
+                                    Button::new("ce_zoom_out").rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label("➖")
                                         .compact()
                                         .on_click(move |_, _, cx| {}),
                                 )
                                 .child(Label::new("100%").text_xs())
                                 .child(
-                                    Button::new("ce_zoom_in")
+                                    Button::new("ce_zoom_in").rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label("➕")
                                         .compact()
                                         .on_click(move |_, _, cx| {}),
                                 )
                                 .child(
-                                    Button::new("ce_zoom_fit")
+                                    Button::new("ce_zoom_fit").rounded(gpui_kit::component::button::ButtonRounded::None)
                                         .label("Fit")
                                         .compact()
                                         .on_click(move |_, _, cx| {}),

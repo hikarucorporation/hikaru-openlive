@@ -188,7 +188,7 @@ pub struct AppState {
     pub smoothed_master_peak: f32,
 
     pub openlive_view: OpenLiveView,
-    pub arranger_state: arranger_view::ArrangerViewState,
+    pub arranger_fader_drag: Option<arranger_view::FaderTarget>,
 
     pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
     pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
@@ -212,7 +212,52 @@ pub fn update_state(cx: &mut App, f: impl FnOnce(&mut AppState)) {
 
 pub struct HikaruApp {
     pub state: Entity<AppState>,
+    pub focus_handle: FocusHandle,
     pub _audio_stream: Option<cpal::Stream>,
+}
+
+pub fn handle_global_key(key: &str, cx: &mut App) {
+    match key {
+        "tab" => {
+            update_state(cx, |state| match state.mode {
+                AppMode::OpenLive => {
+                    state.openlive_view = match state.openlive_view {
+                        OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
+                        OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+                    };
+                }
+                AppMode::OpenStudio => {
+                    state.mode = AppMode::OpenLive;
+                }
+            });
+        }
+        "f9" => {
+            update_state(cx, |state| {
+                state.show_mixer = !state.show_mixer;
+            });
+        }
+        "f10" => {
+            update_state(cx, |state| {
+                state.show_dsp_rack = !state.show_dsp_rack;
+            });
+        }
+        "f11" => {
+            update_state(cx, |state| {
+                state.show_explorer = !state.show_explorer;
+            });
+        }
+        "delete" | "backspace" => {
+            update_state(cx, |state| {
+                if !state.playlist_state.selected_clips.is_empty() {
+                    state.playlist_state.clips.retain(|(_, c)| {
+                        !state.playlist_state.selected_clips.contains(&c.id)
+                    });
+                    state.playlist_state.selected_clips.clear();
+                }
+            });
+        }
+        _ => {}
+    }
 }
 
 impl HikaruApp {
@@ -300,7 +345,7 @@ impl HikaruApp {
             smoothed_track_peaks: [0.0; 16],
             smoothed_master_peak: 0.0,
             openlive_view: OpenLiveView::SessionMatrix,
-            arranger_state: arranger_view::ArrangerViewState::default(),
+            arranger_fader_drag: None,
             active_external_plugins: Vec::new(),
             engine_handle,
         });
@@ -312,6 +357,7 @@ impl HikaruApp {
 
         HikaruApp {
             state,
+            focus_handle: cx.focus_handle(),
             _audio_stream: audio_stream,
         }
     }
@@ -591,8 +637,14 @@ impl HikaruApp {
 // =========================================================================
 
 impl Render for HikaruApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElement {
         self.sync_frame(cx);
+
+        // Foco en la vista raíz: garantiza que las teclas (TAB, F9-F11)
+        // lleguen al div raíz aunque el usuario no haya clickeado nada.
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
 
         let app_state = self.state.read(cx);
         let mode = app_state.mode;
@@ -608,6 +660,8 @@ impl Render for HikaruApp {
         drop(app_state);
 
         div()
+            .id("app_root")
+            .track_focus(&self.focus_handle)
             .size_full()
             .flex()
             .flex_col()
@@ -708,52 +762,11 @@ impl Render for HikaruApp {
                 this.child(render_drag_preview(&sample_path))
             })
             
-            // ATRIBUTOS DE TECLADO Y SHORTCUTS
-            .on_key_down(move |event, _, cx| {
+            // SHORTCUTS: el foco vive en el div raíz, por eso capture_key_down
+            // los recibe sin importar qué control interno esté enfocado.
+            .capture_key_down(move |event, _, cx| {
                 let key = event.keystroke.key.as_str().to_lowercase();
-                let ctrl = event.keystroke.modifiers.control;
-                let alt = event.keystroke.modifiers.alt;
-                let shift = event.keystroke.modifiers.shift;
-                let _ = (ctrl, alt, shift);
-
-                if key == "tab" {
-                    update_state(cx, |state| match state.mode {
-                        AppMode::OpenLive => {
-                            state.openlive_view = match state.openlive_view {
-                                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
-                                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
-                            };
-                        }
-                        AppMode::OpenStudio => {
-                            state.mode = AppMode::OpenLive;
-                        }
-                    });
-                }
-                if key == "f9" {
-                    update_state(cx, |state| {
-                        state.show_mixer = !state.show_mixer;
-                    });
-                }
-                if key == "f10" {
-                    update_state(cx, |state| {
-                        state.show_dsp_rack = !state.show_dsp_rack;
-                    });
-                }
-                if key == "f11" {
-                    update_state(cx, |state| {
-                        state.show_explorer = !state.show_explorer;
-                    });
-                }
-                if key == "delete" || key == "backspace" {
-                    update_state(cx, |state| {
-                        if !state.playlist_state.selected_clips.is_empty() {
-                            state.playlist_state.clips.retain(|(_, c)| {
-                                !state.playlist_state.selected_clips.contains(&c.id)
-                            });
-                            state.playlist_state.selected_clips.clear();
-                        }
-                    });
-                }
+                handle_global_key(&key, cx);
             })
     }
 }

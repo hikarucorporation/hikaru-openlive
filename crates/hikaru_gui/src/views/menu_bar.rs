@@ -35,7 +35,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
             div()
                 .relative()
                 .child(
-                    Button::new(format!("menu_{}", label.to_lowercase()))
+                    Button::new(format!("menu_{}", label.to_lowercase())).rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(label.clone())
                         .compact()
                         .bg(rgb(0x3D3D3D))
@@ -167,7 +167,7 @@ fn render_dropdown(
             div()
                 .w_full()
                 .child(
-                    Button::new(format!("menu_item_{}", label))
+                    Button::new(format!("menu_item_{}", label)).rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(label)
                         .compact()
                         .w_full()

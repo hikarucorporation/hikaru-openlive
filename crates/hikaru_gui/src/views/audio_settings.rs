@@ -72,7 +72,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .gap(px(6.0))
                 .child(Label::new("Driver / Subsistema:").text_xs())
                 .child(
-                    Button::new("audio_backend_btn")
+                    Button::new("audio_backend_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("{:?}", backend))
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -95,7 +95,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .gap(px(6.0))
                 .child(Label::new("Dispositivo de Salida:").text_xs())
                 .child(
-                    Button::new("audio_device_btn")
+                    Button::new("audio_device_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(device.clone())
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -117,7 +117,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .gap(px(6.0))
                 .child(Label::new("Sample Rate:").text_xs())
                 .child(
-                    Button::new("audio_sr_btn")
+                    Button::new("audio_sr_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("{} Hz", sample_rate))
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -139,7 +139,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .gap(px(6.0))
                 .child(Label::new("Buffer Size:").text_xs())
                 .child(
-                    Button::new("audio_buf_btn")
+                    Button::new("audio_buf_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label(format!("{} samples", buffer_size))
                         .compact()
                         .on_click(move |_, _, cx| {
@@ -163,14 +163,14 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             h_flex()
                 .gap(px(6.0))
                 .child(
-                    Button::new("audio_restart")
+                    Button::new("audio_restart").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("Reiniciar Driver Audio")
                         .compact()
                         .on_click(move |_, _, _| {}),
                 )
                 .child(div().flex_1())
                 .child(
-                    Button::new("audio_close")
+                    Button::new("audio_close").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("Cerrar")
                         .compact()
                         .on_click(move |_, _, cx| {

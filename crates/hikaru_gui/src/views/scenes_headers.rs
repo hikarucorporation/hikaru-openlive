@@ -13,7 +13,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         .id("scenes_headers")
         .gap(px(4.0))
         .children((0..scenes).map(|i| {
-            Button::new(format!("scene_hdr_{}", i))
+            Button::new(format!("scene_hdr_{}", i)).rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label(format!("▶ Scene {}", i + 1))
                 .compact()
                 .on_click(move |_, _, cx| {

@@ -51,7 +51,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         .px(px(8.0))
         .gap(px(6.0))
         .child(
-            Button::new("transport_rewind_start")
+            Button::new("transport_rewind_start").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏮")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -65,7 +65,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_rewind_bars")
+            Button::new("transport_rewind_bars").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏪")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -85,7 +85,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_play")
+            Button::new("transport_play").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("▶")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -150,7 +150,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_pause")
+            Button::new("transport_pause").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏸")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -175,7 +175,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_stop")
+            Button::new("transport_stop").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏹")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -190,7 +190,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_record")
+            Button::new("transport_record").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏺")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -208,7 +208,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_loop")
+            Button::new("transport_loop").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("🔁")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -226,7 +226,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_forward_bars")
+            Button::new("transport_forward_bars").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏩")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -242,7 +242,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("transport_forward_16bars")
+            Button::new("transport_forward_16bars").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("⏭")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -272,7 +272,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 ),
         )
         .child(
-            Button::new("mode_openlive")
+            Button::new("mode_openlive").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("OPENLIVE")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -295,7 +295,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("mode_openstudio")
+            Button::new("mode_openstudio").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("OPENSTUDIO")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -319,7 +319,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         )
         .child(Label::new("BPM").text_xs().text_color(rgb(0xE0E0E0)))
         .child(
-            Button::new("bpm_display")
+            Button::new("bpm_display").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label(format!("{:.0}", bpm))
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -334,7 +334,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         )
         .child(div().flex_1())
         .child(
-            Button::new("toggle_mixer")
+            Button::new("toggle_mixer").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("MIXER (F9)")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -349,7 +349,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("toggle_dsp_rack")
+            Button::new("toggle_dsp_rack").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("DSP RACK (F10)")
                 .compact()
                 .bg(rgb(0x3D3D3D))
@@ -364,7 +364,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 }),
         )
         .child(
-            Button::new("toggle_explorer")
+            Button::new("toggle_explorer").rounded(gpui_kit::component::button::ButtonRounded::None)
                 .label("EXPLORER (F11)")
                 .compact()
                 .bg(rgb(0x3D3D3D))
