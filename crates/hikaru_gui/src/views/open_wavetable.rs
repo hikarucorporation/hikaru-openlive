@@ -745,7 +745,6 @@ fn render_table_navigator(
         .child(
             Button::new(format!("wt_table_menu_{track_idx}_{slot_idx}"))
                 .rounded(ButtonRounded::None)
-                .label(table_name)
                 .compact()
                 .flex_1()
                 .min_w(px(0.0))
@@ -753,7 +752,14 @@ fn render_table_navigator(
                     with_editor(cx, track_idx, slot_idx, |editor| {
                         editor.menu_open = !editor.menu_open;
                     });
-                }),
+                })
+                .child(
+                    Label::new(format!("{table_name}.wav"))
+                        .text_xs()
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(rgb(0xC8CEDA))
+                        .truncate(),
+                ),
         )
         .child(
             Button::new(format!("wt_table_next_{track_idx}_{slot_idx}"))

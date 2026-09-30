@@ -220,7 +220,7 @@ impl Wavetable {
         }
 
         Self {
-            name: format!("Init {cycles}"),
+            name: "Factory".to_string(),
             path: None,
             samples,
             frames: cycles,
