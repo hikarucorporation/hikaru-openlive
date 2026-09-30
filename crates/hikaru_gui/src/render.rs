@@ -60,7 +60,7 @@ use hikaru_render::wgpu;
 /// cuadrado (unos 254 x 135). Con el 1.6 que tenía antes, la imagen se encajaba
 /// por el alto y quedaban barras negras a los lados; y bajarlo de 512x320 además
 /// ahorra un 25% de los bytes de readback, que en CPU es lo caro del camino.
-pub const WAVETABLE_VIEWPORT: (u32, u32) = (480, 256);
+pub const WAVETABLE_VIEWPORT: (u32, u32) = (320, 200);
 
 /// Columnas de la cinta en el eje de la forma de onda.
 ///

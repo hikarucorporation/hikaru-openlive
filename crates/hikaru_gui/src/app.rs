@@ -217,6 +217,7 @@ pub struct AppState {
 
     pub selected_track_index: usize,
     pub selected_slot_index: usize,
+    pub add_slot_menu_open: bool,
 
     pub track_peak_bits: Vec<Arc<AtomicU32>>,
     pub smoothed_track_peaks: [f32; 16],
@@ -470,6 +471,7 @@ impl HikaruApp {
             studio_tracks,
             selected_track_index: 1,
             selected_slot_index: 0,
+            add_slot_menu_open: false,
             track_peak_bits,
             smoothed_track_peaks: [0.0; 16],
             smoothed_master_peak: 0.0,
@@ -821,18 +823,10 @@ impl Render for HikaruApp {
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
         let show_mixer = app_state.show_mixer;
         let dragged_sample = app_state.dragged_sample.clone();
-        // El alto del rack depende de si hay un editor desplegado. Con el alto
-        // de la tira sola (200px) el editor se dibujaba pero quedaba recortado
-        // por el `overflow_hidden` del panel: el canvas 3D quedaba con unos
-        // pocos píxeles y la cinta se veía como una línea.
-        let dsp_rack_height = match app_state
-            .tracks()
-            .get(app_state.safe_track_index())
-            .map(|track| dsp_rack::editor_for(&track.effects, app_state.selected_slot_index))
-        {
-            Some(_) => dsp_rack::RACK_HEIGHT_OPENED,
-            None => dsp_rack::RACK_HEIGHT_CLOSED,
-        };
+        // El alto del rack es fijo e inmutable: no se expande ni se achica al
+        // insertar o abrir dispositivos. Todas las tarjetas ocupan el 100% de
+        // esta altura.
+        let dsp_rack_height = crate::views::dsp_rack::RACK_HEIGHT;
         drop(app_state);
 
         div()
@@ -947,11 +941,17 @@ impl Render for HikaruApp {
                 // (si no, `backspace` borraría clips del playlist).
                 let app = state(cx).read(cx);
                 let bpm_input = app.bpm_input.clone();
+                let show_dsp_rack = app.show_dsp_rack;
                 drop(app);
                 if bpm_input.read(cx).focus_handle(cx).is_focused(window) {
                     return;
                 }
                 let key = event.keystroke.key.as_str().to_lowercase();
+                // La tecla Delete elimina la tarjeta seleccionada del DSP Rack
+                if show_dsp_rack && key == "delete" {
+                    dsp_rack::handle_delete_key(cx);
+                    return;
+                }
                 handle_global_key(&key, cx);
             })
     }

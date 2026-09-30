@@ -94,10 +94,10 @@ use crate::views::wavetable_io::{self, Wavetable};
 /// Cuadrado y con ancho fijo hace dos cosas: entra en la cadena de módulos del
 /// rack al lado de los demás sin empujar al que sigue, y el visor queda cerca de
 /// cuadrado, que es el aspecto que hace legible la pila de ciclos.
-pub const MODULE_SIZE: f32 = 264.0;
+pub const MODULE_SIZE: f32 = 220.0;
 
 /// Ancho del módulo. Igual a [`MODULE_SIZE`]; existe con nombre propio para que
-/// quien lo useno se pregunte por qué un cuadrado tiene ancho.
+/// quien lo use se pregunte por qué un cuadrado tiene ancho.
 pub const EDITOR_WIDTH: f32 = MODULE_SIZE;
 
 /// Alto del módulo. Lo lee `dsp_rack` para calcular el alto del rack, así que
@@ -111,20 +111,25 @@ const MODULE_PADDING: f32 = 5.0;
 const MODULE_GAP: f32 = 5.0;
 
 /// Alto de la fila del header con el nombre del plugin.
-const HEADER_HEIGHT: f32 = 18.0;
+const HEADER_HEIGHT: f32 = 14.0;
 
 /// Alto de la fila del selector de wavetable.
-const SELECTOR_HEIGHT: f32 = 32.0;
+const SELECTOR_HEIGHT: f32 = 22.0;
 
 /// Alto del pie: el knob, el contador de ciclos y los botones de paso.
-const FOOTER_HEIGHT: f32 = 54.0;
+const FOOTER_HEIGHT: f32 = 44.0;
 
 /// Lado del knob en pantalla. El target offscreen es de 96px y el `img` escala
 /// con `Contain`, así que el knob se ve con la resolución de la pantalla.
 ///
 /// Va en el pie, no sobre el visor: como elemento de la cadena ocupa su lugar en
 /// el layout, y el visor queda libre entero para la pila de ciclos.
-const KNOB_SIZE: f32 = 48.0;
+///
+/// 48px es lo que se puede agarrar con un mouse sin que el click sea un tiro al
+/// blanco. Con 42 (el valor chico de la versión comprimida) el área efectiva de
+/// clickeo se vuelve veterinaria; el fine-tune no lo arregla porque depende de
+/// [`DRAG_RANGE_PX`], no del tamaño del disco.
+const KNOB_SIZE: f32 = 36.0;
 
 /// Caja de la malla 3D.
 ///
@@ -132,9 +137,9 @@ const KNOB_SIZE: f32 = 48.0;
 /// cuadrada. Un `thickness` alto sigue siendo lo que hace que la pila de ciclos
 /// se lea en Z: 100 unidades de profundidad con 24 ciclos dejan aire real entre
 /// formas, que es lo que las distingue de un canto sólido.
-const MESH_WIDTH: f32 = 320.0;
-const MESH_HEIGHT: f32 = 130.0;
-const MESH_THICKNESS: f32 = 100.0;
+const MESH_WIDTH: f32 = 260.0;
+const MESH_HEIGHT: f32 = 100.0;
+const MESH_THICKNESS: f32 = 80.0;
 
 /// Ciclos que se dibujan como máximo en la pila.
 ///
@@ -1107,6 +1112,42 @@ pub fn load_wavetable_from_path(
 /// La caja de la cinta del visor.
 fn mesh_params() -> hikaru_render::WavetableMeshParams {
     hikaru_render::WavetableMeshParams { width: MESH_WIDTH, height: MESH_HEIGHT, thickness: MESH_THICKNESS }
+}
+
+pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) -> AnyElement {
+    let editor = {
+        let app = state(cx).read(cx);
+        match app.slot(track_idx, slot_idx) {
+            Some(slot) => slot.wavetable.clone(),
+            None => return div().w_full().flex_1().into_any_element(),
+        }
+    };
+
+    let view = request_view(cx, &editor);
+
+    div()
+        .w_full()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .child(render_table_selector(cx, track_idx, slot_idx, &editor))
+        .child(render_viewport(&view))
+        .into_any_element()
+}
+
+pub fn render_module_footer(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) -> AnyElement {
+    let editor = {
+        let app = state(cx).read(cx);
+        match app.slot(track_idx, slot_idx) {
+            Some(slot) => slot.wavetable.clone(),
+            None => return div().w_full().h(px(50.0)).into_any_element(),
+        }
+    };
+
+    let view = request_view(cx, &editor);
+
+    render_footer(cx, track_idx, slot_idx, &editor, &view)
 }
 
 

@@ -26,6 +26,12 @@ pub struct DspSlot {
     /// siendo legible.
     pub wavetable: WavetableEditor,
     pub dms_state: Option<OpenDms>,
+    /// Si el menú de selección de plugin está desplegado en esta tarjeta.
+    ///
+    /// Vive en el slot y no en un estado de UI aparte para que el menú sea de
+    /// la tarjeta que se clickeó: con un `Option<usize>` compartido, abrir el
+    /// menú de un slot tendría que acordarse de cerrar el del otro.
+    pub menu_open: bool,
 }
 
 impl DspSlot {
@@ -37,6 +43,7 @@ impl DspSlot {
             is_open: false,
             wavetable: WavetableEditor::new(),
             dms_state: None,
+            menu_open: false,
         }
     }
 

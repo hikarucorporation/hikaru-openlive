@@ -160,7 +160,7 @@ pub const VIEWER_PITCH: f32 = std::f32::consts::FRAC_PI_6;
 /// 0.8 deja un 10% de aire por lado. Más que 0.85 y la caja empieza a rozar el
 /// borde al inclinar la cámara, porque las esquinas de arriba se proyectan más
 /// afuera que el centro.
-pub const DEFAULT_FILL: f32 = 0.8;
+pub const DEFAULT_FILL: f32 = 0.85;
 
 impl Default for Camera {
     /// La cámara del visor: posición fija, de frente e inclinada 30°.
@@ -473,16 +473,16 @@ mod tests {
 
     #[test]
     fn the_default_camera_frames_the_whole_wavetable_box() {
-        // La cinta se construye en 320x200 (ver `WavetableMeshParams`), así que
+        // La cinta se construye en 260x100 (ver `WavetableMeshParams`), así que
         // ninguna esquina de esa caja puede caer fuera del viewport con la
         // cámara por defecto.
         let camera = Camera::default();
         let aspect = 1.6;
         let view_proj = camera.view_proj(aspect);
 
-        for x in [-160.0f32, 160.0] {
-            for y in [-100.0f32, 100.0] {
-                for z in [-12.0f32, 12.0] {
+        for x in [-130.0f32, 130.0] {
+            for y in [-50.0f32, 50.0] {
+                for z in [-40.0f32, 40.0] {
                     let point = ndc([x, y, z], &view_proj);
                     assert!(
                         point[0].abs() <= 1.0 && point[1].abs() <= 1.0,
@@ -528,10 +528,10 @@ mod tests {
         // la mayor parte del panel, no flotar chica en el centro. Antes el
         // encuadre por esfera envolvente la dejaba en menos de la mitad.
         let mut camera = Camera::wavetable_viewer();
-        let half = [160.0, 60.0, 55.0];
-        camera.fit_to_box(half, 512.0 / 320.0);
+        let half = [130.0, 50.0, 40.0];
+        camera.fit_to_box(half, 320.0 / 200.0);
 
-        let occupy = occupancy(&camera, half, 512.0 / 320.0);
+        let occupy = occupancy(&camera, half, 320.0 / 200.0);
         assert!(
             (occupy - DEFAULT_FILL).abs() < 0.03,
             "la malla ocupa {occupy:.2} del viewport y se pidió {DEFAULT_FILL}"
@@ -542,7 +542,7 @@ mod tests {
     fn fit_to_box_with_fill_honors_a_smaller_fill() {
         // Un fill chico tiene que alejar la cámara, no cambiar el fov: es el
         // encuadre, no la perspectiva, lo que se está ajustando.
-        let half = [160.0, 60.0, 55.0];
+        let half = [130.0, 50.0, 40.0];
         let mut tight = Camera::wavetable_viewer();
         let mut loose = Camera::wavetable_viewer();
         tight.fit_to_box_with_fill(half, 1.6, 0.9);
@@ -559,12 +559,12 @@ mod tests {
         // encuadre muy cerrado pondría la caja contra el near plane y se vería
         // cortada por el plano, que es un recorte sin ningún error de wgpu.
         let mut camera = Camera::wavetable_viewer();
-        camera.fit_to_box_with_fill([160.0, 60.0, 55.0], 1.6, 0.78);
+        camera.fit_to_box_with_fill([130.0, 50.0, 40.0], 1.6, 0.78);
 
         let view_proj = camera.view_proj(1.6);
-        for x in [-160.0, 160.0] {
-            for y in [-60.0, 60.0] {
-                for z in [-55.0, 55.0] {
+        for x in [-130.0, 130.0] {
+            for y in [-50.0, 50.0] {
+                for z in [-40.0, 40.0] {
                     let (_, w) = transform_point(&view_proj, [x, y, z]);
                     assert!(w > 0.0, "la esquina ({x}, {y}, {z}) quedó en w <= 0");
                     let point = ndc([x, y, z], &view_proj);
@@ -595,10 +595,10 @@ mod tests {
         // La pila de ciclos ocupa Z. Encuadrarla con la profundidad de una sola
         // cinta la deja salir por abajo: el ajuste tiene que crecer con Z.
         let mut flat = Camera::default();
-        flat.fit_to_box([160.0, 100.0, 12.0], 1.6);
+        flat.fit_to_box([130.0, 50.0, 12.0], 1.6);
 
         let mut deep = Camera::default();
-        deep.fit_to_box([160.0, 100.0, 60.0], 1.6);
+        deep.fit_to_box([130.0, 50.0, 40.0], 1.6);
 
         assert!(deep.distance > flat.distance, "una pila mas profunda no se aleja menos");
     }

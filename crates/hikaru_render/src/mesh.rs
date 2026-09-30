@@ -118,7 +118,7 @@ pub struct WavetableMeshParams {
 
 impl Default for WavetableMeshParams {
     fn default() -> Self {
-        Self { width: 320.0, height: 200.0, thickness: 24.0 }
+        Self { width: 260.0, height: 100.0, thickness: 24.0 }
     }
 }
 
@@ -903,12 +903,12 @@ mod tests {
 
     #[test]
     fn mesh_params_default_to_the_open_wavetable_viewport() {
-        // 320x200 es el tamaño que ya usa `WavetableOscillator::new` en
+        // 260x100 es el tamaño que ya usa `WavetableOscillator::new` en
         // hikaru_gui; mantenerlo alineado evita que la malla aparezca escalada
         // dentro del recuadro.
         let params = WavetableMeshParams::default();
-        assert_eq!(params.width, 320.0);
-        assert_eq!(params.height, 200.0);
+        assert_eq!(params.width, 260.0);
+        assert_eq!(params.height, 100.0);
     }
 
     #[test]
