@@ -72,6 +72,7 @@ use std::path::PathBuf;
 use gpui_kit::component::*;
 use gpui_kit::component::button::{Button, ButtonRounded};
 use gpui_kit::component::label::Label;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
@@ -170,6 +171,41 @@ const KNOB_MARKER: [f32; 4] = [1.0, 0.43, 0.0, 1.0];
 /// que el visor se lea como parte del plugin y no como un recuadro suelto.
 const VIEWER_TINT: [f32; 4] = [1.0, 0.55, 0.15, 1.0];
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KnobTarget {
+    #[default]
+    Position,
+    Unison,
+    Detune,
+    Phase,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VoiceMode {
+    Mono,
+    Legato,
+    #[default]
+    Poly,
+}
+
+impl VoiceMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            VoiceMode::Mono => "Mono",
+            VoiceMode::Legato => "Legato",
+            VoiceMode::Poly => "Poly",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            VoiceMode::Mono => VoiceMode::Legato,
+            VoiceMode::Legato => VoiceMode::Poly,
+            VoiceMode::Poly => VoiceMode::Mono,
+        }
+    }
+}
+
 /// Estado del editor de un slot de Wavetable.
 #[derive(Clone, Debug)]
 pub struct WavetableEditor {
@@ -184,6 +220,13 @@ pub struct WavetableEditor {
     pub smooth: bool,
     /// Cámara del visor 3D.
     pub camera: Camera,
+    pub unison: u8,
+    pub detune: f32,
+    pub phase: f32,
+    pub pitch: i8,
+    pub octave: i8,
+    pub voices: VoiceMode,
+    pub drag_target: KnobTarget,
     /// Si el selector de wavetables está abierto.
     pub menu_open: bool,
     /// Si el botón izquierdo está apretado sobre el knob.
@@ -218,6 +261,13 @@ impl Default for WavetableEditor {
             frame: 0,
             smooth: true,
             camera: Camera::default(),
+            unison: 1,
+            detune: 0.0,
+            phase: 0.0,
+            pitch: 0,
+            octave: 0,
+            voices: VoiceMode::Poly,
+            drag_target: KnobTarget::Position,
             menu_open: false,
             dragging: false,
             drag_grab: 0.0,
@@ -285,8 +335,18 @@ impl WavetableEditor {
 
     /// Comienza un arrastre en `window_y`.
     pub fn begin_drag(&mut self, window_y: f32) {
+        self.begin_drag_target(KnobTarget::Position, window_y);
+    }
+
+    pub fn begin_drag_target(&mut self, target: KnobTarget, window_y: f32) {
+        self.drag_target = target;
         self.dragging = true;
-        self.drag_grab = self.position();
+        self.drag_grab = match target {
+            KnobTarget::Position => self.position(),
+            KnobTarget::Unison => self.norm_unison(),
+            KnobTarget::Detune => self.detune,
+            KnobTarget::Phase => self.phase,
+        };
         self.drag_origin_y = if window_y.is_finite() { window_y } else { 0.0 };
     }
 
@@ -307,8 +367,48 @@ impl WavetableEditor {
         if !value.is_finite() {
             value = self.drag_grab;
         }
-        self.set_position(value);
-        self.position()
+        match self.drag_target {
+            KnobTarget::Position => {
+                self.set_position(value);
+                self.position()
+            }
+            KnobTarget::Unison => {
+                self.set_unison(1 + (value.clamp(0.0, 1.0) * 15.0).round() as u8);
+                self.norm_unison()
+            }
+            KnobTarget::Detune => {
+                self.detune = value.clamp(0.0, 1.0);
+                self.detune
+            }
+            KnobTarget::Phase => {
+                self.phase = value.clamp(0.0, 1.0);
+                self.phase
+            }
+        }
+    }
+
+    pub fn norm_unison(&self) -> f32 {
+        (self.unison.clamp(1, 16) as f32 - 1.0) / 15.0
+    }
+
+    pub fn set_unison(&mut self, voices: u8) {
+        self.unison = voices.clamp(1, 16);
+    }
+
+    pub fn step_unison(&mut self, delta: i32) {
+        self.set_unison((self.unison as i32 + delta).clamp(1, 16) as u8);
+    }
+
+    pub fn step_pitch(&mut self, delta: i32) {
+        self.pitch = (self.pitch as i32 + delta).clamp(-24, 24) as i8;
+    }
+
+    pub fn step_octave(&mut self, delta: i32) {
+        self.octave = (self.octave as i32 + delta).clamp(-3, 3) as i8;
+    }
+
+    pub fn cycle_voices(&mut self) {
+        self.voices = self.voices.cycle();
     }
 
     /// Termina el arrastre.
@@ -470,7 +570,7 @@ pub fn render(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) ->
             with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
         })
         .child(render_header(&editor))
-        .child(render_table_selector(cx, track_idx, slot_idx, &editor))
+        .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
         .child(render_viewport(&view))
         .child(render_footer(cx, track_idx, slot_idx, &editor, &view))
         // Red de seguridad del seguimiento del arrastre. Va al final para que
@@ -617,66 +717,86 @@ fn loading_panel() -> AnyElement {
 /// un selector. No se arma un `Menu` de gpui-kit: hace falta un popover
 /// posicionado, y con dos entradas y una lista cortita un `v_flex` condicional
 /// alcanza y no depende de dónde esté la ventana.
-fn render_table_selector(
-    cx: &mut Context<HikaruApp>,
+fn render_table_navigator(
+    _cx: &mut Context<HikaruApp>,
     track_idx: usize,
     slot_idx: usize,
     editor: &WavetableEditor,
 ) -> AnyElement {
-    let _ = cx;
+    let table_name = editor.table.name.clone();
+    let siblings = sibling_tables(editor.table.path.as_ref());
+    let current_path = editor.table.path.clone();
 
     h_flex()
         .w_full()
         .h(px(SELECTOR_HEIGHT))
         .items_center()
-        .gap(px(4.0))
+        .gap(px(2.0))
+        .relative()
+        .child(
+            Button::new(format!("wt_table_prev_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("<")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    step_table(cx, track_idx, slot_idx, -1);
+                }),
+        )
         .child(
             Button::new(format!("wt_table_menu_{track_idx}_{slot_idx}"))
                 .rounded(ButtonRounded::None)
-                .label("WAVETABLE")
+                .label(table_name)
                 .compact()
-                .text_color(rgb(0xFF6E00))
+                .flex_1()
+                .min_w(px(0.0))
                 .on_click(move |_, _, cx| {
                     with_editor(cx, track_idx, slot_idx, |editor| {
                         editor.menu_open = !editor.menu_open;
                     });
                 }),
         )
-        // El triángulo es la única señal de que el rótulo es un botón. Sin ella
-        // el usuario no sabe que hay una lista abajo.
         .child(
-            Label::new(if editor.menu_open { "▲" } else { "▼" })
-                .text_xs()
-                .text_color(rgb(0x6A7080)),
-        )
-        // El nombre de la tabla. Se trunca a un ancho fijo en vez de dejar que
-        // la fila estire: un nombre largo no puede empujar al visor fuera del
-        // cuadrado.
-        .child(
-            div()
-                .min_w(px(0.0))
-                .flex_1()
-                .overflow_hidden()
-                .child(
-                    Label::new(editor.table.name.clone())
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0xE8EAF0)),
-                ),
+            Button::new(format!("wt_table_next_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label(">")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    step_table(cx, track_idx, slot_idx, 1);
+                }),
         )
         .when(editor.menu_open, |this| {
             this.child(
                 v_flex()
                     .absolute()
                     .left(px(0.0))
-                    .top(px(MODULE_PADDING + HEADER_HEIGHT + MODULE_GAP))
-                    .w(px(MODULE_SIZE - 2.0 * MODULE_PADDING))
+                    .bottom(px(SELECTOR_HEIGHT + 2.0))
+                    .w_full()
+                    .h(px(150.0))
+                    .overflow_y_scrollbar()
                     .p(px(4.0))
                     .gap(px(2.0))
                     .bg(rgb(0x181B22))
                     .border_1()
                     .border_color(rgb(0x3A4152))
                     .rounded(px(3.0))
+                    .children(siblings.iter().map(|path| {
+                        let name = path
+                            .file_stem()
+                            .map(|stem| stem.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "Wavetable".to_string());
+                        let target = path.clone();
+                        let is_current = current_path.as_ref() == Some(path);
+                        Button::new(format!("wt_table_pick_{track_idx}_{slot_idx}_{name}"))
+                            .rounded(ButtonRounded::None)
+                            .label(name.clone())
+                            .compact()
+                            .w_full()
+                            .when(is_current, |b| b.text_color(rgb(0xFF6E00)))
+                            .on_click(move |_, _, cx| {
+                                load_table_deferred(cx, track_idx, slot_idx, target.clone());
+                            })
+                            .into_any_element()
+                    }))
                     .child(
                         Button::new(format!("wt_browse_explorer_{track_idx}_{slot_idx}"))
                             .rounded(ButtonRounded::None)
@@ -684,10 +804,6 @@ fn render_table_selector(
                             .compact()
                             .w_full()
                             .on_click(move |_, _, cx| {
-                                // El explorer es el browse de la app: ya
-                                // recorre los directorios de Linux, con
-                                // historial y atajo a `/`. Se le pasa el slot
-                                // para que sepa dónde dejar la wavetable.
                                 crate::views::explorer::begin_wavetable_pick(cx, track_idx, slot_idx);
                             }),
                     )
@@ -704,10 +820,6 @@ fn render_table_selector(
                     .child(
                         Button::new(format!("wt_use_sine_{track_idx}_{slot_idx}"))
                             .rounded(ButtonRounded::None)
-                            // Carga la tabla de fábrica y no el seno de un ciclo.
-                            // Con el seno el `WT POS` se apagaba y el módulo
-                            // quedaba sin control, y ese botón era la única
-                            // forma de volver a perderlo.
                             .label(format!("Volver a la tabla de fábrica ({} ciclos)", wavetable_io::DEFAULT_CYCLES))
                             .compact()
                             .w_full()
@@ -967,6 +1079,197 @@ fn render_viewport(view: &WavetableView) -> AnyElement {
         .into_any_element()
 }
 
+const KNOB_2D: f32 = 30.0;
+
+const KNOBS_HEIGHT: f32 = 62.0;
+
+const MODULE_FOOTER_HEIGHT: f32 = 18.0;
+
+fn with_editor_target(
+    cx: &mut gpui_kit::App,
+    track_idx: usize,
+    slot_idx: usize,
+    target: KnobTarget,
+    window_y: f32,
+) {
+    state(cx).update(cx, |state, cx| {
+        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+            slot.wavetable.begin_drag_target(target, window_y);
+        }
+        cx.notify();
+    });
+}
+
+fn knob_2d(
+    track_idx: usize,
+    slot_idx: usize,
+    target: KnobTarget,
+    value: f32,
+    title: &str,
+    sub: String,
+    hot: bool,
+) -> AnyElement {
+    let value = value.clamp(0.0, 1.0);
+    v_flex()
+        .items_center()
+        .gap(px(1.0))
+        .child(
+            div()
+                .id(format!("wt_knob2d_{target:?}_{track_idx}_{slot_idx}"))
+                .w(px(KNOB_2D))
+                .h(px(KNOB_2D))
+                .rounded(px(KNOB_2D / 2.0))
+                .bg(rgb(0x14161C))
+                .border_1()
+                .border_color(if hot { rgb(0xFF6E00) } else { rgb(0x2A2E3A) })
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
+                    with_editor_target(cx, track_idx, slot_idx, target, event.position.y.as_f32());
+                })
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let center_x =
+                                bounds.origin.x + px(bounds.size.width.as_f32() / 2.0);
+                            let center_y =
+                                bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
+                            let radius =
+                                px(bounds.size.width.as_f32() / 2.0 - 5.0);
+                            let angle =
+                                (-135.0 + 270.0 * value) * std::f32::consts::PI / 180.0;
+                            let tip_x =
+                                center_x + px(angle.sin() * radius.as_f32());
+                            let tip_y =
+                                center_y - px(angle.cos() * radius.as_f32());
+                            let mut needle = PathBuilder::stroke(px(2.0));
+                            needle.move_to(point(center_x, center_y));
+                            needle.line_to(point(tip_x, tip_y));
+                            window.paint_path(
+                                needle.build().unwrap(),
+                                if hot { rgb(0xFF6E00) } else { rgb(0xE8EAF0) },
+                            );
+                        },
+                    )
+                    .w_full()
+                    .h_full()
+                    .into_any_element(),
+                )
+                .into_any_element(),
+        )
+        .child(
+            Label::new(title)
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x8A90A0)),
+        )
+        .child(Label::new(sub).text_xs().text_color(rgb(0xE8EAF0)))
+        .into_any_element()
+}
+
+fn render_knobs(
+    cx: &mut Context<HikaruApp>,
+    track_idx: usize,
+    slot_idx: usize,
+    editor: &WavetableEditor,
+    view: &WavetableView,
+) -> AnyElement {
+    let _ = cx;
+    let hot = editor.dragging;
+    let target = editor.drag_target;
+    let voices = editor.unison as usize;
+
+    h_flex()
+        .w_full()
+        .h(px(KNOBS_HEIGHT))
+        .items_center()
+        .gap(px(4.0))
+        .child(knob_2d(
+            track_idx,
+            slot_idx,
+            KnobTarget::Unison,
+            editor.norm_unison(),
+            "UNISON",
+            format!("{} {}", voices, if voices == 1 { "Voice" } else { "Voices" }),
+            hot && target == KnobTarget::Unison,
+        ))
+        .child(knob_2d(
+            track_idx,
+            slot_idx,
+            KnobTarget::Detune,
+            editor.detune,
+            "DETUNE",
+            format!("{:.0}%", editor.detune * 100.0),
+            hot && target == KnobTarget::Detune,
+        ))
+        .child(knob_2d(
+            track_idx,
+            slot_idx,
+            KnobTarget::Phase,
+            editor.phase,
+            "PHASE",
+            format!("{:.0}°", editor.phase * 360.0),
+            hot && target == KnobTarget::Phase,
+        ))
+        .child(div().flex_1())
+        .child(
+            v_flex()
+                .items_center()
+                .justify_center()
+                .gap(px(1.0))
+                .child(knob_image(track_idx, slot_idx, editor, view.knob.clone()))
+                .child(
+                    Label::new("WT POS")
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xFF6E00)),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_viewport_card(view: &WavetableView, frame: usize, frames: usize) -> AnyElement {
+    div()
+        .flex_1()
+        .min_h(px(0.0))
+        .w_full()
+        .relative()
+        .bg(rgb(0x07080B))
+        .border_1()
+        .border_color(rgb(0x2A2E3A))
+        .rounded(px(3.0))
+        .overflow_hidden()
+        .child(match &view.viewer {
+            Some(image) => img(image.clone())
+                .id("wt_viewport_3d")
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .w_full()
+                .h_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => viewport_placeholder(view.error.as_deref()),
+        })
+        .child(
+            v_flex()
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .w_full()
+                .h_full()
+                .justify_end()
+                .items_end()
+                .p(px(3.0))
+                .child(
+                    Label::new(format!("< {}/{} >", frame + 1, frames))
+                        .text_xs()
+                        .text_color(rgb(0x8A90A0)),
+                )
+                .into_any_element(),
+        )
+        .into_any_element()
+}
+
 /// Placeholder cuando todavía no hay imagen.
 ///
 /// Distingue los dos casos que se ven igual desde afuera: la GPU todavía no está
@@ -1115,6 +1418,80 @@ pub fn load_wavetable_from_path(
     load_into_slot(cx, track_idx, slot_idx, path);
 }
 
+pub fn sibling_tables(path: Option<&std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let Some(path) = path else { return Vec::new() };
+    let Some(dir) = path.parent() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<std::path::PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|p| p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("wav")))
+        .collect();
+    out.sort();
+    out
+}
+
+pub fn sibling_step_target(path: Option<&std::path::PathBuf>, delta: i32) -> Option<std::path::PathBuf> {
+    let siblings = sibling_tables(path);
+    if siblings.is_empty() {
+        return None;
+    }
+    let current = path.and_then(|p| {
+        siblings.iter().position(|candidate| candidate == p)
+    });
+    let next = match current {
+        Some(index) => {
+            let len = siblings.len() as i32;
+            (index as i32 + delta).rem_euclid(len) as usize
+        }
+        None => {
+            if delta < 0 {
+                siblings.len() - 1
+            } else {
+                0
+            }
+        }
+    };
+    siblings.into_iter().nth(next)
+}
+
+pub fn load_table_deferred(
+    cx: &mut gpui_kit::App,
+    track_idx: usize,
+    slot_idx: usize,
+    path: std::path::PathBuf,
+) {
+    let st = state(cx);
+    cx.defer(move |cx| {
+        let loaded = load_table_file(&path);
+        st.update(cx, |state, cx| {
+            match loaded {
+                Ok(table) => {
+                    if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+                        slot.wavetable.load(table);
+                        slot.wavetable.menu_open = false;
+                        slot.menu_open = false;
+                    }
+                    state.selected_slot_index = slot_idx;
+                }
+                Err(error) => {
+                    eprintln!("[Hikaru] No se pudo cargar la wavetable: {error}");
+                }
+            }
+            cx.notify();
+        });
+    });
+}
+
+pub fn step_table(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, delta: i32) {
+    let current = state(cx)
+        .read(cx)
+        .slot(track_idx, slot_idx)
+        .and_then(|slot| slot.wavetable.table.path.clone());
+    if let Some(target) = sibling_step_target(current.as_ref(), delta) {
+        load_table_deferred(cx, track_idx, slot_idx, target);
+    }
+}
+
 /// La caja de la cinta del visor.
 fn mesh_params() -> hikaru_render::WavetableMeshParams {
     hikaru_render::WavetableMeshParams { width: MESH_WIDTH, height: MESH_HEIGHT, thickness: MESH_THICKNESS }
@@ -1130,6 +1507,7 @@ pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: us
     };
 
     let view = request_view(cx, &editor);
+    let frames = editor.frame_count();
 
     div()
         .w_full()
@@ -1137,8 +1515,18 @@ pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: us
         .flex()
         .flex_col()
         .gap(px(2.0))
-        .child(render_table_selector(cx, track_idx, slot_idx, &editor))
-        .child(render_viewport(&view))
+        .relative()
+        .overflow_hidden()
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
+        })
+        .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
+        })
+        .child(render_viewport_card(&view, editor.frame, frames))
+        .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
+        .child(render_knobs(cx, track_idx, slot_idx, &editor, &view))
+        .child(drag_keepalive(track_idx, slot_idx))
         .into_any_element()
 }
 
@@ -1147,13 +1535,84 @@ pub fn render_module_footer(cx: &mut Context<HikaruApp>, track_idx: usize, slot_
         let app = state(cx).read(cx);
         match app.slot(track_idx, slot_idx) {
             Some(slot) => slot.wavetable.clone(),
-            None => return div().w_full().h(px(50.0)).into_any_element(),
+            None => return div().w_full().h(px(MODULE_FOOTER_HEIGHT)).into_any_element(),
         }
     };
+    let _ = cx;
 
-    let view = request_view(cx, &editor);
-
-    render_footer(cx, track_idx, slot_idx, &editor, &view)
+    h_flex()
+        .w_full()
+        .h(px(MODULE_FOOTER_HEIGHT))
+        .items_center()
+        .gap(px(2.0))
+        .child(
+            Button::new(format!("wt_pitch_down_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("<")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.step_pitch(-1)
+                    });
+                }),
+        )
+        .child(
+            Label::new(format!("PITCH: {:+}st", editor.pitch))
+                .text_xs()
+                .text_color(rgb(0x8A90A0)),
+        )
+        .child(
+            Button::new(format!("wt_pitch_up_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label(">")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.step_pitch(1)
+                    });
+                }),
+        )
+        .child(div().flex_1())
+        .child(
+            Button::new(format!("wt_voices_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label(format!("VOICES: {}", editor.voices.label()))
+                .compact()
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.cycle_voices()
+                    });
+                }),
+        )
+        .child(div().flex_1())
+        .child(
+            Button::new(format!("wt_oct_down_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("<")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.step_octave(-1)
+                    });
+                }),
+        )
+        .child(
+            Label::new(format!("OCT: {:+}", editor.octave))
+                .text_xs()
+                .text_color(rgb(0x8A90A0)),
+        )
+        .child(
+            Button::new(format!("wt_oct_up_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label(">")
+                .compact()
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.step_octave(1)
+                    });
+                }),
+        )
+        .into_any_element()
 }
 
 

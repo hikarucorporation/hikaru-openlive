@@ -28,14 +28,16 @@ const CARD_FOOTER_HEIGHT: f32 = 50.0;
 pub struct PluginEntry {
     pub category: &'static str,
     pub name: &'static str,
+    pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 2] = [
-    PluginEntry { category: "Generadores", name: "OpenWavetable" },
-    PluginEntry { category: "Generadores", name: "Hikaru OpenDMS" },
+pub const PLUGIN_CATALOG: [PluginEntry; 3] = [
+    PluginEntry { category: "Efectos", name: "OpenEQ3", label: "OpenEQ3" },
+    PluginEntry { category: "Generadores", name: "OpenWavetable", label: "Hikaru OpenWavetable" },
+    PluginEntry { category: "Generadores", name: "Hikaru OpenDMS", label: "Hikaru OpenDMS" },
 ];
 
-const PLUGIN_CATEGORIES: [&str; 3] = ["Generadores", "FX nativas", "VST3 / Externos"];
+const PLUGIN_CATEGORIES: [&str; 3] = ["Efectos", "Generadores", "VST3 / Externos"];
 
 fn rack_button(id: impl Into<gpui_kit::ElementId>) -> Button {
     Button::new(id)
@@ -45,11 +47,65 @@ fn rack_button(id: impl Into<gpui_kit::ElementId>) -> Button {
 }
 
 fn assign_plugin(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, name: &str) {
+    let st = state(cx);
+    let name = name.to_string();
+    cx.defer(move |cx| {
+        st.update(cx, |state, cx| {
+            if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+                slot.name = name.clone();
+                slot.menu_open = false;
+                slot.options_open = false;
+            }
+            state.selected_slot_index = slot_idx;
+            state.add_slot_menu_open = false;
+            cx.notify();
+        });
+    });
+}
+
+fn open_plugin_menu(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
     state(cx).update(cx, |state, cx| {
-        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-            slot.name = name.to_string();
-            slot.menu_open = false;
-            slot.options_open = false;
+        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
+            for (i, s) in track.effects.iter_mut().enumerate() {
+                if i == slot_idx {
+                    s.menu_open = true;
+                    s.options_open = false;
+                } else {
+                    s.menu_open = false;
+                    s.options_open = false;
+                }
+            }
+        }
+        state.selected_slot_index = slot_idx;
+        state.add_slot_menu_open = false;
+        cx.notify();
+    });
+}
+
+fn cycle_card_menu(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
+    let options_open = state(cx)
+        .read(cx)
+        .slot(track_idx, slot_idx)
+        .is_some_and(|slot| slot.options_open);
+    if options_open {
+        open_plugin_menu(cx, track_idx, slot_idx);
+    } else {
+        open_options_menu(cx, track_idx, slot_idx);
+    }
+}
+
+fn open_options_menu(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
+    state(cx).update(cx, |state, cx| {
+        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
+            for (i, s) in track.effects.iter_mut().enumerate() {
+                if i == slot_idx {
+                    s.options_open = !s.options_open;
+                    s.menu_open = false;
+                } else {
+                    s.options_open = false;
+                    s.menu_open = false;
+                }
+            }
         }
         state.selected_slot_index = slot_idx;
         state.add_slot_menu_open = false;
@@ -150,39 +206,45 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
     div()
         .id("dsp_rack")
         .w_full()
-        .h(px(RACK_HEIGHT))
         .flex()
         .flex_col()
-        .bg(rgb(0x14141A))
-        .border_t_1()
-        .border_color(rgb(0x2A2A2A))
         .child(
             div()
                 .w_full()
-                .h(px(20.0))
+                .h(px(RACK_HEIGHT))
                 .flex()
-                .items_center()
-                .px(px(8.0))
-                .bg(rgb(0x1A1A1F))
-                .child(Label::new(title).text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x888888)))
-        )
-        .child(
-            div()
-                .id("dsp_strip")
-                .w_full()
-                .flex_1()
-                .min_h(px(RACK_HEIGHT - 26.0))
-                .overflow_x_scrollbar()
+                .flex_col()
+                .bg(rgb(0x14141A))
+                .border_t_1()
+                .border_color(rgb(0x2A2A2A))
                 .child(
-                    h_flex()
-                        .h_full()
-                        .gap(px(CARD_GAP))
+                    div()
+                        .w_full()
+                        .h(px(20.0))
+                        .flex()
+                        .items_center()
                         .px(px(8.0))
-                        .py(px(6.0))
-                        .children(effects.iter().enumerate().map(|(idx, slot)| {
-                            render_card(cx, track_idx, idx, slot, idx == selected_slot)
-                        }))
-                        .child(render_add_slot_button(cx, track_idx, effects.len()))
+                        .bg(rgb(0x1A1A1F))
+                        .child(Label::new(title).text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x888888)))
+                )
+                .child(
+                    div()
+                        .id("dsp_strip")
+                        .w_full()
+                        .flex_1()
+                        .min_h(px(RACK_HEIGHT - 26.0))
+                        .overflow_x_scrollbar()
+                        .child(
+                            h_flex()
+                                .h_full()
+                                .gap(px(CARD_GAP))
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .children(effects.iter().enumerate().map(|(idx, slot)| {
+                                    render_card(cx, track_idx, idx, slot, idx == selected_slot)
+                                }))
+                                .child(render_add_slot_button(cx, track_idx, effects.len()))
+                        )
                 )
         )
         .when_some(open_menu.zip(menu_left), |this, (idx, left)| {
@@ -255,7 +317,7 @@ fn render_card(
 ) -> AnyElement {
     let name = slot.name.clone();
     let slot_active = slot.active;
-    let options_open = slot.options_open;
+    let options_open = slot.options_open || slot.menu_open;
 
     div()
         .id(format!("dsp_card_{track_idx}_{idx}"))
@@ -273,6 +335,14 @@ fn render_card(
                 state.selected_slot_index = idx;
                 cx.notify();
             });
+        })
+        .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
+            eprintln!("[Hikaru] card RIGHT t{track_idx}s{idx}");
+            open_plugin_menu(cx, track_idx, idx);
+        })
+        .on_aux_click(move |_, _, cx| {
+            eprintln!("[Hikaru] card AUX t{track_idx}s{idx}");
+            open_plugin_menu(cx, track_idx, idx);
         })
         .child(render_card_header(cx, track_idx, idx, &name, slot_active, options_open, is_selected))
         .child(render_card_body(cx, track_idx, idx, &name))
@@ -323,28 +393,28 @@ fn render_card_header(
                 .truncate()
         )
         .child(
-            rack_button(format!("dsp_card_menu_{track_idx}_{idx}"))
-                .rounded(ButtonRounded::None)
-                .label(if options_open { "▲" } else { "▼" })
-                .compact()
-                .on_click(move |_, _, cx| {
-                    state(cx).update(cx, |state, cx| {
-                        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-                            for (i, s) in track.effects.iter_mut().enumerate() {
-                                if i == idx {
-                                    s.options_open = !s.options_open;
-                                    s.menu_open = false;
-                                } else {
-                                    s.options_open = false;
-                                    s.menu_open = false;
-                                }
-                            }
-                        }
-                        state.selected_slot_index = idx;
-                        state.add_slot_menu_open = false;
-                        cx.notify();
-                    });
+            div()
+                .id(format!("dsp_card_menu_{track_idx}_{idx}"))
+                .min_w(px(22.0))
+                .px(px(4.0))
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    eprintln!("[Hikaru] triangle LEFT t{track_idx}s{idx}");
+                    cycle_card_menu(cx, track_idx, idx);
                 })
+                .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
+                    eprintln!("[Hikaru] triangle RIGHT t{track_idx}s{idx}");
+                    open_plugin_menu(cx, track_idx, idx);
+                })
+                .on_aux_click(move |_, _, cx| {
+                    eprintln!("[Hikaru] triangle AUX t{track_idx}s{idx}");
+                    open_plugin_menu(cx, track_idx, idx);
+                })
+                .child(
+                    Label::new(if options_open { "▲" } else { "▼" })
+                        .text_xs()
+                        .text_color(rgb(0xE0E0E0)),
+                )
+                .into_any_element()
         )
         .into_any_element()
 }
@@ -358,14 +428,43 @@ fn render_card_body(
     match name {
         "OpenWavetable" => open_wavetable::render_module(cx, track_idx, idx),
         "Hikaru OpenDMS" => render_dms_compact(cx, track_idx, idx),
+        "OpenEQ3" => v_flex()
+            .w_full()
+            .flex_1()
+            .min_h(px(100.0))
+            .items_center()
+            .justify_center()
+            .gap(px(2.0))
+            .child(
+                Label::new("OpenEQ3")
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xE8EAF0)),
+            )
+            .child(
+                Label::new("Low | Mid | Hi")
+                    .text_xs()
+                    .text_color(rgb(0x888888)),
+            )
+            .into_any_element(),
         _ => {
             div()
+                .id(format!("dsp_empty_{track_idx}_{idx}"))
                 .w_full()
                 .flex_1()
                 .min_h(px(100.0))
                 .flex()
                 .items_center()
                 .justify_center()
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    open_plugin_menu(cx, track_idx, idx);
+                })
+                .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
+                    open_plugin_menu(cx, track_idx, idx);
+                })
+                .on_aux_click(move |_, _, cx| {
+                    open_plugin_menu(cx, track_idx, idx);
+                })
                 .child(
                     Label::new("Empty Slot")
                         .text_sm()
@@ -406,9 +505,9 @@ fn render_plugin_menu(
     div()
         .absolute()
         .left(px(left))
-        .bottom(px(RACK_HEIGHT - 26.0))
+        .bottom(px(0.0))
         .w(px(CARD_WIDTH))
-        .max_h(px(300.0))
+        .h(px(220.0))
         .overflow_y_scrollbar()
         .bg(rgb(0x1E1E26))
         .border_1()
@@ -438,9 +537,10 @@ fn render_plugin_menu(
                 )
                 .children(natives.iter().map(|entry| {
                     let plugin_name = entry.name;
+                    let plugin_label = entry.label;
                     rack_button(format!("dsp_menu_{}_{plugin_name}_{slot_idx}", entry.category))
                         .rounded(ButtonRounded::None)
-                        .label(plugin_name)
+                        .label(plugin_label)
                         .compact()
                         .w_full()
                         .on_click(move |_, _, cx| {
@@ -465,7 +565,6 @@ fn render_plugin_menu(
                     |this| {
                         this.child(
                             Label::new(match *category {
-                                "FX nativas" => "sin efectos con panel",
                                 "VST3 / Externos" => "ninguno escaneado",
                                 _ => "vacío",
                             })
@@ -506,7 +605,7 @@ fn render_options_menu(
     div()
         .absolute()
         .left(px(left))
-        .bottom(px(RACK_HEIGHT - 26.0))
+        .bottom(px(0.0))
         .w(px(CARD_WIDTH))
         .bg(rgb(0x1E1E26))
         .border_1()
