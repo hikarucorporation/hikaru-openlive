@@ -1081,9 +1081,9 @@ fn render_viewport(view: &WavetableView) -> AnyElement {
 
 const KNOB_2D: f32 = 30.0;
 
-const KNOBS_HEIGHT: f32 = 62.0;
+const KNOBS_HEIGHT: f32 = 70.0;
 
-const MODULE_FOOTER_HEIGHT: f32 = 18.0;
+const MODULE_FOOTER_HEIGHT: f32 = 26.0;
 
 fn with_editor_target(
     cx: &mut gpui_kit::App,

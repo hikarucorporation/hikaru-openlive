@@ -14,7 +14,7 @@ use crate::views::open_wavetable;
 
 pub const RACK_HEIGHT: f32 = 230.0;
 
-pub const CARD_WIDTH: f32 = 230.0;
+pub const CARD_WIDTH: f32 = 388.0;
 
 const CARD_PADDING: f32 = 6.0;
 
