@@ -507,8 +507,6 @@ fn render_plugin_menu(
         .left(px(left))
         .bottom(px(RACK_HEIGHT))
         .w(px(CARD_WIDTH))
-        .h(px(220.0))
-        .overflow_y_scrollbar()
         .bg(rgb(0x1E1E26))
         .border_1()
         .border_color(rgb(0x3A3A45))
