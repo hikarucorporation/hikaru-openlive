@@ -154,7 +154,13 @@ const MAX_STACK_FRAMES: usize = 24;
 /// Un `.wav` de dos minutos son 2000 ciclos: 16 MB por slot del rack. Con 64
 /// alcanza para cualquier tabla de verdad y el archivo se lee entero en
 /// memoria una vez.
-const MAX_FRAMES: usize = 64;
+pub(crate) const MAX_FRAMES: usize = 64;
+
+pub fn load_table_file(
+    path: &std::path::Path,
+) -> Result<crate::views::wavetable_io::Wavetable, crate::views::wavetable_io::WavetableError> {
+    crate::views::wavetable_io::load_wavetable(path, MAX_FRAMES)
+}
 
 /// Colores de los knobs, en el espacio que espera el shader (lineal 0..1).
 const KNOB_BODY: [f32; 4] = [0.13, 0.14, 0.17, 1.0];

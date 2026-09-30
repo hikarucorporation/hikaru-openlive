@@ -405,28 +405,42 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 .bg(bg_color)
                                 .rounded(px(3.0))
                                 .child(Label::new(label_clone).text_xs().text_color(crate::theme::TEXT_PRIMARY))
-                                .on_click(move |_, _, cx| {
-                                    let st = state(cx);
-                                    cx.update_entity(&st, |state, cx| {
-                                        if is_dir {
-                                            state.explorer_state.navigate_to(path.clone());
-                                        } else if let Some((track_idx, slot_idx)) =
-                                            state.pending_wavetable_slot
-                                        {
-                                            // Modo "elegir wavetable": el archivo
-                                            // va al slot del rack y no al proyecto,
-                                            // y el modo se cierra para que el
-                                            // siguiente click sea el normal.
+                                        .on_click(move |_, _, cx| {
+                                            let st = state(cx);
+                                            cx.update_entity(&st, |state, cx| {
+                                                if is_dir {
+                                                    state.explorer_state.navigate_to(path.clone());
+                                                } else if let Some((track_idx, slot_idx)) =
+                                                    state.pending_wavetable_slot
+                                                {
                                             state.pending_wavetable_slot = None;
                                             let wavetable_path = path.clone();
                                             let st = st.clone();
-                                            cx.update_entity(&st, |state, cx| {
-                                                crate::views::open_wavetable::load_wavetable_from_path(
-                                                    cx,
-                                                    track_idx,
-                                                    slot_idx,
-                                                    &wavetable_path,
-                                                );
+                                            cx.defer(move |cx| {
+                                                let loaded =
+                                                    crate::views::open_wavetable::load_table_file(
+                                                        &wavetable_path,
+                                                    );
+                                                st.update(cx, |state, cx| {
+                                                    match loaded {
+                                                        Ok(table) => {
+                                                            if let Some(slot) = state
+                                                                .slot_mut(track_idx, slot_idx)
+                                                            {
+                                                                slot.wavetable.load(table);
+                                                                slot.wavetable.menu_open = false;
+                                                                slot.menu_open = false;
+                                                            }
+                                                            state.selected_slot_index = slot_idx;
+                                                        }
+                                                        Err(error) => {
+                                                            eprintln!(
+                                                                "[Hikaru] No se pudo cargar la wavetable: {error}"
+                                                            );
+                                                        }
+                                                    }
+                                                    cx.notify();
+                                                });
                                             });
                                         } else {
                                             state.explorer_state.selected_file = Some(path.clone());

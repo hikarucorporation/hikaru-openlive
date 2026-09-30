@@ -49,8 +49,30 @@ fn assign_plugin(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, name
         if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
             slot.name = name.to_string();
             slot.menu_open = false;
+            slot.options_open = false;
         }
         state.selected_slot_index = slot_idx;
+        state.add_slot_menu_open = false;
+        cx.notify();
+    });
+}
+
+fn remove_slot_at(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
+    state(cx).update(cx, |state, cx| {
+        let selected = state.selected_slot_index;
+        let new_len = if let Some(track) = state.tracks_mut().get_mut(track_idx) {
+            if slot_idx < track.effects.len() {
+                track.effects.remove(slot_idx);
+            }
+            track.effects.len()
+        } else {
+            0
+        };
+        state.selected_slot_index = if new_len == 0 {
+            0
+        } else {
+            selected.min(new_len - 1)
+        };
         cx.notify();
     });
 }
@@ -114,15 +136,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         )
     };
 
-    let (open_menu, add_menu_open) = {
+    let (open_menu, open_options, add_menu_open) = {
         let app = state(cx).read(cx);
-        let open_menu = app.tracks()[track_idx]
-            .effects
-            .iter()
-            .position(|slot| slot.menu_open);
-        (open_menu, app.add_slot_menu_open)
+        let track = &app.tracks()[track_idx];
+        let open_menu = track.effects.iter().position(|slot| slot.menu_open);
+        let open_options = track.effects.iter().position(|slot| slot.options_open);
+        (open_menu, open_options, app.add_slot_menu_open)
     };
     let menu_left = open_menu.map(|idx| card_x_offset(&effects, idx));
+    let options_left = open_options.map(|idx| card_x_offset(&effects, idx));
     let add_menu_left = card_x_offset(&effects, effects.len());
 
     div()
@@ -149,6 +171,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .id("dsp_strip")
                 .w_full()
                 .flex_1()
+                .min_h(px(RACK_HEIGHT - 26.0))
                 .overflow_x_scrollbar()
                 .child(
                     h_flex()
@@ -164,6 +187,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         )
         .when_some(open_menu.zip(menu_left), |this, (idx, left)| {
             this.child(render_plugin_menu(cx, track_idx, idx, left))
+        })
+        .when_some(open_options.zip(options_left), |this, (idx, left)| {
+            this.child(render_options_menu(cx, track_idx, idx, left))
         })
         .when(add_menu_open, |this| {
             this.child(render_plugin_menu(cx, track_idx, effects.len(), add_menu_left))
@@ -229,7 +255,7 @@ fn render_card(
 ) -> AnyElement {
     let name = slot.name.clone();
     let slot_active = slot.active;
-    let menu_open = slot.menu_open;
+    let options_open = slot.options_open;
 
     div()
         .id(format!("dsp_card_{track_idx}_{idx}"))
@@ -248,7 +274,7 @@ fn render_card(
                 cx.notify();
             });
         })
-        .child(render_card_header(cx, track_idx, idx, &name, slot_active, menu_open, is_selected))
+        .child(render_card_header(cx, track_idx, idx, &name, slot_active, options_open, is_selected))
         .child(render_card_body(cx, track_idx, idx, &name))
         .child(render_card_footer(cx, track_idx, idx, &name))
         .into_any_element()
@@ -260,7 +286,7 @@ fn render_card_header(
     idx: usize,
     name: &str,
     active: bool,
-    menu_open: bool,
+    options_open: bool,
     is_selected: bool,
 ) -> AnyElement {
     h_flex()
@@ -299,14 +325,23 @@ fn render_card_header(
         .child(
             rack_button(format!("dsp_card_menu_{track_idx}_{idx}"))
                 .rounded(ButtonRounded::None)
-                .label(if menu_open { "▲" } else { "▼" })
+                .label(if options_open { "▲" } else { "▼" })
                 .compact()
                 .on_click(move |_, _, cx| {
                     state(cx).update(cx, |state, cx| {
-                        if let Some(slot) = state.slot_mut(track_idx, idx) {
-                            slot.menu_open = !slot.menu_open;
+                        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
+                            for (i, s) in track.effects.iter_mut().enumerate() {
+                                if i == idx {
+                                    s.options_open = !s.options_open;
+                                    s.menu_open = false;
+                                } else {
+                                    s.options_open = false;
+                                    s.menu_open = false;
+                                }
+                            }
                         }
                         state.selected_slot_index = idx;
+                        state.add_slot_menu_open = false;
                         cx.notify();
                     });
                 })
@@ -327,13 +362,14 @@ fn render_card_body(
             div()
                 .w_full()
                 .flex_1()
+                .min_h(px(100.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(
                     Label::new("Empty Slot")
-                        .text_xs()
-                        .text_color(rgb(0x555555))
+                        .text_sm()
+                        .text_color(rgb(0x888888))
                 )
                 .into_any_element()
         }
@@ -458,6 +494,74 @@ fn render_plugin_menu(
                 })
                 .into_any_element()
         }))
+        .into_any_element()
+}
+
+fn render_options_menu(
+    cx: &mut Context<HikaruApp>,
+    track_idx: usize,
+    slot_idx: usize,
+    left: f32,
+) -> AnyElement {
+    div()
+        .absolute()
+        .left(px(left))
+        .bottom(px(RACK_HEIGHT - 26.0))
+        .w(px(CARD_WIDTH))
+        .bg(rgb(0x1E1E26))
+        .border_1()
+        .border_color(rgb(0x3A3A45))
+        .rounded(px(4.0))
+        .shadow(vec![gpui_kit::BoxShadow {
+            color: gpui_kit::black().opacity(0.5),
+            offset: point(px(0.0), px(-4.0)),
+            blur_radius: px(8.0),
+            spread_radius: px(0.0),
+            inset: false,
+        }])
+        .p(px(4.0))
+        .gap(px(2.0))
+        .child(
+            rack_button(format!("dsp_opt_save_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("Save Preset...")
+                .compact()
+                .w_full()
+                .on_click(move |_, _, cx| {
+                    state(cx).update(cx, |state, cx| {
+                        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+                            slot.options_open = false;
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            rack_button(format!("dsp_opt_paths_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("Add Wavetable Paths...")
+                .compact()
+                .w_full()
+                .on_click(move |_, _, cx| {
+                    crate::views::explorer::begin_wavetable_pick(cx, track_idx, slot_idx);
+                    state(cx).update(cx, |state, cx| {
+                        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+                            slot.options_open = false;
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            rack_button(format!("dsp_opt_delete_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label("Delete Slot")
+                .compact()
+                .w_full()
+                .on_click(move |_, _, cx| {
+                    remove_slot_at(cx, track_idx, slot_idx);
+                }),
+        )
         .into_any_element()
 }
 
