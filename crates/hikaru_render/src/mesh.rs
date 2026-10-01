@@ -294,7 +294,7 @@ impl WavetableMesh {
         table: &[f32],
         frame_len: usize,
         active: f32,
-        max_frames: usize,
+        _max_frames: usize,
         frame_width: u32,
         params: WavetableMeshParams,
     ) -> Result<Self, MeshError> {
@@ -303,24 +303,33 @@ impl WavetableMesh {
         }
         let columns = frame_width.max(2) as usize;
         let available = table.len() / frame_len;
-        let count = available.max(1).min(max_frames.max(1));
+        let active = if active.is_finite() { active.clamp(0.0, (available - 1).max(0) as f32) } else { 0.0 };
+
+        // # Un solo ciclo, no una pila
+        //
+        // La especificación (`docs/openwavetable_idea.md`) pide el **ciclo
+        // activo** dibujado como una onda, con el contador `< 113/256>` al
+        // costado: una sola forma, no todos los ciclos apilados en Z.
+        //
+        // Esta función原来 recorría la tabla entera y apilaba hasta
+        // `max_frames` cintas en profundidad. Con una tabla de 7 ciclos eso son
+        // 7 láminas y la vista se llenaba de geometría: la onda que importa se
+        // perdía entre las otras seis. Toda la caja en Z (`thickness`) existe
+        // sólo para sostener ese apilado.
+        let source_frame = (active.round() as usize).min(available.saturating_sub(1));
+        let count = 1usize;
 
         let mut vertices = Vec::with_capacity(count * (columns + 1) * 2);
         let mut indices = Vec::with_capacity(count * columns * 6);
 
-        // La tabla completa se mapea sobre `count` filas: si hay más ciclos de
-        // los que entran, cada fila representa un salto de la tabla real en vez
-        // de ser un ciclo contiguo.
-        let stride = available as f32 / count as f32;
-        let spacing = if count > 1 { params.thickness / count as f32 } else { params.thickness };
+        let spacing = params.thickness;
         let depth = (spacing * RIBBON_FILL).max(f32::EPSILON);
-        let active = if active.is_finite() { active.clamp(0.0, (available - 1).max(0) as f32) } else { 0.0 };
 
         for slot in 0..count {
             // El frame se toma de la tabla real, redondeando al ciclo que le
             // toca: es el mismo criterio con el que el knob de índice recorre
             // la matriz, así que lo que brilla y lo que se ve coinciden.
-            let source = (slot as f32 * stride).floor() as usize;
+            let source = source_frame;
             let start = (source * frame_len).min(table.len());
             let end = (start + frame_len).min(table.len());
             let Some(frame) = table.get(start..end) else {
@@ -333,8 +342,9 @@ impl WavetableMesh {
             // El ciclo seleccionado va al frente del volumen y el último al
             // fondo: con la cámara inclinada 30° se ve la pila completa, y el
             // realce marca en qué punto de la matriz se está.
-            let t = if count > 1 { slot as f32 / (count - 1) as f32 } else { 0.0 };
-            let z_center = -params.thickness * 0.5 + t * params.thickness;
+            // Una sola cinta, centrada en el origen: sin apilado no hay
+            // volumen que recorrer y la cinta va al centro del encuadre.
+            let z_center = 0.0;
 
             // `active` viene en ciclos de la tabla real (0..available-1) y las
             // filas son un muestreo de `count` puntos. Se mapea el rango
@@ -346,12 +356,10 @@ impl WavetableMesh {
             // a distancia 0.9 y el realce nunca llega al máximo: el último ciclo
             // se veía al 59% y era indistinguible del penúltimo. Con el mapeo
             // proporcional, el último ciclo cae exacto en la última fila.
-            let row_of_active = if available > 1 && count > 1 {
-                active / (available - 1) as f32 * (count - 1) as f32
-            } else {
-                0.0
-            };
-            let distance = (slot as f32 - row_of_active).abs();
+            // Con una sola cinta es siempre la activa, así que va a brillo
+            // pleno: el realce por distancia era para distinguir filas de una
+            // pila y acá no hay filas.
+            let distance = 0.0;
             let shade = ACTIVE_SHADE
                 + (DIM_SHADE - ACTIVE_SHADE) * (distance / SHADE_FALLOFF).clamp(0.0, 1.0);
 

@@ -12,7 +12,7 @@ use crate::app::{state, HikaruApp};
 use crate::views::mixer::DspSlot;
 use crate::views::open_wavetable;
 
-pub const RACK_HEIGHT: f32 = 230.0;
+pub const RACK_HEIGHT: f32 = 340.0;
 
 pub const CARD_WIDTH: f32 = 388.0;
 
@@ -156,6 +156,7 @@ fn insert_slot_at(cx: &mut gpui_kit::App, track_idx: usize, at_idx: usize) {
             let new_id = track.effects.len();
             let insert_pos = at_idx.min(track.effects.len());
             track.effects.insert(insert_pos, DspSlot::new(new_id, "Empty Slot".to_string()));
+            crate::views::open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
             state.selected_slot_index = insert_pos;
         }
         cx.notify();
@@ -290,6 +291,7 @@ fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, slot_co
                 if let Some(track) = state.tracks_mut().get_mut(track_idx) {
                     let new_id = track.effects.len();
                     track.effects.push(DspSlot::new(new_id, "Empty Slot".to_string()));
+                    crate::views::open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
                     state.selected_slot_index = new_id;
                     if let Some(slot) = state.slot_mut(track_idx, new_id) {
                         slot.menu_open = true;

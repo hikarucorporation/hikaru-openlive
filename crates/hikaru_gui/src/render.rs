@@ -60,14 +60,14 @@ use hikaru_render::wgpu;
 /// cuadrado (unos 254 x 135). Con el 1.6 que tenía antes, la imagen se encajaba
 /// por el alto y quedaban barras negras a los lados; y bajarlo de 512x320 además
 /// ahorra un 25% de los bytes de readback, que en CPU es lo caro del camino.
-pub const WAVETABLE_VIEWPORT: (u32, u32) = (320, 200);
+pub const WAVETABLE_VIEWPORT: (u32, u32) = (768, 384);
 
 /// Columnas de la cinta en el eje de la forma de onda.
 ///
-/// 256 columnas sobre 512 píxeles de ancho dan dos píxeles por columna: más que
-/// suficiente para que la cinta se vea lisa, y bastante menos trabajo de
-/// geometría que las 2048 muestras de una tabla.
-const WAVETABLE_COLUMNS: u32 = 256;
+/// 512 columnas sobre 768 píxeles de ancho dan un poco más de un píxel por
+/// columna. Con 256 la cinta se veía serrada al ampliar el visor: la malla no
+/// tenía más resolución que el target donde se dibuja.
+const WAVETABLE_COLUMNS: u32 = 512;
 
 /// Errores al armar el renderer offscreen.
 #[derive(Debug)]
@@ -515,6 +515,19 @@ impl CachedImage {
     }
 
     fn store(&mut self, key: u64, image: Arc<RenderImage>) {
+        // La imagen que queda acá se sube al atlas de texturas de GPUI, y el
+        // atlas tiene un presupuesto finito. Reemplazar la firma sin soltar la
+        // imagen anterior dejaba la vieja ocupando atlas para siempre, y como la
+        // cache ya no vuelve a pedir esa firma, no había forma de recuperarla:
+        // el atlas se llenaba con imágenes huérfanas y los glifos de texto
+        // empezaban a salir ilegibles en toda la app, de forma permanente.
+        //
+        // Soltarla acá deja que GPUI libere el espacio cuando baje el refcount.
+        // El caso normal no paga nada: si la firma es la misma, la imagen es la
+        // misma y no hay nada que soltar.
+        if self.key != Some(key) {
+            self.image = None;
+        }
         self.key = Some(key);
         self.image = Some(image);
     }
@@ -813,6 +826,15 @@ impl WavetableViewport {
 
         let needs_upload = self.mesh.as_ref().is_none_or(|(cached, _)| *cached != key);
         if needs_upload {
+            // DIAGNÓSTICO TEMPORAL: sacar cuando se encuentre la causa.
+            eprintln!(
+                "[DIAG] upload de malla: waveform_len={} frame_len={} active={} max_frames={} columnas={}",
+                viewer.waveform.len(),
+                viewer.frame_len,
+                viewer.active,
+                viewer.max_frames,
+                WAVETABLE_COLUMNS
+            );
             self.mesh = Some((
                 key,
                 renderer.upload_wavetable_table(

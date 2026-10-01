@@ -134,13 +134,30 @@ const KNOB_SIZE: f32 = 36.0;
 
 /// Caja de la malla 3D.
 ///
-/// El visor ya no es una banda ancha y baja, así que la caja se acerca a
-/// cuadrada. Un `thickness` alto sigue siendo lo que hace que la pila de ciclos
-/// se lea en Z: 100 unidades de profundidad con 24 ciclos dejan aire real entre
-/// formas, que es lo que las distingue de un canto sólido.
+/// # Por qué `thickness` tiene que ser grande respecto de `height`
+///
+/// La cámara mira la pila con 30° de inclinación, así que el apilado en Z se
+/// proyecta en pantalla a `thickness × sin(30°)`, o sea la mitad. Para que las
+/// láminas no se tapen entre ellas hace falta que esa proyección iguale o supere
+/// el alto de una:
+///
+/// ```text
+/// thickness × sin(30°) ≥ height   →   thickness ≥ height × 2
+/// ```
+///
+/// Con `thickness = 80` y `height = 100` eso da 40 contra 100: cada lámina
+/// tapaba a las dos y media vecinas y la pila se veía como un enredo de líneas
+/// cruzadas en vez de ciclos ordenados. 240 da 120 contra 100, con aire.
+///
+/// # Por qué `height` bajó a 70
+///
+/// El espesor de cada cinta es `thickness / count × RIBBON_FILL`. Con 100 de
+/// alto y una cinta de 18.9 de espesor, la relación era 0.19: vistas a 30° las
+/// cintas se proyectaban como astillas y la pila se leía como un manojo de
+/// palitos. Bajar el alto deja la onda proporcional al grosor de su banda.
 const MESH_WIDTH: f32 = 260.0;
-const MESH_HEIGHT: f32 = 100.0;
-const MESH_THICKNESS: f32 = 80.0;
+const MESH_HEIGHT: f32 = 70.0;
+const MESH_THICKNESS: f32 = 240.0;
 
 /// Ciclos que se dibujan como máximo en la pila.
 ///
@@ -253,10 +270,18 @@ pub struct WavetableEditor {
 impl Default for WavetableEditor {
     fn default() -> Self {
         Self {
-            // La tabla de fábrica, de 256 ciclos. Con el seno de un solo ciclo
-            // el `WT POS` arrancaba apagado y sin recorrido, y el módulo se
-            // veía roto en el primer arranque.
-            table: Wavetable::default_table(),
+            // La wavetable con la que arranca el slot: el `.wav` embebido en el
+            // binario, no la tabla sintetizada. Si el embebido no se puede
+            // leer se cae a la sintetizada, porque arrancar sin wavetable es
+            // peor que arrancar con otra.
+            table: wavetable_io::bundled_wavetable(MAX_FRAMES)
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "[ Hikaru OpenLive ] : no se pudo leer la wavetable embebida, se usa la sintetizada | {}",
+                        error
+                    );
+                    Wavetable::default_table()
+                }),
             morph: 0.0,
             frame: 0,
             smooth: true,
@@ -619,12 +644,30 @@ fn register_drag_tracking(
     slot_idx: usize,
 ) {
     window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
-        with_editor(cx, track_idx, slot_idx, |editor| {
+        // Se lee la posición antes y después para no notificar cuando el arrastre no
+        // movió nada. `with_editor` notifica siempre, y como este listener se
+        // re-registra en el paint de cada frame, un `notify` por movimiento de
+        // cursor se realimenta: frame nuevo -> paint -> listener nuevo -> otro
+        // notify. Los listeners se acumulaban y la interfaz dejo de terminar un
+        // frame limpio.
+        let before = state(cx)
+            .read(cx)
+            .slot(track_idx, slot_idx)
+            .map(|slot| slot.wavetable.position());
+
+        let changed = with_editor_if(cx, track_idx, slot_idx, |editor| {
             if !editor.dragging {
-                return;
+                return false;
             }
+            let previous = editor.position();
             editor.drag_to(event.position.y.as_f32(), event.modifiers.shift);
+            editor.position() != previous
         });
+
+        if changed && before.is_some() {
+            // `with_editor_if` ya notificó sólo cuando cambió; acá no hay nada
+            // que hacer. Se deja el bloque para que el motivo quede escrito.
+        }
     });
 }
 
@@ -830,6 +873,7 @@ fn render_table_navigator(
                             .compact()
                             .w_full()
                             .on_click(move |_, _, cx| {
+                                load_log::factory_restored(wavetable_io::DEFAULT_CYCLES);
                                 with_editor(cx, track_idx, slot_idx, |editor| {
                                     editor.load(Wavetable::default_table());
                                     editor.menu_open = false;
@@ -1385,12 +1429,19 @@ fn pick_wavetable_with_native_dialog(
 /// manejo del error y del aviso quede en un solo lugar.
 fn load_into_slot(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, path: &std::path::Path) {
     match wavetable_io::load_wavetable(path, MAX_FRAMES) {
-        Ok(table) => with_editor(cx, track_idx, slot_idx, |editor| {
-            editor.load(table);
-            editor.menu_open = false;
-        }),
+        Ok(table) => {
+            load_log::loaded(path, &table);
+            with_editor(cx, track_idx, slot_idx, |editor| {
+                editor.load(table);
+                editor.menu_open = false;
+            });
+        }
         Err(error) => {
-            eprintln!("[Hikaru] No se pudo cargar la wavetable: {error}");
+            eprintln!(
+                "[ Hikaru OpenLive ] : Wavetable NO cargado [{}] | error={}",
+                path.display(),
+                error
+            );
         }
     }
 }
@@ -1400,6 +1451,31 @@ fn load_into_slot(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, pat
 /// Es el único camino de escritura del panel: todas las perillas y botones pasan
 /// por acá, así que hay un solo lugar donde se toma el lock del estado y se
 /// llama a `notify`.
+/// Igual que [`with_editor`], pero sólo notifica si el cambio hizo algo.
+///
+/// Existe para el arrastre del knob. `with_editor` notifica siempre, y como el
+/// listener de mouse se re-registra en el paint de cada frame, un `notify` por
+/// movimiento de cursor se realimenta: frame nuevo → paint → listener nuevo →
+/// otro notify. Con el mouse quieto sobre el knob, la interfaz se quedaba
+/// siempre pidiendo frames y nunca terminaba uno limpio.
+pub fn with_editor_if(
+    cx: &mut gpui_kit::App,
+    track_idx: usize,
+    slot_idx: usize,
+    change: impl FnOnce(&mut WavetableEditor) -> bool,
+) -> bool {
+    let mut changed = false;
+    state(cx).update(cx, |state, cx| {
+        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+            changed = change(&mut slot.wavetable);
+        }
+        if changed {
+            cx.notify();
+        }
+    });
+    changed
+}
+
 pub fn with_editor(
     cx: &mut gpui_kit::App,
     track_idx: usize,
@@ -1414,6 +1490,60 @@ pub fn with_editor(
     });
 }
 
+#[allow(clippy::items_after_statements)]
+mod load_log {
+    /// Log de arranque: qué wavetable tiene cada slot antes de que toques nada.
+    ///
+    /// La tabla de fábrica no viene de un archivo: `Wavetable::default_table`
+    /// la sintetiza y deja `path` en `None`. Por eso acá no hay una ruta que
+    /// mostrar y se dice explícitamente, para no dejar esperando un path que
+    /// nunca existió.
+    pub fn initial(label: &str, table: &super::wavetable_io::Wavetable) {
+        match table.path.as_ref() {
+            Some(path) => eprintln!(
+                "[ Hikaru OpenLive ] : Wavetable inicial cargado [{}]",
+                path.display()
+            ),
+            None => eprintln!(
+                "[ Hikaru OpenLive ] : Wavetable inicial cargado [sintetizada en memoria, {} ciclos, sin archivo asociado]",
+                table.frames
+            ),
+        }
+        eprintln!(
+            "[ Hikaru OpenLive ] :   {} | {} samples | {} frames | label={}",
+            label, table.samples.len(), table.frames, table.name
+        );
+    }
+
+    /// Log de cada wavetable que entra desde disco o desde el popover.
+    pub fn loaded(path: &std::path::Path, table: &super::wavetable_io::Wavetable) {
+        eprintln!(
+            "[ Hikaru OpenLive ] : Wavetable cargado [{}]",
+            path.display()
+        );
+        eprintln!(
+            "[ Hikaru OpenLive ] :   {} | {} samples | {} frames | directorio={:?}",
+            table.name,
+            table.samples.len(),
+            table.frames,
+            path.parent().map(|p| p.display().to_string())
+        );
+    }
+
+    /// Log de la tabla de fábrica cuando se elige explícitamente desde el menú.
+    pub fn factory_restored(cycles: usize) {
+        eprintln!(
+            "[ Hikaru OpenLive ] : Wavetable restaurado a fábrica [sintetizada, {} ciclos]",
+            cycles
+        );
+    }
+}
+
+/// Log de la wavetable con la que arranca un slot recién creado.
+pub fn log_initial_wavetable(label: &str) {
+    load_log::initial(label, &WavetableEditor::new().table);
+}
+
 /// Carga una wavetable desde una ruta, para el camino del explorer.
 pub fn load_wavetable_from_path(
     cx: &mut gpui_kit::App,
@@ -1424,15 +1554,58 @@ pub fn load_wavetable_from_path(
     load_into_slot(cx, track_idx, slot_idx, path);
 }
 
+/// Cache de la lista de wavetables hermanas, por directorio.
+///
+/// La función se llama desde `render_table_navigator`, o sea **una vez por frame
+/// de render**. Antes eso significaba un `read_dir` completo del directorio de
+/// la tabla en cada frame, con el filtro de extensión, el sort y un `Vec<PathBuf>`
+/// nuevo: con la carpeta de un pack como el de Au5, que tiene cientos de `.wav`,
+/// eso es cientos de stat de filesystem por frame, en el hilo de UI.
+///
+/// Con la tabla de fábrica no pasaba nada porque `path` es `None` y se salía
+/// antes de tocar el disco. El `read_dir` empieza recién cuando hay un archivo
+/// cargado, que es exactamente cuando empezó el problema de la interfaz.
+///
+/// Cachear por directorio evita el I/O repetido sin cambiar el resultado: la
+/// lista de archivos de una carpeta no cambia mientras el usuario navega por los
+/// knobs. Si agrega o borra wavetables desde afuera, la lista se actualiza al
+/// cambiar de tabla o al reiniciar; `clear_sibling_cache` la invalida a mano.
+fn sibling_cache() -> &'static std::sync::Mutex<Option<(std::path::PathBuf, Vec<std::path::PathBuf>)>> {
+    static CACHE: std::sync::Mutex<Option<(std::path::PathBuf, Vec<std::path::PathBuf>)>> =
+        std::sync::Mutex::new(None);
+    &CACHE
+}
+
+/// Vacía la cache de hermanas: para cuando la lista de archivos puede haber
+/// cambiado en disco.
+pub fn clear_sibling_cache() {
+    if let Ok(mut cache) = sibling_cache().lock() {
+        *cache = None;
+    }
+}
+
 pub fn sibling_tables(path: Option<&std::path::PathBuf>) -> Vec<std::path::PathBuf> {
     let Some(path) = path else { return Vec::new() };
     let Some(dir) = path.parent() else { return Vec::new() };
+
+    if let Ok(cache) = sibling_cache().lock() {
+        if let Some((cached_dir, tables)) = cache.as_ref() {
+            if cached_dir == dir {
+                return tables.clone();
+            }
+        }
+    }
+
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out: Vec<std::path::PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|p| p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("wav")))
         .collect();
     out.sort();
+
+    if let Ok(mut cache) = sibling_cache().lock() {
+        *cache = Some((dir.to_path_buf(), out.clone()));
+    }
     out
 }
 

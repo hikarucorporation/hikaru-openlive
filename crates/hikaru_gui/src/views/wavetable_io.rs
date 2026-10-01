@@ -219,6 +219,14 @@ impl Wavetable {
             samples.extend_from_slice(&frame);
         }
 
+        // DIAGNÓSTICO TEMPORAL: sacar cuando se encuentre la causa del
+        // cruzido al cargar wavetables.
+        eprintln!(
+            "[DIAG] tabla de fábrica: samples={} frames={} nombre=Factory",
+            samples.len(),
+            cycles
+        );
+
         Self {
             name: "Factory".to_string(),
             path: None,
@@ -328,6 +336,44 @@ impl std::error::Error for WavetableError {}
 /// archivos ofrezca algo que después no se puede cargar.
 pub const WAVETABLE_EXTENSIONS: [&str; 1] = ["wav"];
 
+/// El `.wav` de la wavetable inicial, embebido en el binario.
+///
+/// Va con `include_bytes!` y no como ruta en disco a propósito: el ejecutable
+/// puede arrancar desde cualquier directorio, y una tabla cargada desde disco
+/// depende de que el archivo siga ahí al lado del binario. Con los bytes dentro,
+/// el slot inicial siempre tiene wavetable.
+pub const BUNDLED_WAVETABLE: &[u8] = include_bytes!("../../../../assets/wavetables/factory.wav");
+
+/// El nombre que muestra el slot inicial.
+/// El nombre que muestra el slot inicial.
+///
+/// Sale del nombre del archivo embebido, no de una constante aparte: tener las
+/// dos cosas por separado hacía que renombrar el `.wav` no cambiara lo que
+/// muestra el slot, y el módulo seguía diciendo "Factory.wav" con un archivo
+/// que se llamaba otra cosa.
+pub const BUNDLED_WAVETABLE_NAME: &str = "Basic Shapes";
+
+/// Carga la wavetable inicial desde los bytes embebidos.
+///
+/// Si el `.wav` embebido no se puede leer, `WavetableEditor::default` cae a la
+/// tabla sintetizada: arrancar sin wavetable es peor que arrancar con una
+/// distinta a la que se pidió.
+pub fn bundled_wavetable(max_frames: usize) -> Result<Wavetable, WavetableError> {
+    let reader = hound::WavReader::new(std::io::Cursor::new(BUNDLED_WAVETABLE))
+        .map_err(|source| WavetableError::Open {
+            path: std::path::PathBuf::from("assets/wavetables/factory.wav"),
+            source: source.to_string(),
+        })?;
+    let table = decode_reader(reader, max_frames)?;
+    Ok(Wavetable {
+        name: BUNDLED_WAVETABLE_NAME.to_string(),
+        // `None` a propósito: no viene de disco, así que no debe aparecer como
+        // una de las wavetables hermanas de su directorio.
+        path: None,
+        ..table
+    })
+}
+
 /// Carga una wavetable desde un `.wav`.
 ///
 /// `max_frames` recorta archivos con muchos ciclos: un `.wav` de una pista
@@ -343,6 +389,24 @@ pub fn load_wavetable(path: &Path, max_frames: usize) -> Result<Wavetable, Wavet
         path: path.to_path_buf(),
         source: error.to_string(),
     })?;
+
+    let mut table = decode_reader(reader, max_frames)?;
+    table.name = name;
+    table.path = Some(path.to_path_buf());
+    Ok(table)
+}
+
+/// Decodifica un `WavReader` ya abierto a una wavetable usable.
+///
+/// Va separado de [`load_wavetable`] para que el `.wav` embebido del binario
+/// y el de disco compartan exactamente la misma decodificación: duplicar eso
+/// hacía que el formato se pueda arreglar en un camino y no en el otro.
+fn decode_reader<R: std::io::Read + std::io::Seek>(
+    mut reader: hound::WavReader<R>,
+    max_frames: usize,
+) -> Result<Wavetable, WavetableError> {
+    let embedded = std::path::PathBuf::from("assets/wavetables/factory.wav");
+    let path = &embedded;
 
     let spec = reader.spec();
     let channels = spec.channels.max(1) as usize;
@@ -392,7 +456,7 @@ pub fn load_wavetable(path: &Path, max_frames: usize) -> Result<Wavetable, Wavet
         eprintln!("[Hikaru] {}: {clipped} muestras fuera de rango, recortadas", path.display());
     }
 
-    Ok(Wavetable { name, path: Some(path.to_path_buf()), samples, frames })
+    Ok(Wavetable { name: String::new(), path: None, samples, frames })
 }
 
 /// Promedia los canales de un buffer entrelazado.
