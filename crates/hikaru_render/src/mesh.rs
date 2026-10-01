@@ -316,8 +316,23 @@ impl WavetableMesh {
         // 7 láminas y la vista se llenaba de geometría: la onda que importa se
         // perdía entre las otras seis. Toda la caja en Z (`thickness`) existe
         // sólo para sostener ese apilado.
-        let source_frame = (active.round() as usize).min(available.saturating_sub(1));
         let count = 1usize;
+
+        // # Interpolación entre los dos ciclos vecinos
+        //
+        // Antes se elegía el ciclo con `active.round()`, o sea el **más
+        // cercano**: al girar WT POS de 3.0 a 4.0 la forma saltaba de golpe
+        // en 3.5 en vez de pasar por el medio. El knob es continuo y el render
+        // también tiene que serlo.
+        //
+        // Se mezclan los dos ciclos vecinos muestra a muestra y se pasa ese
+        // buffer ya interpolado a `push_ribbon`. El número de columnas —y con
+        // él el de vértices de la malla— no depende de nada de esto, así que la
+        // topología es constante por construcción.
+        let last = available.saturating_sub(1);
+        let i0 = (active.floor().max(0.0) as usize).min(last);
+        let i1 = (i0 + 1).min(last);
+        let frac = (active - active.floor()).clamp(0.0, 1.0);
 
         let mut vertices = Vec::with_capacity(count * (columns + 1) * 2);
         let mut indices = Vec::with_capacity(count * columns * 6);
@@ -325,19 +340,36 @@ impl WavetableMesh {
         let spacing = params.thickness;
         let depth = (spacing * RIBBON_FILL).max(f32::EPSILON);
 
-        for slot in 0..count {
+        for _slot in 0..count {
             // El frame se toma de la tabla real, redondeando al ciclo que le
             // toca: es el mismo criterio con el que el knob de índice recorre
             // la matriz, así que lo que brilla y lo que se ve coinciden.
-            let source = source_frame;
-            let start = (source * frame_len).min(table.len());
-            let end = (start + frame_len).min(table.len());
-            let Some(frame) = table.get(start..end) else {
+            let start0 = (i0 * frame_len).min(table.len());
+            let start1 = (i1 * frame_len).min(table.len());
+            let frame0 = table.get(start0..(start0 + frame_len).min(table.len()));
+            let frame1 = table.get(start1..(start1 + frame_len).min(table.len()));
+            let Some(frame0) = frame0 else { break };
+            if frame0.is_empty() {
                 break;
-            };
-            if frame.is_empty() {
-                continue;
             }
+
+            // Blend lineal entre los vecinos. Cuando `frac == 0` (posición
+            // exacta sobre un ciclo) sale una copia del frame y no hay costo
+            // extra: se evita el bucle con el caso trivial.
+            let blended: Vec<f32> = if frac <= f32::EPSILON {
+                frame0.to_vec()
+            } else {
+                let other = frame1.unwrap_or(frame0);
+                frame0
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &a)| {
+                        let b = other.get(k).copied().unwrap_or(a);
+                        a + (b - a) * frac
+                    })
+                    .collect()
+            };
+            let frame = blended.as_slice();
 
             // El ciclo seleccionado va al frente del volumen y el último al
             // fondo: con la cámara inclinada 30° se ve la pila completa, y el
