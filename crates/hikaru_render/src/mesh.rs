@@ -644,10 +644,10 @@ impl MeshRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                // Sin culling: la cinta son dos láminas opuestas, no un volumen
-                // cerrado, y la vista de OpenWavetable la muestra desde los dos
-                // lados. Con back-face culling una de las dos desaparece.
-                cull_mode: None,
+                // La lámina trasera de la cortina se veía como un rombo oscuro
+                // detrás de la forma. Con back-face culling desaparece y queda
+                // solo la cara que mira a la cámara.
+                cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {

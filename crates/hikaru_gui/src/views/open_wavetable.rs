@@ -156,7 +156,7 @@ const KNOB_SIZE: f32 = 36.0;
 /// cintas se proyectaban como astillas y la pila se leía como un manojo de
 /// palitos. Bajar el alto deja la onda proporcional al grosor de su banda.
 const MESH_WIDTH: f32 = 260.0;
-const MESH_HEIGHT: f32 = 70.0;
+const MESH_HEIGHT: f32 = 96.0;
 const MESH_THICKNESS: f32 = 240.0;
 
 /// Ciclos que se dibujan como máximo en la pila.
