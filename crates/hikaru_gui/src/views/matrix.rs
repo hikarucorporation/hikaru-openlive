@@ -823,8 +823,9 @@ fn slot_colors(slot_state: &SlotState, has_clip: bool, is_selected: bool) -> (Hs
     match slot_state {
         SlotState::Stopped => (rgb(0x35404F).into(), rgb(0x6B9FD4).into()),
         SlotState::QueuedToPlay => (rgb(0x5C4A1A).into(), rgb(0xE6C84C).into()),
-        // En reproducción: verde vibrante + borde resaltado.
-        SlotState::Playing => (rgb(0x1DB954).into(), rgb(0x4CFF8A).into()),
+        // En reproducción: fondo oscuro verdoso sutil para que el nombre del
+        // clip siga legible; el progreso lo marca el playhead del canvas.
+        SlotState::Playing => (rgb(0x14301F).into(), rgb(0x4CFF8A).into()),
         SlotState::QueuedToStop => (rgb(0x6B2A2A).into(), rgb(0xE06060).into()),
         SlotState::Empty => (rgb(0x252525).into(), rgb(0x3A3A3A).into()),
     }
@@ -989,52 +990,62 @@ fn render_pad(
                 cx.notify();
             });
         })
-        // Progreso del loop / playhead + fondo pulsante en Playing.
+        // Playhead discreto en Playing: línea vertical fina + barra inferior
+        // de progreso. Solo pinta dos primitivas pequeñas cuyas coordenadas X
+        // derivan del progreso (sin tocar el layout: el canvas es un overlay
+        // absoluto y el fondo del pad permanece oscuro para no tapar el texto).
         .child(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    if is_playing {
-                        // Barra de progreso inferior (loop).
-                        if let Some(ref handle) = engine_handle {
-                            if let Ok(engine) = handle.try_lock() {
-                                if let Some((frame, total)) =
-                                    engine.voice_playhead_frame(track_idx, scene_idx)
-                                {
-                                    if total > 0 {
-                                        let progress =
-                                            (frame as f32 / total as f32).clamp(0.0, 1.0);
-                                        // Relleno de progreso.
-                                        window.paint_quad(PaintQuad {
-                                            bounds: Bounds::new(
-                                                bounds.origin,
-                                                size(
-                                                    bounds.size.width * progress,
-                                                    bounds.size.height,
-                                                ),
-                                            ),
-                                            background: rgb(0xFFFFFF).into(),
-                                            border_color: Hsla::default(),
-                                            corner_radii: gpui_kit::Corners::default(),
-                                            border_widths: gpui_kit::Edges::default(),
-                                            border_style: BorderStyle::default(),
-                                        });
-                                        // Playhead vertical.
-                                        let x = bounds.origin.x
-                                            + bounds.size.width * progress;
-                                        let mut path = PathBuilder::stroke(px(1.5));
-                                        path.move_to(point(x, bounds.origin.y));
-                                        path.line_to(point(
-                                            x,
-                                            bounds.origin.y + bounds.size.height,
-                                        ));
-                                        if let Ok(p) = path.build() {
-                                            window.paint_path(p, rgb(0x062B16));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if !is_playing {
+                        return;
+                    }
+                    // Lectura no bloqueante: si el motor está ocupado este
+                    // frame, se omite el pintado en vez de frenar la UI.
+                    let Some(ref handle) = engine_handle else {
+                        return;
+                    };
+                    let Ok(engine) = handle.try_lock() else {
+                        return;
+                    };
+                    let Some((frame, total)) =
+                        engine.voice_playhead_frame(track_idx, scene_idx)
+                    else {
+                        return;
+                    };
+                    if total == 0 {
+                        return;
+                    }
+                    let progress = (frame as f32 / total as f32).clamp(0.0, 1.0);
+                    let origin = bounds.origin;
+                    let width: f32 = bounds.size.width.into();
+                    let height: f32 = bounds.size.height.into();
+                    // Opción B: barra horizontal fina (3px) clavada abajo,
+                    // rellenada de izquierda a derecha según el progreso.
+                    let bar_h = 3.0_f32;
+                    let fill_w = width * progress;
+                    if fill_w > 0.5 {
+                        window.paint_quad(PaintQuad {
+                            bounds: Bounds::new(
+                                point(origin.x, origin.y + px(height - bar_h)),
+                                size(px(fill_w), px(bar_h)),
+                            ),
+                            background: rgb(0x4CFF8A).into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
+                    }
+                    // Opción A: línea vertical delgada (2px) que avanza con el
+                    // progreso, en blanco/verde claro.
+                    let x = origin.x + px(width * progress);
+                    let mut path = PathBuilder::stroke(px(2.0));
+                    path.move_to(point(x, origin.y));
+                    path.line_to(point(x, origin.y + px(height)));
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, rgb(0xB6FFD2));
                     }
                 },
             )
