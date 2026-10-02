@@ -301,3 +301,70 @@ fn setting_drag_ends_with_mouse_up_like_the_knob() {
     // Sin arrastre, el valor no se mueve.
     assert!((editor.drag_setting_to(900.0, false) - 0.0).abs() < 1e-4);
 }
+
+#[test]
+fn settings_panel_drags_like_a_subwindow_and_stays_dropped() {
+    // 1:1 con el cursor: mover (+40, +30) desplaza el ancla eso mismo.
+    let mut editor = factory_editor();
+    assert_eq!(editor.panel_position(), (3.0, 24.0));
+
+    editor.begin_panel_drag(500.0, 500.0);
+    assert!(editor.drag_panel_to(540.0, 530.0));
+    assert_eq!(editor.panel_position(), (3.0 - 40.0, 24.0 + 30.0));
+
+    // Sin movimiento no hay cambio (ni notify espurio).
+    assert!(!editor.drag_panel_to(540.0, 530.0));
+
+    // El mouse up termina el gesto pero el panel queda donde se soltó.
+    editor.end_drag();
+    assert_eq!(editor.panel_position(), (-37.0, 54.0));
+}
+
+#[test]
+fn settings_panel_answers_immediately_after_overshooting() {
+    // La regresión del "muro invisible": antes el offset se guardaba sin
+    // acotar y se acotaba al leer, así que después de rebasar había que
+    // desandar todo lo acumulado antes de que el panel volviera a moverse.
+    // Ahora el tope está al guardar y 10px de vuelta ya responden.
+    let mut editor = factory_editor();
+    editor.begin_panel_drag(0.0, 0.0);
+    editor.drag_panel_to(-10000.0, 0.0);
+    assert_eq!(editor.panel_position(), (230.0, 24.0));
+
+    editor.begin_panel_drag(0.0, 0.0);
+    assert!(editor.drag_panel_to(10.0, 0.0));
+    assert_eq!(editor.panel_position(), (220.0, 24.0));
+}
+
+#[test]
+fn settings_panel_clamps_follow_the_measured_viewer() {
+    // Con el visor medido (365px como el rack), el panel llega hasta el borde
+    // izquierdo (right = 365 - 30 = 335): sin muro a mitad de camino.
+    let mut editor = factory_editor();
+    assert!(editor.record_viewport_size(365.0, 150.0));
+    // Segunda medida igual: no hay cambio, no hay notify espurio.
+    assert!(!editor.record_viewport_size(365.0, 150.0));
+    // Medidas rotas se ignoran sin romper nada.
+    assert!(!editor.record_viewport_size(f32::NAN, 0.0));
+
+    editor.begin_panel_drag(0.0, 0.0);
+    editor.drag_panel_to(-10000.0, 0.0);
+    // Borde izquierdo del panel en x = 365 - 335 - 140 = -110: la franja de
+    // 30px sigue a la vista para agarrarlo.
+    assert_eq!(editor.panel_position(), (335.0, 24.0));
+}
+
+#[test]
+fn settings_panel_position_never_loses_a_grabbable_strip() {
+    // Por más que se arrastre lejos, el ancla se acota para que siempre quede
+    // una franja del panel a la vista donde agarrarlo de nuevo.
+    let mut editor = factory_editor();
+    editor.begin_panel_drag(0.0, 0.0);
+    editor.drag_panel_to(10000.0, 10000.0);
+    assert_eq!(editor.panel_position(), (-110.0, 136.0));
+
+    let mut editor = factory_editor();
+    editor.begin_panel_drag(0.0, 0.0);
+    editor.drag_panel_to(-10000.0, -10000.0);
+    assert_eq!(editor.panel_position(), (230.0, 0.0));
+}

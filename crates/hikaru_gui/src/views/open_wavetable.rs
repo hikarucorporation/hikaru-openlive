@@ -247,6 +247,16 @@ pub struct WavetableEditor {
     /// Arrastre en curso sobre un slider del panel, si lo hay. Igual que el
     /// del knob pero en horizontal: relativo al punto de agarre.
     setting_drag: Option<SettingDrag>,
+    /// Offset del panel de settings respecto de su ancla (arriba-derecha del
+    /// visor), en píxeles. Persiste al cerrar y reabrir: el panel queda donde
+    /// se soltó.
+    panel_offset: (f32, f32),
+    /// Arrastre del panel como subventana, si lo hay.
+    panel_drag: Option<PanelDrag>,
+    /// Tamaño medido del visor, en píxeles. Lo reporta un canvas en cada paint
+    /// (ver `viewport_size_reporter`) y sirve para acotar el arrastre del
+    /// panel al visor real en vez de a números adivinados.
+    viewport_size: (f32, f32),
     /// Cámara del visor 3D.
     pub camera: Camera,
     pub unison: u8,
@@ -301,6 +311,9 @@ impl Default for WavetableEditor {
             render_settings: RenderSettings::default(),
             settings_open: false,
             setting_drag: None,
+            panel_offset: (0.0, 0.0),
+            panel_drag: None,
+            viewport_size: (0.0, 0.0),
             camera: Camera::default(),
             unison: 1,
             detune: 0.0,
@@ -382,6 +395,8 @@ impl WavetableEditor {
     pub fn begin_drag_target(&mut self, target: KnobTarget, window_y: f32) {
         self.drag_target = target;
         self.dragging = true;
+        self.setting_drag = None;
+        self.panel_drag = None;
         self.drag_grab = match target {
             KnobTarget::Position => self.position(),
             KnobTarget::Unison => self.norm_unison(),
@@ -452,15 +467,113 @@ impl WavetableEditor {
         self.voices = self.voices.cycle();
     }
 
-    /// Termina el arrastre (del knob o de un slider del panel).
+    /// Termina cualquier arrastre en curso (knob, slider o panel).
     pub fn end_drag(&mut self) {
         self.dragging = false;
         self.setting_drag = None;
+        self.panel_drag = None;
+    }
+
+    /// Tamaño del visor medido (o el fallback antes del primer paint).
+    fn measured_viewport(&self) -> (f32, f32) {
+        let (w, h) = self.viewport_size;
+        (
+            if w.is_finite() && w > 0.0 { w } else { FALLBACK_VIEWPORT_W },
+            if h.is_finite() && h > 0.0 { h } else { FALLBACK_VIEWPORT_H },
+        )
+    }
+
+    /// Rango del offset del panel para el visor actual.
+    ///
+    /// Se acota AL GUARDAR (`drag_panel_to`), nunca al leer: si el offset
+    /// guardado se pasara del rango visible, el viaje de vuelta no movería el
+    /// panel hasta desandar lo acumulado de más — el cursor avanza y el panel
+    /// no, que es exactamente el "muro invisible".
+    fn panel_offset_range(&self) -> ((f32, f32), (f32, f32)) {
+        let (view_w, view_h) = self.measured_viewport();
+        // `right` en [-(W-30), view_w-30]: el panel de 140px deja al menos la
+        // franja agarrable a la vista en ambos bordes, y llega hasta el borde
+        // izquierdo del visor. En `top`, del borde superior hasta dejar la
+        // tira de agarre a la vista.
+        let right_min = -(PANEL_WIDTH - PANEL_GRAB_STRIP);
+        let right_max = (view_w - PANEL_GRAB_STRIP).max(right_min);
+        let top_max = (view_h - PANEL_GRIP_H).max(0.0);
+        // Traducido a offsets desde el ancla (right = 3 - ox, top = 24 + oy).
+        (
+            (PANEL_DEFAULT_RIGHT - right_max, PANEL_DEFAULT_RIGHT - right_min),
+            (0.0 - PANEL_DEFAULT_TOP, top_max - PANEL_DEFAULT_TOP),
+        )
+    }
+
+    /// Posición del panel como `(right, top)` en píxeles dentro del visor.
+    ///
+    /// Red de seguridad redundante con el acotado al guardar: el offset ya
+    /// viene en rango, esto sólo protege contra valores viejos o externos.
+    pub fn panel_position(&self) -> (f32, f32) {
+        let ((ox_min, ox_max), (oy_min, oy_max)) = self.panel_offset_range();
+        let ox = self.panel_offset.0.clamp(ox_min, ox_max);
+        let oy = self.panel_offset.1.clamp(oy_min, oy_max);
+        (PANEL_DEFAULT_RIGHT - ox, PANEL_DEFAULT_TOP + oy)
+    }
+
+    /// Guarda la medida del visor reportada en el paint. Devuelve si cambió,
+    /// para notificar (y re-renderizar) sólo en ese caso: sin la guarda, cada
+    /// paint pediría otro frame y la interfaz no terminaría nunca uno limpio.
+    pub fn record_viewport_size(&mut self, width: f32, height: f32) -> bool {
+        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+            return false;
+        }
+        // Se acota por arriba para que un bounds degenerado (ventana
+        // minimizada, layout a medio armar) no deje topes absurdos.
+        let size = (width.min(4096.0), height.min(4096.0));
+        if size == self.viewport_size {
+            return false;
+        }
+        self.viewport_size = size;
+        true
+    }
+
+    /// Comienza el arrastre del panel desde `window` (coordenadas de ventana).
+    pub fn begin_panel_drag(&mut self, window_x: f32, window_y: f32) {
+        self.dragging = false;
+        self.setting_drag = None;
+        self.panel_drag = Some(PanelDrag {
+            grab: self.panel_offset,
+            origin: (
+                if window_x.is_finite() { window_x } else { 0.0 },
+                if window_y.is_finite() { window_y } else { 0.0 },
+            ),
+        });
+    }
+
+    /// Continúa el arrastre del panel y devuelve si cambió la posición.
+    ///
+    /// 1:1 con el cursor (sin ganancia): la subventana sigue al mouse.
+    /// Devuelve `false` si no hay arrastre o si no se movió nada, para no
+    /// notificar de gusto.
+    pub fn drag_panel_to(&mut self, window_x: f32, window_y: f32) -> bool {
+        let Some(drag) = self.panel_drag else {
+            return false;
+        };
+        if !window_x.is_finite() || !window_y.is_finite() {
+            return false;
+        }
+        let ((ox_min, ox_max), (oy_min, oy_max)) = self.panel_offset_range();
+        let next = (
+            (drag.grab.0 + (window_x - drag.origin.0)).clamp(ox_min, ox_max),
+            (drag.grab.1 + (window_y - drag.origin.1)).clamp(oy_min, oy_max),
+        );
+        if next == self.panel_offset {
+            return false;
+        }
+        self.panel_offset = next;
+        true
     }
 
     /// Comienza el arrastre de un slider del panel en `window_x`.
     pub fn begin_setting_drag(&mut self, param: SettingParam, window_x: f32) {
         self.dragging = false;
+        self.panel_drag = None;
         self.setting_drag = Some(SettingDrag {
             param,
             grab: param.get(&self.render_settings),
@@ -708,6 +821,36 @@ struct SettingDrag {
     origin_x: f32,
 }
 
+/// Arrastre del panel de settings como subventana.
+#[derive(Clone, Copy, Debug)]
+struct PanelDrag {
+    /// Offset del panel en el instante del `mouse down`.
+    grab: (f32, f32),
+    /// Punto de la ventana donde se apretó el botón, en píxeles.
+    origin: (f32, f32),
+}
+
+/// Ancla por defecto del panel: 3px del borde derecho y 24px del superior del
+/// visor (debajo de la fila de botones).
+const PANEL_DEFAULT_RIGHT: f32 = 3.0;
+const PANEL_DEFAULT_TOP: f32 = 24.0;
+
+/// Ancho del panel de settings, en píxeles. Lo usan los topes para no perderlo
+/// de vista (ver `panel_position`).
+const PANEL_WIDTH: f32 = 140.0;
+
+/// Franja mínima visible del panel, en píxeles. Los topes garantizan que al
+/// menos esto quede siempre a la vista para volver a agarrarlo.
+const PANEL_GRAB_STRIP: f32 = 30.0;
+
+/// Alto mínimo de la tira de agarre, para el tope vertical.
+const PANEL_GRIP_H: f32 = 14.0;
+
+/// Tamaño del visor usado antes del primer paint (el reportero lo mide en el
+/// primer frame, así que estos valores casi nunca se usan).
+const FALLBACK_VIEWPORT_W: f32 = 260.0;
+const FALLBACK_VIEWPORT_H: f32 = 150.0;
+
 /// Píxeles de arrastre horizontal que recorren el rango entero de un slider.
 ///
 /// El mismo orden de magnitud que [`DRAG_RANGE_PX`] del knob: el gesto se
@@ -791,8 +934,11 @@ pub fn render(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) ->
 /// no puede tomar un write lock para eso.
 fn knob_dragging(cx: &gpui_kit::App, track_idx: usize, slot_idx: usize) -> bool {
     let app = state(cx).read(cx);
-    app.slot(track_idx, slot_idx)
-        .is_some_and(|slot| slot.wavetable.dragging || slot.wavetable.setting_drag.is_some())
+    app.slot(track_idx, slot_idx).is_some_and(|slot| {
+        slot.wavetable.dragging
+            || slot.wavetable.setting_drag.is_some()
+            || slot.wavetable.panel_drag.is_some()
+    })
 }
 
 /// Registra el seguimiento del arrastre a nivel de ventana.
@@ -836,9 +982,12 @@ fn register_drag_tracking(
             .map(|slot| slot.wavetable.position());
 
         let changed = with_editor_if(cx, track_idx, slot_idx, |editor| {
-            // Los sliders del panel se arrastran en horizontal; el knob, en
-            // vertical. Un solo gesto activo por vez: el `mouse down` que lo
-            // empezó ya apagó el otro.
+            // Un solo gesto activo por vez: el `mouse down` que lo empezó ya
+            // apagó los otros. El panel se mueve 1:1 con el cursor, los
+            // sliders en horizontal y el knob en vertical.
+            if editor.panel_drag.is_some() {
+                return editor.drag_panel_to(event.position.x.as_f32(), event.position.y.as_f32());
+            }
             if editor.setting_drag.is_some() {
                 let previous = editor.setting_drag_value();
                 editor.drag_setting_to(event.position.x.as_f32(), event.modifiers.shift);
@@ -857,6 +1006,29 @@ fn register_drag_tracking(
             // que hacer. Se deja el bloque para que el motivo quede escrito.
         }
     });
+}
+
+/// Reporta el tamaño real del visor en cada paint para acotar el arrastre del
+/// panel al visor medido (no a números adivinados).
+///
+/// Es un canvas invisible sin hitbox: no dibuja ni intercepta el mouse, sólo
+/// deja la medida en el editor —y sólo cuando cambia, para no realimentar
+/// frames para siempre.
+fn viewport_size_reporter(track_idx: usize, slot_idx: usize) -> AnyElement {
+    canvas(
+        |_bounds, _window, _cx| {},
+        move |bounds, _state, _window, cx| {
+            with_editor_if(cx, track_idx, slot_idx, |editor| {
+                editor.record_viewport_size(
+                    bounds.size.width.as_f32(),
+                    bounds.size.height.as_f32(),
+                )
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+    .into_any_element()
 }
 
 /// Canvas invisible que mantiene vivo el seguimiento del arrastre.
@@ -1461,17 +1633,16 @@ fn setting_row(
 /// es inmediato.
 ///
 /// El panel va anclado arriba Y abajo del visor (`top` + `bottom`): su altura
-/// es siempre el espacio disponible, ni un píxel más ni menos. Si el contenido
-/// sobra (visor chico), el sobrante se recorre con la RUEDA del mouse —la
-/// barrita lateral es sólo indicador, en GPUI no se arrastra— y si entra todo,
-/// no hay scroll. Anclar un solo borde (o usar `max_h` mayor que el visor)
-/// dejaba al `Scrollable` sin overflow interno y la rueda no tenía nada para
-/// mover.
-fn settings_panel(
-    track_idx: usize,
-    slot_idx: usize,
-    settings: &RenderSettings,
-) -> AnyElement {
+/// es siempre el espacio disponible. Si el contenido sobra (visor chico), el
+/// sobrante se recorre con la RUEDA del mouse.
+///
+/// OJO: nada de `overflow_y_scrollbar()` del kit acá. Ese helper envuelve en
+/// un `Scrollable` cuyo layout NO copia `position`/`inset`: el `absolute` con
+/// `right`/`top` se perdía en el wrapper, el panel caía arriba-izquierda del
+/// visor y ningún arrastre lo movía (el "muro invisible"). El scroll va
+/// directo sobre este `div` con `.id()` + `.overflow_y_scroll()`, que sí
+/// respetan el posicionamiento.
+fn settings_panel(track_idx: usize, slot_idx: usize, editor: &WavetableEditor) -> AnyElement {
     // Parejas por fila: anchos, profundidad/cámara, fade/suavizado y glow.
     let pairs = [
         (SettingParam::LineWidth, SettingParam::LineWidth2d),
@@ -1479,19 +1650,44 @@ fn settings_panel(
         (SettingParam::Yaw, SettingParam::Pitch),
         (SettingParam::AaFeather, SettingParam::Glow),
     ];
+    let settings = &editor.render_settings;
+    let (right, top) = editor.panel_position();
     v_flex()
+        .id("wt_settings_scroll")
         .absolute()
-        .right(px(3.0))
-        .top(px(24.0))
+        .right(px(right))
+        .top(px(top))
         .bottom(px(3.0))
         .w(px(140.0))
-        .overflow_y_scrollbar()
+        .overflow_y_scroll()
         .p(px(3.0))
         .gap(px(1.0))
         .bg(rgb(0x181B22))
         .border_1()
         .border_color(rgb(0x3A4152))
         .rounded(px(3.0))
+        // Tira de agarre: arrastrarla mueve el panel como subventana. Es sólo
+        // un `Label` (sin controles adentro) para que el `mouse down` no
+        // compita con ningún slider o botón.
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_center()
+                .child(
+                    Label::new("⋮⋮ ajustes")
+                        .text_xs()
+                        .text_color(rgb(0x6A7080)),
+                )
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.begin_panel_drag(
+                            event.position.x.as_f32(),
+                            event.position.y.as_f32(),
+                        );
+                    });
+                }),
+        )
         .children(pairs.iter().map(|(left, right)| {
             setting_row(track_idx, slot_idx, (*left, left.get(settings)), (*right, right.get(settings)))
         }))
@@ -1514,6 +1710,7 @@ fn render_viewport(
         .border_color(rgb(0x2A2E3A))
         .rounded(px(3.0))
         .overflow_hidden()
+        .child(viewport_size_reporter(track_idx, slot_idx))
         .child(match &view.viewer {
             Some(image) => img(image.clone())
                 .id("wt_viewport_3d")
@@ -1528,7 +1725,7 @@ fn render_viewport(
         })
         .child(view_mode_controls(track_idx, slot_idx, editor))
         .when(editor.settings_open, |this| {
-            this.child(settings_panel(track_idx, slot_idx, &editor.render_settings))
+            this.child(settings_panel(track_idx, slot_idx, editor))
         })
         .into_any_element()
 }
@@ -1699,6 +1896,7 @@ fn render_viewport_card(
         .border_color(rgb(0x2A2E3A))
         .rounded(px(3.0))
         .overflow_hidden()
+        .child(viewport_size_reporter(track_idx, slot_idx))
         .child(match &view.viewer {
             Some(image) => img(image.clone())
                 .id("wt_viewport_3d")
@@ -1713,7 +1911,7 @@ fn render_viewport_card(
         })
         .child(view_mode_controls(track_idx, slot_idx, editor))
         .when(editor.settings_open, |this| {
-            this.child(settings_panel(track_idx, slot_idx, &editor.render_settings))
+            this.child(settings_panel(track_idx, slot_idx, editor))
         })
         .child(
             v_flex()
