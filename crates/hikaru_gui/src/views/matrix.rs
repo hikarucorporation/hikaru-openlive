@@ -847,23 +847,15 @@ fn slot_hover_border(slot_state: &SlotState, has_clip: bool) -> Hsla {
     }
 }
 
-fn slot_display_text(slot_state: &SlotState, has_clip: bool, clip_name: &str) -> String {
+fn slot_display_text(_slot_state: &SlotState, has_clip: bool, clip_name: &str) -> String {
     if !has_clip {
         // Celda vacía: pad oscuro limpio, sin texto genérico.
         return String::new();
     }
-    match slot_state {
-        SlotState::Playing => {
-            if clip_name.is_empty() {
-                "▶ Playing".to_string()
-            } else {
-                format!("▶ {}", clip_name)
-            }
-        }
-        SlotState::QueuedToPlay => "… Play".to_string(),
-        SlotState::QueuedToStop => "■ Stop".to_string(),
-        _ => clip_name.to_string(),
-    }
+    // Nombre limpio, sin prefijos de estado (▶/■/…): el mini-botón de la
+    // esquina es el indicador de estado único y el label se trunca con
+    // ellipsis en el layout (una sola línea pequeña).
+    clip_name.to_string()
 }
 
 fn play_glyph(slot_state: &SlotState, has_clip: bool) -> &'static str {
@@ -897,16 +889,6 @@ fn render_pad(
     let glyph = play_glyph(&slot_state, has_clip);
     let is_playing = slot_state == SlotState::Playing;
     let is_empty = !has_clip;
-    let status_dot: Hsla = if is_empty {
-        rgb(0x5A5A5A).into()
-    } else {
-        match slot_state {
-            SlotState::Playing => rgb(0x0AFF6B).into(),
-            SlotState::QueuedToPlay => rgb(0xE6C84C).into(),
-            SlotState::QueuedToStop => rgb(0xE06060).into(),
-            _ => rgb(0x6B9FD4).into(),
-        }
-    };
 
     let pad = div()
         .id(SharedString::from(format!("matrix_pad_{}_{}", track_idx, scene_idx)))
@@ -1056,92 +1038,78 @@ fn render_pad(
             .absolute()
             .inset_0(),
         )
-        // Botón Play/Stop pequeño (estilo Arranger: cuadrado sólido en vacíos).
+        // Cabecera del pad: mini-botón Play/Stop + nombre del clip en una
+        // sola fila (padding 4px arriba/izquierda, alineados con items_center).
+        // El botón es el indicador de estado único (▶/■/… + color); el nombre
+        // va en una sola línea pequeña truncada con ellipsis (`Cymatics - …`)
+        // y el resto de la superficie queda limpia para progreso y selección.
         .child(
             div()
                 .absolute()
-                .left(px(5.0))
-                .top(px(5.0))
-                .w(px(20.0))
-                .h(px(20.0))
-                .rounded(px(3.0))
-                .bg(if has_clip {
-                    if is_playing {
-                        rgb(0x062B16)
-                    } else {
-                        rgb(0x1B6FB5)
-                    }
-                } else {
-                    rgb(0x32323C)
-                })
-                .border_1()
-                .border_color(if is_playing {
-                    rgb(0x4CFF8A)
-                } else {
-                    rgb(0x5A5A5A)
-                })
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|this| this.border_color(rgb(0x5AB4FF)))
-                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |s, cx| {
-                        s.matrix_state.selected_slot = Some((track_idx, scene_idx));
-                        if has_clip {
-                            let proxy = s.audio_proxy.clone();
-                            trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
-                        }
-                        // En vacío el mini-botón no dispara: sólo selecciona.
-                        cx.notify();
-                    });
-                })
-                .child(if has_clip {
-                    Label::new(glyph)
-                        .text_size(px(10.0))
-                        .text_color(rgb(0xFFFFFF))
-                        .into_any_element()
-                } else {
-                    // Stop: cuadrado sólido limpio, al estilo del Arranger.
-                    div().w(px(7.0)).h(px(7.0)).bg(rgb(0xFFFFFF)).into_any_element()
-                }),
-        )
-        // Punto de estado + nombre del clip (solo si hay clip; vacío = pad limpio).
-        .child(
-            div()
-                .absolute()
-                .left(px(30.0))
+                .top(px(4.0))
+                .left(px(4.0))
                 .right(px(4.0))
-                .top_0()
-                .bottom_0()
+                .h(px(20.0))
                 .flex()
-                .flex_col()
-                .justify_center()
-                .gap(px(1.0))
+                .flex_row()
+                .items_center()
+                .gap(px(4.0))
                 .overflow_hidden()
+                .child(
+                    div()
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .flex_shrink_0()
+                        .rounded(px(3.0))
+                        .bg(if has_clip {
+                            if is_playing {
+                                rgb(0x062B16)
+                            } else {
+                                rgb(0x1B6FB5)
+                            }
+                        } else {
+                            rgb(0x32323C)
+                        })
+                        .border_1()
+                        .border_color(if is_playing {
+                            rgb(0x4CFF8A)
+                        } else {
+                            rgb(0x5A5A5A)
+                        })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|this| this.border_color(rgb(0x5AB4FF)))
+                        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |s, cx| {
+                                s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                                if has_clip {
+                                    let proxy = s.audio_proxy.clone();
+                                    trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
+                                }
+                                // En vacío el mini-botón no dispara: sólo selecciona.
+                                cx.notify();
+                            });
+                        })
+                        .child(if has_clip {
+                            Label::new(glyph)
+                                .text_size(px(10.0))
+                                .text_color(rgb(0xFFFFFF))
+                                .into_any_element()
+                        } else {
+                            // Stop: cuadrado sólido limpio, al estilo del Arranger.
+                            div().w(px(7.0)).h(px(7.0)).bg(rgb(0xFFFFFF)).into_any_element()
+                        }),
+                )
                 .when(has_clip, move |this| {
-                    let status_label = match slot_state {
-                        SlotState::Playing => "PLAYING".to_string(),
-                        SlotState::QueuedToPlay => "QUEUED ▶".to_string(),
-                        SlotState::QueuedToStop => "STOPPING".to_string(),
-                        _ => "STOPPED".to_string(),
-                    };
                     this.child(
-                        h_flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(status_dot))
-                            .child(
-                                Label::new(status_label)
-                                    .text_size(px(7.0))
-                                    .text_color(rgb(0xFFFFFF)),
-                            ),
-                    )
-                    .child(
                         Label::new(display_text.clone())
                             .text_size(px(9.0))
-                            .text_color(rgb(0xFFFFFF)),
+                            .text_color(rgb(0xFFFFFF))
+                            .flex_1()
+                            .truncate(),
                     )
                 }),
         );
