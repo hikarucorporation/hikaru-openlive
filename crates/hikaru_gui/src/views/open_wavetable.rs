@@ -1309,8 +1309,7 @@ fn request_view(cx: &mut Context<HikaruApp>, editor: &WavetableEditor) -> Waveta
 fn view_mode_controls(
     track_idx: usize,
     slot_idx: usize,
-    mode: RenderMode,
-    settings_open: bool,
+    editor: &WavetableEditor,
 ) -> AnyElement {
     h_flex()
         .absolute()
@@ -1325,7 +1324,11 @@ fn view_mode_controls(
                     Label::new("⚙")
                         .text_xs()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(if settings_open { rgb(0xFF6E00) } else { rgb(0x8A90A0) }),
+                        .text_color(if editor.settings_open {
+                            rgb(0xFF6E00)
+                        } else {
+                            rgb(0x8A90A0)
+                        }),
                 )
                 .on_click(move |_, _, cx| {
                     with_editor(cx, track_idx, slot_idx, |editor| {
@@ -1338,7 +1341,7 @@ fn view_mode_controls(
                 .rounded(ButtonRounded::None)
                 .compact()
                 .child(
-                    Label::new(mode.label())
+                    Label::new(editor.render_mode.label())
                         .text_xs()
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(0xFF6E00)),
@@ -1349,39 +1352,70 @@ fn view_mode_controls(
                     });
                 }),
         )
+        .child(
+            Button::new(format!("wt_meshtype_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .compact()
+                .child(
+                    Label::new(format!("Malla: {}", editor.render_settings.mesh.label()))
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x8A90A0)),
+                )
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.render_settings.mesh = editor.render_settings.mesh.cycle();
+                    });
+                }),
+        )
         .into_any_element()
 }
 
 /// Una fila de slider del panel: título, barra arrastrable en horizontal y
 /// valor. El arrastre es relativo al agarre (igual que el knob pero en X) y
 /// con Shift va a un cuarto de velocidad.
-fn setting_slider(
+/// Ancho fijo de cada celda de la grilla (la mitad del interior del panel) y
+/// de su barra: sin fracciones ni flex inciertos, el relleno es `CELL_BAR`
+/// por la fracción del valor, en píxeles exactos.
+const SETTING_CELL_W: f32 = 65.0;
+
+/// Una celda de slider para la grilla de 2 columnas: título + valor en una
+/// línea y barra arrastrable debajo. Las 8 celdas entran en 4 filas y el menú
+/// completo se ve sin scroll dentro del visor.
+fn setting_cell(
     track_idx: usize,
     slot_idx: usize,
     param: SettingParam,
     value: f32,
 ) -> AnyElement {
-    // Anchos fijos que suman al interior del panel (140px): 42 + 3 + 57 +
-    // 3 + 32 = 137. Nada se parte en dos líneas.
-    const BAR_W: f32 = 57.0;
     let (min, max) = param.range();
     let frac = ((value - min) / (max - min)).clamp(0.0, 1.0);
 
-    h_flex()
-        .w_full()
-        .items_center()
-        .gap(px(3.0))
+    v_flex()
+        .w(px(SETTING_CELL_W))
+        .gap(px(1.0))
         .child(
-            Label::new(param.title())
-                .text_xs()
-                .text_color(rgb(0x8A90A0))
-                .w(px(42.0))
-                .truncate(),
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .child(
+                    Label::new(param.title())
+                        .text_xs()
+                        .text_color(rgb(0x8A90A0))
+                        .truncate(),
+                )
+                .child(
+                    Label::new(param.format(value))
+                        .text_xs()
+                        .text_color(rgb(0xE8EAF0))
+                        .truncate(),
+                ),
         )
         .child(
             div()
-                .w(px(BAR_W))
-                .h(px(10.0))
+                .w(px(SETTING_CELL_W))
+                .h(px(8.0))
                 .bg(rgb(0x0E0F13))
                 .border_1()
                 .border_color(rgb(0x2A2E3A))
@@ -1394,7 +1428,7 @@ fn setting_slider(
                         .left(px(0.0))
                         .top(px(0.0))
                         .bottom(px(0.0))
-                        .w(px(BAR_W * frac))
+                        .w(px(SETTING_CELL_W * frac))
                         .bg(rgb(0xFF6E00)),
                 )
                 .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
@@ -1403,60 +1437,63 @@ fn setting_slider(
                     });
                 }),
         )
-        .child(
-            Label::new(param.format(value))
-                .text_xs()
-                .text_color(rgb(0xE8EAF0))
-                .w(px(32.0))
-                .truncate(),
-        )
         .into_any_element()
 }
 
-/// Panel emergente "Hikaru OpenWavetable Settings": sliders en vivo del look
-/// del visor. Cada cambio entra en la clave de caché del viewport, así que el
-/// re-render es inmediato sin más plomería.
-/// Menú contextual compacto de settings (~148px): entra en el visor sin
-/// taparlo. Una sola columna de filas de una línea —sin secciones ni textos
-/// largos— con los 8 ajustes y el selector de malla.
+/// Una fila de la grilla con dos celdas lado a lado.
+fn setting_row(
+    track_idx: usize,
+    slot_idx: usize,
+    left: (SettingParam, f32),
+    right: (SettingParam, f32),
+) -> AnyElement {
+    h_flex()
+        .w_full()
+        .gap(px(4.0))
+        .child(setting_cell(track_idx, slot_idx, left.0, left.1))
+        .child(setting_cell(track_idx, slot_idx, right.0, right.1))
+        .into_any_element()
+}
+
+/// Menú contextual compacto de settings: grilla de 2 columnas × 4 filas con
+/// los 8 sliders en vivo (el selector de malla vive en la barra superior).
+/// Cada cambio entra en la clave de caché del viewport, así que el re-render
+/// es inmediato.
+///
+/// El panel va anclado arriba Y abajo del visor (`top` + `bottom`): su altura
+/// es siempre el espacio disponible, ni un píxel más ni menos. Si el contenido
+/// sobra (visor chico), el sobrante se recorre con la RUEDA del mouse —la
+/// barrita lateral es sólo indicador, en GPUI no se arrastra— y si entra todo,
+/// no hay scroll. Anclar un solo borde (o usar `max_h` mayor que el visor)
+/// dejaba al `Scrollable` sin overflow interno y la rueda no tenía nada para
+/// mover.
 fn settings_panel(
     track_idx: usize,
     slot_idx: usize,
     settings: &RenderSettings,
 ) -> AnyElement {
+    // Parejas por fila: anchos, profundidad/cámara, fade/suavizado y glow.
+    let pairs = [
+        (SettingParam::LineWidth, SettingParam::LineWidth2d),
+        (SettingParam::DepthScale, SettingParam::DepthFade),
+        (SettingParam::Yaw, SettingParam::Pitch),
+        (SettingParam::AaFeather, SettingParam::Glow),
+    ];
     v_flex()
         .absolute()
         .right(px(3.0))
-        .top(px(26.0))
-        .w(px(148.0))
-        .max_h(px(190.0))
+        .top(px(24.0))
+        .bottom(px(3.0))
+        .w(px(140.0))
         .overflow_y_scrollbar()
-        .p(px(4.0))
-        .gap(px(2.0))
+        .p(px(3.0))
+        .gap(px(1.0))
         .bg(rgb(0x181B22))
         .border_1()
         .border_color(rgb(0x3A4152))
         .rounded(px(3.0))
-        .child(
-            Label::new("WT Settings")
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0xE8EAF0)),
-        )
-        .child(
-            Button::new(format!("wt_meshtype_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .compact()
-                .w_full()
-                .label(format!("Malla: {}", settings.mesh.label()))
-                .on_click(move |_, _, cx| {
-                    with_editor(cx, track_idx, slot_idx, |editor| {
-                        editor.render_settings.mesh = editor.render_settings.mesh.cycle();
-                    });
-                }),
-        )
-        .children(SettingParam::ALL.iter().map(|param| {
-            setting_slider(track_idx, slot_idx, *param, param.get(settings)).into_any_element()
+        .children(pairs.iter().map(|(left, right)| {
+            setting_row(track_idx, slot_idx, (*left, left.get(settings)), (*right, right.get(settings)))
         }))
         .into_any_element()
 }
@@ -1489,12 +1526,7 @@ fn render_viewport(
                 .into_any_element(),
             None => viewport_placeholder(view.error.as_deref()),
         })
-        .child(view_mode_controls(
-            track_idx,
-            slot_idx,
-            editor.render_mode,
-            editor.settings_open,
-        ))
+        .child(view_mode_controls(track_idx, slot_idx, editor))
         .when(editor.settings_open, |this| {
             this.child(settings_panel(track_idx, slot_idx, &editor.render_settings))
         })
@@ -1679,12 +1711,7 @@ fn render_viewport_card(
                 .into_any_element(),
             None => viewport_placeholder(view.error.as_deref()),
         })
-        .child(view_mode_controls(
-            track_idx,
-            slot_idx,
-            editor.render_mode,
-            editor.settings_open,
-        ))
+        .child(view_mode_controls(track_idx, slot_idx, editor))
         .when(editor.settings_open, |this| {
             this.child(settings_panel(track_idx, slot_idx, &editor.render_settings))
         })
