@@ -592,10 +592,14 @@ pub(crate) fn trigger_scene(state: &mut SessionMatrixState, audio_proxy: &AudioP
             }
             state.grid[track_idx][scene_idx].state = SlotState::Playing;
             if let Some(clip) = state.grid[track_idx][scene_idx].clip.as_mut() {
+                // Reset del playhead local: el engine rearranca además la
+                // fase de la voz desde la muestra 0 (`TriggerScene`), así
+                // que el avance visual vuelve a 0% de inmediato.
                 clip.local_bar = 1.0;
             }
             sync_midi_clip(state, audio_proxy, track_idx, scene_idx);
         }
+        // Pistas sin clip en esta escena: se dejan en su estado actual.
     }
 
     audio_proxy.send(GuiCommand::TriggerScene { scene_idx });

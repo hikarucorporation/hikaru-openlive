@@ -1109,9 +1109,18 @@ impl<'a> AudioEngine<'a> {
             .map(|c| (c.start_frame, c.start_absolute))
     }
 
-    /// Disparo de escena con fase continua: todos los clips de la fila
-    /// heredan el origen del clip más antiguo que venía sonando, para que
-    /// la escena nueva entre en fase en vez de rearrancar cada voz.
+    /// Disparo de escena con reinicio de fase (Beat/Bar Sync): todos los
+    /// clips de la fila rearrancan desde la muestra 0 (`start_frame` /
+    /// `start_absolute = now`), estén sonando o pausados, para que la escena
+    /// nueva entre perfectamente alineada al compás en vez de heredar la
+    /// fase de lo que venía sonando.
+    ///
+    /// - Pistas con clip en la escena: `is_playing = true` + puntero de
+    ///   lectura a 0. Como el playhead (`voice_playhead_frame`) deriva de
+    ///   `start_absolute`, el avance visual también vuelve a 0% de inmediato.
+    /// - Pistas con clip en otras escenas del mismo track: stop (solo el
+    ///   clip de la escena disparada queda sonando en ese track).
+    /// - Pistas sin clip en la escena: se mantienen en su estado actual.
     pub fn trigger_scene(&mut self, scene_index: usize) {
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
@@ -1121,16 +1130,11 @@ impl<'a> AudioEngine<'a> {
                 tracks_with_clip.insert(clip.track_index);
             }
         }
-        // Referencia global capturada antes de mutar (o `now` si no hay nada).
-        let (ref_frame, ref_abs) = self.legato_reference(None).unwrap_or((now, now_abs));
         for clip in self.clips.iter_mut() {
             if clip.scene_index == scene_index {
-                if clip.is_playing && clip.start_absolute == now_abs {
-                    continue;
-                }
                 clip.is_playing = true;
-                clip.start_frame = ref_frame;
-                clip.start_absolute = ref_abs;
+                clip.start_frame = now;
+                clip.start_absolute = now_abs;
                 clip.prev_frame = usize::MAX;
                 clip.xfade_remaining = 0;
                 clip.xfade_len = 0;
@@ -2187,7 +2191,9 @@ mod tests {
     }
 
     #[test]
-    fn legato_scene_switch_keeps_phase() {
+    fn scene_switch_restarts_phase_from_zero() {
+        // El Scene Launcher reinicia la fase: la escena nueva rearranca
+        // desde la muestra 0 aunque otra escena llevara 1500 frames sonando.
         let mut engine = test_engine();
         engine.set_mode(EngineMode::OpenLive);
         let n = 8192u64;
@@ -2200,10 +2206,10 @@ mod tests {
         let mut raw = vec![0.0f32; 64 * 2];
         let mut buf = AudioBuffer::new(&mut raw);
         engine.process(&mut buf);
-        let expect = (1500.0f32 / n as f32).tanh();
+        let expect = (0.0f32 / n as f32).tanh();
         assert!(
             (raw[0] - expect).abs() < 2e-3,
-            "escena nueva debe entrar en fase: {} vs esperado {}",
+            "escena nueva debe rearrancar desde 0: {} vs esperado {}",
             raw[0], expect
         );
     }
