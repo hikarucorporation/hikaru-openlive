@@ -176,6 +176,19 @@ pub struct MatrixClip {
     pub loop_end: u64,
     pub loop_enabled: bool,
     pub has_time_selection: bool,
+    /// Picos normalizados 0..=1 para la mini waveform del pad.
+    ///
+    /// Se calcula una sola vez al cargar el archivo (leyendo el WAV por
+    /// streaming, sin decodificarlo entero) y el render solo lo copia para
+    /// pintarlo: recalcular la forma de onda en cada frame costaría una
+    /// pasada completa sobre el audio por pad y por frame.
+    pub peaks: Vec<f32>,
+}
+
+impl MatrixClip {
+    ///_bins de la mini waveform del pad. A 110px de ancho basta uno cada dos
+    /// píxeles: más bins no se distinguen y solo multiplican el path.
+    pub const PEAK_BINS: usize = 56;
 }
 
 impl MatrixClip {
@@ -683,6 +696,17 @@ pub fn load_clip_into_slot(
     let mut local_state = PlaylistState::default();
     local_state.zoom_x = state.editor_zoom_x;
 
+    // Picos para la mini waveform del pad: se calculan una sola vez al cargar
+    // el archivo, no en cada frame de pintado.
+    let peaks = if is_midi {
+        Vec::new()
+    } else {
+        crate::views::open_dms_sampler::load_peaks_from_wav(
+            path_str.as_str(),
+            MatrixClip::PEAK_BINS,
+        )
+    };
+
     state.grid[track_idx][scene_idx] = MatrixSlot {
         state: SlotState::Stopped,
         clip: Some(MatrixClip {
@@ -698,6 +722,7 @@ pub fn load_clip_into_slot(
             loop_end: 0,
             loop_enabled: true,
             has_time_selection: true,
+            peaks,
         }),
     };
 
@@ -762,6 +787,11 @@ pub fn append_sample_as_event(
             events.push(AudioEvent::new_full(id, name, samples, channels, sr, start));
         }
         clip.refresh_preview();
+        // La waveform del pad refleja el clip ya extendido con el sample nuevo.
+        clip.peaks = crate::views::open_dms_sampler::load_peaks_from_wav(
+            path_str.as_str(),
+            MatrixClip::PEAK_BINS,
+        );
         sync_audio_events_to_engine(clip, audio_proxy, track_idx, scene_idx);
     } else {
         audio_proxy.send(GuiCommand::LoadClip {
@@ -882,6 +912,7 @@ fn render_pad(
     drop_sample_ready: bool,
     clipboard_ready: bool,
     engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
+    peaks: Vec<f32>,
 ) -> AnyElement {
     let (bg, border) = slot_colors(&slot_state, has_clip, is_selected);
     let hover_border = slot_hover_border(&slot_state, has_clip);
@@ -909,6 +940,51 @@ fn render_pad(
         })
         .when(is_playing, |d| {
             d.border_2().border_color(rgb(0x4CFF8A))
+        })
+        // Capa 1 (la más baja): mini waveform de fondo. Es el primer hijo del
+        // pad, así que el playhead y la cabecera quedan por encima; el alpha
+        // bajo (~28%) y el margen vertical dejan el nombre del clip legible.
+        .when(!peaks.is_empty(), |d| {
+            d.child(canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let left = bounds.origin.x.as_f32();
+                    let width = bounds.size.width.as_f32().max(1.0);
+                    let height = bounds.size.height.as_f32().max(1.0);
+                    // Margen interno: la silueta no toca los bordes superior,
+                    // inferior ni laterales del pad.
+                    let pad_x = 4.0_f32;
+                    let pad_y = 6.0_f32;
+                    let usable_w = (width - pad_x * 2.0).max(1.0);
+                    let usable_h = (height - pad_y * 2.0).max(1.0);
+                    let middle = bounds.origin.y.as_f32() + height / 2.0;
+                    // Un path por mitad: silueta simétrica legible con menos
+                    // segmentos que una barra por bin.
+                    for mirror in [false, true] {
+                        let mut path = PathBuilder::stroke(px(1.0));
+                        for (index, peak) in peaks.iter().enumerate() {
+                            let x = left + pad_x + usable_w * index as f32 / peaks.len() as f32;
+                            let amplitude = usable_h * 0.5 * peak.clamp(0.0, 1.0);
+                            let y = if mirror {
+                                middle + amplitude
+                            } else {
+                                middle - amplitude
+                            };
+                            if index == 0 {
+                                path.move_to(point(px(x), px(y)));
+                            } else {
+                                path.line_to(point(px(x), px(y)));
+                            }
+                        }
+                        if let Ok(path) = path.build() {
+                            let peak_color: Hsla = rgba(0xFFFFFF47).into();
+                            window.paint_path(path, peak_color);
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .inset_0())
         })
         // Drop target del Drag & Drop desde el Explorer: acepta solo el
         // payload tipado `ExplorerAudioDrag` y carga el clip en este slot.
@@ -1248,13 +1324,21 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .iter()
         .map(|s| s.name.clone())
         .collect();
-    let slots: Vec<Vec<(SlotState, Option<String>)>> = app
+    // El snapshot incluye los picos ya cacheados del clip: el render solo
+    // copia el `Vec` para pintarlo, nunca recalcula la forma de onda.
+    let slots: Vec<Vec<(SlotState, Option<String>, Vec<f32>)>> = app
         .matrix_state
         .grid
         .iter()
         .map(|row| {
             row.iter()
-                .map(|slot| (slot.state.clone(), slot.clip.as_ref().map(|c| c.name.clone())))
+                .map(|slot| {
+                    (
+                        slot.state.clone(),
+                        slot.clip.as_ref().map(|c| c.name.clone()),
+                        slot.clip.as_ref().map(|c| c.peaks.clone()).unwrap_or_default(),
+                    )
+                })
                 .collect()
         })
         .collect();
@@ -1276,11 +1360,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let mut scene_cells: Vec<AnyElement> = Vec::new();
 
         for scene_idx in 0..scenes_len {
-            let (slot_state, clip_name_opt) = slots
+            let (slot_state, clip_name_opt, peaks) = slots
                 .get(track_idx)
                 .and_then(|r| r.get(scene_idx))
                 .cloned()
-                .unwrap_or((SlotState::Empty, None));
+                .unwrap_or((SlotState::Empty, None, Vec::new()));
             let clip_name = clip_name_opt.unwrap_or_default();
             let has_clip = !clip_name.is_empty();
             let is_selected = selected == Some((track_idx, scene_idx));
@@ -1295,6 +1379,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 drop_sample_ready,
                 clipboard_ready,
                 engine_handle.clone(),
+                peaks,
             ));
         }
 
@@ -1373,7 +1458,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         // ¿Hay al menos un clip en esta escena? Atenúa el header si está vacía.
         let has_any_clip = slots
             .iter()
-            .any(|row| row.get(scene_idx).map(|(_, n)| n.is_some()).unwrap_or(false));
+            .any(|row| row.get(scene_idx).map(|(_, n, _)| n.is_some()).unwrap_or(false));
         scene_headers.push(render_scene_launcher(scene_idx, name, has_any_clip));
     }
 
@@ -1466,7 +1551,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     let clip_label = slots
                         .get(t)
                         .and_then(|r| r.get(s))
-                        .and_then(|(_, n)| n.clone())
+                        .and_then(|(_, n, _)| n.clone())
                         .unwrap_or_default();
                     if clip_label.is_empty() {
                         format!("CLIP EDITOR — Track {} | Scene {}", t + 1, s + 1)
