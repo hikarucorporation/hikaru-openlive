@@ -19,7 +19,7 @@
 //! diagnóstico es el glob y no el hecho de testear este crate: ese módulo no
 //! importa `gpui_kit::*`.
 
-use super::open_wavetable::{WavetableEditor, DRAG_RANGE_PX};
+use super::open_wavetable::{SettingParam, WavetableEditor, DRAG_RANGE_PX};
 use super::wavetable_io::Wavetable;
 
 /// El ángulo de la marca del knob, en grados, que es como se lee en pantalla.
@@ -266,4 +266,38 @@ fn a_full_quarter_turn_moves_through_the_whole_table() {
     // `origen - actual`, así que bajar la Y sube el knob.
     editor.drag_to(1000.0 - 135.0 * DRAG_RANGE_PX / 270.0, false);
     assert!((editor.position() - 0.5).abs() < 0.01, "media vuelta no es la mitad de la tabla");
+}
+
+#[test]
+fn setting_sliders_drag_horizontally_and_clamp_to_range() {
+    // Los sliders del panel son relativos al agarre como el knob, pero en X:
+    // 160px recorren el rango entero y el valor se acota sin pasarse.
+    let mut editor = factory_editor();
+
+    editor.begin_setting_drag(SettingParam::Yaw, 1000.0);
+    // Rango -30..30 (60 de recorrido): 160px a la derecha = +60, acotado a 30.
+    assert!((editor.drag_setting_to(1160.0, false) - 30.0).abs() < 1e-4);
+    assert!((editor.render_settings.yaw_deg - 30.0).abs() < 1e-4);
+
+    editor.begin_setting_drag(SettingParam::Yaw, 1000.0);
+    // Hacia la izquierda baja: medio recorrido son -30 desde el agarre en 30.
+    assert!((editor.drag_setting_to(920.0, false) - 0.0).abs() < 1e-4);
+
+    // Con Shift va a un cuarto de velocidad (mismo factor que el knob).
+    editor.begin_setting_drag(SettingParam::Glow, 1000.0);
+    // Rango 0.3..2.0 (1.7 de recorrido): 160px con fine = +0.425 sobre 1.0.
+    assert!((editor.drag_setting_to(1160.0, true) - 1.425).abs() < 1e-4);
+}
+
+#[test]
+fn setting_drag_ends_with_mouse_up_like_the_knob() {
+    // El `mouse up` del módulo termina los dos gestos: si el de settings
+    // quedara vivo, el próximo movimiento del mouse movería un slider solo.
+    let mut editor = factory_editor();
+    editor.begin_setting_drag(SettingParam::Pitch, 500.0);
+    assert!(editor.setting_drag_value().is_some());
+    editor.end_drag();
+    assert!(editor.setting_drag_value().is_none());
+    // Sin arrastre, el valor no se mueve.
+    assert!((editor.drag_setting_to(900.0, false) - 0.0).abs() < 1e-4);
 }

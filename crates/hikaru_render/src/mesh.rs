@@ -47,6 +47,10 @@ struct Uniforms {
     light_intensity: f32,
     // Tinte base de la malla (RGBA).
     tint: vec4<f32>,
+    // Ancho del suavizado de borde en píxeles (ver `RenderSettings::aa_feather`):
+    // 0 es trazo duro. Llega por uniforme para no reconstruir geometría al
+    // mover el slider del panel.
+    aa_feather: f32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -88,13 +92,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Antialiasing analítico del borde: `uv.x` es la coordenada transversal
     // de la línea (-1..+1, ver `push_terrain_line` y `push_ribbon`). El alfa
-    // cae a 0 en ~1 píxel (vía `fwidth`) en vez de serruchar el borde, y las
-    // líneas lejanas —cuya proyección es más fina que el píxel— se atenúan en
-    // vez de titilar o saltearse. Funciona con el blending normal del pipeline
-    // (MSAA real exigiría texturas multimuestra en el `RenderTarget`, que es
-    // de `context`, no de este pipeline).
+    // cae a 0 en `aa_feather` píxeles (vía `fwidth`) en vez de serruchar el
+    // borde, y las líneas lejanas —cuya proyección es más fina que el píxel—
+    // se atenúan en vez de titilar o saltearse. Funciona con el blending
+    // normal del pipeline (MSAA real exigiría texturas multimuestra en el
+    // `RenderTarget`, que es de `context`, no de este pipeline).
     let edge = 1.0 - abs(in.uv.x);
-    let aa = clamp(edge / (fwidth(in.uv.x) + 1e-6), 0.0, 1.0);
+    let aa = clamp(edge / (fwidth(in.uv.x) * uniforms.aa_feather + 1e-6), 0.0, 1.0);
 
     let lit = 0.25 + 0.75 * diffuse;
     let color = vec4<f32>(uniforms.tint.rgb * (lit + 0.35 * rim) * shade, uniforms.tint.a * aa);
@@ -211,26 +215,137 @@ impl RenderMode {
 /// sin cambiar la topología (sólo la densidad).
 const TERRAIN_MIN_COLUMNS: u32 = 128;
 
-/// Shear lateral fijo del terreno 3D: `-tan(15°)`.
-///
-/// Con nuestro signo de Z (frente `+`, fondo `-`), el fondo (`Z < 0`) se corre
-/// a la derecha en pantalla, como en la fórmula de diseño (`yaw ~15°`).
-const TERRAIN_SKEW_X: f32 = -0.2679;
-
-/// Shear vertical fijo del terreno 3D: `+tan(25°)`.
-///
-/// En la fórmula de diseño (`screen_y = cy - (Y - Z·skew_y)·s`, con NDC y-up
-/// el signo exterior cae): el fondo (`Z < 0`) sube en pantalla
-/// (`pitch ~25°` visto desde arriba), como en Vital.
-const TERRAIN_SKEW_Y: f32 = 0.4663;
+/// Ancho de trazo saneado del panel: finito y dentro de un rango que ni
+/// desaparece (invisible) ni tapa a las filas vecinas.
+fn sanitize_width(value: f32) -> f32 {
+    if value.is_finite() { value.clamp(0.5, 12.0) } else { TERRAIN_LINE_WIDTH }
+}
 
 /// Fracción del viewport que ocupa el terreno encuadrado.
 const TERRAIN_FILL: f32 = 0.85;
 
-/// Atenuación del fondo: la última fila rinde `1 - esto` del brillo de la
-/// primera, a igual distancia de `WT POS`. Es leve a propósito: el fondo sigue
-/// legible como referencia y el realce del activo sigue mandando.
+/// Atenuación del fondo por defecto: la última fila rinde `1 - esto` del
+/// brillo de la primera, a igual distancia de `WT POS`. Es leve a propósito:
+/// el fondo sigue legible como referencia y el realce del activo sigue
+/// mandando. El panel de settings la expone como slider (ver
+/// [`RenderSettings::depth_fade`]).
 const TERRAIN_DEPTH_FADE: f32 = 0.35;
+
+/// Yaw por defecto del terreno, en grados. Ver [`RenderSettings::yaw_deg`].
+const TERRAIN_YAW_DEG: f32 = 15.0;
+
+/// Pitch por defecto del terreno, en grados. Ver [`RenderSettings::pitch_deg`].
+const TERRAIN_PITCH_DEG: f32 = 25.0;
+
+/// Tipo de malla del terreno 3D: lo que dibuja cada fila (y, en `Solid`, lo
+/// que las conecta).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeshType {
+    /// Líneas de ancho constante (ver [`push_terrain_line`]): el trazo Vital.
+    #[default]
+    Wireframe,
+    /// Cintas con volumen mínimo (tubo en el plano X-Y, fino en Z): la línea
+    /// con cuerpo y sombreado en la silueta.
+    Ribbon,
+    /// Superficie continua que conecta las filas (heightfield X-Z con altura
+    /// en Y): el terreno sólido.
+    Solid,
+}
+
+impl MeshType {
+    /// Rótulo corto para el selector del panel.
+    pub fn label(self) -> &'static str {
+        match self {
+            MeshType::Wireframe => "Líneas",
+            MeshType::Ribbon => "Cintas",
+            MeshType::Solid => "Sólido",
+        }
+    }
+
+    /// El siguiente tipo, para el botón cíclico del panel.
+    pub fn cycle(self) -> Self {
+        match self {
+            MeshType::Wireframe => MeshType::Ribbon,
+            MeshType::Ribbon => MeshType::Solid,
+            MeshType::Solid => MeshType::Wireframe,
+        }
+    }
+}
+
+/// Parámetros de look del visor de wavetable, editables en vivo desde el
+/// panel "Hikaru OpenWavetable Settings" de la UI.
+///
+/// Es `Copy` a propósito: viaja por valor dentro del pedido de render y entra
+/// en la clave de caché, así que mover un slider invalida el frame cacheado y
+/// re-renderiza con los valores nuevos sin más plomería.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderSettings {
+    /// Grosor del trazo en 3D, en unidades locales (ver `TERRAIN_LINE_WIDTH`
+    /// como referencia). En `Ribbon` es también la profundidad del tubo.
+    pub line_width: f32,
+    /// Grosor del trazo en el modo 2D de diagnóstico.
+    pub line_width_2d: f32,
+    /// Multiplicador del espaciado en profundidad: <1 junta los sub-frames,
+    /// >1 los separa.
+    pub depth_scale: f32,
+    /// Yaw de la vista 3D en grados (desvío lateral del fondo).
+    pub yaw_deg: f32,
+    /// Pitch de la vista 3D en grados (cuánto sube el fondo en pantalla).
+    pub pitch_deg: f32,
+    /// Fade back-to-front: la última fila rinde `1 - esto` del brillo de la
+    /// primera, a igual distancia de `WT POS`.
+    pub depth_fade: f32,
+    /// Qué geometría se dibuja por fila en 3D.
+    pub mesh: MeshType,
+    /// Ancho del suavizado de borde en píxeles (0 = trazo duro). Llega al
+    /// shader como uniforme, así que no reconstruye geometría.
+    pub aa_feather: f32,
+    /// Multiplicador del tinte (brillo/glow general del visor).
+    pub glow: f32,
+}
+
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            line_width: TERRAIN_LINE_WIDTH,
+            line_width_2d: TERRAIN_LINE_WIDTH,
+            depth_scale: 1.0,
+            yaw_deg: TERRAIN_YAW_DEG,
+            pitch_deg: TERRAIN_PITCH_DEG,
+            depth_fade: TERRAIN_DEPTH_FADE,
+            mesh: MeshType::default(),
+            aa_feather: 1.0,
+            glow: 1.0,
+        }
+    }
+}
+
+impl RenderSettings {
+    /// Firma estable para la clave de caché del visor: cualquier slider mueve
+    /// algún bit y el frame se re-renderiza.
+    pub fn key_hash(&self) -> u64 {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut hash = OFFSET;
+        let mut mix = |word: u64| {
+            for byte in word.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(PRIME);
+            }
+        };
+        mix(self.line_width.to_bits() as u64);
+        mix(self.line_width_2d.to_bits() as u64);
+        mix(self.depth_scale.to_bits() as u64);
+        mix(self.yaw_deg.to_bits() as u64);
+        mix(self.pitch_deg.to_bits() as u64);
+        mix(self.depth_fade.to_bits() as u64);
+        mix(self.mesh as u64);
+        mix(self.aa_feather.to_bits() as u64);
+        mix(self.glow.to_bits() as u64);
+        hash
+    }
+}
 
 /// Matriz de proyección oblicua fija para el terreno 3D.
 ///
@@ -256,20 +371,46 @@ const TERRAIN_DEPTH_FADE: f32 = 0.35;
 /// la fija el eje limitante, igual que `Camera::fit_to_box` pero para esta
 /// proyección.
 pub fn terrain_view_proj(half: [f32; 3], aspect: f32) -> Mat4 {
+    terrain_view_proj_angled(half, aspect, TERRAIN_YAW_DEG, TERRAIN_PITCH_DEG)
+}
+
+/// Lo mismo que [`terrain_view_proj`] pero con los ángulos del panel de
+/// settings: `yaw_deg` desvía el fondo en X y `pitch_deg` lo eleva en Y.
+///
+/// Los valores se acotan y sanean acá (no sólo en la UI) porque la matriz no
+/// puede permitirse un `tan` de 90° ni un NaN: la malla desaparecería sin
+/// ningún error de wgpu que lo delate.
+pub fn terrain_view_proj_angled(
+    half: [f32; 3],
+    aspect: f32,
+    yaw_deg: f32,
+    pitch_deg: f32,
+) -> Mat4 {
     let aspect = if aspect.is_finite() && aspect > f32::EPSILON { aspect } else { 1.0 };
     let (hx, hy, hz) = (half[0].max(0.0), half[1].max(0.0), half[2].max(0.0));
 
+    // `clamp` solo no alcanza: con NaN devuelve NaN y la matriz envenenaría
+    // toda la escena. Se cae a los ángulos por defecto.
+    let yaw = if yaw_deg.is_finite() { yaw_deg.clamp(-60.0, 60.0) } else { TERRAIN_YAW_DEG };
+    let pitch =
+        if pitch_deg.is_finite() { pitch_deg.clamp(5.0, 80.0) } else { TERRAIN_PITCH_DEG };
+    let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
+    // Mismo convenio de signos que la fórmula de diseño: con Z frente `+` y
+    // fondo `-`, el fondo se corre a la derecha y sube en pantalla.
+    let skew_x = -yaw.tan();
+    let skew_y = pitch.tan();
+
     // Semi-extensiones proyectadas (peor esquina): con shear, una fila del
     // fondo suma `|hz·skew|` en cada eje además de su propio semieje.
-    let ex = hx + hz * TERRAIN_SKEW_X.abs();
-    let ey = hy + hz * TERRAIN_SKEW_Y.abs();
+    let ex = hx + hz * skew_x.abs();
+    let ey = hy + hz * skew_y.abs();
     let s = TERRAIN_FILL / ey.max(ex / aspect).max(f32::EPSILON);
     let total = (hz * 2.0).max(f32::EPSILON);
 
     [
         [s / aspect, 0.0, 0.0, 0.0],
         [0.0, s, 0.0, 0.0],
-        [s * TERRAIN_SKEW_X / aspect, -s * TERRAIN_SKEW_Y, -1.0 / total, 0.0],
+        [s * skew_x / aspect, -s * skew_y, -1.0 / total, 0.0],
         [0.0, 0.0, 0.5, 1.0],
     ]
 }
@@ -411,20 +552,23 @@ impl WavetableMesh {
     ///   ondas se apilan hacia el fondo en perspectiva, no como una torre
     ///   hacia arriba.
     ///
-    /// Cada fila es una línea de ancho constante (ver [`push_terrain_line`]):
-    /// sin faldón, sin relleno y sin volumen en Z, sólo la curva de la onda
-    /// con el mismo grosor en todas partes. Las filas son estrictamente
-    /// paralelas en profundidad y comparten la misma perspectiva X/Y, así que
-    /// no hay aristas cruzadas entre sub-frames ni barras sólidas: el terreno
-    /// se lee de frente-arriba como en Vital/Serum.
+    /// Cada fila se dibuja según `style.mesh` (ver [`RenderSettings`]):
+    /// `Wireframe` son líneas de ancho constante (ver [`push_terrain_line`]),
+    /// `Ribbon` cintas con volumen mínimo y `Solid` la superficie continua que
+    /// las conecta (ver [`push_terrain_solid`]). En los tres casos, sin faldón
+    /// ni relleno hacia ninguna base: las filas son estrictamente paralelas en
+    /// profundidad y comparten la misma perspectiva X/Y, así que no hay
+    /// aristas cruzadas entre sub-frames ni barras sólidas: el terreno se lee
+    /// de frente-arriba como en Vital/Serum.
     ///
     /// # Cómo se reparten
     ///
     /// `table` es la tabla entera tal como la entrega `wavetable_io`: `frames`
     /// bloques consecutivos de `frame_len` muestras. Se dibujan como máximo
-    /// `max_frames` filas, repartidas en la extensión total `params.thickness`
-    /// en Y: la serie completa siempre cabe en la caja y la escala global no
-    /// depende de cuántos ciclos traiga el archivo.
+    /// `max_frames` filas, repartidas en la extensión total
+    /// `params.thickness × style.depth_scale` en Z: la serie completa siempre
+    /// cabe en la caja y la escala global no depende de cuántos ciclos traiga
+    /// el archivo.
     ///
     /// Con más ciclos que `max_frames` no se dibujan todos, y los que se dibujan
     /// representan la tabla completa: se reparte el rango, no se recortan los
@@ -440,9 +584,9 @@ impl WavetableMesh {
     /// queda atenuado pero legible como referencia del terreno. El falloff de
     /// 1.5 filas hace que barrer el knob se vea como un barrido continuo y no
     /// como saltos entre filas, incluso cuando se muestrea una tabla grande.
-    /// Encima va el fade back-to-front (ver [`TERRAIN_DEPTH_FADE`]): a igual
-    /// distancia del knob, las filas traseras rinden menos, así que el
-    /// terreno se lee de atrás hacia adelante con el activo destacado.
+    /// Encima va el fade back-to-front (`style.depth_fade`): a igual distancia
+    /// del knob, las filas traseras rinden menos, así que el terreno se lee
+    /// de atrás hacia adelante con el activo destacado.
     pub fn from_table(
         table: &[f32],
         frame_len: usize,
@@ -450,6 +594,7 @@ impl WavetableMesh {
         max_frames: usize,
         frame_width: u32,
         params: WavetableMeshParams,
+        style: &RenderSettings,
     ) -> Result<Self, MeshError> {
         if table.is_empty() || frame_len == 0 {
             return Err(MeshError::WaveformTooShort);
@@ -477,19 +622,40 @@ impl WavetableMesh {
             active / (available - 1) as f32 * (count - 1) as f32
         };
 
-        // `columns` pares por fila (sin columna duplicada de cierre) y
-        // `columns - 1` quads por fila (sin segmento de cierre).
+        // Ajustes del panel, saneados acá (no sólo en la UI): la geometría no
+        // puede permitirse un NaN ni un cero que la aplaste sin que ningún
+        // error de wgpu lo delate.
+        let line_width = sanitize_width(style.line_width);
+        let depth_scale = if style.depth_scale.is_finite() {
+            style.depth_scale.clamp(0.1, 4.0)
+        } else {
+            1.0
+        };
+        let fade = if style.depth_fade.is_finite() {
+            style.depth_fade.clamp(0.0, 0.9)
+        } else {
+            TERRAIN_DEPTH_FADE
+        };
+
+        // Capacidad para el peor caso (alambre/cinta: pares por fila; sólido:
+        // un vértice por punto de grilla, que es menos).
         let mut vertices = Vec::with_capacity(count * columns * 2);
         let mut indices = Vec::with_capacity(count * (columns - 1) * 6);
 
-        // Extensión total del terreno en Z. El offset entre filas es constante
-        // (`total / count`, con medio hueco de aire en cada borde para que la
-        // primera y la última línea no queden pegadas al borde del encuadre).
-        // El ancho de línea es fijo ([`TERRAIN_LINE_WIDTH`]) y mucho menor que
-        // el hueco, así que entre una onda y la otra siempre queda aire. Con
-        // una sola fila no hay profundidad que recorrer y va centrada en 0.
-        let total = params.thickness.max(f32::EPSILON);
+        // Extensión total del terreno en Z (con la escala del panel). El offset
+        // entre filas es constante (`total / count`, con medio hueco de aire
+        // en cada borde para que la primera y la última línea no queden
+        // pegadas al borde del encuadre). Con una sola fila no hay profundidad
+        // que recorrer y va centrada en 0.
+        let total = (params.thickness * depth_scale).max(f32::EPSILON);
         let spacing = total / count as f32;
+
+        // Filas para el modo sólido: alturas ya muestreadas + plano + brillo.
+        // En alambre/cinta se emite directo por fila; en sólido se tiende la
+        // superficie una vez reunidas todas.
+        let mut grid: Vec<Vec<f32>> = Vec::new();
+        let mut zrows: Vec<f32> = Vec::new();
+        let mut row_shades: Vec<f32> = Vec::new();
 
         for slot in 0..count {
             // Fila -> índice real de la tabla, redondeado: el mismo criterio
@@ -520,24 +686,64 @@ impl WavetableMesh {
             let distance = (slot as f32 - active_slot).abs();
             let highlight = ACTIVE_SHADE
                 + (DIM_SHADE - ACTIVE_SHADE) * (distance / SHADE_FALLOFF).clamp(0.0, 1.0);
-            // Fade back-to-front: a igual distancia de `WT POS`, las filas
-            // traseras rinden menos (ver `TERRAIN_DEPTH_FADE`). El activo
-            // sigue siendo el más brillante de su zona en todos los casos.
+            // Fade back-to-front del panel: a igual distancia de `WT POS`,
+            // las filas traseras rinden menos. El activo sigue siendo el más
+            // brillante de su zona en todos los casos.
             let depth = if count > 1 {
-                1.0 - TERRAIN_DEPTH_FADE * slot as f32 / (count - 1) as f32
+                1.0 - fade * slot as f32 / (count - 1) as f32
             } else {
                 1.0
             };
             let shade = highlight * depth;
 
-            push_terrain_line(
+            match style.mesh {
+                MeshType::Wireframe => {
+                    push_terrain_line(
+                        &mut vertices,
+                        &mut indices,
+                        frame,
+                        columns,
+                        params,
+                        z_center,
+                        line_width,
+                        shade,
+                    );
+                }
+                MeshType::Ribbon => {
+                    // Tubo en el plano X-Y con espesor en Z (ver
+                    // `push_ribbon`): la misma curva con cuerpo y sombreado
+                    // en la silueta.
+                    push_ribbon(
+                        &mut vertices,
+                        &mut indices,
+                        frame,
+                        columns,
+                        params,
+                        z_center,
+                        line_width,
+                        shade,
+                    );
+                }
+                MeshType::Solid => {
+                    // La superficie se tiende al final, con todas las filas
+                    // reunidas: necesita las vecinas para las normales.
+                    grid.push(sample_heights(frame, columns, &params));
+                    zrows.push(z_center);
+                    row_shades.push(shade);
+                }
+            }
+        }
+
+        if style.mesh == MeshType::Solid && !grid.is_empty() {
+            let half_width = params.width * 0.5;
+            push_terrain_solid(
                 &mut vertices,
                 &mut indices,
-                frame,
-                columns,
-                params,
-                z_center,
-                shade,
+                &grid,
+                |c| -half_width + c as f32 / columns as f32 * params.width,
+                &zrows,
+                &row_shades,
+                line_width,
             );
         }
 
@@ -563,18 +769,29 @@ impl WavetableMesh {
         frame: &[f32],
         frame_width: u32,
         params: WavetableMeshParams,
+        style: &RenderSettings,
     ) -> Result<Self, MeshError> {
         if frame.is_empty() {
             return Err(MeshError::WaveformTooShort);
         }
         // Mismo piso de resolución que el terreno: el diagnóstico tiene que
-        // mostrar la curva real, no una versión angulosa de pocos puntos.
+        // mostrar la curva real, no una versión angulosa de pocos puntos. El
+        // grosor es el del panel para el modo 2D.
         let columns = frame_width.max(TERRAIN_MIN_COLUMNS).max(2) as usize;
 
         let mut vertices = Vec::with_capacity(columns * 2);
-        let mut indices = Vec::with_capacity((columns - 1) * 6);
+        let mut indices = Vec::with_capacity(columns.saturating_sub(1) * 6);
 
-        push_terrain_line(&mut vertices, &mut indices, frame, columns, params, 0.0, ACTIVE_SHADE);
+        push_terrain_line(
+            &mut vertices,
+            &mut indices,
+            frame,
+            columns,
+            params,
+            0.0,
+            sanitize_width(style.line_width_2d),
+            ACTIVE_SHADE,
+        );
 
         if vertices.is_empty() {
             return Err(MeshError::Empty);
@@ -629,15 +846,18 @@ fn resample(waveform: &[f32], u: f32) -> f32 {
 
 /// Agrega una cinta cerrada a los buffers de la malla.
 ///
-/// La usa [`WavetableMesh::from_waveform`] para el ciclo aislado: tubo horizontal
-/// en X-Y con espesor en Z. El terreno de [`WavetableMesh::from_table`] usa en
-/// cambio [`push_terrain_line`] (líneas planas de ancho constante en X-Z,
-/// apiladas en serie en Y).
+/// La usa [`WavetableMesh::from_waveform`] para el ciclo aislado y el modo
+/// `Ribbon` de [`WavetableMesh::from_table`]: tubo en el plano X-Y con espesor
+/// en Z. Las líneas planas del modo alambre viven en [`push_terrain_line`].
 ///
 /// El `peak` de la forma de onda es el de su propio ciclo y no el de la tabla
 /// entera. Normalizar contra el pico global haría que un frame casi en silencio
 /// se viera plano al lado de uno fuerte, que es justamente el detalle que un
 /// selector de wavetable tiene que mostrar.
+///
+/// SIN duplicar la primera columna al final y SIN segmento de cierre (la misma
+/// razón que en las líneas: unir el borde derecho con el izquierdo dibujaría
+/// una banda horizontal de todo el ancho sobre la onda).
 ///
 /// `z_center` y `depth` colocan la cinta en el eje Z; `shade` es el factor de
 /// brillo que aplica el fragment shader.
@@ -663,13 +883,8 @@ fn push_ribbon(
         .max(f32::EPSILON);
 
     let base = vertices.len() as u32;
-    // Malla de (columns + 1) x 2: la última columna repite la primera para
-    // cerrar el lazo.
-    for column in 0..=columns {
-        // La posición y la muestra dan la vuelta: la última columna vuelve al
-        // principio. Si `u` valiera 1.0, la cinta terminaría en `+width/2` y el
-        // lazo quedaría abierto con un segmento de más.
-        let phase_u = (column % columns) as f32 / columns as f32;
+    for column in 0..columns {
+        let phase_u = column as f32 / columns as f32;
 
         let sample = resample(waveform, phase_u);
         let x = -half_width + phase_u * params.width;
@@ -690,17 +905,15 @@ fn push_ribbon(
         });
     }
 
-    // Cada segmento del lazo aporta dos triángulos que unen la cara delantera
-    // con la trasera del tubo cerrado. El winding sigue la convención del
+    // Cada segmento entre columnas consecutivas aporta dos triángulos que unen
+    // la cara delantera con la trasera. El winding sigue la convención del
     // pipeline con back-face culling (ver [`MeshRenderer::new`]).
-    let ring = columns + 1;
-    for column in 0..columns {
-        let next = (column + 1) % ring;
+    for column in 0..columns.saturating_sub(1) {
         // Cada columna aporta un par de vértices (frontal, posterior), corridos
         // por `base` porque la pila mete varias cintas en el mismo buffer.
         let front_a = base + (column as u32) * 2;
         let back_a = front_a + 1;
-        let front_b = base + (next as u32) * 2;
+        let front_b = base + (column as u32 + 1) * 2;
         let back_b = front_b + 1;
 
         indices.extend_from_slice(&[front_a, back_a, front_b]);
@@ -730,8 +943,30 @@ fn push_ribbon(
 /// - Normal `+Z` uniforme (hacia la cámara, que mira desde `+Z` de frente con
 ///   pitch de 30°): sombreado parejo; la forma se lee por silueta.
 ///
-/// `z_center` coloca la línea en el eje Z; `shade` es el factor de brillo del
-/// fragment shader (tracking de `WT POS`).
+/// Alturas de un ciclo re-muestreado a `columns` puntos, normalizadas a ±0.9
+/// de la media caja con el pico del propio ciclo.
+///
+/// Es el muestreo compartido por la línea ([`push_line_strip`]) y la
+/// superficie ([`push_terrain_solid`]): un solo lugar donde la forma de onda
+/// se convierte en geometría, así que los tres tipos de malla dibujan la
+/// misma curva.
+fn sample_heights(waveform: &[f32], columns: usize, params: &WavetableMeshParams) -> Vec<f32> {
+    let peak = waveform
+        .iter()
+        .fold(0.0f32, |acc, sample| acc.max(sample.abs()))
+        .max(f32::EPSILON);
+
+    (0..columns)
+        .map(|column| {
+            let phase_u = column as f32 / columns as f32;
+            resample(waveform, phase_u) / peak * 0.9 * params.height * 0.5
+        })
+        .collect()
+}
+
+/// `z_center` coloca la línea en el eje Z; `line_width` es el ancho del trazo
+/// (ver `RenderSettings`); `shade` es el factor de brillo del fragment shader
+/// (tracking de `WT POS`).
 fn push_terrain_line(
     vertices: &mut Vec<MeshVertex>,
     indices: &mut Vec<u32>,
@@ -739,16 +974,11 @@ fn push_terrain_line(
     columns: usize,
     params: WavetableMeshParams,
     z_center: f32,
+    line_width: f32,
     shade: f32,
 ) {
     let half_width = params.width * 0.5;
-    let half_height = params.height * 0.5;
-    let half_line = TERRAIN_LINE_WIDTH * 0.5;
-
-    let peak = waveform
-        .iter()
-        .fold(0.0f32, |acc, sample| acc.max(sample.abs()))
-        .max(f32::EPSILON);
+    let heights = sample_heights(waveform, columns, &params);
 
     // Puntos de la curva en el plano X-Y, de izquierda a derecha. SIN duplicar
     // la primera columna al final y SIN segmento de cierre: unir el último
@@ -756,15 +986,33 @@ fn push_terrain_line(
     // triángulo de todo el ancho cruzando la pantalla — la diagonal fantasma
     // que se veía entre ciclos. La onda periódica ya empalma visualmente
     // porque el último sample colinda con el primero en fase.
-    let mut points = Vec::with_capacity(columns);
-    for column in 0..columns {
-        let phase_u = column as f32 / columns as f32;
-        let sample = resample(waveform, phase_u);
-        points.push((
-            -half_width + phase_u * params.width,
-            sample / peak * 0.9 * half_height,
-        ));
-    }
+    let points: Vec<(f32, f32)> = heights
+        .iter()
+        .enumerate()
+        .map(|(column, &y)| {
+            (-half_width + column as f32 / columns as f32 * params.width, y)
+        })
+        .collect();
+
+    push_line_strip(vertices, indices, &points, z_center, line_width, shade);
+}
+
+/// Emite la tira de triángulos de una curva en el plano X-Y a profundidad
+/// `z_center`, con ancho `line_width` perpendicular a la curva.
+///
+/// Es el trazado compartido por el modo alambre y por el fallback de una sola
+/// fila del modo sólido: la misma curva, el mismo grosor, el mismo winding
+/// (`+Z`, verificado) para el back-face culling del pipeline.
+fn push_line_strip(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    points: &[(f32, f32)],
+    z_center: f32,
+    line_width: f32,
+    shade: f32,
+) {
+    let half_line = (line_width * 0.5).max(0.125);
+    let columns = points.len();
 
     let base = vertices.len() as u32;
     for (i, &(x, y)) in points.iter().enumerate() {
@@ -798,12 +1046,11 @@ fn push_terrain_line(
         });
     }
 
-    // Un quad por segmento entre columnas consecutivas (`columns - 1`
-    // segmentos, sin cierre). El orden da normal geométrica `+Z` (`d × perp(d)`
-    // en el plano X-Y apunta a `-Z`, así que se emite en este orden),
-    // consistente con el back-face culling del pipeline ante la cámara que
-    // mira desde `+Z`.
-    for column in 0..columns - 1 {
+    // Un quad por segmento entre columnas consecutivas, sin cierre. El orden da
+    // normal geométrica `+Z` (`d × perp(d)` en el plano X-Y apunta a `-Z`, así
+    // que se emite en este orden), consistente con el back-face culling del
+    // pipeline ante la cámara que mira desde `+Z`.
+    for column in 0..columns.saturating_sub(1) {
         let left_a = base + (column as u32) * 2;
         let right_a = left_a + 1;
         let left_b = base + (column as u32 + 1) * 2;
@@ -814,18 +1061,109 @@ fn push_terrain_line(
     }
 }
 
+/// Agrega la superficie continua del terreno: las filas conectadas entre sí
+/// como un heightfield (X = fase, Z = profundidad, Y = altura).
+///
+/// `heights` son las filas ya muestreadas (ver [`sample_heights`]), ordenadas
+/// de adelante (`zrows[0]`, la más cercana a la cámara) hacia atrás;
+/// `shades` el brillo por fila. Cada vértice lleva la normal analítica de la
+/// superficie (`(-hx, 1, -hz)` normalizada por diferencias centrales), así que
+/// la luz modela las pendientes en vez de pintar plano.
+///
+/// Con una sola fila no hay superficie que tender y se cae a la línea
+/// ([`push_line_strip`]): el modo sólido de una tabla de un ciclo se ve igual
+/// que el alambre.
+///
+/// `uv.x` es 0 en el interior (alfa pleno) y ±1 en el borde de la grilla, para
+/// que la silueta de la superficie también tenga el suavizado del shader.
+#[allow(clippy::too_many_arguments)]
+fn push_terrain_solid(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    heights: &[Vec<f32>],
+    x_of: impl Fn(usize) -> f32,
+    zrows: &[f32],
+    shades: &[f32],
+    line_width: f32,
+) {
+    let rows = heights.len();
+    let columns = heights.first().map_or(0, Vec::len);
+    if rows == 0 || columns == 0 {
+        return;
+    }
+    if rows < 2 {
+        // Sin segunda fila no hay quads: la curva sola, con el mismo trazo.
+        let points: Vec<(f32, f32)> =
+            heights[0].iter().enumerate().map(|(c, &y)| (x_of(c), y)).collect();
+        push_line_strip(vertices, indices, &points, zrows[0], line_width, shades[0]);
+        return;
+    }
+
+    // Normaliza un gradiente a vector unitario, con eje de reserva para el
+    // caso degenerado (filas idénticas planas: la normal es +Y igual).
+    fn unit(x: f32, y: f32, z: f32) -> [f32; 3] {
+        let len = (x * x + y * y + z * z).sqrt();
+        if len > f32::EPSILON { [x / len, y / len, z / len] } else { [0.0, 1.0, 0.0] }
+    }
+
+    let base = vertices.len() as u32;
+    for i in 0..rows {
+        // Filas vecinas para la derivada en Z (clamped en los bordes).
+        let up = heights[i.saturating_sub(1)].as_slice();
+        let down = heights[(i + 1).min(rows - 1)].as_slice();
+        let dz = (zrows[(i + 1).min(rows - 1)] - zrows[i.saturating_sub(1)]).abs().max(f32::EPSILON);
+        for j in 0..columns {
+            let prev = heights[i][j.saturating_sub(1)];
+            let next = heights[i][(j + 1).min(columns - 1)];
+            // `x_of` es lineal en columnas: el paso es la diferencia real,
+            // sin asumir resolución.
+            let dx = (x_of((j + 1).min(columns - 1)) - x_of(j.saturating_sub(1))).abs().max(f32::EPSILON);
+            let hx = (next - prev) / dx;
+            let hz = (down[j] - up[j]) / dz;
+            let shade = shades[i];
+            // Borde de la grilla: silueta suavizada; interior: alfa pleno.
+            let edge = if i == 0 || i + 1 == rows || j == 0 || j + 1 == columns {
+                1.0
+            } else {
+                0.0
+            };
+            vertices.push(MeshVertex {
+                position: [x_of(j), heights[i][j], zrows[i]],
+                normal: unit(-hx, 1.0, -hz),
+                uv: [edge, shade],
+            });
+        }
+    }
+
+    // Quads de la grilla. Con filas ordenadas de adelante (+Z) hacia atrás
+    // (-Z), este orden da normal geométrica `+Y` (verificado por construcción:
+    // en plano da exactamente +Y), consistente con el culling.
+    for i in 0..rows - 1 {
+        for j in 0..columns - 1 {
+            let a = base + (i * columns + j) as u32;
+            let b = base + (i * columns + j + 1) as u32;
+            let c = base + ((i + 1) * columns + j) as u32;
+            let d = base + ((i + 1) * columns + j + 1) as u32;
+
+            indices.extend_from_slice(&[a, b, c]);
+            indices.extend_from_slice(&[b, d, c]);
+        }
+    }
+}
+
 /// Buffers de uniforms del pipeline de malla.
 ///
 /// El layout tiene que seguir en sync con el `struct Uniforms` del WGSL: 64
-/// bytes de matriz, 16 de luz y 16 de tinte. Agregar un campo lo cambia de
-/// tamaño, y como `min_binding_size` es `None` en el layout, un desfasaje no lo
-/// detecta wgpu: el shader lee floats desplazados y la malla sale con la
-/// iluminación corrida.
+/// bytes de matriz, 16 de luz, 16 de tinte y 16 de suavizado. Agregar un campo
+/// lo cambia de tamaño, y como `min_binding_size` es `None` en el layout, un
+/// desfasaje no lo detecta wgpu: el shader lee floats desplazados y la malla
+/// sale con la iluminación corrida.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct MeshUniforms {
     /// Matriz `projection * view`, en columna mayor. La arma
-    /// [`crate::camera::Camera::view_proj`].
+    /// [`crate::camera::Camera::view_proj`] (o [`terrain_view_proj`] para el
+    /// terreno 3D).
     pub view_proj: [[f32; 4]; 4],
     /// Dirección de la luz, normalizada, en espacio **local** de la malla.
     pub light_dir: [f32; 3],
@@ -833,6 +1171,11 @@ pub struct MeshUniforms {
     pub light_intensity: f32,
     /// Tinte base.
     pub tint: [f32; 4],
+    /// Ancho del suavizado de borde en píxeles (ver `RenderSettings`).
+    pub aa_feather: f32,
+    /// Relleno a 16 bytes: el tamaño total tiene que ser múltiplo de 16 como
+    /// el `struct Uniforms` del WGSL.
+    pub _pad: [f32; 3],
 }
 
 impl Default for MeshUniforms {
@@ -842,7 +1185,9 @@ impl Default for MeshUniforms {
     /// el plano z = 0: se ve una línea, no un volumen. La cámara de frente
     /// hace que el estado neutro ya sea algo que se pueda mirar.
     fn default() -> Self {
-        crate::camera::Camera::front().uniforms(1.0, [0.35, 0.85, 1.0, 1.0])
+        let mut uniforms = crate::camera::Camera::front().uniforms(1.0, [0.35, 0.85, 1.0, 1.0]);
+        uniforms.aa_feather = 1.0;
+        uniforms
     }
 }
 
@@ -1140,18 +1485,27 @@ mod tests {
     fn index_count_is_a_multiple_of_three() {
         let mesh = WavetableMesh::from_waveform(&test_waveform(), 16, Default::default()).unwrap();
         assert_eq!(mesh.indices.len() % 3, 0);
-        // Dos triángulos por segmento del lazo.
-        assert_eq!(mesh.indices.len(), 16 * 6);
+        // Dos triángulos por segmento entre columnas consecutivas, sin cierre.
+        assert_eq!(mesh.indices.len(), 15 * 6);
     }
 
     #[test]
-    fn the_loop_closes_on_itself() {
-        // El oscilador es periódico: la última columna tiene que caer en la
-        // misma posición que la primera, o la cinta muestra una costura.
+    fn single_waveform_has_no_closing_segment_across_the_width() {
+        // La cinta aislada tampoco duplica ni cierra: unir el borde derecho
+        // con el izquierdo dibujaría la banda horizontal fantasma sobre la
+        // onda (el mismo defecto que el terreno).
         let columns = 16u32;
         let mesh =
             WavetableMesh::from_waveform(&test_waveform(), columns, Default::default()).unwrap();
-        assert_eq!(mesh.vertices[0].position, mesh.vertices[columns as usize * 2].position);
+        assert_eq!(mesh.vertices.len(), columns as usize * 2);
+        let step = 260.0 / columns as f32;
+        for tri in mesh.indices.chunks_exact(3) {
+            let xs: Vec<f32> =
+                tri.iter().map(|&v| mesh.vertices[v as usize].position[0]).collect();
+            let span = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+                - xs.iter().cloned().fold(f32::INFINITY, f32::min);
+            assert!(span < step + 1e-4, "triángulo {tri:?} cruza {span} en X");
+        }
     }
 
     #[test]
@@ -1181,10 +1535,10 @@ mod tests {
 
     #[test]
     fn minimum_width_yields_a_valid_mesh() {
-        // Una sola columna no puede cerrar el lazo; el piso de 2 columnas es
-        // lo que garantiza que los índices queden dentro del rango.
+        // Una sola columna no alcanza para un segmento; el piso de 2 columnas
+        // es lo que garantiza un quad y que los índices queden en rango.
         let mesh = WavetableMesh::from_waveform(&test_waveform(), 1, Default::default()).unwrap();
-        assert_eq!(mesh.indices.len(), 2 * 6);
+        assert_eq!(mesh.indices.len(), 1 * 6);
         assert_eq!(validate_geometry(&mesh.vertices, &mesh.indices), Ok(()));
     }
 
@@ -1232,10 +1586,10 @@ mod tests {
 
     #[test]
     fn uniform_buffer_matches_the_wgsl_struct() {
-        // mat4x4 (64) + vec3 + f32 (16) + vec4 (16) = 96 bytes. Con
-        // `min_binding_size: None` en el layout, wgpu no valida esto: el
-        // síntoma es iluminación corrida.
-        assert_eq!(std::mem::size_of::<MeshUniforms>(), 96);
+        // mat4x4 (64) + vec3 + f32 (16) + vec4 (16) + f32 + pad (16) = 112
+        // bytes. Con `min_binding_size: None` en el layout, wgpu no valida
+        // esto: el síntoma es iluminación corrida.
+        assert_eq!(std::mem::size_of::<MeshUniforms>(), 112);
     }
 
     #[test]
@@ -1283,7 +1637,7 @@ mod tests {
             frame.iter().copied().cycle().take(frame.len() * 3).collect();
         let columns = 128u32;
         let params = terrain_params();
-        let mesh = WavetableMesh::from_table(&table, frame.len(), 0.0, 64, columns, params)
+        let mesh = WavetableMesh::from_table(&table, frame.len(), 0.0, 64, columns, params, &RenderSettings::default())
             .expect("el terreno debería construirse");
 
         let rows = 3usize;
@@ -1312,7 +1666,7 @@ mod tests {
         // faldón, sin relleno y sin volumen.
         let table = flat_table(7, 8);
         let columns = 128u32;
-        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, columns, terrain_params())
+        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, columns, terrain_params(), &RenderSettings::default())
             .expect("el terreno debería construirse");
         assert_eq!(mesh.vertices.len(), 7 * (columns as usize) * 2);
         assert_eq!(mesh.indices.len(), 7 * (columns as usize - 1) * 6);
@@ -1326,7 +1680,7 @@ mod tests {
         // angulosas. La UI alimenta 512, así que el piso sólo protege a otros
         // llamantes sin cambiar la topología.
         let table = flat_table(3, 8);
-        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, 2, terrain_params())
+        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, 2, terrain_params(), &RenderSettings::default())
             .expect("el terreno debería construirse");
         assert_eq!(
             mesh.vertices.len(),
@@ -1349,7 +1703,7 @@ mod tests {
         let table = flat_table(5, 8);
         let columns = 128usize;
         let params = terrain_params();
-        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, columns as u32, params).unwrap();
+        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, columns as u32, params, &RenderSettings::default()).unwrap();
 
         // Paralelismo continuo: los centros comparten X e Y por columna en
         // todas las filas (misma perspectiva X/Y; la tabla plana repite la
@@ -1396,7 +1750,7 @@ mod tests {
         let columns = 128usize;
         let params = terrain_params();
         let mesh =
-            WavetableMesh::from_table(&table, 2, 0.0, 64, columns as u32, params).unwrap();
+            WavetableMesh::from_table(&table, 2, 0.0, 64, columns as u32, params, &RenderSettings::default()).unwrap();
 
         // Columna 0 muestrea u=0 -> +1: arriba. Columna `columns/2` muestrea
         // u=0.5 -> -1. El centro del par cae sobre la curva (el offset se
@@ -1441,7 +1795,7 @@ mod tests {
         let table = flat_table(7, 8);
         let columns = 128u32;
         let mesh =
-            WavetableMesh::from_table(&table, 8, 2.0, 64, columns, terrain_params()).unwrap();
+            WavetableMesh::from_table(&table, 8, 2.0, 64, columns, terrain_params(), &RenderSettings::default()).unwrap();
 
         let shade_of = |slot: usize| {
             mesh.vertices[row_range(slot, columns as usize).start].uv[1]
@@ -1456,9 +1810,9 @@ mod tests {
         // El activo al frente rinde más que el mismo activo al fondo: el fade
         // ordena el terreno de atrás hacia adelante.
         let front_bias =
-            WavetableMesh::from_table(&table, 8, 0.0, 64, columns, terrain_params()).unwrap();
+            WavetableMesh::from_table(&table, 8, 0.0, 64, columns, terrain_params(), &RenderSettings::default()).unwrap();
         let back_bias =
-            WavetableMesh::from_table(&table, 8, 6.0, 64, columns, terrain_params()).unwrap();
+            WavetableMesh::from_table(&table, 8, 6.0, 64, columns, terrain_params(), &RenderSettings::default()).unwrap();
         let shade_at = |mesh: &WavetableMesh, slot: usize| {
             mesh.vertices[row_range(slot, columns as usize).start].uv[1]
         };
@@ -1473,7 +1827,7 @@ mod tests {
         let table = flat_table(7, 8);
         let columns = 128u32;
         let mesh =
-            WavetableMesh::from_table(&table, 8, 2.5, 64, columns, terrain_params()).unwrap();
+            WavetableMesh::from_table(&table, 8, 2.5, 64, columns, terrain_params(), &RenderSettings::default()).unwrap();
         let shade_of = |slot: usize| {
             mesh.vertices[row_range(slot, columns as usize).start].uv[1]
         };
@@ -1498,7 +1852,7 @@ mod tests {
             .collect();
         let columns = 128u32;
         let mesh =
-            WavetableMesh::from_table(&table, frame_len, 0.0, 4, columns, terrain_params())
+            WavetableMesh::from_table(&table, frame_len, 0.0, 4, columns, terrain_params(), &RenderSettings::default())
                 .unwrap();
         assert_eq!(mesh.vertices.len(), 4 * (columns as usize) * 2);
 
@@ -1517,7 +1871,7 @@ mod tests {
         // Con active en el último ciclo, la última fila lleva el realce pleno
         // por su fade de fondo (ver `expected_shade`).
         let mesh =
-            WavetableMesh::from_table(&table, frame_len, 7.0, 4, columns, params).unwrap();
+            WavetableMesh::from_table(&table, frame_len, 7.0, 4, columns, params, &RenderSettings::default()).unwrap();
         let shade_last =
             mesh.vertices[row_range(3, columns as usize).start].uv[1];
         assert!((shade_last - expected_shade(3, 4, 3.0)).abs() < 1e-6);
@@ -1530,7 +1884,7 @@ mod tests {
         let table = flat_table(24, 16);
         let params = terrain_params();
         let mesh =
-            WavetableMesh::from_table(&table, 16, 3.0, 24, 128, params).unwrap();
+            WavetableMesh::from_table(&table, 16, 3.0, 24, 128, params, &RenderSettings::default()).unwrap();
         for v in &mesh.vertices {
             let [x, y, z] = v.position;
             // Margen de medio trazo: el ancho perpendicular puede asomar hasta
@@ -1587,9 +1941,10 @@ mod tests {
 
     #[test]
     fn oblique_projection_pushes_back_rows_up_and_right() {
-        // El ritmo diagonal del terreno (ver `TERRAIN_SKEW_X/Y`): a igual X/Y,
-        // una fila del fondo aparece más arriba y más a la derecha que una del
-        // frente, como en Vital. Es shear puro, sin convergencia.
+        // El ritmo diagonal del terreno (shear de `terrain_view_proj_angled`):
+        // a igual X/Y, una fila del fondo aparece más arriba y más a la
+        // derecha que una del frente, como en Vital. Es shear puro, sin
+        // convergencia.
         let params = terrain_params();
         let view_proj = terrain_view_proj(
             [params.width * 0.5, params.height * 0.5, params.thickness * 0.5],
@@ -1619,7 +1974,7 @@ mod tests {
         let params = terrain_params();
         let columns = 128usize;
         let mesh =
-            WavetableMesh::from_table(&table, 16, 0.0, 64, columns as u32, params).unwrap();
+            WavetableMesh::from_table(&table, 16, 0.0, 64, columns as u32, params, &RenderSettings::default()).unwrap();
 
         let view_proj = terrain_view_proj(
             [params.width * 0.5, params.height * 0.5, params.thickness * 0.5],
@@ -1654,6 +2009,175 @@ mod tests {
         assert_eq!(RenderMode::Mode2D.label(), "2D");
     }
 
+    /// Settings de prueba con el tipo de malla dado y el resto por defecto.
+    fn style_with(mesh: MeshType) -> RenderSettings {
+        RenderSettings { mesh, ..RenderSettings::default() }
+    }
+
+    #[test]
+    fn mesh_type_cycles_through_the_three_geometries() {
+        assert_eq!(MeshType::default(), MeshType::Wireframe);
+        assert_eq!(MeshType::Wireframe.cycle(), MeshType::Ribbon);
+        assert_eq!(MeshType::Ribbon.cycle(), MeshType::Solid);
+        assert_eq!(MeshType::Solid.cycle(), MeshType::Wireframe);
+        assert_eq!(MeshType::Wireframe.label(), "Líneas");
+        assert_eq!(MeshType::Ribbon.label(), "Cintas");
+        assert_eq!(MeshType::Solid.label(), "Sólido");
+    }
+
+    #[test]
+    fn render_settings_default_to_the_verified_look() {
+        // Los defaults tienen que ser el look ya validado: si alguien los
+        // cambia, este test recuerda qué se consideraba correcto.
+        let settings = RenderSettings::default();
+        assert_eq!(settings.line_width, TERRAIN_LINE_WIDTH);
+        assert_eq!(settings.line_width_2d, TERRAIN_LINE_WIDTH);
+        assert_eq!(settings.depth_scale, 1.0);
+        assert_eq!(settings.yaw_deg, 15.0);
+        assert_eq!(settings.pitch_deg, 25.0);
+        assert_eq!(settings.depth_fade, 0.35);
+        assert_eq!(settings.mesh, MeshType::Wireframe);
+        assert_eq!(settings.aa_feather, 1.0);
+        assert_eq!(settings.glow, 1.0);
+    }
+
+    #[test]
+    fn any_setting_moves_the_cache_key() {
+        let base = RenderSettings::default().key_hash();
+        // Y los mismos valores dan la misma clave (sin re-render espurio).
+        assert_eq!(RenderSettings::default().key_hash(), base);
+        for set in [
+            (|s: &mut RenderSettings| s.line_width = 5.0) as fn(&mut RenderSettings),
+            |s| s.line_width_2d = 5.0,
+            |s| s.depth_scale = 1.5,
+            |s| s.yaw_deg = 20.0,
+            |s| s.pitch_deg = 30.0,
+            |s| s.depth_fade = 0.5,
+            |s| s.mesh = MeshType::Solid,
+            |s| s.aa_feather = 0.0,
+            |s| s.glow = 1.5,
+        ] {
+            let mut other = RenderSettings::default();
+            set(&mut other);
+            assert_ne!(other.key_hash(), base, "un ajuste no mueve la clave");
+        }
+    }
+
+    #[test]
+    fn ribbon_rows_are_tubes_with_depth_and_no_wrap_segment() {
+        // 3 filas como tubos en X-Y con espesor en Z: pares por columna y
+        // quads sólo entre columnas consecutivas.
+        let table = flat_table(3, 8);
+        let columns = 128usize;
+        let style = style_with(MeshType::Ribbon);
+        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, columns as u32, terrain_params(), &style)
+            .expect("el terreno de cintas debería construirse");
+        assert_eq!(mesh.vertices.len(), 3 * columns * 2);
+        assert_eq!(mesh.indices.len(), 3 * (columns - 1) * 6);
+        assert_eq!(validate_geometry(&mesh.vertices, &mesh.indices), Ok(()));
+
+        // Espesor en Z igual al grosor del panel, alrededor del plano de fila.
+        let row = row_range(0, columns);
+        let z_front = mesh.vertices[row.start].position[2];
+        let z_back = mesh.vertices[row.start + 1].position[2];
+        assert!(((z_front - z_back).abs() - style.line_width).abs() < 1e-4);
+        // Normales ±Z alternadas (delantera/trasera del tubo).
+        for (i, v) in mesh.vertices.iter().enumerate() {
+            let expected = if i % 2 == 0 { [0.0, 0.0, -1.0] } else { [0.0, 0.0, 1.0] };
+            assert_eq!(v.normal, expected, "vértice {i}");
+        }
+    }
+
+    #[test]
+    fn solid_surface_connects_rows_with_upward_normals() {
+        // Tabla plana de ceros: la superficie es el plano y=0 y toda normal
+        // (de vértice y geométrica) tiene que mirar hacia arriba.
+        let columns = 128usize;
+        let table = vec![0.0f32; 4 * 8];
+        let style = style_with(MeshType::Solid);
+        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, columns as u32, terrain_params(), &style)
+            .expect("la superficie debería construirse");
+
+        // Un vértice por punto de grilla (compartidos entre quads).
+        assert_eq!(mesh.vertices.len(), 4 * columns);
+        assert_eq!(mesh.indices.len(), 3 * (columns - 1) * 6);
+        assert_eq!(validate_geometry(&mesh.vertices, &mesh.indices), Ok(()));
+
+        assert!(mesh.vertices.iter().all(|v| v.normal == [0.0, 1.0, 0.0]));
+        for tri in mesh.indices.chunks_exact(3) {
+            let p: Vec<[f32; 3]> =
+                tri.iter().map(|&ix| mesh.vertices[ix as usize].position).collect();
+            let e1 = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+            let e2 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+            let ny = e1[2] * e2[0] - e1[0] * e2[2];
+            assert!(ny > 0.0, "cara invertida en {tri:?}");
+        }
+
+        // Silueta suavizada en el borde de la grilla, alfa pleno adentro.
+        let at = |r: usize, c: usize| mesh.vertices[r * columns + c].uv[0];
+        assert_eq!(at(0, 0), 1.0);
+        assert_eq!(at(3, 127), 1.0);
+        assert_eq!(at(0, 64), 1.0);
+        assert_eq!(at(1, 1), 0.0);
+        assert_eq!(at(2, 40), 0.0);
+    }
+
+    #[test]
+    fn solid_with_a_single_row_falls_back_to_a_line() {
+        // Sin segunda fila no hay quads que tender: la curva sola, con los
+        // mismos conteos que el alambre.
+        let table = vec![0.5f32; 8];
+        let style = style_with(MeshType::Solid);
+        let mesh = WavetableMesh::from_table(&table, 8, 0.0, 64, 128, terrain_params(), &style)
+            .expect("el fallback debería construirse");
+        assert_eq!(mesh.vertices.len(), 128 * 2);
+        assert_eq!(mesh.indices.len(), 127 * 6);
+        assert_eq!(validate_geometry(&mesh.vertices, &mesh.indices), Ok(()));
+    }
+
+    #[test]
+    fn angled_projection_matches_the_fixed_one_at_default_angles() {
+        // La variante con ángulos existe para los sliders; con 15°/25° tiene
+        // que dar exactamente la matriz fija (mismo `tan`, mismo código).
+        let half = [130.0, 48.0, 120.0];
+        assert_eq!(terrain_view_proj(half, 2.0), terrain_view_proj_angled(half, 2.0, 15.0, 25.0));
+    }
+
+    #[test]
+    fn angled_projection_survives_extreme_and_degenerate_angles() {
+        // Yaw/pitch en los bordes del rango y valores rotos: la escena se
+        // re-encuadra sola y la matriz sigue siendo finita y afín (w = 1).
+        for (yaw, pitch) in [
+            (-30.0, 5.0),
+            (30.0, 60.0),
+            (0.0, 25.0),
+            (f32::NAN, f32::INFINITY),
+            (1000.0, -1000.0),
+        ] {
+            let view =
+                terrain_view_proj_angled([130.0, 48.0, 120.0], 768.0 / 384.0, yaw, pitch);
+            assert!(
+                view.iter().all(|col| col.iter().all(|v| v.is_finite())),
+                "matriz no finita con yaw={yaw} pitch={pitch}"
+            );
+            for x in [-130.0f32, 130.0] {
+                for y in [-48.0f32, 48.0] {
+                    for z in [-120.0f32, 120.0] {
+                        let (clip, w) =
+                            crate::camera::transform_point(&view, [x, y, z]);
+                        assert!((w - 1.0).abs() < 1e-6);
+                        assert!(
+                            (clip[0] / w).abs() <= 1.0 + 1e-3
+                                && (clip[1] / w).abs() <= 1.0 + 1e-3,
+                            "esquina fuera de pantalla con yaw={yaw} pitch={pitch}"
+                        );
+                        assert!((0.0..=1.0).contains(&(clip[2] / w)));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn active_line_is_a_single_full_bright_curve_at_zero_depth() {
         // El ciclo ya interpolado que entrega la UI: seno de un período.
@@ -1661,7 +2185,7 @@ mod tests {
             .map(|i| (i as f32 / 256.0 * std::f32::consts::TAU).sin())
             .collect();
         let params = terrain_params();
-        let mesh = WavetableMesh::from_active_line(&frame, 512, params)
+        let mesh = WavetableMesh::from_active_line(&frame, 512, params, &RenderSettings::default())
             .expect("la línea 2D debería construirse");
 
         // Una sola curva: 512 pares, 511 quads, sin filas apiladas.
@@ -1692,7 +2216,7 @@ mod tests {
     #[test]
     fn active_line_rejects_an_empty_frame() {
         assert!(matches!(
-            WavetableMesh::from_active_line(&[], 512, terrain_params()),
+            WavetableMesh::from_active_line(&[], 512, terrain_params(), &RenderSettings::default()),
             Err(MeshError::WaveformTooShort)
         ));
     }
@@ -1700,11 +2224,11 @@ mod tests {
     #[test]
     fn terrain_rejects_empty_input() {
         assert!(matches!(
-            WavetableMesh::from_table(&[], 8, 0.0, 8, 16, terrain_params()),
+            WavetableMesh::from_table(&[], 8, 0.0, 8, 16, terrain_params(), &RenderSettings::default()),
             Err(MeshError::WaveformTooShort)
         ));
         assert!(matches!(
-            WavetableMesh::from_table(&[0.0; 16], 0, 0.0, 8, 16, terrain_params()),
+            WavetableMesh::from_table(&[0.0; 16], 0, 0.0, 8, 16, terrain_params(), &RenderSettings::default()),
             Err(MeshError::WaveformTooShort)
         ));
     }

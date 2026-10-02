@@ -390,6 +390,10 @@ impl Camera {
             light_dir: self.local_light_dir([0.4, 0.6, 1.0]),
             light_intensity: 1.0,
             tint,
+            // Suavizado por defecto; quien dibuja con settings lo pisa con el
+            // valor del panel (ver `render_viewer` en `hikaru_gui`).
+            aa_feather: 1.0,
+            _pad: [0.0; 3],
         }
     }
 }

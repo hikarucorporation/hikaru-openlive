@@ -40,10 +40,10 @@ use std::sync::{Arc, Mutex};
 
 use gpui_kit::{App, Global, RenderImage};
 use hikaru_render::{
-    terrain_view_proj, upload_knob, Camera, GpuContext, GpuMesh, KnobMesh, KnobRenderer,
-    KnobUniforms, MeshRenderer, MeshUniforms, QuadInstance, QuadRenderer, ReadbackError,
-    RenderMode, RenderTarget, SpriteLayout, SpriteSheet, SpriteSheetResources, WavetableMesh,
-    WavetableMeshParams, TERRAIN_LINE_WIDTH,
+    terrain_view_proj, terrain_view_proj_angled, upload_knob, Camera, GpuContext, GpuMesh,
+    KnobMesh, KnobRenderer, KnobUniforms, MeshRenderer, MeshUniforms, QuadInstance, QuadRenderer,
+    ReadbackError, RenderMode, RenderSettings, RenderTarget, SpriteLayout, SpriteSheet,
+    SpriteSheetResources, WavetableMesh, WavetableMeshParams, TERRAIN_LINE_WIDTH,
 };
 // Se usa el reexport de `hikaru_render` en vez de declarar wgpu como dependencia
 // directa: garantiza que la GUI hable con exactamente la misma versión que el
@@ -320,7 +320,8 @@ impl HikaruRenderer {
     ///
     /// `table` es la tabla entera tal como la devuelve `wavetable_io`, y
     /// `active` el ciclo en primer plano. La geometría sale de
-    /// [`WavetableMesh::from_table`], que apila los ciclos en el eje Z.
+    /// [`WavetableMesh::from_table`], que apila los ciclos en el eje Z con el
+    /// look de `style` (panel de settings).
     pub fn upload_wavetable_table(
         &self,
         label: &str,
@@ -330,8 +331,9 @@ impl HikaruRenderer {
         max_frames: usize,
         frame_width: u32,
         params: WavetableMeshParams,
+        style: &RenderSettings,
     ) -> Result<GpuMesh, hikaru_render::mesh::MeshError> {
-        WavetableMesh::from_table(table, frame_len, active, max_frames, frame_width, params)?
+        WavetableMesh::from_table(table, frame_len, active, max_frames, frame_width, params, style)?
             .upload(&self.ctx, label)
     }
 
@@ -588,6 +590,8 @@ pub struct FrameKey {
     /// Modo del visor: 2D y 3D con los mismos samples son imágenes distintas,
     /// así que el toggle tiene que invalidar el render cacheado.
     pub mode_2d: bool,
+    /// Ajustes del panel: cada slider mueve bits y re-renderiza.
+    pub style: u64,
     /// Yaw cuantizado.
     pub yaw: i32,
     /// Pitch cuantizado.
@@ -777,22 +781,58 @@ impl WavetableViewport {
         // El encuadre se calcula contra la caja de la malla y el aspect real
         // del viewport: con un encuadre fijo, la misma escena encuadra bien en
         // 16:9 y corta la cinta en un panel angosto.
+        // El glow del panel escala el tinte (pero no el alfa): el ciclo activo
+        // sigue siendo el más brillante porque el contraste viaja en la
+        // geometría (`uv.y`), no en el uniforme.
+        let glow = if viewer.settings.glow.is_finite() {
+            viewer.settings.glow.clamp(0.3, 2.0)
+        } else {
+            1.0
+        };
+        let tint = [
+            viewer.tint[0] * glow,
+            viewer.tint[1] * glow,
+            viewer.tint[2] * glow,
+            viewer.tint[3],
+        ];
+        // Un feather negativo o NaN apagaría la malla en el shader (alfa ≤ 0):
+        // se sanea acá porque el WGSL no valida.
+        let aa_feather = if viewer.settings.aa_feather.is_finite() {
+            viewer.settings.aa_feather.clamp(0.0, 4.0)
+        } else {
+            1.0
+        };
         let uniforms = match viewer.render_mode {
-            RenderMode::Mode3D => MeshUniforms {
-                view_proj: terrain_view_proj(
-                    [
-                        viewer.mesh_params.width * 0.5,
-                        viewer.mesh_params.height * 0.5,
-                        viewer.mesh_params.thickness * 0.5,
-                    ],
-                    aspect,
-                ),
-                // Luz fija de frente-arriba: el shader la normaliza igual, así
-                // que el vector sólo fija la dirección del sombreado parejo.
-                light_dir: [0.3, 0.5, 1.0],
-                light_intensity: 1.0,
-                tint: viewer.tint,
-            },
+            RenderMode::Mode3D => {
+                // La escala de profundidad del panel estira la caja que se
+                // encuadra, igual que estira la geometría: las dos leen el
+                // mismo ajuste y el terreno siempre cabe en pantalla.
+                let depth_scale = if viewer.settings.depth_scale.is_finite() {
+                    viewer.settings.depth_scale.clamp(0.1, 4.0)
+                } else {
+                    1.0
+                };
+                MeshUniforms {
+                    view_proj: terrain_view_proj_angled(
+                        [
+                            viewer.mesh_params.width * 0.5,
+                            viewer.mesh_params.height * 0.5,
+                            viewer.mesh_params.thickness * 0.5 * depth_scale,
+                        ],
+                        aspect,
+                        viewer.settings.yaw_deg,
+                        viewer.settings.pitch_deg,
+                    ),
+                    // Luz fija de frente-arriba: el shader la normaliza igual,
+                    // así que el vector sólo fija la dirección del sombreado
+                    // parejo.
+                    light_dir: [0.3, 0.5, 1.0],
+                    light_intensity: 1.0,
+                    tint,
+                    aa_feather,
+                    _pad: [0.0; 3],
+                }
+            }
             RenderMode::Mode2D => {
                 let mut camera = Camera::front();
                 camera.fit_to_box(
@@ -803,7 +843,9 @@ impl WavetableViewport {
                     ],
                     aspect,
                 );
-                camera.uniforms(aspect, viewer.tint)
+                let mut uniforms = camera.uniforms(aspect, tint);
+                uniforms.aa_feather = aa_feather;
+                uniforms
             }
         };
 
@@ -860,8 +902,9 @@ impl WavetableViewport {
         if needs_upload {
             // DIAGNÓSTICO TEMPORAL: sacar cuando se encuentre la causa.
             eprintln!(
-                "[DIAG] upload de malla: mode={:?} waveform_len={} frame_len={} active={} max_frames={} columnas={}",
+                "[DIAG] upload de malla: mode={:?} mesh={:?} waveform_len={} frame_len={} active={} max_frames={} columnas={}",
                 viewer.render_mode,
+                viewer.settings.mesh,
                 viewer.waveform.len(),
                 viewer.frame_len,
                 viewer.active,
@@ -877,6 +920,7 @@ impl WavetableViewport {
                     viewer.max_frames,
                     WAVETABLE_COLUMNS,
                     viewer.mesh_params,
+                    &viewer.settings,
                 )?,
                 RenderMode::Mode2D => {
                     // El ciclo activo ya interpolado que manda la UI; si por
@@ -892,8 +936,13 @@ impl WavetableViewport {
                     let frame = frame.filter(|frame| !frame.is_empty()).ok_or(
                         hikaru_render::mesh::MeshError::WaveformTooShort,
                     )?;
-                    WavetableMesh::from_active_line(frame, WAVETABLE_COLUMNS, viewer.mesh_params)?
-                        .upload(renderer.context(), "hikaru::wavetable_2d")?
+                    WavetableMesh::from_active_line(
+                        frame,
+                        WAVETABLE_COLUMNS,
+                        viewer.mesh_params,
+                        &viewer.settings,
+                    )?
+                    .upload(renderer.context(), "hikaru::wavetable_2d")?
                 }
             };
             self.mesh = Some((key, mesh));
@@ -962,6 +1011,9 @@ pub struct ViewerRequest<'a> {
     /// Modo del visor: en 2D se dibuja `active_frame` plano de frente, en 3D
     /// la pila completa en perspectiva.
     pub render_mode: RenderMode,
+    /// Ajustes de look del panel de settings (grosor, profundidad, ángulos,
+    /// fade, tipo de malla, AA, glow). Es `Copy` y viaja por valor.
+    pub settings: RenderSettings,
     /// El ciclo activo ya interpolado, para el modo 2D. `Some` siempre que
     /// `render_mode` sea 2D (la UI lo calcula con el morph actual, así que la
     /// onda plana muestra el morphing exacto); en 3D es `None` y no se usa.
@@ -987,6 +1039,7 @@ impl ViewerRequest<'_> {
             waveform: hash_waveform(self.waveform),
             active: quantize_active(self.active),
             mode_2d: self.render_mode == RenderMode::Mode2D,
+            style: self.settings.key_hash(),
             yaw: quantize_camera(self.camera.yaw),
             pitch: quantize_camera(self.camera.pitch),
             distance: quantize_camera(self.camera.distance),
@@ -997,7 +1050,7 @@ impl ViewerRequest<'_> {
 
 /// Reduce una [`FrameKey`] a un entero para usarla como clave de cache.
 ///
-/// Los campos son todos enteros o bits de `f32`, así que la clave son 56 bytes
+/// Los campos son todos enteros o bits de `f32`, así que la clave son 64 bytes
 /// que hashear es más barato que compararlos campo por campo tres veces por
 /// frame.
 fn frame_key_hash(key: FrameKey) -> u64 {
@@ -1011,6 +1064,7 @@ fn frame_key_hash(key: FrameKey) -> u64 {
         key.waveform,
         key.active as u64,
         u64::from(key.mode_2d),
+        key.style,
         key.yaw as u64,
         key.pitch as u64,
         key.distance as u64,
@@ -1044,6 +1098,7 @@ mod tests {
             frame_len: waveform.len(),
             active: 0.0,
             render_mode,
+            settings: RenderSettings::default(),
             active_frame,
             max_frames: 24,
             mesh_params: WavetableMeshParams { width: 260.0, height: 96.0, thickness: 240.0 },
@@ -1064,6 +1119,19 @@ mod tests {
 
         assert_ne!(three_d.key(), two_d.key());
         assert_ne!(frame_key_hash(three_d.key()), frame_key_hash(two_d.key()));
+    }
+
+    #[test]
+    fn moving_a_setting_invalidates_the_cached_image() {
+        // Cada slider del panel tiene que re-renderizar: si la clave no
+        // llevara los settings, mover el grosor no cambiaría la imagen.
+        let table = vec![0.0f32; 64];
+        let base = request(&table, None, RenderMode::Mode3D);
+        let mut moved = base;
+        moved.settings.line_width = 5.0;
+
+        assert_ne!(base.key(), moved.key());
+        assert_ne!(frame_key_hash(base.key()), frame_key_hash(moved.key()));
     }
 
     #[test]

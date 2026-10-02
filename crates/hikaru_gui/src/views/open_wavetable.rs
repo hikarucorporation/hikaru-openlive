@@ -76,7 +76,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
-use hikaru_render::{Camera, RenderMode};
+use hikaru_render::{Camera, RenderMode, RenderSettings};
 
 use crate::app::{state, HikaruApp};
 use crate::render::{
@@ -239,6 +239,14 @@ pub struct WavetableEditor {
     /// ciclo activo interpolado plano de frente, para verificar la lectura del
     /// `.wav` antes de la proyección 3D.
     pub render_mode: RenderMode,
+    /// Ajustes de look del panel "Hikaru OpenWavetable Settings". Viajan al
+    /// renderer en cada pedido y entran en la clave de caché.
+    pub render_settings: RenderSettings,
+    /// Si el panel de settings está abierto.
+    pub settings_open: bool,
+    /// Arrastre en curso sobre un slider del panel, si lo hay. Igual que el
+    /// del knob pero en horizontal: relativo al punto de agarre.
+    setting_drag: Option<SettingDrag>,
     /// Cámara del visor 3D.
     pub camera: Camera,
     pub unison: u8,
@@ -290,6 +298,9 @@ impl Default for WavetableEditor {
             frame: 0,
             smooth: true,
             render_mode: RenderMode::default(),
+            render_settings: RenderSettings::default(),
+            settings_open: false,
+            setting_drag: None,
             camera: Camera::default(),
             unison: 1,
             detune: 0.0,
@@ -441,9 +452,47 @@ impl WavetableEditor {
         self.voices = self.voices.cycle();
     }
 
-    /// Termina el arrastre.
+    /// Termina el arrastre (del knob o de un slider del panel).
     pub fn end_drag(&mut self) {
         self.dragging = false;
+        self.setting_drag = None;
+    }
+
+    /// Comienza el arrastre de un slider del panel en `window_x`.
+    pub fn begin_setting_drag(&mut self, param: SettingParam, window_x: f32) {
+        self.dragging = false;
+        self.setting_drag = Some(SettingDrag {
+            param,
+            grab: param.get(&self.render_settings),
+            origin_x: if window_x.is_finite() { window_x } else { 0.0 },
+        });
+    }
+
+    /// Continúa el arrastre del slider y devuelve el valor nuevo.
+    ///
+    /// Horizontal y relativo al agarre, como el knob pero en X: hacia la
+    /// derecha sube el valor. Con Shift el recorrido es un
+    /// [`FINE_TUNE_FACTOR`] de eso.
+    pub fn drag_setting_to(&mut self, window_x: f32, fine: bool) -> f32 {
+        let Some(drag) = self.setting_drag else {
+            return 0.0;
+        };
+        if !window_x.is_finite() {
+            return drag.grab;
+        }
+        let (min, max) = drag.param.range();
+        let mut value =
+            drag.grab + (window_x - drag.origin_x) / SETTING_DRAG_PX * (max - min) * value_gain(fine);
+        if !value.is_finite() {
+            value = drag.grab;
+        }
+        drag.param.set(&mut self.render_settings, value);
+        drag.param.get(&self.render_settings)
+    }
+
+    /// Valor actual del ajuste bajo arrastre, si hay uno en curso.
+    pub fn setting_drag_value(&self) -> Option<f32> {
+        self.setting_drag.map(|drag| drag.param.get(&self.render_settings))
     }
 
     /// Cuántos frames hay, para el rótulo `3 / 64`.
@@ -540,6 +589,131 @@ fn value_gain(fine: bool) -> f32 {
     if fine { FINE_TUNE_FACTOR } else { 1.0 }
 }
 
+/// Parámetro ajustable del panel de settings, con su rango y formato.
+///
+/// Es el equivalente horizontal del knob: el arrastre es relativo al punto de
+/// agarre y recorre el rango entero en [`SETTING_DRAG_PX`] píxeles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingParam {
+    /// Grosor del trazo en 3D (también profundidad del tubo en `Ribbon`).
+    LineWidth,
+    /// Grosor del trazo en el modo 2D de diagnóstico.
+    LineWidth2d,
+    /// Multiplicador del espaciado en profundidad.
+    DepthScale,
+    /// Yaw de la vista 3D en grados.
+    Yaw,
+    /// Pitch de la vista 3D en grados.
+    Pitch,
+    /// Fade back-to-front de las filas traseras.
+    DepthFade,
+    /// Ancho del suavizado de borde en píxeles (0 = trazo duro).
+    AaFeather,
+    /// Multiplicador del tinte (brillo/glow general).
+    Glow,
+}
+
+impl SettingParam {
+    /// Todos los sliders del panel, en orden de aparición.
+    pub const ALL: [SettingParam; 8] = [
+        SettingParam::LineWidth,
+        SettingParam::LineWidth2d,
+        SettingParam::DepthScale,
+        SettingParam::Yaw,
+        SettingParam::Pitch,
+        SettingParam::DepthFade,
+        SettingParam::AaFeather,
+        SettingParam::Glow,
+    ];
+
+    /// Rótulo corto de la fila del panel (máx. ~6 caracteres para que entre
+    /// en una línea del menú compacto).
+    pub fn title(self) -> &'static str {
+        match self {
+            SettingParam::LineWidth => "Trazo",
+            SettingParam::LineWidth2d => "Tr.2D",
+            SettingParam::DepthScale => "Prof.Z",
+            SettingParam::Yaw => "Yaw",
+            SettingParam::Pitch => "Pitch",
+            SettingParam::DepthFade => "Fade",
+            SettingParam::AaFeather => "Suav.",
+            SettingParam::Glow => "Glow",
+        }
+    }
+
+    /// Rango del slider (mínimo, máximo).
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            SettingParam::LineWidth => (1.0, 6.0),
+            SettingParam::LineWidth2d => (1.0, 8.0),
+            SettingParam::DepthScale => (0.3, 2.0),
+            SettingParam::Yaw => (-30.0, 30.0),
+            SettingParam::Pitch => (5.0, 60.0),
+            SettingParam::DepthFade => (0.0, 0.8),
+            SettingParam::AaFeather => (0.0, 2.0),
+            SettingParam::Glow => (0.3, 2.0),
+        }
+    }
+
+    /// Lee el valor desde los settings.
+    pub fn get(self, settings: &RenderSettings) -> f32 {
+        match self {
+            SettingParam::LineWidth => settings.line_width,
+            SettingParam::LineWidth2d => settings.line_width_2d,
+            SettingParam::DepthScale => settings.depth_scale,
+            SettingParam::Yaw => settings.yaw_deg,
+            SettingParam::Pitch => settings.pitch_deg,
+            SettingParam::DepthFade => settings.depth_fade,
+            SettingParam::AaFeather => settings.aa_feather,
+            SettingParam::Glow => settings.glow,
+        }
+    }
+
+    /// Escribe el valor acotado a su rango.
+    pub fn set(self, settings: &mut RenderSettings, value: f32) {
+        let (min, max) = self.range();
+        let value = if value.is_finite() { value.clamp(min, max) } else { min };
+        match self {
+            SettingParam::LineWidth => settings.line_width = value,
+            SettingParam::LineWidth2d => settings.line_width_2d = value,
+            SettingParam::DepthScale => settings.depth_scale = value,
+            SettingParam::Yaw => settings.yaw_deg = value,
+            SettingParam::Pitch => settings.pitch_deg = value,
+            SettingParam::DepthFade => settings.depth_fade = value,
+            SettingParam::AaFeather => settings.aa_feather = value,
+            SettingParam::Glow => settings.glow = value,
+        }
+    }
+
+    /// Texto del valor para la fila del panel.
+    pub fn format(self, value: f32) -> String {
+        match self {
+            SettingParam::Yaw | SettingParam::Pitch => format!("{value:.0}°"),
+            SettingParam::DepthFade => format!("{:.0}%", value * 100.0),
+            SettingParam::Glow => format!("{value:.1}×"),
+            SettingParam::DepthScale => format!("{value:.2}"),
+            _ => format!("{value:.1}"),
+        }
+    }
+}
+
+/// Arrastre en curso sobre un slider del panel.
+#[derive(Clone, Copy, Debug)]
+struct SettingDrag {
+    /// Qué ajuste se está moviendo.
+    param: SettingParam,
+    /// Valor del ajuste en el instante del `mouse down`.
+    grab: f32,
+    /// Coordenada X de la ventana donde se apretó el botón, en píxeles.
+    origin_x: f32,
+}
+
+/// Píxeles de arrastre horizontal que recorren el rango entero de un slider.
+///
+/// El mismo orden de magnitud que [`DRAG_RANGE_PX`] del knob: el gesto se
+/// siente igual en los dos controles.
+const SETTING_DRAG_PX: f32 = 160.0;
+
 /// El módulo completo.
 ///
 /// Cuatro bandas verticales dentro de un cuadrado: header, selector, visor y pie.
@@ -601,7 +775,7 @@ pub fn render(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) ->
         })
         .child(render_header(&editor))
         .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
-        .child(render_viewport(track_idx, slot_idx, editor.render_mode, &view))
+        .child(render_viewport(track_idx, slot_idx, &editor, &view))
         .child(render_footer(cx, track_idx, slot_idx, &editor, &view))
         // Red de seguridad del seguimiento del arrastre. Va al final para que
         // quede por encima: es invisible y no registra hitbox, así que no
@@ -610,14 +784,15 @@ pub fn render(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) ->
         .into_any_element()
 }
 
-/// Si el knob de este slot tiene un arrastre en curso.
+/// Si el knob o un slider de este slot tiene un arrastre en curso.
 ///
 /// Lee por `&App` compartido, a diferencia de [`with_editor`], que pide el lock
 /// de escritura: el seguimiento consulta el flag en cada movimiento del mouse y
 /// no puede tomar un write lock para eso.
 fn knob_dragging(cx: &gpui_kit::App, track_idx: usize, slot_idx: usize) -> bool {
     let app = state(cx).read(cx);
-    app.slot(track_idx, slot_idx).is_some_and(|slot| slot.wavetable.dragging)
+    app.slot(track_idx, slot_idx)
+        .is_some_and(|slot| slot.wavetable.dragging || slot.wavetable.setting_drag.is_some())
 }
 
 /// Registra el seguimiento del arrastre a nivel de ventana.
@@ -661,6 +836,14 @@ fn register_drag_tracking(
             .map(|slot| slot.wavetable.position());
 
         let changed = with_editor_if(cx, track_idx, slot_idx, |editor| {
+            // Los sliders del panel se arrastran en horizontal; el knob, en
+            // vertical. Un solo gesto activo por vez: el `mouse down` que lo
+            // empezó ya apagó el otro.
+            if editor.setting_drag.is_some() {
+                let previous = editor.setting_drag_value();
+                editor.drag_setting_to(event.position.x.as_f32(), event.modifiers.shift);
+                return editor.setting_drag_value() != previous;
+            }
             if !editor.dragging {
                 return false;
             }
@@ -1095,6 +1278,7 @@ fn request_view(cx: &mut Context<HikaruApp>, editor: &WavetableEditor) -> Waveta
             frame_len: editor.frame_len(),
             active: editor.active_cycle(),
             render_mode: editor.render_mode,
+            settings: editor.render_settings,
             active_frame: active_2d.as_deref(),
             max_frames: MAX_STACK_FRAMES,
             mesh_params: mesh_params(),
@@ -1118,14 +1302,37 @@ fn request_view(cx: &mut Context<HikaruApp>, editor: &WavetableEditor) -> Waveta
 /// Es la única banda con `flex_1`, así que su alto es el que sobra del cuadrado
 /// menos las otras tres. El `img` va con `ObjectFit::Contain`: la imagen offscreen
 /// tiene su propio aspect y encajarla a la fuerza la deformaría.
-/// Botón 2D/3D del visor: alterna entre el terreno en perspectiva y el ciclo
-/// activo plano de diagnóstico. Va arriba a la derecha, superpuesto sin tapar
-/// la onda, y muestra el modo actual en naranja.
-fn view_mode_toggle(track_idx: usize, slot_idx: usize, mode: RenderMode) -> AnyElement {
-    div()
+/// Controles del visor, arriba a la derecha y superpuestos sin tapar la onda:
+/// el engranaje abre el panel "Hikaru OpenWavetable Settings" y el botón 2D/3D
+/// alterna entre el terreno en perspectiva y el ciclo activo plano. El modo
+/// actual va en naranja.
+fn view_mode_controls(
+    track_idx: usize,
+    slot_idx: usize,
+    mode: RenderMode,
+    settings_open: bool,
+) -> AnyElement {
+    h_flex()
         .absolute()
         .right(px(3.0))
         .top(px(3.0))
+        .gap(px(2.0))
+        .child(
+            Button::new(format!("wt_settings_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .compact()
+                .child(
+                    Label::new("⚙")
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if settings_open { rgb(0xFF6E00) } else { rgb(0x8A90A0) }),
+                )
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.settings_open = !editor.settings_open;
+                    });
+                }),
+        )
         .child(
             Button::new(format!("wt_viewmode_{track_idx}_{slot_idx}"))
                 .rounded(ButtonRounded::None)
@@ -1145,10 +1352,119 @@ fn view_mode_toggle(track_idx: usize, slot_idx: usize, mode: RenderMode) -> AnyE
         .into_any_element()
 }
 
+/// Una fila de slider del panel: título, barra arrastrable en horizontal y
+/// valor. El arrastre es relativo al agarre (igual que el knob pero en X) y
+/// con Shift va a un cuarto de velocidad.
+fn setting_slider(
+    track_idx: usize,
+    slot_idx: usize,
+    param: SettingParam,
+    value: f32,
+) -> AnyElement {
+    // Anchos fijos que suman al interior del panel (140px): 42 + 3 + 57 +
+    // 3 + 32 = 137. Nada se parte en dos líneas.
+    const BAR_W: f32 = 57.0;
+    let (min, max) = param.range();
+    let frac = ((value - min) / (max - min)).clamp(0.0, 1.0);
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap(px(3.0))
+        .child(
+            Label::new(param.title())
+                .text_xs()
+                .text_color(rgb(0x8A90A0))
+                .w(px(42.0))
+                .truncate(),
+        )
+        .child(
+            div()
+                .w(px(BAR_W))
+                .h(px(10.0))
+                .bg(rgb(0x0E0F13))
+                .border_1()
+                .border_color(rgb(0x2A2E3A))
+                .rounded(px(2.0))
+                .relative()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px(0.0))
+                        .bottom(px(0.0))
+                        .w(px(BAR_W * frac))
+                        .bg(rgb(0xFF6E00)),
+                )
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.begin_setting_drag(param, event.position.x.as_f32());
+                    });
+                }),
+        )
+        .child(
+            Label::new(param.format(value))
+                .text_xs()
+                .text_color(rgb(0xE8EAF0))
+                .w(px(32.0))
+                .truncate(),
+        )
+        .into_any_element()
+}
+
+/// Panel emergente "Hikaru OpenWavetable Settings": sliders en vivo del look
+/// del visor. Cada cambio entra en la clave de caché del viewport, así que el
+/// re-render es inmediato sin más plomería.
+/// Menú contextual compacto de settings (~148px): entra en el visor sin
+/// taparlo. Una sola columna de filas de una línea —sin secciones ni textos
+/// largos— con los 8 ajustes y el selector de malla.
+fn settings_panel(
+    track_idx: usize,
+    slot_idx: usize,
+    settings: &RenderSettings,
+) -> AnyElement {
+    v_flex()
+        .absolute()
+        .right(px(3.0))
+        .top(px(26.0))
+        .w(px(148.0))
+        .max_h(px(190.0))
+        .overflow_y_scrollbar()
+        .p(px(4.0))
+        .gap(px(2.0))
+        .bg(rgb(0x181B22))
+        .border_1()
+        .border_color(rgb(0x3A4152))
+        .rounded(px(3.0))
+        .child(
+            Label::new("WT Settings")
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0xE8EAF0)),
+        )
+        .child(
+            Button::new(format!("wt_meshtype_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .compact()
+                .w_full()
+                .label(format!("Malla: {}", settings.mesh.label()))
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.render_settings.mesh = editor.render_settings.mesh.cycle();
+                    });
+                }),
+        )
+        .children(SettingParam::ALL.iter().map(|param| {
+            setting_slider(track_idx, slot_idx, *param, param.get(settings)).into_any_element()
+        }))
+        .into_any_element()
+}
+
 fn render_viewport(
     track_idx: usize,
     slot_idx: usize,
-    mode: RenderMode,
+    editor: &WavetableEditor,
     view: &WavetableView,
 ) -> AnyElement {
     div()
@@ -1173,7 +1489,15 @@ fn render_viewport(
                 .into_any_element(),
             None => viewport_placeholder(view.error.as_deref()),
         })
-        .child(view_mode_toggle(track_idx, slot_idx, mode))
+        .child(view_mode_controls(
+            track_idx,
+            slot_idx,
+            editor.render_mode,
+            editor.settings_open,
+        ))
+        .when(editor.settings_open, |this| {
+            this.child(settings_panel(track_idx, slot_idx, &editor.render_settings))
+        })
         .into_any_element()
 }
 
@@ -1328,7 +1652,7 @@ fn render_knobs(
 fn render_viewport_card(
     track_idx: usize,
     slot_idx: usize,
-    mode: RenderMode,
+    editor: &WavetableEditor,
     view: &WavetableView,
     frame: usize,
     frames: usize,
@@ -1355,7 +1679,15 @@ fn render_viewport_card(
                 .into_any_element(),
             None => viewport_placeholder(view.error.as_deref()),
         })
-        .child(view_mode_toggle(track_idx, slot_idx, mode))
+        .child(view_mode_controls(
+            track_idx,
+            slot_idx,
+            editor.render_mode,
+            editor.settings_open,
+        ))
+        .when(editor.settings_open, |this| {
+            this.child(settings_panel(track_idx, slot_idx, &editor.render_settings))
+        })
         .child(
             v_flex()
                 .absolute()
@@ -1758,7 +2090,7 @@ pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: us
         .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _, cx| {
             with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
         })
-        .child(render_viewport_card(track_idx, slot_idx, editor.render_mode, &view, editor.frame, frames))
+        .child(render_viewport_card(track_idx, slot_idx, &editor, &view, editor.frame, frames))
         .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
         .child(render_knobs(cx, track_idx, slot_idx, &editor, &view))
         .child(drag_keepalive(track_idx, slot_idx))
