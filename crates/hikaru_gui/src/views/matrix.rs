@@ -799,21 +799,22 @@ pub fn sync_audio_events_to_engine(
     }
 }
 
+use std::sync::{Arc, Mutex};
+
 use gpui_kit::component::*;
-use gpui_kit::prelude::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
-use gpui_kit::prelude::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::prelude::{InteractiveElement as _, StatefulInteractiveElement as _};
-use gpui_kit::Styled as _;
+use gpui_kit::prelude::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
 use crate::app::{state, HikaruApp};
 
 fn slot_colors(slot_state: &SlotState, has_clip: bool, is_selected: bool) -> (Hsla, Hsla) {
     if is_selected {
-        return (rgb(0x3D4A5C).into(), rgb(0xE0E0E0).into());
+        // Focus/selección: resaltado azul profesional.
+        return (rgb(0x2D3A4A).into(), rgb(0x5AB4FF).into());
     }
     if !has_clip {
         return (rgb(0x252525).into(), rgb(0x3A3A3A).into());
@@ -821,10 +822,394 @@ fn slot_colors(slot_state: &SlotState, has_clip: bool, is_selected: bool) -> (Hs
     match slot_state {
         SlotState::Stopped => (rgb(0x35404F).into(), rgb(0x6B9FD4).into()),
         SlotState::QueuedToPlay => (rgb(0x5C4A1A).into(), rgb(0xE6C84C).into()),
-        SlotState::Playing => (rgb(0x2A5A9E).into(), rgb(0x6BB8FF).into()),
+        // En reproducción: verde vibrante + borde resaltado.
+        SlotState::Playing => (rgb(0x1DB954).into(), rgb(0x4CFF8A).into()),
         SlotState::QueuedToStop => (rgb(0x6B2A2A).into(), rgb(0xE06060).into()),
         SlotState::Empty => (rgb(0x252525).into(), rgb(0x3A3A3A).into()),
     }
+}
+
+fn slot_hover_border(slot_state: &SlotState, has_clip: bool) -> Hsla {
+    if !has_clip {
+        // Vacío: borde sutilmente encendido al hover para invitar a crear/cargar.
+        return rgb(0x0096BE).into();
+    }
+    match slot_state {
+        SlotState::Playing => rgb(0xB6FFD2).into(),
+        SlotState::QueuedToPlay | SlotState::QueuedToStop => rgb(0xFFFFFF).into(),
+        _ => rgb(0x9CC8FF).into(),
+    }
+}
+
+fn slot_display_text(slot_state: &SlotState, has_clip: bool, clip_name: &str) -> String {
+    if !has_clip {
+        // Celda vacía: pad oscuro limpio, sin texto genérico.
+        return String::new();
+    }
+    match slot_state {
+        SlotState::Playing => {
+            if clip_name.is_empty() {
+                "▶ Playing".to_string()
+            } else {
+                format!("▶ {}", clip_name)
+            }
+        }
+        SlotState::QueuedToPlay => "… Play".to_string(),
+        SlotState::QueuedToStop => "■ Stop".to_string(),
+        _ => clip_name.to_string(),
+    }
+}
+
+fn play_glyph(slot_state: &SlotState, has_clip: bool) -> &'static str {
+    if !has_clip {
+        // Vacío: no se usa glyph de texto; se dibuja cuadrado Stop sólido (ver render_pad).
+        return "■";
+    }
+    match slot_state {
+        SlotState::Playing => "■",
+        SlotState::QueuedToPlay => "…",
+        SlotState::QueuedToStop => "…",
+        _ => "▶",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_pad(
+    track_idx: usize,
+    scene_idx: usize,
+    slot_state: SlotState,
+    clip_name: String,
+    has_clip: bool,
+    is_selected: bool,
+    drop_sample_ready: bool,
+    clipboard_ready: bool,
+    engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
+) -> AnyElement {
+    let (bg, border) = slot_colors(&slot_state, has_clip, is_selected);
+    let hover_border = slot_hover_border(&slot_state, has_clip);
+    let display_text = slot_display_text(&slot_state, has_clip, &clip_name);
+    let glyph = play_glyph(&slot_state, has_clip);
+    let is_playing = slot_state == SlotState::Playing;
+    let is_empty = !has_clip;
+    let status_dot: Hsla = if is_empty {
+        rgb(0x5A5A5A).into()
+    } else {
+        match slot_state {
+            SlotState::Playing => rgb(0x0AFF6B).into(),
+            SlotState::QueuedToPlay => rgb(0xE6C84C).into(),
+            SlotState::QueuedToStop => rgb(0xE06060).into(),
+            _ => rgb(0x6B9FD4).into(),
+        }
+    };
+
+    let pad = div()
+        .id(SharedString::from(format!("matrix_pad_{}_{}", track_idx, scene_idx)))
+        .relative()
+        .w(px(110.0))
+        .h(px(54.0))
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        .rounded(px(3.0))
+        .overflow_hidden()
+        .cursor_pointer()
+        // Hover: borde azul sutilmente encendido + leve variación de fondo.
+        .hover(move |this| this.border_color(hover_border).bg(rgb(0x2E3A4A)))
+        .when(is_selected, |d| d.border_2().border_color(rgb(0x5AB4FF)))
+        .when(drop_sample_ready && is_empty, |d| {
+            d.border_color(rgb(0x0096BE)).border_2()
+        })
+        .when(is_playing, |d| {
+            d.border_2().border_color(rgb(0x4CFF8A))
+        })
+        // Click en el cuerpo del pad: seleccionar + drop de sample o trigger.
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |s, cx| {
+                // Si hay un sample arrastrado desde el explorer, cargarlo aquí.
+                if let Some(path) = s.dragged_sample.take() {
+                    if crate::views::explorer::is_audio_file(&path)
+                        || crate::views::explorer::is_midi_file(&path)
+                    {
+                        s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                        let bpm = s.transport.bpm;
+                        let proxy = s.audio_proxy.clone();
+                        load_clip_into_slot(
+                            &mut s.matrix_state,
+                            &proxy,
+                            track_idx,
+                            scene_idx,
+                            path,
+                            bpm,
+                        );
+                        cx.notify();
+                        return;
+                    } else {
+                        // No era un archivo válido: devolverlo para no perderlo.
+                        s.dragged_sample = Some(path);
+                    }
+                }
+                s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                if has_clip {
+                    // Con clip (Stopped/Playing/...): el pad completo es disparador.
+                    let proxy = s.audio_proxy.clone();
+                    trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
+                } else {
+                    // Vacío: queda seleccionado para que el Clip Editor ofrezca
+                    // "crear/grabar clip" o cargar un sample/MIDI.
+                    // No se dispara nada al engine (trigger_pad lo ignoraría).
+                }
+                cx.notify();
+            });
+        })
+        // Progreso del loop / playhead + fondo pulsante en Playing.
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    if is_playing {
+                        // Barra de progreso inferior (loop).
+                        if let Some(ref handle) = engine_handle {
+                            if let Ok(engine) = handle.try_lock() {
+                                if let Some((frame, total)) =
+                                    engine.voice_playhead_frame(track_idx, scene_idx)
+                                {
+                                    if total > 0 {
+                                        let progress =
+                                            (frame as f32 / total as f32).clamp(0.0, 1.0);
+                                        // Relleno de progreso.
+                                        window.paint_quad(PaintQuad {
+                                            bounds: Bounds::new(
+                                                bounds.origin,
+                                                size(
+                                                    bounds.size.width * progress,
+                                                    bounds.size.height,
+                                                ),
+                                            ),
+                                            background: rgb(0xFFFFFF).into(),
+                                            border_color: Hsla::default(),
+                                            corner_radii: gpui_kit::Corners::default(),
+                                            border_widths: gpui_kit::Edges::default(),
+                                            border_style: BorderStyle::default(),
+                                        });
+                                        // Playhead vertical.
+                                        let x = bounds.origin.x
+                                            + bounds.size.width * progress;
+                                        let mut path = PathBuilder::stroke(px(1.5));
+                                        path.move_to(point(x, bounds.origin.y));
+                                        path.line_to(point(
+                                            x,
+                                            bounds.origin.y + bounds.size.height,
+                                        ));
+                                        if let Ok(p) = path.build() {
+                                            window.paint_path(p, rgb(0x062B16));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        // Botón Play/Stop pequeño (estilo Arranger: cuadrado sólido en vacíos).
+        .child(
+            div()
+                .absolute()
+                .left(px(5.0))
+                .top(px(5.0))
+                .w(px(20.0))
+                .h(px(20.0))
+                .rounded(px(3.0))
+                .bg(if has_clip {
+                    if is_playing {
+                        rgb(0x062B16)
+                    } else {
+                        rgb(0x1B6FB5)
+                    }
+                } else {
+                    rgb(0x32323C)
+                })
+                .border_1()
+                .border_color(if is_playing {
+                    rgb(0x4CFF8A)
+                } else {
+                    rgb(0x5A5A5A)
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|this| this.border_color(rgb(0x5AB4FF)))
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                        if has_clip {
+                            let proxy = s.audio_proxy.clone();
+                            trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
+                        }
+                        // En vacío el mini-botón no dispara: sólo selecciona.
+                        cx.notify();
+                    });
+                })
+                .child(if has_clip {
+                    Label::new(glyph)
+                        .text_size(px(10.0))
+                        .text_color(rgb(0xFFFFFF))
+                        .into_any_element()
+                } else {
+                    // Stop: cuadrado sólido limpio, al estilo del Arranger.
+                    div().w(px(7.0)).h(px(7.0)).bg(rgb(0xFFFFFF)).into_any_element()
+                }),
+        )
+        // Punto de estado + nombre del clip (solo si hay clip; vacío = pad limpio).
+        .child(
+            div()
+                .absolute()
+                .left(px(30.0))
+                .right(px(4.0))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .gap(px(1.0))
+                .overflow_hidden()
+                .when(has_clip, move |this| {
+                    let status_label = match slot_state {
+                        SlotState::Playing => "PLAYING".to_string(),
+                        SlotState::QueuedToPlay => "QUEUED ▶".to_string(),
+                        SlotState::QueuedToStop => "STOPPING".to_string(),
+                        _ => "STOPPED".to_string(),
+                    };
+                    this.child(
+                        h_flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(status_dot))
+                            .child(
+                                Label::new(status_label)
+                                    .text_size(px(7.0))
+                                    .text_color(rgb(0xFFFFFF)),
+                            ),
+                    )
+                    .child(
+                        Label::new(display_text.clone())
+                            .text_size(px(9.0))
+                            .text_color(rgb(0xFFFFFF)),
+                    )
+                }),
+        );
+
+    pad.context_menu(move |menu: PopupMenu, _window, _cx| {
+        menu.item(
+            PopupMenuItem::new("Copiar")
+                .disabled(!has_clip)
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        let clipboard = &mut s.matrix_clipboard;
+                        s.matrix_state.copy_slot(track_idx, scene_idx, clipboard);
+                        cx.notify();
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Cortar")
+                .disabled(!has_clip)
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        let proxy = s.audio_proxy.clone();
+                        let clipboard = &mut s.matrix_clipboard;
+                        s.matrix_state
+                            .cut_slot(track_idx, scene_idx, clipboard, &proxy);
+                        cx.notify();
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Pegar")
+                .disabled(!clipboard_ready)
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        let proxy = s.audio_proxy.clone();
+                        let clipboard = &s.matrix_clipboard;
+                        s.matrix_state
+                            .paste_slot(track_idx, scene_idx, clipboard, &proxy);
+                        cx.notify();
+                    });
+                }),
+        )
+        .item(PopupMenuItem::separator())
+        .item(
+            PopupMenuItem::new("Duplicar")
+                .disabled(!has_clip)
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        let proxy = s.audio_proxy.clone();
+                        s.matrix_state
+                            .duplicate_slot(track_idx, scene_idx, &proxy);
+                        cx.notify();
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Eliminar")
+                .disabled(!has_clip)
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        let proxy = s.audio_proxy.clone();
+                        s.matrix_state
+                            .delete_slot(track_idx, scene_idx, &proxy);
+                        cx.notify();
+                    });
+                }),
+        )
+    })
+    .into_any_element()
+}
+
+fn render_scene_launcher(scene_idx: usize, name: String, has_any_clip: bool) -> AnyElement {
+    div()
+        .id(SharedString::from(format!("matrix_scene_{}", scene_idx)))
+        .w(px(110.0))
+        .h(px(28.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(3.0))
+        .bg(rgb(0x1E1E28))
+        .border_1()
+        .border_color(rgb(0x0096BE))
+        .cursor_pointer()
+        // Hover: borde encendido para feedback visual.
+        .hover(|this| this.border_color(rgb(0x4CD6FF)).bg(rgb(0x2A2A3A)))
+        // Click: dispara simultáneamente todos los clips activos de la fila.
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |s, cx| {
+                let proxy = s.audio_proxy.clone();
+                trigger_scene(&mut s.matrix_state, &proxy, scene_idx);
+                cx.notify();
+            });
+        })
+        .child(
+            Label::new(format!("▶ {}", name))
+                .text_xs()
+                .text_color(if has_any_clip {
+                    rgb(0xFFFFFF)
+                } else {
+                    rgb(0x808080)
+                }),
+        )
+        .into_any_element()
 }
 
 fn db_text(volume: f32) -> String {
@@ -840,103 +1225,67 @@ fn db_text(volume: f32) -> String {
 
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
-    let matrix = &app.matrix_state;
-    let clipboard = &app.matrix_clipboard;
-    let dragged_sample = app.dragged_sample.clone();
-    let audio_proxy = app.audio_proxy.clone();
-    let engine_handle = app.engine_handle.clone();
-    let bpm = app.transport.bpm;
-    let ppqn = app.transport.ppqn();
-    let sample_rate = app.transport.sample_rate.get() as u32;
-    let transport_sample_count = app.transport.sample_count;
-    let is_looping = app.is_looping;
-    let loop_start = app.playlist_state.loop_start_ticks;
-    let loop_end = app.playlist_state.loop_end_ticks;
-    let mode = app.mode;
-    drop(app);
-
-    let tracks_len = matrix.tracks.len();
-    let scenes_len = matrix.scenes.len();
-    let selected = matrix.selected_slot;
-    let show_editor = matrix.show_editor;
-    let editor_height = matrix.editor_height;
-    let any_playing = matrix
+    // Snapshot mínimo para no mantener el borrow durante el armado de la UI.
+    let tracks_meta: Vec<(String, bool, bool, f32, f32)> = app
+        .matrix_state
+        .tracks
+        .iter()
+        .map(|t| (t.name.clone(), t.muted, t.soloed, t.volume, t.pan))
+        .collect();
+    let scene_names: Vec<String> = app
+        .matrix_state
+        .scenes
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    let slots: Vec<Vec<(SlotState, Option<String>)>> = app
+        .matrix_state
         .grid
         .iter()
-        .flatten()
-        .any(|s| s.state == SlotState::Playing);
+        .map(|row| {
+            row.iter()
+                .map(|slot| (slot.state.clone(), slot.clip.as_ref().map(|c| c.name.clone())))
+                .collect()
+        })
+        .collect();
+    let selected = app.matrix_state.selected_slot;
+    let show_editor = app.matrix_state.show_editor;
+    let editor_height = app.matrix_state.editor_height;
+    let clipboard_ready = app.matrix_clipboard.has_content();
+    let drop_sample_ready = app.dragged_sample.is_some();
+    let engine_handle = app.engine_handle.clone();
+    drop(app);
+
+    let tracks_len = tracks_meta.len();
+    let scenes_len = scene_names.len();
 
     let mut track_rows: Vec<AnyElement> = Vec::new();
     for track_idx in 0..tracks_len {
-        let meta = &matrix.tracks[track_idx];
-        let track_name = meta.name.clone();
-        let track_muted = meta.muted;
-        let track_soloed = meta.soloed;
-        let track_volume = meta.volume;
-        let track_pan = meta.pan;
+        let (track_name, track_muted, track_soloed, track_volume, _track_pan) =
+            tracks_meta[track_idx].clone();
         let mut scene_cells: Vec<AnyElement> = Vec::new();
 
         for scene_idx in 0..scenes_len {
-            let engine_handle = engine_handle.clone();
-            let (bg, border) = {
-                let slot = &matrix.grid[track_idx][scene_idx];
-                slot_colors(&slot.state, slot.clip.is_some(), selected == Some((track_idx, scene_idx)))
-            };
-            let clip_name = matrix.grid[track_idx][scene_idx]
-                .clip
-                .as_ref()
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
+            let (slot_state, clip_name_opt) = slots
+                .get(track_idx)
+                .and_then(|r| r.get(scene_idx))
+                .cloned()
+                .unwrap_or((SlotState::Empty, None));
+            let clip_name = clip_name_opt.unwrap_or_default();
             let has_clip = !clip_name.is_empty();
             let is_selected = selected == Some((track_idx, scene_idx));
-            let slot_state = matrix.grid[track_idx][scene_idx].state.clone();
-            let is_playing = slot_state == SlotState::Playing;
 
-            scene_cells.push(
-                div()
-                    .w(px(110.0))
-                    .h(px(54.0))
-                    .bg(bg)
-                    .border_1()
-                    .border_color(border)
-                    .rounded(px(3.0))
-                    .child(
-                        canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, _| {
-                                if has_clip {
-                                    if is_playing {
-                                        if let Some(ref handle) = engine_handle {
-                                            if let Ok(engine) = handle.try_lock() {
-                                                if let Some((frame, total)) = engine
-                                                    .voice_playhead_frame(track_idx, scene_idx)
-                                                {
-                                                    if total > 0 {
-                                                        let progress =
-                                                            (frame as f32 / total as f32).clamp(0.0, 1.0);
-                                                        let x = bounds.origin.x + bounds.size.width * progress;
-                                                        let mut path = PathBuilder::stroke(px(1.5));
-                                                        path.move_to(point(x, bounds.origin.y));
-                                                        path.line_to(point(x, bounds.origin.y + bounds.size.height));
-                                                        window.paint_path(path.build().unwrap(), rgb(0xFFFFFF));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if !clip_name.is_empty() && clip_name.len() <= 14 {
-                                        let mut path = PathBuilder::fill();
-                                        path.move_to(point(bounds.origin.x + px(22.0), bounds.origin.y + px(11.0)));
-                                        path.line_to(point(bounds.origin.x + px(30.0), bounds.origin.y + px(11.0)));
-                                        path.close();
-                                        window.paint_path(path.build().unwrap(), rgb(0xFFFFFF));
-                                    }
-                                }
-                            },
-                        ),
-                    )
-                    .into_any_element(),
-            );
+            scene_cells.push(render_pad(
+                track_idx,
+                scene_idx,
+                slot_state,
+                clip_name,
+                has_clip,
+                is_selected,
+                drop_sample_ready,
+                clipboard_ready,
+                engine_handle.clone(),
+            ));
         }
 
         track_rows.push(
@@ -1010,30 +1359,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
 
     let mut scene_headers: Vec<AnyElement> = Vec::new();
     for scene_idx in 0..scenes_len {
-        let name = matrix.scenes[scene_idx].name.clone();
-        scene_headers.push(
-            div()
-                .w(px(110.0))
-                .h(px(28.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    Button::new(format!("scene_btn_{}", scene_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(format!("▶ {}", name))
-                        .w_full()
-                        .bg(rgb(0x3D3D3D))
-                        .text_color(rgb(0xE0E0E0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                trigger_scene(&mut state.matrix_state, &state.audio_proxy, scene_idx);
-                                cx.notify();
-                            });
-                        }),
-                )
-                .into_any_element(),
-        );
+        let name = scene_names[scene_idx].clone();
+        // ¿Hay al menos un clip en esta escena? Atenúa el header si está vacía.
+        let has_any_clip = slots
+            .iter()
+            .any(|row| row.get(scene_idx).map(|(_, n)| n.is_some()).unwrap_or(false));
+        scene_headers.push(render_scene_launcher(scene_idx, name, has_any_clip));
     }
 
     v_flex()
@@ -1119,6 +1450,27 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .children(track_rows),
         )
         .when(show_editor, |this| {
+            // Barra del Clip Editor: muestra explícitamente el slot actual.
+            let hint = match selected {
+                Some((t, s)) => {
+                    let clip_label = slots
+                        .get(t)
+                        .and_then(|r| r.get(s))
+                        .and_then(|(_, n)| n.clone())
+                        .unwrap_or_default();
+                    if clip_label.is_empty() {
+                        format!("CLIP EDITOR — Track {} | Scene {}", t + 1, s + 1)
+                    } else {
+                        format!(
+                            "CLIP EDITOR — Track {} | Scene {} — {}",
+                            t + 1,
+                            s + 1,
+                            clip_label
+                        )
+                    }
+                }
+                None => "CLIP EDITOR".to_string(),
+            };
             this.child(
                 div()
                     .h(px(editor_height))
@@ -1126,7 +1478,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .border_1()
                     .border_color(rgb(0x2D3741))
                     .rounded(px(4.0))
-                    .child(Label::new("CLIP EDITOR").text_xs()),
+                    .p(px(6.0))
+                    .child(Label::new(hint).text_xs().text_color(rgb(0x9AA4B2))),
             )
         })
         .into_any_element()
