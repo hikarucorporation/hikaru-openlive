@@ -40,9 +40,10 @@ use std::sync::{Arc, Mutex};
 
 use gpui_kit::{App, Global, RenderImage};
 use hikaru_render::{
-    upload_knob, Camera, GpuContext, GpuMesh, KnobMesh, KnobRenderer, KnobUniforms, MeshRenderer,
-    MeshUniforms, QuadInstance, QuadRenderer, ReadbackError, RenderTarget, SpriteLayout,
-    SpriteSheet, SpriteSheetResources, WavetableMesh, WavetableMeshParams,
+    terrain_view_proj, upload_knob, Camera, GpuContext, GpuMesh, KnobMesh, KnobRenderer,
+    KnobUniforms, MeshRenderer, MeshUniforms, QuadInstance, QuadRenderer, ReadbackError,
+    RenderMode, RenderTarget, SpriteLayout, SpriteSheet, SpriteSheetResources, WavetableMesh,
+    WavetableMeshParams, TERRAIN_LINE_WIDTH,
 };
 // Se usa el reexport de `hikaru_render` en vez de declarar wgpu como dependencia
 // directa: garantiza que la GUI hable con exactamente la misma versión que el
@@ -584,6 +585,9 @@ pub struct FrameKey {
     pub waveform: u64,
     /// Ciclo en primer plano, cuantizado.
     pub active: i32,
+    /// Modo del visor: 2D y 3D con los mismos samples son imágenes distintas,
+    /// así que el toggle tiene que invalidar el render cacheado.
+    pub mode_2d: bool,
     /// Yaw cuantizado.
     pub yaw: i32,
     /// Pitch cuantizado.
@@ -763,19 +767,45 @@ impl WavetableViewport {
         let (width, height) = viewer.size;
         let aspect = if height > 0 { width as f32 / height as f32 } else { 1.0 };
 
-        // El encuadre se calcula contra la caja de la malla y el aspect real del
-        // viewport: con un `distance` fijo, la misma cámara encuadra bien en 16:9
-        // y corta la cinta en un panel angosto. El semieje de Z es el de la pila
-        // de ciclos, que es lo que la vista muestra en profundidad.
-        let mut camera = viewer.camera;
-        camera.fit_to_box(
-            [
-                viewer.mesh_params.width * 0.5,
-                viewer.mesh_params.height * 0.5,
-                viewer.mesh_params.thickness * 0.5,
-            ],
-            aspect,
-        );
+        // En 3D la proyección es la oblicua fija del terreno (ver
+        // `terrain_view_proj`): la misma línea 2D replicada en Z con shear
+        // constante y sin división perspectiva, así que ninguna fila se
+        // deforma por distancia. En 2D es la cámara frontal sin pitch sobre
+        // una sola línea plana: la misma onda, para diagnosticar la lectura
+        // del `.wav`.
+        //
+        // El encuadre se calcula contra la caja de la malla y el aspect real
+        // del viewport: con un encuadre fijo, la misma escena encuadra bien en
+        // 16:9 y corta la cinta en un panel angosto.
+        let uniforms = match viewer.render_mode {
+            RenderMode::Mode3D => MeshUniforms {
+                view_proj: terrain_view_proj(
+                    [
+                        viewer.mesh_params.width * 0.5,
+                        viewer.mesh_params.height * 0.5,
+                        viewer.mesh_params.thickness * 0.5,
+                    ],
+                    aspect,
+                ),
+                // Luz fija de frente-arriba: el shader la normaliza igual, así
+                // que el vector sólo fija la dirección del sombreado parejo.
+                light_dir: [0.3, 0.5, 1.0],
+                light_intensity: 1.0,
+                tint: viewer.tint,
+            },
+            RenderMode::Mode2D => {
+                let mut camera = Camera::front();
+                camera.fit_to_box(
+                    [
+                        viewer.mesh_params.width * 0.5,
+                        viewer.mesh_params.height * 0.5,
+                        TERRAIN_LINE_WIDTH * 0.5,
+                    ],
+                    aspect,
+                );
+                camera.uniforms(aspect, viewer.tint)
+            }
+        };
 
         self.ensure_mesh(renderer, viewer)?;
 
@@ -785,7 +815,7 @@ impl WavetableViewport {
         let mesh = &self.mesh.as_ref().expect("la malla se acaba de asegurar").1;
         renderer.draw_wavetable_mesh(
             mesh,
-            &camera.uniforms(aspect, viewer.tint),
+            &uniforms,
             TargetId::WavetableViewer,
             viewer.background,
         )?;
@@ -816,7 +846,9 @@ impl WavetableViewport {
     /// plano: mover el knob de índice cambia el realce de la pila, así que es
     /// otra imagen aunque los samples sean los mismos. La geometría se
     /// reconstruye en ese caso, que es lo correcto porque es una vez por cambio
-    /// de índice y no una vez por frame.
+    /// de índice y no una vez por frame. En modo 2D la malla es el ciclo activo
+    /// interpolado (una sola línea plana), así que también se reconstruye al
+    /// mover `WT POS`: es lo que hace continuo el morphing en la vista plana.
     fn ensure_mesh(
         &mut self,
         renderer: &HikaruRenderer,
@@ -828,16 +860,16 @@ impl WavetableViewport {
         if needs_upload {
             // DIAGNÓSTICO TEMPORAL: sacar cuando se encuentre la causa.
             eprintln!(
-                "[DIAG] upload de malla: waveform_len={} frame_len={} active={} max_frames={} columnas={}",
+                "[DIAG] upload de malla: mode={:?} waveform_len={} frame_len={} active={} max_frames={} columnas={}",
+                viewer.render_mode,
                 viewer.waveform.len(),
                 viewer.frame_len,
                 viewer.active,
                 viewer.max_frames,
                 WAVETABLE_COLUMNS
             );
-            self.mesh = Some((
-                key,
-                renderer.upload_wavetable_table(
+            let mesh = match viewer.render_mode {
+                RenderMode::Mode3D => renderer.upload_wavetable_table(
                     "hikaru::wavetable",
                     viewer.waveform,
                     viewer.frame_len,
@@ -846,7 +878,25 @@ impl WavetableViewport {
                     WAVETABLE_COLUMNS,
                     viewer.mesh_params,
                 )?,
-            ));
+                RenderMode::Mode2D => {
+                    // El ciclo activo ya interpolado que manda la UI; si por
+                    // algún motivo no vino, se cae al primer ciclo de la tabla
+                    // antes que a un placeholder con error.
+                    let frame = viewer.active_frame.or_else(|| {
+                        if viewer.frame_len > 0 {
+                            viewer.waveform.get(..viewer.frame_len.min(viewer.waveform.len()))
+                        } else {
+                            None
+                        }
+                    });
+                    let frame = frame.filter(|frame| !frame.is_empty()).ok_or(
+                        hikaru_render::mesh::MeshError::WaveformTooShort,
+                    )?;
+                    WavetableMesh::from_active_line(frame, WAVETABLE_COLUMNS, viewer.mesh_params)?
+                        .upload(renderer.context(), "hikaru::wavetable_2d")?
+                }
+            };
+            self.mesh = Some((key, mesh));
         }
 
         Ok(())
@@ -909,6 +959,13 @@ pub struct ViewerRequest<'a> {
     /// Ciclo que se está mirando, en posición continua: la misma que devuelve el
     /// knob de morph. El realce de la malla lo sigue de forma continua.
     pub active: f32,
+    /// Modo del visor: en 2D se dibuja `active_frame` plano de frente, en 3D
+    /// la pila completa en perspectiva.
+    pub render_mode: RenderMode,
+    /// El ciclo activo ya interpolado, para el modo 2D. `Some` siempre que
+    /// `render_mode` sea 2D (la UI lo calcula con el morph actual, así que la
+    /// onda plana muestra el morphing exacto); en 3D es `None` y no se usa.
+    pub active_frame: Option<&'a [f32]>,
     /// Cuántos ciclos se dibujan como máximo. Acota la geometría para que una
     /// tabla de 2000 ciclos no sea 2000 cintas.
     pub max_frames: usize,
@@ -929,6 +986,7 @@ impl ViewerRequest<'_> {
             height: self.size.1,
             waveform: hash_waveform(self.waveform),
             active: quantize_active(self.active),
+            mode_2d: self.render_mode == RenderMode::Mode2D,
             yaw: quantize_camera(self.camera.yaw),
             pitch: quantize_camera(self.camera.pitch),
             distance: quantize_camera(self.camera.distance),
@@ -952,6 +1010,7 @@ fn frame_key_hash(key: FrameKey) -> u64 {
         u64::from(key.height),
         key.waveform,
         key.active as u64,
+        u64::from(key.mode_2d),
         key.yaw as u64,
         key.pitch as u64,
         key.distance as u64,
@@ -966,6 +1025,59 @@ fn frame_key_hash(key: FrameKey) -> u64 {
         }
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pedido mínimo con la tabla dada, en el modo pedido.
+    fn request<'a>(
+        waveform: &'a [f32],
+        active_frame: Option<&'a [f32]>,
+        render_mode: RenderMode,
+    ) -> ViewerRequest<'a> {
+        ViewerRequest {
+            size: WAVETABLE_VIEWPORT,
+            camera: Camera::wavetable_viewer(),
+            waveform,
+            frame_len: waveform.len(),
+            active: 0.0,
+            render_mode,
+            active_frame,
+            max_frames: 24,
+            mesh_params: WavetableMeshParams { width: 260.0, height: 96.0, thickness: 240.0 },
+            tint: [1.0, 0.55, 0.15, 1.0],
+            background: wgpu::Color::TRANSPARENT,
+        }
+    }
+
+    #[test]
+    fn toggling_the_view_mode_invalidates_the_cached_image() {
+        // 2D y 3D con los mismos samples son imágenes distintas: si la clave
+        // no llevara el modo, el toggle devolvería la imagen cacheada del otro
+        // modo para siempre.
+        let table = vec![0.0f32; 64];
+        let frame = vec![0.0f32; 64];
+        let three_d = request(&table, None, RenderMode::Mode3D);
+        let two_d = request(&table, Some(&frame), RenderMode::Mode2D);
+
+        assert_ne!(three_d.key(), two_d.key());
+        assert_ne!(frame_key_hash(three_d.key()), frame_key_hash(two_d.key()));
+    }
+
+    #[test]
+    fn same_mode_and_samples_hit_the_cache() {
+        // El caso contrario también importa: sin cambios no hay re-render (el
+        // readback de GPU por frame es lo caro del camino).
+        let table = vec![0.0f32; 64];
+        let frame = vec![0.0f32; 64];
+        let first = request(&table, Some(&frame), RenderMode::Mode2D);
+        let second = request(&table, Some(&frame), RenderMode::Mode2D);
+
+        assert_eq!(first.key(), second.key());
+        assert_eq!(frame_key_hash(first.key()), frame_key_hash(second.key()));
+    }
 }
 
 /// Manejo global del viewport 3D.

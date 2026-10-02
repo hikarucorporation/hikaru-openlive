@@ -46,7 +46,10 @@ pub use knob::{
     upload_knob, KnobMesh, KnobMeshParams, KnobRenderer, KnobUniforms, KNOB_RESOLUTION,
 };
 pub use context::{GpuContext, ReadbackError, RenderTarget};
-pub use mesh::{GpuMesh, MeshRenderer, MeshUniforms, WavetableMesh, WavetableMeshParams};
+pub use mesh::{
+    terrain_view_proj, GpuMesh, MeshRenderer, MeshUniforms, RenderMode, WavetableMesh,
+    WavetableMeshParams, TERRAIN_LINE_WIDTH,
+};
 pub use quad::{
     QuadError, QuadInstance, QuadRenderer, SpriteLayout, SpriteSheet, SpriteSheetResources,
     UvRect,

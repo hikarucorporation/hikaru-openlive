@@ -76,7 +76,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
-use hikaru_render::Camera;
+use hikaru_render::{Camera, RenderMode};
 
 use crate::app::{state, HikaruApp};
 use crate::render::{
@@ -235,6 +235,10 @@ pub struct WavetableEditor {
     pub frame: usize,
     /// Si el morph interpola entre frames o salta de uno en uno.
     pub smooth: bool,
+    /// Modo del visor: terreno 3D o ciclo 2D de diagnóstico. El 2D muestra el
+    /// ciclo activo interpolado plano de frente, para verificar la lectura del
+    /// `.wav` antes de la proyección 3D.
+    pub render_mode: RenderMode,
     /// Cámara del visor 3D.
     pub camera: Camera,
     pub unison: u8,
@@ -285,6 +289,7 @@ impl Default for WavetableEditor {
             morph: 0.0,
             frame: 0,
             smooth: true,
+            render_mode: RenderMode::default(),
             camera: Camera::default(),
             unison: 1,
             detune: 0.0,
@@ -596,7 +601,7 @@ pub fn render(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) ->
         })
         .child(render_header(&editor))
         .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
-        .child(render_viewport(&view))
+        .child(render_viewport(track_idx, slot_idx, editor.render_mode, &view))
         .child(render_footer(cx, track_idx, slot_idx, &editor, &view))
         // Red de seguridad del seguimiento del arrastre. Va al final para que
         // quede por encima: es invisible y no registra hitbox, así que no
@@ -1070,17 +1075,27 @@ fn request_view(cx: &mut Context<HikaruApp>, editor: &WavetableEditor) -> Waveta
     let handle = cx.global::<WavetableViewportHandle>().clone();
     handle.spawn_connect(cx);
 
+    // En modo 2D la malla es el ciclo activo ya interpolado (el morphing
+    // exacto bajo `WT POS`): se calcula acá y se presta por referencia al
+    // pedido, que sólo lo lee durante el `view`. En 3D no se calcula para no
+    // tirar una copia de 2048 samples por frame.
+    let active_2d =
+        (editor.render_mode == RenderMode::Mode2D).then(|| editor.current_samples());
+
     handle.view(&WavetableViewRequest {
         viewer: ViewerRequest {
             size: WAVETABLE_VIEWPORT,
             // La cámara viene fija del `hikaru_render` (`Camera::wavetable_viewer`,
             // 30° de inclinación). El visor ya no tiene controles de yaw/pitch:
-            // la perspectiva es la que hace legible la pila de ciclos.
+            // la perspectiva es la que hace legible la pila de ciclos. En modo
+            // 2D el renderer la reemplaza por la frontal (ver `render_viewer`).
             camera: editor.camera,
             // La tabla entera, para que la malla apile los ciclos reales en Z.
             waveform: editor.table_samples(),
             frame_len: editor.frame_len(),
             active: editor.active_cycle(),
+            render_mode: editor.render_mode,
+            active_frame: active_2d.as_deref(),
             max_frames: MAX_STACK_FRAMES,
             mesh_params: mesh_params(),
             tint: VIEWER_TINT,
@@ -1103,7 +1118,39 @@ fn request_view(cx: &mut Context<HikaruApp>, editor: &WavetableEditor) -> Waveta
 /// Es la única banda con `flex_1`, así que su alto es el que sobra del cuadrado
 /// menos las otras tres. El `img` va con `ObjectFit::Contain`: la imagen offscreen
 /// tiene su propio aspect y encajarla a la fuerza la deformaría.
-fn render_viewport(view: &WavetableView) -> AnyElement {
+/// Botón 2D/3D del visor: alterna entre el terreno en perspectiva y el ciclo
+/// activo plano de diagnóstico. Va arriba a la derecha, superpuesto sin tapar
+/// la onda, y muestra el modo actual en naranja.
+fn view_mode_toggle(track_idx: usize, slot_idx: usize, mode: RenderMode) -> AnyElement {
+    div()
+        .absolute()
+        .right(px(3.0))
+        .top(px(3.0))
+        .child(
+            Button::new(format!("wt_viewmode_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .compact()
+                .child(
+                    Label::new(mode.label())
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xFF6E00)),
+                )
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.render_mode = editor.render_mode.toggle();
+                    });
+                }),
+        )
+        .into_any_element()
+}
+
+fn render_viewport(
+    track_idx: usize,
+    slot_idx: usize,
+    mode: RenderMode,
+    view: &WavetableView,
+) -> AnyElement {
     div()
         .flex_1()
         .min_h(px(0.0))
@@ -1126,6 +1173,7 @@ fn render_viewport(view: &WavetableView) -> AnyElement {
                 .into_any_element(),
             None => viewport_placeholder(view.error.as_deref()),
         })
+        .child(view_mode_toggle(track_idx, slot_idx, mode))
         .into_any_element()
 }
 
@@ -1277,7 +1325,14 @@ fn render_knobs(
         .into_any_element()
 }
 
-fn render_viewport_card(view: &WavetableView, frame: usize, frames: usize) -> AnyElement {
+fn render_viewport_card(
+    track_idx: usize,
+    slot_idx: usize,
+    mode: RenderMode,
+    view: &WavetableView,
+    frame: usize,
+    frames: usize,
+) -> AnyElement {
     div()
         .flex_1()
         .min_h(px(0.0))
@@ -1300,6 +1355,7 @@ fn render_viewport_card(view: &WavetableView, frame: usize, frames: usize) -> An
                 .into_any_element(),
             None => viewport_placeholder(view.error.as_deref()),
         })
+        .child(view_mode_toggle(track_idx, slot_idx, mode))
         .child(
             v_flex()
                 .absolute()
@@ -1702,7 +1758,7 @@ pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: us
         .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _, cx| {
             with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
         })
-        .child(render_viewport_card(&view, editor.frame, frames))
+        .child(render_viewport_card(track_idx, slot_idx, editor.render_mode, &view, editor.frame, frames))
         .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
         .child(render_knobs(cx, track_idx, slot_idx, &editor, &view))
         .child(drag_keepalive(track_idx, slot_idx))
