@@ -16,6 +16,63 @@ use gpui_kit::*;
 use crate::app::{state, HikaruApp};
 use crate::audio_proxy::GuiCommand;
 
+/// Payload del Drag & Drop interno (Explorer → Session Matrix / Arranger).
+///
+/// Viaja con el gesto nativo de GPUI (`on_drag` / `on_drop`): el drop target
+/// lo recibe tipado y carga el clip sin pasar por `dragged_sample`. Se usa
+/// `PathBuf` envuelto (y no crudo) para que `can_drop` pueda discriminar este
+/// gesto de cualquier otro drag de la app.
+#[derive(Clone, Debug)]
+pub struct ExplorerAudioDrag(pub PathBuf);
+
+/// Fantasma flotante que sigue al cursor durante el arrastre.
+///
+/// GPUI pinta la vista que devuelve el constructor de `on_drag` junto al
+/// cursor; este `Render` mínimo (nombre del archivo + icono de clip) es el
+/// indicador flotante que pide el requerimiento 1.
+pub struct ExplorerDragGhost {
+    name: String,
+}
+
+impl Render for ExplorerDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .bg(rgb(0x14161C))
+            .border_1()
+            .border_color(rgb(0x00FFFF))
+            .rounded(px(4.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .child(
+                Label::new(format!("🎵 {}", self.name))
+                    .text_xs()
+                    .text_color(crate::theme::TEXT_PRIMARY),
+            )
+    }
+}
+
+/// Marca el archivo como "arrastrándose" para el resaltado legacy de los pads.
+///
+/// El gesto nativo ya transporta el path tipado, pero los pads iluminan su
+/// borde a partir de `dragged_sample` (`drop_sample_ready`). Sincronizarlo
+/// aquí mantiene ese feedback sin duplicar la carga: el `on_drop` de los
+/// pads consume el payload tipado y limpia este flag.
+pub fn mark_dragged_sample(cx: &mut App, path: &PathBuf) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.dragged_sample = Some(path.clone());
+        cx.notify();
+    });
+}
+
+pub fn clear_dragged_sample(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.dragged_sample = None;
+        cx.notify();
+    });
+}
+
 pub struct FileExplorerState {
     pub current_path: PathBuf,
     pub path_input: String,
@@ -231,6 +288,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
+    // El waveform también inicia el arrastre (click sostenido + mover):
+    // si hay un archivo de audio/MIDI seleccionado, el visor es origen.
+    let wave_drag: Option<PathBuf> = selected_file.clone().filter(|p| {
+        is_audio_file(p) || is_midi_file(p)
+    });
+
     let wave_canvas = div()
         .id("explorer_wave_canvas")
         .w_full()
@@ -239,6 +302,21 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .rounded(px(4.0))
         .border_1()
         .border_color(crate::theme::BORDER_COLOR)
+        .when_some(wave_drag, |d, drag_path| {
+            d.on_drag(
+                ExplorerAudioDrag(drag_path.clone()),
+                |payload, _, _, cx| {
+                    mark_dragged_sample(cx, &payload.0);
+                    let name = payload
+                        .0
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    cx.new(|_| ExplorerDragGhost { name })
+                },
+            )
+        })
         .child(
             canvas(
                 |_, _, _| {},
@@ -388,7 +466,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             let is_selected = selected_file.as_ref() == Some(&path);
                             let label_clone = label.clone();
                             let project_bpm = project_bpm;
-                            
+                            // Solo audio/MIDI admiten arrastre; los directorios navegan con click.
+                            let is_draggable =
+                                !is_dir && (is_audio_file(&path) || is_midi_file(&path));
+
                             let bg_color = if is_selected {
                                 crate::theme::SLOT_ACTIVE_BG
                             } else {
@@ -405,6 +486,21 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 .bg(bg_color)
                                 .rounded(px(3.0))
                                 .child(Label::new(label_clone).text_xs().text_color(crate::theme::TEXT_PRIMARY))
+                                        .when(is_draggable, |d| {
+                                            d.on_drag(
+                                                ExplorerAudioDrag(path.clone()),
+                                                |payload, _, _, cx| {
+                                                    mark_dragged_sample(cx, &payload.0);
+                                                    let name = payload
+                                                        .0
+                                                        .file_name()
+                                                        .unwrap_or_default()
+                                                        .to_string_lossy()
+                                                        .to_string();
+                                                    cx.new(|_| ExplorerDragGhost { name })
+                                                },
+                                            )
+                                        })
                                         .on_click(move |_, _, cx| {
                                             let st = state(cx);
                                             cx.update_entity(&st, |state, cx| {

@@ -10,6 +10,7 @@ use hikaru_audio_engine::AudioEngine;
 
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 pub use crate::views::clipboard::MatrixClipboard;
+use crate::views::explorer::ExplorerAudioDrag;
 use crate::views::mixer::Track;
 use crate::views::playlist::PlaylistState;
 
@@ -921,6 +922,32 @@ fn render_pad(
         })
         .when(is_playing, |d| {
             d.border_2().border_color(rgb(0x4CFF8A))
+        })
+        // Drop target del Drag & Drop desde el Explorer: acepta solo el
+        // payload tipado `ExplorerAudioDrag` y carga el clip en este slot.
+        .can_drop(|payload: &dyn std::any::Any, _, _| {
+            payload.is::<ExplorerAudioDrag>()
+        })
+        .on_drop(move |payload: &ExplorerAudioDrag, _, cx| {
+            let path = payload.0.clone();
+            let st = state(cx);
+            st.update(cx, |s, cx| {
+                // El gesto nativo ya trae el path; limpiar el flag legacy
+                // para apagar el resaltado y el fantasma flotante.
+                s.dragged_sample = None;
+                s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                let bpm = s.transport.bpm;
+                let proxy = s.audio_proxy.clone();
+                load_clip_into_slot(
+                    &mut s.matrix_state,
+                    &proxy,
+                    track_idx,
+                    scene_idx,
+                    path,
+                    bpm,
+                );
+                cx.notify();
+            });
         })
         // Click en el cuerpo del pad: seleccionar + drop de sample o trigger.
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {

@@ -524,11 +524,38 @@ fn render_pad(
         .when(drop_sample_ready, |d| d.border_color(rgb(0x0096BE)))
         .rounded(px(2.0))
         .overflow_hidden()
+        // Drop target del Drag & Drop desde el Explorer (línea de tiempo).
+        .can_drop(|payload: &dyn std::any::Any, _, _| {
+            payload.is::<crate::views::explorer::ExplorerAudioDrag>()
+        })
+        .on_drop(
+            move |payload: &crate::views::explorer::ExplorerAudioDrag, _, cx| {
+                let path = payload.0.clone();
+                let st = state(cx);
+                st.update(cx, |s, cx| {
+                    s.dragged_sample = None;
+                    s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                    let bpm = s.transport.bpm;
+                    let proxy = s.audio_proxy.clone();
+                    load_clip_into_slot(
+                        &mut s.matrix_state,
+                        &proxy,
+                        track_idx,
+                        scene_idx,
+                        path,
+                        bpm,
+                    );
+                    cx.notify();
+                });
+            },
+        )
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |s, cx| {
                 if let Some(path) = s.dragged_sample.take() {
-                    if crate::views::explorer::is_audio_file(&path) {
+                    if crate::views::explorer::is_audio_file(&path)
+                        || crate::views::explorer::is_midi_file(&path)
+                    {
                         s.matrix_state.selected_slot = Some((track_idx, scene_idx));
                         let bpm = s.transport.bpm;
                         let proxy = s.audio_proxy.clone();
