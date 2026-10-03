@@ -1542,7 +1542,7 @@ fn h_mix_slider(
         .flex_shrink_0()
         .rounded(px(3.0))
         .when(dragging_this, |d| d.cursor_grabbing())
-        .when(!dragging_this, |d| d.cursor_ew_resize())
+        .when(!dragging_this, |d| d.cursor_pointer())
         .hover(|this| this.bg(rgb(0x232329)))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
