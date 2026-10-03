@@ -174,6 +174,63 @@ pub fn format_bpm(bpm: f64) -> String {
     }
 }
 
+/// Métricas estándar que recorre el stepper de compás (SIG) con `-` / `+`.
+pub const STANDARD_SIGS: [(u32, u32); 7] =
+    [(2, 4), (3, 4), (4, 4), (5, 4), (6, 8), (7, 8), (12, 8)];
+
+/// Texto de la caja de compás: siempre `numerador/denominador` (`4/4`).
+pub fn format_sig(num: u32, den: u32) -> String {
+    format!("{}/{}", num.max(1), den.max(1))
+}
+
+/// Parsea lo que el usuario escribe en la caja de compás.
+///
+/// Acepta `N/D` (`6/8`) y número suelto (`3` → `3/4`). El numerador se acota
+/// a 1..=16 y el denominador a potencias de 2 musicales (2, 4, 8, 16); en otro
+/// caso devuelve `None` y la caja revierte al valor del transporte.
+pub fn parse_sig(text: &str) -> Option<(u32, u32)> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (num_txt, den_txt) = match text.split_once('/') {
+        Some((n, d)) => (n.trim(), Some(d.trim())),
+        None => (text, None),
+    };
+    let Ok(num) = num_txt.parse::<u32>() else {
+        return None;
+    };
+    if !(1..=16).contains(&num) {
+        return None;
+    }
+    let den = match den_txt {
+        None => 4,
+        Some(d) => {
+            let Ok(v) = d.parse::<u32>() else {
+                return None;
+            };
+            if ![2, 4, 8, 16].contains(&v) {
+                return None;
+            }
+            v
+        }
+    };
+    Some((num, den))
+}
+
+/// Paso del stepper de compás sobre la lista estándar.
+///
+/// Si el compás actual no está en la lista (edición directa libre), se parte
+/// de `4/4` para que `-` / `+` siempre caigan en una métrica conocida.
+pub fn step_sig(num: u32, den: u32, delta: i32) -> (u32, u32) {
+    let idx = STANDARD_SIGS
+        .iter()
+        .position(|&(n, d)| n == num && d == den)
+        .unwrap_or(2) as i32;
+    let next = (idx + delta).clamp(0, STANDARD_SIGS.len() as i32 - 1) as usize;
+    STANDARD_SIGS[next]
+}
+
 pub struct AppState {
     pub mode: AppMode,
     pub transport: TransportPosition,
@@ -187,6 +244,11 @@ pub struct AppState {
     /// usuario; `transport.bpm` sigue siendo el valor con el que trabaja el
     /// resto de la app.
     pub bpm_input: Entity<InputState>,
+    /// Caja de compás del transport (`4/4`). Igual que la de BPM: el usuario
+    /// edita texto y los botones `-` / `+` recorren `STANDARD_SIGS`;
+    /// `transport.beats_per_bar` / `beat_division` siguen siendo el valor con
+    /// el que trabaja el resto de la app.
+    pub sig_input: Entity<InputState>,
     pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
     pub show_dsp_rack: bool,
     pub show_about: bool,
@@ -322,6 +384,8 @@ pub struct HikaruApp {
     pub _audio_stream: Option<cpal::Stream>,
     /// Mantiene viva la suscripción a `InputEvent` de la caja de BPM.
     _bpm_input_sub: Subscription,
+    /// Mantiene viva la suscripción a `InputEvent` de la caja de compás.
+    _sig_input_sub: Subscription,
     /// Viewport 3D de la Wavetable. Se guarda como campo además de publicarse
     /// como `Global` para que quede atado al ciclo de vida de la entidad: si
     /// sólo fuera un global, el renderer offscreen sobreviviría a la ventana.
@@ -448,6 +512,17 @@ impl HikaruApp {
             input.set_value(format_bpm(initial_bpm), window, cx)
         });
 
+        // Caja de compás (`4/4`): texto libre `N/D` con los mismos gestos que
+        // la de BPM (teclado, botones `-` / `+`, acote al perder el foco).
+        let sig_input = cx.new(|cx| InputState::new(window, cx));
+        sig_input.update(cx, |input, cx| {
+            input.set_value(
+                format_sig(transport.beats_per_bar, transport.beat_division),
+                window,
+                cx,
+            )
+        });
+
         let state = cx.new(|_| AppState {
             mode: AppMode::OpenLive,
             transport,
@@ -458,6 +533,7 @@ impl HikaruApp {
             cpu_usage: 0.12,
             bpm_synced_to_engine: -1.0,
             bpm_input: bpm_input.clone(),
+            sig_input: sig_input.clone(),
             global_loop_synced_to_engine: None,
             show_dsp_rack: false,
             show_about: false,
@@ -515,6 +591,24 @@ impl HikaruApp {
             });
         });
 
+        // La caja escribe el compás; el transport lo consumen el timecode y
+        // las grillas. Ante texto inválido no se toca nada (igual que BPM):
+        // el render del header reescribe la caja con el valor del transporte
+        // en cuanto pierde el foco.
+        let sig_input_sub = cx.subscribe(&sig_input, |_, input, event, cx| {
+            if !matches!(event, InputEvent::Change | InputEvent::Blur) {
+                return;
+            }
+            let text = input.read(cx).value().as_ref().to_string();
+            let Some((num, den)) = parse_sig(&text) else {
+                return;
+            };
+            update_state(cx, |state| {
+                state.transport.beats_per_bar = num;
+                state.transport.beat_division = den;
+            });
+        });
+
         let wavetable_viewport = WavetableViewportHandle::new();
         // El renderer offscreen se levanta una vez por sesión. La conexión es
         // asíncrona (pedir adapter y device a wgpu lo es) y va en un `spawn`
@@ -530,6 +624,7 @@ impl HikaruApp {
             focus_handle: cx.focus_handle(),
             _audio_stream: audio_stream,
             _bpm_input_sub: bpm_input_sub,
+            _sig_input_sub: sig_input_sub,
             wavetable_viewport,
         }
     }

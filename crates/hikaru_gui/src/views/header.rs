@@ -9,7 +9,7 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::*;
 use gpui_kit::base::{Button as BaseButton, NumberInput as BaseNumberInput};
 
-use crate::app::{format_bpm, state, AppMode, HikaruApp, OpenLiveView};
+use crate::app::{format_bpm, format_sig, state, step_sig, AppMode, HikaruApp, OpenLiveView};
 use crate::audio_proxy::{AudioClipData, GuiCommand};
 use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::playlist::ClipType;
@@ -47,6 +47,73 @@ fn bpm_step_button(button: BaseButton, glyph: &'static str) -> BaseButton {
         .hover(|this| this.bg(rgb(0x4D4D4D)))
         .active(|this| this.bg(rgb(0x5A5A5A)))
         .child(glyph)
+}
+
+/// Botón de paso (`-` / `+`) del stepper de compás (SIG).
+///
+/// Réplica exacta del estilo de `bpm_step_button`: mismo ancho, mismos hover
+/// y active, mismo color de texto. Recorre `STANDARD_SIGS` en vez de sumar un
+/// número, así que no puede reutilizar los botones del `NumberInput`.
+fn sig_step_button(id: &'static str, glyph: &'static str, delta: i32) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex_none()
+        .h_full()
+        .w(px(22.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(0xE0E0E0))
+        .hover(|this| this.bg(rgb(0x4D4D4D)))
+        .active(|this| this.bg(rgb(0x5A5A5A)))
+        .child(glyph)
+        .on_click(move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                let (num, den) = step_sig(
+                    state.transport.beats_per_bar,
+                    state.transport.beat_division,
+                    delta,
+                );
+                state.transport.beats_per_bar = num;
+                state.transport.beat_division = den;
+                // La caja se reescribe sola en el próximo render (sync de
+                // `sig_text` cuando no está editando).
+                cx.notify();
+            });
+        })
+}
+
+/// Stepper de compás `SIG [ - ] [ 4/4 ] [ + ]`: misma caja, bordes, fondo,
+/// alto y tipografía que `render_bpm_spinbox`. El valor central es editable
+/// (`N/D`, o `N` suelto que asume `/4`); `-` / `+` ciclan 2/4, 3/4, 4/4, 5/4,
+/// 6/8, 7/8, 12/8.
+fn render_sig_stepper(sig_input: &Entity<InputState>) -> impl IntoElement {
+    TextStyleScope::text_color(
+        rgb(0xE0E0E0),
+        div()
+            .flex()
+            .h(px(24.0))
+            .w(px(96.0))
+            .rounded(px(3.0))
+            .border_1()
+            .border_color(rgb(0x4D4D4D))
+            .bg(rgb(0x2E2E2E))
+            .overflow_hidden()
+            .child(sig_step_button("sig_step_dec", "−", -1))
+            .child(
+                Input::new(sig_input)
+                    .appearance(false)
+                    .bordered(false)
+                    .h_full()
+                    .w_full()
+                    .gap_0()
+                    .rounded_none()
+                    .text_align(TextAlign::Center)
+                    .with_size(Size::XSmall),
+            )
+            .child(sig_step_button("sig_step_inc", "+", 1)),
+    )
 }
 
 fn render_bpm_spinbox(bpm_input: &Entity<InputState>) -> impl IntoElement {
@@ -93,7 +160,9 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
     let show_explorer = app.show_explorer;
     let bpm = transport.bpm;
     let beats_per_bar = transport.beats_per_bar;
+    let beat_division = transport.beat_division;
     let bpm_input = app.bpm_input.clone();
+    let sig_input = app.sig_input.clone();
     let samples_per_beat = (transport.sample_rate.get() as f64 * 60.0) / transport.bpm;
     let samples_per_bar = samples_per_beat * transport.beats_per_bar as f64;
     let current_bar = 1.0 + (transport.sample_count as f64 / samples_per_bar) as f32;
@@ -112,6 +181,22 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         if shown.as_ref() != bpm_text {
             let text = bpm_text.clone();
             bpm_input.update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+    }
+
+    // La caja de compás refleja `beats_per_bar`/`beat_division` salvo que el
+    // usuario la esté editando. Esto también revierte texto inválido al perder
+    // el foco y confirma los pasos de `-` / `+` en el frame siguiente.
+    let sig_text = format_sig(beats_per_bar, beat_division);
+    let sig_editing = sig_input
+        .read(cx)
+        .focus_handle(cx)
+        .is_focused(window);
+    if !sig_editing {
+        let shown = sig_input.read(cx).value();
+        if shown.as_ref() != sig_text {
+            let text = sig_text.clone();
+            sig_input.update(cx, |input, cx| input.set_value(text, window, cx));
         }
     }
 
@@ -312,7 +397,8 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         )
         .child(Label::new("BPM").text_xs().text_color(rgb(0xE0E0E0)))
         .child(render_bpm_spinbox(&bpm_input))
-        .child(Label::new(format!("{}/4", beats_per_bar)).text_xs().text_color(rgb(0xE0E0E0)))
+        .child(Label::new("SIG").text_xs().text_color(rgb(0xE0E0E0)))
+        .child(render_sig_stepper(&sig_input))
         .child(div().flex_1())
         .child(
             Button::new("toggle_arranger").rounded(gpui_kit::component::button::ButtonRounded::None)
