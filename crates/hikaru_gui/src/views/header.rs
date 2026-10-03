@@ -128,8 +128,20 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         .px(px(8.0))
         .gap(px(6.0))
         .child(
+            // Toggle Play/Pause: el MISMO Button en ambos estados (mismo
+            // ancho, padding y centrado `items_center`/`justify_center` del
+            // contenido), sólo cambia el glifo. La pausa usa "▮▮" (U+25AE,
+            // rectángulos verticales del bloque Geometric Shapes) en vez de
+            // "⏸" (U+23F8): ese codepoint se rasteriza como glifo estilo
+            // emoji, visualmente más pequeño y con bearings distintos que
+            // "▶"/"■"/"●". Con "▮▮" las tres insignias comparten bloque,
+            // altura de capital y peso a idéntico `text_size`, y el bounding
+            // box del botón queda invariable en el toggle.
+            // (El `text_size` del label lo fija el tema del Button y los
+            // iconos SVG Lucide salen como bloques opacos en este renderer,
+            // así que el glifo geométrico es la vía de escalado disponible.)
             Button::new("transport_play_pause").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label(if is_playing { "⏸" } else { "▶" })
+                .label(if is_playing { "▮▮" } else { "▶" })
                 .compact()
                 .w(px(TRANSPORT_BTN_W))
                 .bg(rgb(0x3D3D3D))
