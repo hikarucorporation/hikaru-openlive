@@ -941,9 +941,10 @@ fn render_pad(
         .when(is_playing, |d| {
             d.border_2().border_color(rgb(0x4CFF8A))
         })
-        // Capa 1 (la más baja): mini waveform de fondo. Es el primer hijo del
-        // pad, así que el playhead y la cabecera quedan por encima; el alpha
-        // bajo (~28%) y el margen vertical dejan el nombre del clip legible.
+        // Capas 2 y 3 (contenedor oscuro + picos) en un solo canvas absoluto:
+        // el contenedor se pinta primero como lienzo de la waveform y los picos
+        // encima, ambos por debajo del playhead (capa 4) y de la cabecera con
+        // el nombre y el botón (capa 5), que son hijos posteriores del pad.
         .when(!peaks.is_empty(), |d| {
             d.child(canvas(
                 |_, _, _| {},
@@ -951,20 +952,49 @@ fn render_pad(
                     let left = bounds.origin.x.as_f32();
                     let width = bounds.size.width.as_f32().max(1.0);
                     let height = bounds.size.height.as_f32().max(1.0);
-                    // Margen interno: la silueta no toca los bordes superior,
-                    // inferior ni laterales del pad.
+                    // Margen interno: ni el contenedor ni la silueta tocan los
+                    // bordes del pad, así el marco y el nombre siguen libres.
                     let pad_x = 4.0_f32;
                     let pad_y = 6.0_f32;
-                    let usable_w = (width - pad_x * 2.0).max(1.0);
-                    let usable_h = (height - pad_y * 2.0).max(1.0);
+                    let inner_w = (width - pad_x * 2.0).max(1.0);
+                    let inner_h = (height - pad_y * 2.0).max(1.0);
+                    let inner_y = bounds.origin.y.as_f32() + pad_y;
+
+                    // Capa 2: lienzo oscuro del clip. En Playing lleva un tinte
+                    // verde muy sutil para diferenciar el estado sin perder el
+                    // contraste de los picos.
+                    let container_color = if is_playing {
+                        rgb(0x0E1F16)
+                    } else {
+                        rgb(0x121418)
+                    };
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(px(left + pad_x), px(inner_y)),
+                            size(px(inner_w), px(inner_h)),
+                        ),
+                        background: container_color.into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::all(px(2.0)),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+
+                    // Capa 3: picos. Tonos fríos al detener, verde claro en
+                    // reproducción; ambos al ~50% para no competir con el texto.
+                    let peak_color: Hsla = if is_playing {
+                        rgba(0x8CFFC7).into()
+                    } else {
+                        rgba(0x7FA8D8).into()
+                    };
                     let middle = bounds.origin.y.as_f32() + height / 2.0;
                     // Un path por mitad: silueta simétrica legible con menos
                     // segmentos que una barra por bin.
                     for mirror in [false, true] {
                         let mut path = PathBuilder::stroke(px(1.0));
                         for (index, peak) in peaks.iter().enumerate() {
-                            let x = left + pad_x + usable_w * index as f32 / peaks.len() as f32;
-                            let amplitude = usable_h * 0.5 * peak.clamp(0.0, 1.0);
+                            let x = left + pad_x + inner_w * index as f32 / peaks.len() as f32;
+                            let amplitude = inner_h * 0.5 * peak.clamp(0.0, 1.0);
                             let y = if mirror {
                                 middle + amplitude
                             } else {
@@ -977,7 +1007,6 @@ fn render_pad(
                             }
                         }
                         if let Ok(path) = path.build() {
-                            let peak_color: Hsla = rgba(0xFFFFFF47).into();
                             window.paint_path(path, peak_color);
                         }
                     }
