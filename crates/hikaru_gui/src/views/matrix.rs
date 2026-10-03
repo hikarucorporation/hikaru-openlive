@@ -1360,6 +1360,56 @@ fn pan_text(pan: f32) -> String {
 }
 
 // =========================================================================
+// GEOMETRÍA DEL KNOB DE PAN (helpers puros, testeados en tests/pan_geometry)
+// =========================================================================
+
+/// Detent central de display: por debajo de ±0.02 el paneo se muestra como
+/// centro exacto.
+///
+/// Un drag o clic que termina en 0.01 deja la aguja a ~1.4° (apariencia de
+/// "12:02" con la etiqueta todavía en valores mínimos): el detent unifica
+/// aguja y etiqueta en `C` / vertical. Solo afecta al display; el valor de
+/// audio no se toca.
+pub const PAN_CENTER_DETENT: f32 = 0.02;
+
+pub fn snap_center_pan(pan: f32) -> f32 {
+    if pan.is_finite() && pan.abs() < PAN_CENTER_DETENT {
+        0.0
+    } else {
+        pan
+    }
+}
+
+/// Ángulo estándar del paneo, en radianes:
+///
+/// - `L100` (`-1.0`) → `-3/4 * PI`
+/// - Centro (`0.0`) → `-1/2 * PI` (12 en punto exacto)
+/// - `R100` (`1.0`) → `-1/4 * PI`
+///
+/// Es la parametrización del barrido visual de ±135° del knob: el ángulo de
+/// pantalla (horario desde las 12) es `3 * (θ + PI/2)`, que en los extremos
+/// da `∓3/4 * PI`. Con `pan == 0.0` el resultado es bit-exacto (`-PI/2`), así
+/// que `sin == 0.0` y la punta de la aguja cae sobre `center_x` sin deriva.
+pub fn pan_standard_angle(pan: f32) -> f32 {
+    use std::f32::consts::PI;
+    -PI / 2.0 + pan.clamp(-1.0, 1.0) * PI / 4.0
+}
+
+/// Ángulo de barrido en pantalla (horario desde las 12, radianes) para el pan
+/// ya con detent aplicado. En `0.0` devuelve `0.0` bit-exacto.
+pub fn pan_sweep_angle(snapped_pan: f32) -> f32 {
+    use std::f32::consts::PI;
+    3.0 * (pan_standard_angle(snapped_pan) + PI / 2.0)
+}
+
+/// Punta de la aguja para un centro y largo dados. Función pura para poder
+/// testear que en el centro `tip_x == center_x` bit-exacto.
+pub fn pan_needle_tip(snapped_pan: f32, center_x: f32, center_y: f32, len: f32) -> (f32, f32) {
+    let a = pan_sweep_angle(snapped_pan);
+    (center_x + len * a.sin(), center_y - len * a.cos())
+}
+
+// =========================================================================
 // CONTROLES DE MEZCLA DEL TRACK HEADER (Session Matrix)
 // =========================================================================
 //
@@ -1649,11 +1699,12 @@ const PAN_KNOB_TRAVEL: f32 = 150.0;
 ///   agarre, recorrido completo en `PAN_KNOB_TRAVEL` px).
 /// - Doble-clic: vuelve exacto al centro.
 fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
-    let pan = if pan.is_finite() {
+    // Display con detent central: aguja y etiqueta ven el mismo valor.
+    let pan = snap_center_pan(if pan.is_finite() {
         pan.clamp(-1.0, 1.0)
     } else {
         0.0
-    };
+    });
     // Solo bounds locales para el salto al ángulo; el gesto relativo vive en
     // el estado global (`matrix_pan_gesture`) para sobrevivir re-renders.
     let bounds_slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
@@ -1709,18 +1760,22 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
                     ]);
                 },
                 move |bounds, _, window, _| {
+                    // Eje de origen explícito en f32 (ver requisito de
+                    // bounding-box centering del knob).
+                    let center_x =
+                        bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
+                    let center_y =
+                        bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
                     let side = bounds
                         .size
                         .width
                         .as_f32()
                         .min(bounds.size.height.as_f32());
-                    let cx0 = bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
-                    let cy0 = bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
                     let radius = side / 2.0 - 1.0;
                     // Disco: quad con los cuatro radios a la mitad del lado.
                     window.paint_quad(PaintQuad {
                         bounds: Bounds::new(
-                            point(px(cx0 - radius), px(cy0 - radius)),
+                            point(px(center_x - radius), px(center_y - radius)),
                             size(px(radius * 2.0), px(radius * 2.0)),
                         ),
                         background: rgb(0x232329).into(),
@@ -1739,31 +1794,40 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
                         },
                         border_style: BorderStyle::default(),
                     });
-                    // Aguja: −135° (L) .. +135° (R) desde las 12 en punto.
-                    let angle = pan * 135.0 * std::f32::consts::PI / 180.0;
+                    // Aguja: el ángulo sale de `pan_needle_tip` (anchors del
+                    // spec: L→−3π/4, C→−π/2, R→−π/4; barrido ±135°). En C la
+                    // punta es bit-exacta sobre `center_x`.
+                    //
+                    // Nota sobre el stroke: la línea se pinta CENTRADA sobre
+                    // el path (1.5px por lado), así que es simétrica por
+                    // construcción y NO lleva compensación de `stroke/2`:
+                    // restarla DESPLAZARÍA la aguja y crearía el offset
+                    // reportado. Esa compensación solo aplica a fills
+                    // alineados a borde.
                     let len = (radius - 4.0).max(0.0);
-                    let mut needle = PathBuilder::stroke(px(2.0));
-                    needle.move_to(point(px(cx0), px(cy0)));
-                    needle.line_to(point(
-                        px(cx0 + len * angle.sin()),
-                        px(cy0 - len * angle.cos()),
-                    ));
+                    let (tip_x, tip_y) = pan_needle_tip(pan, center_x, center_y, len);
+                    let mut needle = PathBuilder::stroke(px(3.0));
+                    needle.move_to(point(px(center_x), px(center_y)));
+                    needle.line_to(point(px(tip_x), px(tip_y)));
                     if let Ok(needle) = needle.build() {
                         window.paint_path(needle, rgb(0x00A2E8));
                     }
-                    // Punto central.
+                    // Punto central: generoso y del mismo cian que la aguja
+                    // para que pivote + aguja lean como una sola masa
+                    // centrada (ancla visual contra offsets de 1px por
+                    // reescalado del display).
                     window.paint_quad(PaintQuad {
                         bounds: Bounds::new(
-                            point(px(cx0 - 1.5), px(cy0 - 1.5)),
-                            size(px(3.0), px(3.0)),
+                            point(px(center_x - 2.5), px(center_y - 2.5)),
+                            size(px(5.0), px(5.0)),
                         ),
-                        background: rgb(0x808080).into(),
+                        background: rgb(0x00A2E8).into(),
                         border_color: Hsla::default(),
                         corner_radii: gpui_kit::Corners {
-                            top_left: px(1.5),
-                            top_right: px(1.5),
-                            bottom_right: px(1.5),
-                            bottom_left: px(1.5),
+                            top_left: px(2.5),
+                            top_right: px(2.5),
+                            bottom_right: px(2.5),
+                            bottom_left: px(2.5),
                         },
                         border_widths: gpui_kit::Edges::default(),
                         border_style: BorderStyle::default(),
@@ -1916,7 +1980,7 @@ fn track_header(
                     mix_drag == Some(MatrixMixTarget::Pan(track_idx)),
                 ))
                 .child(
-                    Label::new(pan_text(pan))
+                    Label::new(pan_text(snap_center_pan(pan)))
                         .text_size(px(9.0))
                         .text_color(rgb(0xE0E0E0))
                         .w(px(24.0)),
