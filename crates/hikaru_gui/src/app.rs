@@ -286,6 +286,15 @@ pub struct AppState {
 
     pub openlive_view: OpenLiveView,
     pub arranger_fader_drag: Option<arranger_view::FaderTarget>,
+    /// Gesto de mezcla en curso en los headers de la Session Matrix
+    /// (volumen/pan por pista). Global —y no flag local del widget— porque
+    /// el header se reconstruye en cada frame y el primer `notify` del drag
+    /// mataría un flag local, cortando el gesto tras un solo paso.
+    pub matrix_mix_drag: Option<matrix::MatrixMixTarget>,
+    /// Base del gesto relativo del knob de pan: `(y_inicial, pan_inicial)`.
+    pub matrix_pan_gesture: Option<(f32, f32)>,
+    /// Bounds del riel congelados en `mouse_down` para mapear el overlay.
+    pub matrix_mix_bounds: [f32; 4],
 
     pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
     pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
@@ -559,6 +568,9 @@ impl HikaruApp {
             smoothed_master_peak: 0.0,
             openlive_view: OpenLiveView::SessionMatrix,
             arranger_fader_drag: None,
+            matrix_mix_drag: None,
+            matrix_pan_gesture: None,
+            matrix_mix_bounds: [0.0; 4],
             active_external_plugins: Vec::new(),
             engine_handle,
         });

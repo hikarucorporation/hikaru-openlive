@@ -849,7 +849,7 @@ use gpui_kit::prelude::{InteractiveElement as _, Styled as _};
 // sin la feature `test-support` es identidad y no cambia nada en producción.
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
-use crate::app::{state, HikaruApp};
+use crate::app::{state, AppState, HikaruApp};
 
 fn slot_colors(slot_state: &SlotState, has_clip: bool, is_selected: bool) -> (Hsla, Hsla) {
     if is_selected {
@@ -1383,36 +1383,129 @@ const MIX_SLIDER_PAD_Y: f32 = 3.0;
 /// 0.0dB en la curva de `db_text` (lineal 0..=1 con el 0.75 como 0 dB).
 const VOLUME_RESET: f32 = 0.75;
 
+/// Destino del drag de mezcla en curso en los headers.
+///
+/// Vive en `AppState` y no en un flag local del widget porque el header se
+/// reconstruye en cada frame: el primer `notify` del drag mataba el flag
+/// local y los `mouse_move` siguientes caían en closures nuevos con el flag
+/// en `false` (solo sobrevivían los clics discretos).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatrixMixTarget {
+    Volume(usize),
+    Pan(usize),
+}
+
 fn set_matrix_volume(cx: &mut App, track_idx: usize, volume: f32) {
-    let volume = volume.clamp(0.0, 1.0);
     let st = state(cx);
     st.update(cx, |s, cx| {
-        if let Some(t) = s.matrix_state.tracks.get_mut(track_idx) {
-            t.volume = volume;
-        }
-        if let Some(live) = s.live_tracks.get_mut(track_idx + 1) {
-            live.volume = volume;
-        }
-        s.audio_proxy.send(GuiCommand::SetTrackVolume {
-            track_idx,
-            volume_db: volume,
-        });
+        apply_matrix_volume(s, track_idx, volume);
         cx.notify();
     });
 }
 
+/// Escritura efectiva de volumen (matriz + espejo `live_tracks` + motor).
+/// Trabaja sobre `&mut AppState` para reutilizarla en el drag continuo sin
+/// re-emitir `notify` por paso intermedio.
+fn apply_matrix_volume(s: &mut AppState, track_idx: usize, volume: f32) {
+    let volume = volume.clamp(0.0, 1.0);
+    if let Some(t) = s.matrix_state.tracks.get_mut(track_idx) {
+        t.volume = volume;
+    }
+    if let Some(live) = s.live_tracks.get_mut(track_idx + 1) {
+        live.volume = volume;
+    }
+    s.audio_proxy.send(GuiCommand::SetTrackVolume {
+        track_idx,
+        volume_db: volume,
+    });
+}
+
 fn set_matrix_pan(cx: &mut App, track_idx: usize, pan: f32) {
-    let pan = pan.clamp(-1.0, 1.0);
     let st = state(cx);
     st.update(cx, |s, cx| {
-        if let Some(t) = s.matrix_state.tracks.get_mut(track_idx) {
-            t.pan = pan;
-        }
-        if let Some(live) = s.live_tracks.get_mut(track_idx + 1) {
-            live.pan = pan;
-        }
-        s.audio_proxy.send(GuiCommand::SetTrackPan { track_idx, pan });
+        apply_matrix_pan(s, track_idx, pan);
         cx.notify();
+    });
+}
+
+/// Escritura efectiva de pan. Igual que el volumen: reutilizable en el drag.
+fn apply_matrix_pan(s: &mut AppState, track_idx: usize, pan: f32) {
+    let pan = pan.clamp(-1.0, 1.0);
+    if let Some(t) = s.matrix_state.tracks.get_mut(track_idx) {
+        t.pan = pan;
+    }
+    if let Some(live) = s.live_tracks.get_mut(track_idx + 1) {
+        live.pan = pan;
+    }
+    s.audio_proxy.send(GuiCommand::SetTrackPan { track_idx, pan });
+}
+
+fn norm_from_slider_x(bounds: [f32; 4], x: f32) -> f32 {
+    let travel = (bounds[2] - MIX_THUMB_W).max(1.0);
+    ((x - bounds[0] - MIX_THUMB_W / 2.0) / travel).clamp(0.0, 1.0)
+}
+
+/// Inicia el drag de volumen: registra el gesto en el estado global (sobrevive
+/// a los re-renders), congela los bounds del riel para el overlay y salta al
+/// punto clicado.
+fn start_vol_drag(cx: &mut App, track_idx: usize, bounds: [f32; 4], x: f32) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.matrix_mix_drag = Some(MatrixMixTarget::Volume(track_idx));
+        s.matrix_mix_bounds = bounds;
+        apply_matrix_volume(s, track_idx, norm_from_slider_x(bounds, x));
+        cx.notify();
+    });
+}
+
+/// Paso del drag de volumen (`delta_x`): el overlay y el propio slider llaman
+/// acá leyendo el gesto global, así ningún re-render lo corta.
+fn continue_vol_drag(cx: &mut App, track_idx: usize, x: f32) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.matrix_mix_drag != Some(MatrixMixTarget::Volume(track_idx)) {
+            return;
+        }
+        let bounds = s.matrix_mix_bounds;
+        apply_matrix_volume(s, track_idx, norm_from_slider_x(bounds, x));
+        cx.notify();
+    });
+}
+
+/// Inicia el drag de pan: salto al ángulo clicado + base relativa global.
+fn start_pan_drag(cx: &mut App, track_idx: usize, y: f32, jumped: f32) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.matrix_mix_drag = Some(MatrixMixTarget::Pan(track_idx));
+        s.matrix_pan_gesture = Some((y, jumped));
+        apply_matrix_pan(s, track_idx, jumped);
+        cx.notify();
+    });
+}
+
+/// Paso del drag de pan (`delta_y` relativo a la base global).
+fn continue_pan_drag(cx: &mut App, track_idx: usize, y: f32) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.matrix_mix_drag != Some(MatrixMixTarget::Pan(track_idx)) {
+            return;
+        }
+        if let Some((y0, p0)) = s.matrix_pan_gesture {
+            apply_matrix_pan(s, track_idx, p0 + (y0 - y) / PAN_KNOB_TRAVEL);
+        }
+        cx.notify();
+    });
+}
+
+/// Cierra cualquier drag de mezcla (soltar el botón en cualquier lado).
+fn end_mix_drag(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.matrix_mix_drag.is_some() {
+            s.matrix_mix_drag = None;
+            s.matrix_pan_gesture = None;
+            cx.notify();
+        }
     });
 }
 
@@ -1427,34 +1520,16 @@ fn set_matrix_pan(cx: &mut App, track_idx: usize, pan: f32) {
 /// así que el padding no desplaza el mapeo puntero→valor.
 fn h_mix_slider(
     id: String,
+    track_idx: usize,
     norm: f32,
-    on_change: impl Fn(f32, &mut App) + 'static,
-    on_reset: impl Fn(&mut App) + 'static,
+    dragging_this: bool,
 ) -> AnyElement {
     let norm = norm.clamp(0.0, 1.0);
-    // El canvas invisible registra los bounds para traducir el puntero a
-    // valor; el drag vive en un flag local (mismo patrón que los faders del
-    // Arranger, pero sin estado global: el header es efímero por frame).
+    // Solo se miden bounds (canvas invisible); el flag de drag es global
+    // (`matrix_mix_drag`) para que los re-renders no corten el gesto.
     let bounds_slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
-    let dragging: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let b_down = bounds_slot.clone();
-    let b_move = bounds_slot.clone();
     let b_paint = bounds_slot.clone();
-    let d_down = dragging.clone();
-    let d_move = dragging.clone();
-    let d_up = dragging.clone();
-
-    let norm_from_x = move |b: [f32; 4], x: f32| {
-        let travel = (b[2] - MIX_THUMB_W).max(1.0);
-        ((x - b[0] - MIX_THUMB_W / 2.0) / travel).clamp(0.0, 1.0)
-    };
-    let norm_down = norm_from_x;
-    let norm_move = norm_from_x;
-    // `Fn` no es `Copy`: se comparte por `Rc` entre los handlers de
-    // mouse-down (salto + inicio de drag) y mouse-move (drag).
-    let on_change: Rc<dyn Fn(f32, &mut App)> = Rc::new(on_change);
-    let on_down = on_change.clone();
-    let on_move = on_change.clone();
 
     let thumb_x = MIX_THUMB_W / 2.0 + norm * (MIX_SLIDER_W - MIX_THUMB_W);
 
@@ -1466,27 +1541,22 @@ fn h_mix_slider(
         .py(px(MIX_SLIDER_PAD_Y))
         .flex_shrink_0()
         .rounded(px(3.0))
-        .cursor_pointer()
+        .when(dragging_this, |d| d.cursor_grabbing())
+        .when(!dragging_this, |d| d.cursor_ew_resize())
         .hover(|this| this.bg(rgb(0x232329)))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
-                d_down.set(false);
-                on_reset(cx);
+                end_mix_drag(cx);
+                set_matrix_volume(cx, track_idx, VOLUME_RESET);
                 return;
             }
-            d_down.set(true);
-            let v = norm_down(b_down.get(), event.position.x.as_f32());
-            on_down(v, cx);
+            start_vol_drag(cx, track_idx, b_down.get(), event.position.x.as_f32());
         })
         .on_mouse_move(move |event, _, cx| {
-            if !d_move.get() {
-                return;
-            }
-            let v = norm_move(b_move.get(), event.position.x.as_f32());
-            on_move(v, cx);
+            continue_vol_drag(cx, track_idx, event.position.x.as_f32());
         })
-        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, _| {
-            d_up.set(false);
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            end_mix_drag(cx);
         })
         .child(
             div()
@@ -1565,23 +1635,17 @@ const PAN_KNOB_TRAVEL: f32 = 150.0;
 /// - Drag vertical desde ahí: arriba → R, abajo → L (relativo al punto de
 ///   agarre, recorrido completo en `PAN_KNOB_TRAVEL` px).
 /// - Doble-clic: vuelve exacto al centro.
-fn pan_knob(track_idx: usize, pan: f32) -> AnyElement {
+fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
     let pan = if pan.is_finite() {
         pan.clamp(-1.0, 1.0)
     } else {
         0.0
     };
-    // Bounds del knob para traducir el clic a ángulo. Los registra el canvas
-    // en pre-paint (igual que los sliders de volumen).
+    // Solo bounds locales para el salto al ángulo; el gesto relativo vive en
+    // el estado global (`matrix_pan_gesture`) para sobrevivir re-renders.
     let bounds_slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
     let b_down = bounds_slot.clone();
     let b_paint = bounds_slot.clone();
-    // Estado del gesto: `[y_inicial, pan_inicial]`. Local al widget porque el
-    // header se reconstruye en cada frame (igual que los sliders de volumen).
-    let gesture: Rc<Cell<Option<[f32; 2]>>> = Rc::new(Cell::new(None));
-    let g_down = gesture.clone();
-    let g_move = gesture.clone();
-    let g_up = gesture.clone();
 
     div()
         .id(SharedString::from(format!("matrix_panknob_{}", track_idx)))
@@ -1592,11 +1656,12 @@ fn pan_knob(track_idx: usize, pan: f32) -> AnyElement {
         .p(px(PAN_KNOB_PAD))
         .flex_shrink_0()
         .rounded(px(19.0))
-        .cursor_pointer()
+        .when(dragging_this, |d| d.cursor_grabbing())
+        .when(!dragging_this, |d| d.cursor_pointer())
         .hover(|this| this.bg(rgb(0x232329)))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
-                g_down.set(None);
+                end_mix_drag(cx);
                 set_matrix_pan(cx, track_idx, 0.0);
                 return;
             }
@@ -1607,19 +1672,13 @@ fn pan_knob(track_idx: usize, pan: f32) -> AnyElement {
             let dx = event.position.x.as_f32() - (b[0] + b[2] / 2.0);
             let dy = y - (b[1] + b[3] / 2.0);
             let jumped = (dx.atan2(-dy).to_degrees() / 135.0).clamp(-1.0, 1.0);
-            set_matrix_pan(cx, track_idx, jumped);
-            // El drag continúa en relativo desde el punto de agarre.
-            g_down.set(Some([y, jumped]));
+            start_pan_drag(cx, track_idx, y, jumped);
         })
         .on_mouse_move(move |event, _, cx| {
-            let Some([y0, p0]) = g_move.get() else {
-                return;
-            };
-            let v = p0 + (y0 - event.position.y.as_f32()) / PAN_KNOB_TRAVEL;
-            set_matrix_pan(cx, track_idx, v);
+            continue_pan_drag(cx, track_idx, event.position.y.as_f32());
         })
-        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, _| {
-            g_up.set(None);
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            end_mix_drag(cx);
         })
         .child(
             div()
@@ -1723,6 +1782,7 @@ fn track_header(
     soloed: bool,
     volume: f32,
     pan: f32,
+    mix_drag: Option<MatrixMixTarget>,
 ) -> AnyElement {
     v_flex()
         .w(px(HEADER_WIDTH))
@@ -1801,7 +1861,11 @@ fn track_header(
             h_flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(pan_knob(track_idx, pan))
+                .child(pan_knob(
+                    track_idx,
+                    pan,
+                    mix_drag == Some(MatrixMixTarget::Pan(track_idx)),
+                ))
                 .child(
                     Label::new(pan_text(pan))
                         .text_size(px(9.0))
@@ -1810,9 +1874,9 @@ fn track_header(
                 )
                 .child(h_mix_slider(
                     format!("matrix_vol_{}", track_idx),
+                    track_idx,
                     volume,
-                    move |v, cx| set_matrix_volume(cx, track_idx, v),
-                    move |cx| set_matrix_volume(cx, track_idx, VOLUME_RESET),
+                    mix_drag == Some(MatrixMixTarget::Volume(track_idx)),
                 ))
                 .child(
                     Label::new(db_text(volume))
@@ -1858,6 +1922,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         })
         .collect();
     let selected = app.matrix_state.selected_slot;
+    // Gesto de mezcla en curso (para cursores y el overlay de captura).
+    let mix_drag = app.matrix_mix_drag;
     let show_editor = app.matrix_state.show_editor;
     let editor_height = app.matrix_state.editor_height;
     let clipboard_ready = app.matrix_clipboard.has_content();
@@ -1908,6 +1974,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     track_soloed,
                     track_volume,
                     track_pan,
+                    mix_drag,
                 ))
                 .children(scene_cells)
                 .into_any_element(),
@@ -1926,6 +1993,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
 
     v_flex()
         .id("session_matrix")
+        .relative()
         .size_full()
         .bg(rgb(0x1E1E1E))
         .gap(px(4.0))
@@ -2037,6 +2105,41 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .rounded(px(4.0))
                     .p(px(6.0))
                     .child(Label::new(hint).text_xs().text_color(rgb(0x9AA4B2))),
+            )
+        })
+        // Capturador de drag a ventana completa: mientras hay un gesto de
+        // mezcla en curso, este overlay invisible recibe TODOS los
+        // mouse_move/mouse_up aunque el cursor se salga del control, así el
+        // arrastre nunca se corta por 1px. Se monta solo durante el gesto.
+        .when(mix_drag.is_some(), |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .id("matrix_mix_drag_catcher")
+                    .cursor_grabbing()
+                    .on_mouse_move(move |event, _, cx| {
+                        // Si el botón se soltó fuera de la ventana, el próximo
+                        // move llega sin botón: se cierra el gesto en vez de
+                        // dejarlo colgado.
+                        if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                            end_mix_drag(cx);
+                            return;
+                        }
+                        let drag = state(cx).read(cx).matrix_mix_drag;
+                        match drag {
+                            Some(MatrixMixTarget::Volume(idx)) => {
+                                continue_vol_drag(cx, idx, event.position.x.as_f32())
+                            }
+                            Some(MatrixMixTarget::Pan(idx)) => {
+                                continue_pan_drag(cx, idx, event.position.y.as_f32())
+                            }
+                            None => {}
+                        }
+                    })
+                    .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                        end_mix_drag(cx);
+                    }),
             )
         })
         .into_any_element()

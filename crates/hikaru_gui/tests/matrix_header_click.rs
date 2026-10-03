@@ -58,6 +58,16 @@ fn track_mix(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext)
     .unwrap()
 }
 
+/// El gesto de mezcla nunca queda colgado tras soltar el botón.
+fn mix_drag(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext) -> bool {
+    cx.update_window(handle.into(), |view, _, cx| {
+        let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+        let st = app.read(cx).state.clone();
+        st.read(cx).matrix_mix_drag.is_some()
+    })
+    .unwrap()
+}
+
 /// Clic en el extremo izquierdo del fader de volumen: salta al mínimo.
 #[gpui_kit::gpui::test]
 fn clicking_volume_fader_jumps_to_point(cx: &mut TestAppContext) {
@@ -75,6 +85,10 @@ fn clicking_volume_fader_jumps_to_point(cx: &mut TestAppContext) {
     assert!(
         after < 0.5,
         "el clic a la izquierda del fader debería bajar el volumen (quedó en {after})"
+    );
+    assert!(
+        !mix_drag(handle, cx),
+        "el mouse_up debería haber cerrado el gesto de mezcla"
     );
 }
 
