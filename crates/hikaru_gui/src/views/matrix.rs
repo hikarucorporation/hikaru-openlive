@@ -368,7 +368,11 @@ impl Default for SessionMatrixState {
             scenes,
             next_clip_id: 1,
             selected_slot: None,
-            editor_height: 220.0,
+            // Altura inicial del panel del Clip Editor: 104px para que la
+            // grilla default de 8×8 (filas de ~51px) quepa en 720p sin
+            // scrollbar (el panel es solo un placeholder con el hint del
+            // slot actual).
+            editor_height: 104.0,
             editor_zoom_x: 0.04,
             show_editor: true,
         }
@@ -928,9 +932,10 @@ fn render_pad(
 
     let pad = div()
         .id(SharedString::from(format!("matrix_pad_{}_{}", track_idx, scene_idx)))
+        .test_support()
         .relative()
         .w(px(110.0))
-        .h(px(54.0))
+        .h(px(PAD_HEIGHT))
         .bg(bg)
         .border_1()
         .border_color(border)
@@ -960,7 +965,7 @@ fn render_pad(
                     // Margen interno: ni el contenedor ni la silueta tocan los
                     // bordes del pad, así el marco y el nombre siguen libres.
                     let pad_x = 4.0_f32;
-                    let pad_y = 6.0_f32;
+                    let pad_y = 4.0_f32;
                     let inner_w = (width - pad_x * 2.0).max(1.0);
                     let inner_h = (height - pad_y * 2.0).max(1.0);
                     let inner_y = bounds.origin.y.as_f32() + pad_y;
@@ -1156,10 +1161,10 @@ fn render_pad(
         .child(
             div()
                 .absolute()
-                .top(px(4.0))
+                .top(px(3.0))
                 .left(px(4.0))
                 .right(px(4.0))
-                .h(px(20.0))
+                .h(px(16.0))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -1167,8 +1172,8 @@ fn render_pad(
                 .overflow_hidden()
                 .child(
                     div()
-                        .w(px(20.0))
-                        .h(px(20.0))
+                        .w(px(16.0))
+                        .h(px(16.0))
                         .flex_shrink_0()
                         .rounded(px(3.0))
                         .bg(if has_clip {
@@ -1205,12 +1210,12 @@ fn render_pad(
                         })
                         .child(if has_clip {
                             Label::new(glyph)
-                                .text_size(px(10.0))
+                                .text_size(px(8.0))
                                 .text_color(rgb(0xFFFFFF))
                                 .into_any_element()
                         } else {
                             // Stop: cuadrado sólido limpio, al estilo del Arranger.
-                            div().w(px(7.0)).h(px(7.0)).bg(rgb(0xFFFFFF)).into_any_element()
+                            div().w(px(6.0)).h(px(6.0)).bg(rgb(0xFFFFFF)).into_any_element()
                         }),
                 )
                 .when(has_clip, move |this| {
@@ -1300,7 +1305,7 @@ fn render_scene_launcher(scene_idx: usize, name: String, has_any_clip: bool) -> 
     div()
         .id(SharedString::from(format!("matrix_scene_{}", scene_idx)))
         .w(px(110.0))
-        .h(px(28.0))
+        .h(px(SCENE_HEADER_HEIGHT))
         .flex()
         .items_center()
         .justify_center()
@@ -1370,6 +1375,10 @@ fn pan_text(pan: f32) -> String {
 
 /// Ancho total de la cabecera (ver `HEADER_SPACER_W` para el espejo).
 const HEADER_WIDTH: f32 = 196.0;
+/// Alto de cada pad de clip (ver presupuesto en `render`).
+const PAD_HEIGHT: f32 = 44.0;
+/// Alto de los launchers de escena: compacto y alineado con las celdas.
+const SCENE_HEADER_HEIGHT: f32 = 24.0;
 /// Ancho del espaciador sobre la columna de cabeceras (= ancho − padding raíz).
 const HEADER_SPACER_W: f32 = 188.0;
 /// Botones M/S compactos: altura y padding fijos (el `Button` del kit fija su
@@ -1378,8 +1387,8 @@ const MS_BTN_W: f32 = 22.0;
 const MS_BTN_H: f32 = 18.0;
 /// Ancho fijo del riel de volumen: el thumb se posiciona en px deterministas.
 const MIX_SLIDER_W: f32 = 72.0;
-const MIX_SLIDER_H: f32 = 16.0;
-const MIX_THUMB_W: f32 = 10.0;
+const MIX_SLIDER_H: f32 = 12.0;
+const MIX_THUMB_W: f32 = 8.0;
 /// Padding vertical extra alrededor del slider: la hitbox queda en 20px de
 /// alto para que el drag horizontal no se corte por 1px arriba o abajo.
 const MIX_SLIDER_PAD_Y: f32 = 2.0;
@@ -1588,9 +1597,9 @@ fn h_mix_slider(
                     div()
                         .absolute()
                         .left(px(0.0))
-                        .top(px((MIX_SLIDER_H - 4.0) / 2.0))
+                        .top(px((MIX_SLIDER_H - 3.0) / 2.0))
                         .w(px(MIX_SLIDER_W))
-                        .h(px(4.0))
+                        .h(px(3.0))
                         .bg(rgb(0x2D2D2D))
                         .rounded(px(1.0)),
                 )
@@ -1599,9 +1608,9 @@ fn h_mix_slider(
                     div()
                         .absolute()
                         .left(px(0.0))
-                        .top(px((MIX_SLIDER_H - 4.0) / 2.0))
+                        .top(px((MIX_SLIDER_H - 3.0) / 2.0))
                         .w(px(thumb_x.max(1.0)))
-                        .h(px(4.0))
+                        .h(px(3.0))
                         .bg(rgb(0x0096BE)),
                 )
                 // Thumb
@@ -1621,10 +1630,10 @@ fn h_mix_slider(
 }
 
 /// Diámetro del knob de pan, en píxeles.
-const PAN_KNOB_SIZE: f32 = 28.0;
-/// Padding alrededor del knob: la hitbox queda en 36×36 para que el agarre
+const PAN_KNOB_SIZE: f32 = 22.0;
+/// Padding alrededor del knob: la hitbox queda en 28×28 para que el agarre
 /// no exija puntería de 1px.
-const PAN_KNOB_PAD: f32 = 4.0;
+const PAN_KNOB_PAD: f32 = 3.0;
 /// Píxeles de drag vertical para recorrer el paneo entero (L→R).
 const PAN_KNOB_TRAVEL: f32 = 150.0;
 
@@ -1659,7 +1668,7 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
         .justify_center()
         .p(px(PAN_KNOB_PAD))
         .flex_shrink_0()
-        .rounded(px(19.0))
+        .rounded(px(14.0))
         .when(dragging_this, |d| d.cursor_grabbing())
         .when(!dragging_this, |d| d.cursor_pointer())
         .hover(|this| this.bg(rgb(0x232329)))
@@ -1745,16 +1754,16 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
                     // Punto central.
                     window.paint_quad(PaintQuad {
                         bounds: Bounds::new(
-                            point(px(cx0 - 2.0), px(cy0 - 2.0)),
-                            size(px(4.0), px(4.0)),
+                            point(px(cx0 - 1.5), px(cy0 - 1.5)),
+                            size(px(3.0), px(3.0)),
                         ),
                         background: rgb(0x808080).into(),
                         border_color: Hsla::default(),
                         corner_radii: gpui_kit::Corners {
-                            top_left: px(2.0),
-                            top_right: px(2.0),
-                            bottom_right: px(2.0),
-                            bottom_left: px(2.0),
+                            top_left: px(1.5),
+                            top_right: px(1.5),
+                            bottom_right: px(1.5),
+                            bottom_left: px(1.5),
                         },
                         border_widths: gpui_kit::Edges::default(),
                         border_style: BorderStyle::default(),
@@ -1834,7 +1843,7 @@ fn track_header(
         .border_1()
         .border_color(rgb(0x2D2D37))
         .rounded(px(4.0))
-        .p(px(3.0))
+        .p(px(1.0))
         .gap(px(1.0))
         .child(
             h_flex()
@@ -2042,7 +2051,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .items_center()
                 .gap(px(8.0))
                 .px(px(8.0))
-                .py(px(4.0))
+                .py(px(2.0))
                 .child(Label::new("SESSION MATRIX").text_sm().font_weight(FontWeight::BOLD).text_color(rgb(0xE0E0E0)))
                 .child(
                     Button::new("matrix_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
@@ -2109,10 +2118,23 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .children(scene_headers),
         )
         .child(
-            v_flex()
-                .overflow_y_scrollbar()
-                .gap(px(4.0))
-                .children(track_rows),
+            // Wrapper observable del área de filas: el `Scrollable` interno
+            // sobrescribe el id de su contenido con uno propio, así que la
+            // medición (y el `flex_1` que habilita el scroll condicional)
+            // viven en este `div` externo.
+            div()
+                .id("matrix_rows")
+                .test_support()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    v_flex()
+                        .overflow_y_scrollbar()
+                        .gap(px(3.0))
+                        .children(track_rows),
+                ),
         )
         .when(show_editor, |this| {
             // Barra del Clip Editor: muestra explícitamente el slot actual.
