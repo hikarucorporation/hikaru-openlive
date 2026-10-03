@@ -15,6 +15,10 @@ use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::playlist::ClipType;
 use hikaru_transport::transport_state::TransportPlaybackState;
 
+/// Ancho uniforme de los 3 botones principales de transporte
+/// (Play/Pause, Stop, REC): mismo tamaño, spacing compacto.
+const TRANSPORT_BTN_W: f32 = 40.0;
+
 fn format_timecode(bars: f32, bpm: f64) -> String {
     let beats = (bars - 1.0).max(0.0) * 4.0;
     let total_seconds = (beats / bpm as f32) * 60.0;
@@ -81,15 +85,14 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
     let app = state(cx).read(cx);
     let transport = &app.transport;
     let is_playing = transport.playback_state == TransportPlaybackState::Playing;
-    let is_paused = transport.playback_state == TransportPlaybackState::Paused;
     let is_recording = app.is_recording;
-    let is_looping = app.is_looping;
     let is_live = app.mode == AppMode::OpenLive;
     let is_studio = app.mode == AppMode::OpenStudio;
     let show_arranger = is_live && app.openlive_view == OpenLiveView::ArrangerView;
     let show_dsp_rack = app.show_dsp_rack;
     let show_explorer = app.show_explorer;
     let bpm = transport.bpm;
+    let beats_per_bar = transport.beats_per_bar;
     let bpm_input = app.bpm_input.clone();
     let samples_per_beat = (transport.sample_rate.get() as f64 * 60.0) / transport.bpm;
     let samples_per_bar = samples_per_beat * transport.beats_per_bar as f64;
@@ -112,6 +115,9 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         }
     }
 
+    // Botonera principal de transporte: exclusivamente Play/Pause (toggle),
+    // Stop y REC, con tamaño uniforme y spacing compacto:
+    //   [▶/⏸] [■ STOP] [● REC] | timecode | modos | BPM | compás | vistas
     h_flex()
         .id("header_bar")
         .h(px(40.0))
@@ -122,43 +128,10 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         .px(px(8.0))
         .gap(px(6.0))
         .child(
-            Button::new("transport_rewind_start").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏮")
+            Button::new("transport_play_pause").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label(if is_playing { "⏸" } else { "▶" })
                 .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(rgb(0xE0E0E0))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.transport.sample_count = 0;
-                        state.audio_proxy.send(GuiCommand::Seek { sample_count: 0 });
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_rewind_bars").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏪")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(rgb(0xE0E0E0))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        let samples_to_sub = (samples_per_bar * 4.0) as u64;
-                        state.transport.sample_count = state
-                            .transport
-                            .sample_count
-                            .saturating_sub(samples_to_sub);
-                        state.audio_proxy.send(GuiCommand::Seek {
-                            sample_count: state.transport.sample_count,
-                        });
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_play").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("▶")
-                .compact()
+                .w(px(TRANSPORT_BTN_W))
                 .bg(rgb(0x3D3D3D))
                 .text_color(if is_playing {
                     rgb(0x4CAF50)
@@ -168,6 +141,12 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
                 .on_click(move |_, _, cx| {
                     let st = state(cx);
                     st.update(cx, |state, _| {
+                        if state.transport.playback_state == TransportPlaybackState::Playing {
+                            // Pausa en la posición actual del playhead.
+                            state.transport.playback_state = TransportPlaybackState::Paused;
+                            state.audio_proxy.send(GuiCommand::Pause);
+                            return;
+                        }
                         state.transport.playback_state = TransportPlaybackState::Playing;
                         state.audio_proxy.send(GuiCommand::StopPreview);
                         state.audio_proxy.send(GuiCommand::SetBpm(state.transport.bpm as f32));
@@ -221,34 +200,10 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
                 }),
         )
         .child(
-            Button::new("transport_pause").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏸")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(if is_paused {
-                    rgb(0xFFC107)
-                } else {
-                    rgb(0xE0E0E0)
-                })
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        if state.transport.playback_state == TransportPlaybackState::Playing {
-                            state.transport.playback_state = TransportPlaybackState::Paused;
-                            state.audio_proxy.send(GuiCommand::Pause);
-                        } else if state.transport.playback_state == TransportPlaybackState::Paused {
-                            state.transport.playback_state = TransportPlaybackState::Playing;
-                            state.audio_proxy.send(GuiCommand::StopPreview);
-                            state.audio_proxy.send(GuiCommand::SetBpm(state.transport.bpm as f32));
-                            state.audio_proxy.send(GuiCommand::Play);
-                        }
-                    });
-                }),
-        )
-        .child(
             Button::new("transport_stop").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏹")
+                .label("■")
                 .compact()
+                .w(px(TRANSPORT_BTN_W))
                 .bg(rgb(0x3D3D3D))
                 .text_color(rgb(0xE0E0E0))
                 .on_click(move |_, _, cx| {
@@ -262,9 +217,14 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         )
         .child(
             Button::new("transport_record").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏺")
+                .label("●")
                 .compact()
-                .bg(rgb(0x3D3D3D))
+                .w(px(TRANSPORT_BTN_W))
+                .bg(if is_recording {
+                    rgb(0x5A1A1A)
+                } else {
+                    rgb(0x3D3D3D)
+                })
                 .text_color(if is_recording {
                     rgb(0xFF5252)
                 } else {
@@ -275,56 +235,6 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
                     st.update(cx, |state, cx| {
                         state.is_recording = !state.is_recording;
                         cx.notify();
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_loop").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("🔁")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(if is_looping {
-                    rgb(0x00BCD4)
-                } else {
-                    rgb(0xE0E0E0)
-                })
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        state.is_looping = !state.is_looping;
-                        cx.notify();
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_forward_bars").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏩")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(rgb(0xE0E0E0))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.transport.sample_count += (samples_per_bar * 4.0) as u64;
-                        state.audio_proxy.send(GuiCommand::Seek {
-                            sample_count: state.transport.sample_count,
-                        });
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_forward_16bars").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("⏭")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(rgb(0xE0E0E0))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.transport.sample_count += (samples_per_bar * 16.0) as u64;
-                        state.audio_proxy.send(GuiCommand::Seek {
-                            sample_count: state.transport.sample_count,
-                        });
                     });
                 }),
         )
@@ -390,6 +300,7 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         )
         .child(Label::new("BPM").text_xs().text_color(rgb(0xE0E0E0)))
         .child(render_bpm_spinbox(&bpm_input))
+        .child(Label::new(format!("{}/4", beats_per_bar)).text_xs().text_color(rgb(0xE0E0E0)))
         .child(div().flex_1())
         .child(
             Button::new("toggle_arranger").rounded(gpui_kit::component::button::ButtonRounded::None)
