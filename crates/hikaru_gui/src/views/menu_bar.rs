@@ -102,10 +102,15 @@ fn render_dropdown(
                 }),
             ),
             (
-                "🎛 Mixer (F9)",
+                "🎚 Arranger / Mixer Columns (F9)",
                 Box::new(|cx: &mut App| {
                     update_state(cx, |state| {
-                        state.show_mixer = !state.show_mixer;
+                        if state.mode == AppMode::OpenLive {
+                            state.openlive_view = match state.openlive_view {
+                                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
+                                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+                            };
+                        }
                     });
                 }),
             ),

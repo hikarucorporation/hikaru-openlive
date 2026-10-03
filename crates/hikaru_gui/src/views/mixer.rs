@@ -1,16 +1,22 @@
-use gpui_kit::component::*;
-use gpui_kit::component::button::Button;
-use gpui_kit::component::label::Label;
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::Styled as _;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+// Hikaru OpenLive / OpenStudio - Mixer model + Channel Strip kit
+// GNU AGPLv3
+// crates/hikaru_gui/src/views/mixer.rs
+//
+// Este módulo YA NO es una vista independiente: el dock horizontal del Mixer
+// inferior (que duplicaba faders y picos) se eliminó. Ahora contiene:
+//
+// - El modelo de mezcla (`Track`, `DspSlot`, `SendConnection`).
+// - El kit de widgets del Channel Strip que `arranger_view.rs` reutiliza en
+//   cada columna de pista (OpenLive y OpenStudio comparten el mismo strip):
+//   `vertical_vu_meter`, curva de dB y suavizado de picos.
+//
+// La vista vive en `crate::views::arranger_view`.
+
 use gpui_kit::*;
 
-use crate::app::{state, AppMode, HikaruApp};
-use crate::audio_proxy::GuiCommand;
-use crate::views::open_dms::OpenDms;
-use crate::views::open_wavetable::WavetableEditor;
+// =========================================================================
+// MODELO
+// =========================================================================
 
 #[derive(Clone, Debug)]
 pub struct DspSlot {
@@ -29,6 +35,9 @@ pub struct DspSlot {
     pub menu_open: bool,
     pub options_open: bool,
 }
+
+use crate::views::open_dms::OpenDms;
+use crate::views::open_wavetable::WavetableEditor;
 
 impl DspSlot {
     pub fn new(id: usize, name: String) -> Self {
@@ -69,6 +78,8 @@ pub struct Track {
     pub pan_mode: crate::app::PanMode,
     pub mute: bool,
     pub solo: bool,
+    /// Armado de grabación ([R] del channel strip).
+    pub arm: bool,
     pub is_master: bool,
     pub route_destination_id: usize,
     pub sends: Vec<SendConnection>,
@@ -86,6 +97,7 @@ impl Track {
             pan_mode: crate::app::PanMode::Stereo,
             mute: false,
             solo: false,
+            arm: false,
             is_master,
             route_destination_id: 0,
             sends: Vec::new(),
@@ -95,7 +107,12 @@ impl Track {
     }
 }
 
-fn db_text(volume: f32) -> String {
+// =========================================================================
+// CURVAS DE dB
+// =========================================================================
+
+/// Texto del fader: mapea 0..=1 a -60..+6 dB con el 0.75 como 0 dB.
+pub fn db_text(volume: f32) -> String {
     let db_val = if volume <= 0.0 {
         -60.0
     } else if volume <= 0.75 {
@@ -106,379 +123,122 @@ fn db_text(volume: f32) -> String {
     format!("{:.1} dB", db_val)
 }
 
-pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
-    let app = state(cx).read(cx);
-    let mode = app.mode;
-    let selected_idx = app.selected_track_index;
-    let tracks = match mode {
-        AppMode::OpenLive => &app.live_tracks,
-        AppMode::OpenStudio => &app.studio_tracks,
+/// Texto del nivel de señal del VU: 20*log10 con suelo en -60 dB.
+pub fn level_db_text(level: f32) -> String {
+    let db_val = if level <= 0.0 {
+        -60.0
+    } else {
+        (20.0 * level.log10()).clamp(-60.0, 6.0)
     };
-    let raw_master = f32::from_bits(app.output_level_bits.load(std::sync::atomic::Ordering::Relaxed));
-    let master_level = if raw_master.is_finite() { raw_master } else { 0.0 };
-    let mut track_peaks = [0.0f32; 16];
-    for (i, arc) in app.track_peak_bits.iter().enumerate().take(16) {
-        let raw = f32::from_bits(arc.load(std::sync::atomic::Ordering::Relaxed));
-        let raw = if raw.is_finite() { raw } else { 0.0 };
-        track_peaks[i] = raw;
+    format!("{:.1}dB", db_val)
+}
+
+// =========================================================================
+// VU METER VERTICAL (renderizado directo, sin relayout)
+// =========================================================================
+//
+// El medidor es un `canvas` de tamaño FIJO (`VU_WIDTH` x `VU_HEIGHT`): el nivel
+// sólo cambia lo que se pinta (quads por textura), nunca el tamaño ni los
+// hijos del layout. Así el DOM/GUI no se re-mide a 60 FPS aunque el pico se
+// actualice en cada frame. El suavizado ataque/liberación se aplica una vez
+// por frame en `AppState::sync_frame` (`smoothed_track_peaks`), no acá.
+
+/// Ancho fijo del VU según blueprint (columna estrecha a la izquierda).
+pub const VU_WIDTH: f32 = 14.0;
+/// Alto fijo del VU: idéntico al recorrido del fader para lectura paralela.
+pub const VU_HEIGHT: f32 = 160.0;
+
+/// Color del relleno según tramo: verde -> ámbar -> rojo de clip.
+pub fn vu_fill_color(level: f32) -> Hsla {
+    if level > 0.9 {
+        rgb(0xFF3C3C).into()
+    } else if level > 0.75 {
+        rgb(0xFFC800).into()
+    } else {
+        rgb(0x00FF64).into()
     }
-    drop(app);
+}
 
-    let is_live = mode == AppMode::OpenLive;
+/// Suavizado ataque rápido / liberación lenta para los picos atómicos.
+///
+/// `previous` es el valor ya suavizado del frame anterior y `target` el pico
+/// crudo del motor. Sin esto el canvas parpadearía entre 0 y 1 siguiendo el
+/// buffer de audio en vez de mostrar una aguja legible.
+pub fn smooth_peak(previous: f32, target: f32) -> f32 {
+    let prev = if previous.is_finite() { previous } else { 0.0 };
+    let tgt = if target.is_finite() {
+        target.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if tgt > prev {
+        prev + (tgt - prev) * 0.6
+    } else {
+        prev + (tgt - prev) * 0.12
+    }
+}
 
-    v_flex()
-        .id("mixer")
-        .size_full()
-        .bg(rgb(0x14141A))
-        .p(px(8.0))
-        .gap(px(6.0))
+/// VU meter vertical de tamaño fijo pintado directo en canvas.
+///
+/// Ni el `div` ni el `canvas` cambian de tamaño o hijos con `level`: todo el
+/// movimiento ocurre dentro del callback de pintado.
+pub fn vertical_vu_meter(level: f32) -> AnyElement {
+    let level = if level.is_finite() {
+        level.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    div()
+        .w(px(VU_WIDTH))
+        .h(px(VU_HEIGHT))
+        .flex_shrink_0()
         .child(
-            h_flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(
-                    Button::new("mixer_openlive").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("OPENLIVE")
-                        .compact()
-                        .when(is_live, |b| b.text_color(rgb(0x00B4D8)))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, _| {
-                                state.mode = AppMode::OpenLive;
-                            });
-                        }),
-                )
-                .child(
-                    Button::new("mixer_openstudio").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("OPENSTUDIO")
-                        .compact()
-                        .when(!is_live, |b| b.text_color(rgb(0xFF6E00)))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, _| {
-                                state.mode = AppMode::OpenStudio;
-                            });
-                        }),
-                )
-                .child(
-                    Button::new("mixer_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(" [ + ] ")
-                        .compact()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                let new_id = state
-                                    .live_tracks
-                                    .iter()
-                                    .map(|t| t.id)
-                                    .max()
-                                    .unwrap_or(0)
-                                    + 1;
-                                state
-                                    .live_tracks
-                                    .push(Track::new(new_id, format!("Track {:02}", new_id), false));
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    Button::new("mixer_remove_track").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(" [ - ] ")
-                        .compact()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            st.update(cx, |state, cx| {
-                                if state.live_tracks.len() > 1 {
-                                    state.live_tracks.pop();
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(Label::new(format!("TOTAL: {}", tracks.len())).text_xs()),
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    // Fondo: siempre el mismo quad, mismo costo.
+                    window.paint_quad(PaintQuad {
+                        bounds,
+                        background: rgb(0x0A0A0A).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                    if level <= 0.001 {
+                        return;
+                    }
+                    let fw = bounds.size.width;
+                    let fh = bounds.size.height;
+                    let sig_h = fh * level;
+                    // Relleno desde abajo: un solo quad por frame.
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(bounds.origin.x, bounds.origin.y + fh - sig_h),
+                            size(fw, sig_h),
+                        ),
+                        background: vu_fill_color(level).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                    // Filo superior brillante: marca el pico instantáneo.
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(bounds.origin.x, bounds.origin.y + fh - sig_h),
+                            size(fw, px(2.0)),
+                        ),
+                        background: rgb(0xFFFFFF).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                },
+            )
+            .w(px(VU_WIDTH))
+            .h(px(VU_HEIGHT)),
         )
-        .child(
-            div()
-                .flex_1()
-                .overflow_x_scrollbar()
-                .child(
-                    h_flex()
-                        .gap(px(6.0))
-                        .children(tracks.iter().enumerate().map(|(idx, track)| {
-                            let is_sel = idx == selected_idx;
-                            let is_master = track.is_master;
-                            let name = track.name.clone();
-                            let volume = track.volume;
-                            let pan = track.pan;
-                            let mute = track.mute;
-                            let solo = track.solo;
-                            let vu = if is_master {
-                                master_level
-                            } else if let Some(mx) = track.matrix_idx {
-                                track_peaks.get(mx).copied().unwrap_or(0.0)
-                            } else {
-                                0.0
-                            };
-
-                            v_flex()
-                                .w(px(85.0))
-                                .h_full()
-                                 .bg(if is_master {
-                                     rgb(0x1E1E2D)
-                                 } else if is_sel {
-                                     rgb(0x232323)
-                                 } else {
-                                     rgb(0x19191E)
-                                 })
-                                 .border_1()
-                                 .border_color(if is_sel {
-                                     rgb(0xFF6E00)
-                                 } else {
-                                     rgb(0x282828)
-                                })
-                                .rounded(px(4.0))
-                                .p(px(8.0))
-                                .gap(px(4.0))
-                                .items_center()
-                                .child(
-                                    Button::new(format!("mixer_sel_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                        .label(if is_master {
-                                            "MASTER".to_string()
-                                        } else {
-                                            format!("TRK {:02}: {}", track.id, name)
-                                        })
-                                        .compact()
-                                        .w_full()
-                                        .when(is_sel, |b| b.text_color(rgb(0x0078D7)))
-                                        .on_click(move |_, _, cx| {
-                                            let st = state(cx);
-                                            st.update(cx, |state, cx| {
-                                                state.selected_track_index = idx;
-                                                cx.notify();
-                                            });
-                                        }),
-                                )
-                                .child(
-                                    Button::new(format!("mixer_panmode_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                        .label(if track.pan_mode == crate::app::PanMode::MidSide {
-                                            "M/S"
-                                        } else {
-                                            "L/R"
-                                        })
-                                        .compact()
-                                        .on_click(move |_, _, cx| {
-                                            let st = state(cx);
-                                            st.update(cx, |state, cx| {
-                                                let t = if idx < state.live_tracks.len() {
-                                                    Some(&mut state.live_tracks[idx])
-                                                } else {
-                                                    None
-                                                };
-                                                if let Some(t) = t {
-                                                    t.pan_mode = match t.pan_mode {
-                                                        crate::app::PanMode::MidSide => crate::app::PanMode::Stereo,
-                                                        crate::app::PanMode::Stereo => crate::app::PanMode::MidSide,
-                                                    };
-                                                }
-                                                cx.notify();
-                                            });
-                                        }),
-                                )
-                                .child(
-                                    canvas(
-                                        |_, _, _| {},
-                                        move |bounds, _, window, _| {
-                                            let cx0 = bounds.origin.x + px(bounds.size.width.as_f32() / 2.0);
-                                            let cy = bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
-                                            let r = px(bounds.size.width.as_f32().min(bounds.size.height.as_f32()) / 2.0 - px(2.0).as_f32());
-                                            let mut path = PathBuilder::stroke(px(1.5));
-                                            path.arc_to(
-                                                point(r, r),
-                                                px(0.0),
-                                                false,
-                                                true,
-                                                point(cx0, cy),
-                                            );
-                                            window.paint_path(path.build().unwrap(), rgb(0x505055));
-                                            let norm = ((pan.clamp(-1.0, 1.0) + 1.0) / 2.0).clamp(0.0, 1.0);
-                                            let angle = (norm - 0.5) * (std::f32::consts::PI * 1.5);
-                                            let hx = cx0 + px(angle.sin() * (r.as_f32() - px(4.0).as_f32()));
-                                            let hy = cy - px(angle.cos() * (r.as_f32() - px(4.0).as_f32()));
-                                            let mut path2 = PathBuilder::stroke(px(2.0));
-                                            path2.move_to(point(cx0, cy));
-                                            path2.line_to(point(hx, hy));
-                                            window.paint_path(path2.build().unwrap(), rgb(0xFF6E00));
-                                        },
-                                    )
-                                    .w(px(28.0))
-                                    .h(px(28.0))
-                                    .into_any_element(),
-                                )
-                                .child(Label::new(format!("{:+.0}", pan * 100.0)).text_xs())
-                                .child(
-                                    canvas(
-                                        |_, _, _| {},
-                                        move |bounds, _, window, _| {
-                                            let fx = bounds.origin.x;
-                                            let fy = bounds.origin.y;
-                                            let fw = bounds.size.width;
-                                            let fh = bounds.size.height;
-                                            window.paint_quad(PaintQuad {
-                                                bounds: Bounds::new(
-                                                    point(fx, fy),
-                                                    size(fw, fh),
-                                                ),
-                                                background: rgb(0x0A0A0A).into(),
-                                                border_color: Hsla::default(),
-                                                corner_radii: gpui_kit::Corners::default(),
-                                                border_widths: gpui_kit::Edges::default(),
-                                                border_style: BorderStyle::default(),
-                                            });
-                                            let level = vu.clamp(0.0, 1.0);
-                                            let sig_h = fh * level;
-                                            let col = if level > 0.9 {
-                                                rgb(0xFF3C3C)
-                                            } else if level > 0.75 {
-                                                rgb(0xFFC800)
-                                            } else {
-                                                rgb(0x00FF64)
-                                            };
-                                            window.paint_quad(PaintQuad {
-                                                bounds: Bounds::new(
-                                                    point(fx, fy + fh - sig_h),
-                                                    size(fw, sig_h),
-                                                ),
-                                                background: col.into(),
-                                                border_color: Hsla::default(),
-                                                corner_radii: gpui_kit::Corners::default(),
-                                                border_widths: gpui_kit::Edges::default(),
-                                                border_style: BorderStyle::default(),
-                                            });
-                                        },
-                                    )
-                                    .w(px(14.0))
-                                    .h_full()
-                                    .min_h(px(80.0))
-                                    .into_any_element(),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(24.0))
-                                        .h_full()
-                                        .min_h(px(120.0))
-                                        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                                            let y = event.position.y.as_f32();
-                                            let fh = 120.0_f32;
-                                            let vol = (1.0 - (y / fh)).clamp(0.0, 1.0);
-                                            let st = state(cx);
-                                            st.update(&mut *cx, |state, cx| {
-                                                let t = if idx < state.live_tracks.len() {
-                                                    Some(&mut state.live_tracks[idx])
-                                                } else {
-                                                    None
-                                                };
-                                                if let Some(t) = t {
-                                                    t.volume = vol;
-                                                }
-                                                cx.notify();
-                                            });
-                                        })
-                                        .child(
-                                            canvas(
-                                                |_, _, _| {},
-                                                move |bounds, _, window, _| {
-                                                    let fx = bounds.origin.x;
-                                                    let fw = bounds.size.width;
-                                                    let fh = bounds.size.height;
-                                                    window.paint_quad(PaintQuad {
-                                                        bounds,
-                                                        background: rgb(0x2D2D2D).into(),
-                                                        border_color: Hsla::default(),
-                                                        corner_radii: gpui_kit::Corners::default(),
-                                                        border_widths: gpui_kit::Edges::default(),
-                                                        border_style: BorderStyle::default(),
-                                                    });
-                                                    let ty = fx + fh - volume.clamp(0.0, 1.0) * fh;
-                                                    window.paint_quad(PaintQuad {
-                                                        bounds: Bounds::new(
-                                                            point(fx, ty),
-                                                            size(fw, fh - (ty - fx)),
-                                                        ),
-                                                        background: rgb(0x0096BE).into(),
-                                                        border_color: Hsla::default(),
-                                                        corner_radii: gpui_kit::Corners::default(),
-                                                        border_widths: gpui_kit::Edges::default(),
-                                                        border_style: BorderStyle::default(),
-                                                    });
-                                                    window.paint_quad(PaintQuad {
-                                                        bounds: Bounds::new(
-                                                            point(fx - px(4.0), ty),
-                                                            size(fw + px(8.0), px(8.0)),
-                                                        ),
-                                                        background: rgb(0x00A2E8).into(),
-                                                        border_color: Hsla::default(),
-                                                        corner_radii: gpui_kit::Corners::default(),
-                                                        border_widths: gpui_kit::Edges::default(),
-                                                        border_style: BorderStyle::default(),
-                                                    });
-                                                },
-                                            )
-                                        ),
-                                )
-                                .child(Label::new(db_text(volume)).text_xs())
-                                .child(
-                                    h_flex()
-                                        .gap(px(4.0))
-                                        .child(
-                                            Button::new(format!("mixer_mute_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                                .label("M")
-                                                .compact()
-                                                .when(mute, |b| b.text_color(rgb(0xC80000)))
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |state, cx| {
-                                                        let t = if idx < state.live_tracks.len() {
-                                                            Some(&mut state.live_tracks[idx])
-                                                        } else {
-                                                            None
-                                                        };
-                                                        if let Some(t) = t {
-                                                            t.mute = !t.mute;
-                                                            state.audio_proxy.send(GuiCommand::SetTrackMute {
-                                                                track_idx: idx,
-                                                                mute: t.mute,
-                                                            });
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .child(
-                                            Button::new(format!("mixer_solo_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                                .label("S")
-                                                .compact()
-                                                .when(solo, |b| b.text_color(rgb(0xC8A000)))
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |state, cx| {
-                                                        let t = if idx < state.live_tracks.len() {
-                                                            Some(&mut state.live_tracks[idx])
-                                                        } else {
-                                                            None
-                                                        };
-                                                        if let Some(t) = t {
-                                                            t.solo = !t.solo;
-                                                            state.audio_proxy.send(GuiCommand::SetTrackSolo {
-                                                                track_idx: idx,
-                                                                solo: t.solo,
-                                                            });
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        ),
-                                )
-                        })),
-                ),
-        )
+        .into_any_element()
 }

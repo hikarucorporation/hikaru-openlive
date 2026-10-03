@@ -188,7 +188,6 @@ pub struct AppState {
     /// resto de la app.
     pub bpm_input: Entity<InputState>,
     pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
-    pub show_mixer: bool,
     pub show_dsp_rack: bool,
     pub show_about: bool,
     pub is_recording: bool,
@@ -345,8 +344,16 @@ pub fn handle_global_key(key: &str, cx: &mut App) {
             });
         }
         "f9" => {
+            // El dock del mixer ya no existe (sus faders/VU viven en el
+            // channel strip de cada columna del Arranger): F9 conmuta la
+            // vista de sesión y el Arranger en OpenLive.
             update_state(cx, |state| {
-                state.show_mixer = !state.show_mixer;
+                if state.mode == AppMode::OpenLive {
+                    state.openlive_view = match state.openlive_view {
+                        OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
+                        OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+                    };
+                }
             });
         }
         "f10" => {
@@ -452,7 +459,6 @@ impl HikaruApp {
             bpm_synced_to_engine: -1.0,
             bpm_input: bpm_input.clone(),
             global_loop_synced_to_engine: None,
-            show_mixer: false,
             show_dsp_rack: false,
             show_about: false,
             is_recording: false,
@@ -581,6 +587,23 @@ impl HikaruApp {
         self.state.update(cx, |state, cx| {
             state.transport.sample_count = position_clock.load(Ordering::Relaxed);
             state.playlist_state.ppqn = state.transport.ppqn();
+
+            // Suavizado de picos para los VU del Arranger (ataque rápido,
+            // liberación lenta): los canvas de tamaño fijo leen estos valores
+            // ya filtrados, así el nivel de señal nunca provoca un relayout
+            // aunque el motor escriba picos crudos en cada buffer de audio.
+            {
+                let raw_master =
+                    f32::from_bits(state.output_level_bits.load(Ordering::Relaxed));
+                state.smoothed_master_peak =
+                    mixer::smooth_peak(state.smoothed_master_peak, raw_master);
+                for (i, slot) in state.smoothed_track_peaks.iter_mut().enumerate() {
+                    if let Some(bits) = state.track_peak_bits.get(i) {
+                        let raw = f32::from_bits(bits.load(Ordering::Relaxed));
+                        *slot = mixer::smooth_peak(*slot, raw);
+                    }
+                }
+            }
 
             if (state.transport.bpm - state.bpm_synced_to_engine).abs() > f64::EPSILON {
                 state.bpm_synced_to_engine = state.transport.bpm;
@@ -821,7 +844,6 @@ impl Render for HikaruApp {
         let show_about = app_state.show_about;
         let audio_settings_open = app_state.audio_settings_state.is_open;
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
-        let show_mixer = app_state.show_mixer;
         let dragged_sample = app_state.dragged_sample.clone();
         // El alto del rack es fijo e inmutable: no se expande ni se achica al
         // insertar o abrir dispositivos. Todas las tarjetas ocupan el 100% de
@@ -904,18 +926,6 @@ impl Render for HikaruApp {
                                         .border_color(crate::theme::BORDER_COLOR)
                                         .child(dsp_rack::render(cx)),
                                 )
-                            })
-                            
-                            // PANEL INFERIOR PLEGABLE: MIXER DE PISTAS (F9)
-                            .when(show_mixer, |this| {
-                                this.child(
-                                    div()
-                                        .h(px(240.0))
-                                        .w_full()
-                                        .border_t_1()
-                                        .border_color(crate::theme::BORDER_COLOR)
-                                        .child(mixer::render(cx)),
-                                )
                             }),
                     ),
             )
@@ -963,7 +973,9 @@ fn render_central(mode: AppMode, openlive_view: OpenLiveView, cx: &mut Context<H
             OpenLiveView::SessionMatrix => matrix::render(cx),
             OpenLiveView::ArrangerView => arranger_view::render(cx),
         },
-        AppMode::OpenStudio => playlist::render(cx),
+        // OpenStudio también es el Arranger View: columnas con el contenedor
+        // vertical de waveform arriba y el MISMO channel strip abajo.
+        AppMode::OpenStudio => arranger_view::render(cx),
     }
 }
 

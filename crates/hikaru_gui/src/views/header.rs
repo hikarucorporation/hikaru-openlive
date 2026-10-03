@@ -9,7 +9,7 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::*;
 use gpui_kit::base::{Button as BaseButton, NumberInput as BaseNumberInput};
 
-use crate::app::{format_bpm, state, AppMode, HikaruApp};
+use crate::app::{format_bpm, state, AppMode, HikaruApp, OpenLiveView};
 use crate::audio_proxy::{AudioClipData, GuiCommand};
 use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::playlist::ClipType;
@@ -86,7 +86,7 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
     let is_looping = app.is_looping;
     let is_live = app.mode == AppMode::OpenLive;
     let is_studio = app.mode == AppMode::OpenStudio;
-    let show_mixer = app.show_mixer;
+    let show_arranger = is_live && app.openlive_view == OpenLiveView::ArrangerView;
     let show_dsp_rack = app.show_dsp_rack;
     let show_explorer = app.show_explorer;
     let bpm = transport.bpm;
@@ -392,16 +392,21 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         .child(render_bpm_spinbox(&bpm_input))
         .child(div().flex_1())
         .child(
-            Button::new("toggle_mixer").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("MIXER (F9)")
+            Button::new("toggle_arranger").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("ARRANGER (F9)")
                 .compact()
                 .bg(rgb(0x3D3D3D))
-                .when(show_mixer, |this| this.text_color(rgb(0x00BCD4)))
-                .when(!show_mixer, |this| this.text_color(rgb(0xE0E0E0)))
+                .when(show_arranger, |this| this.text_color(rgb(0x00BCD4)))
+                .when(!show_arranger, |this| this.text_color(rgb(0xE0E0E0)))
                 .on_click(move |_, _, cx| {
                     let st = state(cx);
                     st.update(cx, |state, cx| {
-                        state.show_mixer = !state.show_mixer;
+                        if state.mode == AppMode::OpenLive {
+                            state.openlive_view = match state.openlive_view {
+                                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
+                                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+                            };
+                        }
                         cx.notify();
                     });
                 }),
