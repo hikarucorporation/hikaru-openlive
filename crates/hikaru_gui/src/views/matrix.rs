@@ -1535,13 +1535,13 @@ fn continue_vol_drag(cx: &mut App, track_idx: usize, x: f32) {
     });
 }
 
-/// Inicia el drag de pan: salto al ángulo clicado + base relativa global.
-fn start_pan_drag(cx: &mut App, track_idx: usize, y: f32, jumped: f32) {
+/// Inicia el drag de pan: solo siembra la base relativa con el valor actual
+/// (como cualquier knob de DAW: agarrar NO cambia el valor, solo el drag).
+fn start_pan_drag(cx: &mut App, track_idx: usize, y: f32, current: f32) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         s.matrix_mix_drag = Some(MatrixMixTarget::Pan(track_idx));
-        s.matrix_pan_gesture = Some((y, jumped));
-        apply_matrix_pan(s, track_idx, jumped);
+        s.matrix_pan_gesture = Some((y, current));
         cx.notify();
     });
 }
@@ -1693,8 +1693,8 @@ const PAN_KNOB_TRAVEL: f32 = 150.0;
 /// `controls.rs`): el ángulo va de −135° (L) a +135° (R) medidos desde las
 /// 12, con el centro arriba.
 ///
-/// Interacción (las tres dan feedback inmediato en la aguja y la lectura):
-/// - Clic: salta al ángulo apuntado (0° = arriba/C, ±135° = extremos).
+/// Interacción estilo DAW estándar:
+/// - Agarrar (mouse_down) NO cambia el valor: solo siembra la base del gesto.
 /// - Drag vertical desde ahí: arriba → R, abajo → L (relativo al punto de
 ///   agarre, recorrido completo en `PAN_KNOB_TRAVEL` px).
 /// - Doble-clic: vuelve exacto al centro.
@@ -1705,12 +1705,8 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
     } else {
         0.0
     });
-    // Solo bounds locales para el salto al ángulo; el gesto relativo vive en
-    // el estado global (`matrix_pan_gesture`) para sobrevivir re-renders.
-    let bounds_slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
-    let b_down = bounds_slot.clone();
-    let b_paint = bounds_slot.clone();
-
+    // Sin bounds locales: agarrar no mapea posición a valor, así que el knob
+    // no necesita medir nada (el gesto relativo vive en el estado global).
     div()
         .id(SharedString::from(format!("matrix_panknob_{}", track_idx)))
         .test_support()
@@ -1729,14 +1725,7 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
                 set_matrix_pan(cx, track_idx, 0.0);
                 return;
             }
-            // Salto al ángulo apuntado: 0° arriba, +horario hacia R. Fuera
-            // del arco (±135°) se acota al extremo más cercano.
-            let y = event.position.y.as_f32();
-            let b = b_down.get();
-            let dx = event.position.x.as_f32() - (b[0] + b[2] / 2.0);
-            let dy = y - (b[1] + b[3] / 2.0);
-            let jumped = (dx.atan2(-dy).to_degrees() / 135.0).clamp(-1.0, 1.0);
-            start_pan_drag(cx, track_idx, y, jumped);
+            start_pan_drag(cx, track_idx, event.position.y.as_f32(), pan);
         })
         .on_mouse_move(move |event, _, cx| {
             continue_pan_drag(cx, track_idx, event.position.y.as_f32());
@@ -1751,14 +1740,7 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
                 .flex_shrink_0()
                 .child(
                     canvas(
-                move |bounds, _, _| {
-                    b_paint.set([
-                        bounds.origin.x.as_f32(),
-                        bounds.origin.y.as_f32(),
-                        bounds.size.width.as_f32(),
-                        bounds.size.height.as_f32(),
-                    ]);
-                },
+                |_, _, _| {},
                 move |bounds, _, window, _| {
                     // Eje de origen explícito en f32 (ver requisito de
                     // bounding-box centering del knob).

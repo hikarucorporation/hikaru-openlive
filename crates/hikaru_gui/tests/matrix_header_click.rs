@@ -139,47 +139,36 @@ fn header_mute_button_toggles(cx: &mut TestAppContext) {
     assert!(track_mix(handle, cx).2);
 }
 
-/// Clic en el knob: salta al ángulo apuntado (derecha → R, izquierda → L,
-/// arriba → centro). Antes el clic simple era un no-op silencioso y parecía
-/// que el knob no respondía.
+/// Agarrar el knob (clic simple, sin mover) NO cambia el valor: como en
+/// cualquier DAW, el valor solo lo define el drag (o el doble-clic reset).
 #[gpui_kit::gpui::test]
-fn clicking_pan_knob_jumps_to_angle(cx: &mut TestAppContext) {
+fn grabbing_pan_knob_does_not_jump(cx: &mut TestAppContext) {
     let handle = open_matrix(cx);
-    assert_eq!(track_mix(handle, cx).1, 0.0);
-
-    // Lado derecho del knob (hitbox 28×28, visual centrada en 14,14):
-    // ~+90° → R.
-    cx.update_window(handle.into(), |_, window, cx| {
+    // Primero se lleva a R con el motor de estado para que el no-op sea
+    // observable (si ya estuviera en C, el test no probaría nada).
+    cx.update_window(handle.into(), |view, window, cx| {
+        let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+        app.update(cx, |app, cx| {
+            app.state.update(cx, |s, cx| {
+                s.matrix_state.tracks[0].pan = 0.8;
+                cx.notify();
+            });
+        });
         window.draw(cx).clear(cx);
-        window.click_at("matrix_panknob_0", point(px(24.0), px(14.0)), cx);
+        // Clics en varios puntos del knob: ninguno debe mover el valor.
+        for (x, y) in [(24.0, 14.0), (4.0, 14.0), (14.0, 4.0), (14.0, 14.0)] {
+            window.click_at("matrix_panknob_0", point(px(x), px(y)), cx);
+        }
     })
     .unwrap();
-    let right = track_mix(handle, cx).1;
+
+    let pan = track_mix(handle, cx).1;
     assert!(
-        right > 0.5,
-        "clic a la derecha del knob debería panea a R (quedó en {right})"
+        (pan - 0.8).abs() < f32::EPSILON,
+        "agarrar el knob no debería cambiar el pan (quedó en {pan})"
     );
-
-    // Lado izquierdo: ~−90° → L.
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.draw(cx).clear(cx);
-        window.click_at("matrix_panknob_0", point(px(4.0), px(14.0)), cx);
-    })
-    .unwrap();
-    let left = track_mix(handle, cx).1;
     assert!(
-        left < -0.5,
-        "clic a la izquierda del knob debería panear a L (quedó en {left})"
-    );
-
-    // Arriba en punto: centro.
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.draw(cx).clear(cx);
-        window.click_at("matrix_panknob_0", point(px(14.0), px(4.0)), cx);
-    })
-    .unwrap();
-    assert!(
-        track_mix(handle, cx).1.abs() < 0.05,
-        "clic arriba del knob debería volver al centro"
+        !mix_drag(handle, cx),
+        "el mouse_up debería haber cerrado el gesto de mezcla"
     );
 }
