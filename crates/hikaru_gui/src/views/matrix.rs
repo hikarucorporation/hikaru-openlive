@@ -5,6 +5,8 @@
 // crates/hikaru_gui/src/views/matrix.rs
 
 use std::path::PathBuf;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use hikaru_audio_engine::AudioEngine;
 
@@ -843,6 +845,9 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::prelude::{InteractiveElement as _, Styled as _};
+// Registro para el harness de tests headless (`tests/matrix_header_click`):
+// sin la feature `test-support` es identidad y no cambia nada en producción.
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 use crate::app::{state, HikaruApp};
 
@@ -1338,6 +1343,487 @@ fn db_text(volume: f32) -> String {
     format!("{:.1}dB", db_val)
 }
 
+fn pan_text(pan: f32) -> String {
+    let v = (pan * 100.0).round() as i32;
+    if v == 0 {
+        "C".to_string()
+    } else if v < 0 {
+        format!("L{}", v.abs())
+    } else {
+        format!("R{}", v)
+    }
+}
+
+// =========================================================================
+// CONTROLES DE MEZCLA DEL TRACK HEADER (Session Matrix)
+// =========================================================================
+//
+// Cada cabecera es una columna compacta:
+//
+//   | Track 1                     [S] [M] |
+//   | Vol: [|======------] -3.2dB         |
+//   | Pan: [---o---] C                    |
+//
+// Los sliders son horizontales con drag en tiempo real y doble-clic para
+// resetear (volumen → 0.0dB = 0.75 lineal, pan → centro). Escriben en la
+// matriz y espejan a `live_tracks` + motor, igual que los faders del Arranger.
+
+/// Ancho total de la cabecera (ver `HEADER_SPACER_W` para el espejo).
+const HEADER_WIDTH: f32 = 196.0;
+/// Ancho del espaciador sobre la columna de cabeceras (= ancho − padding raíz).
+const HEADER_SPACER_W: f32 = 188.0;
+/// Ancho fijo del riel de volumen: el thumb se posiciona en px deterministas.
+const MIX_SLIDER_W: f32 = 72.0;
+const MIX_SLIDER_H: f32 = 16.0;
+const MIX_THUMB_W: f32 = 10.0;
+/// Padding vertical extra alrededor del slider: la hitbox queda en 22px de
+/// alto para que el drag horizontal no se corte por 1px arriba o abajo.
+const MIX_SLIDER_PAD_Y: f32 = 3.0;
+
+/// 0.0dB en la curva de `db_text` (lineal 0..=1 con el 0.75 como 0 dB).
+const VOLUME_RESET: f32 = 0.75;
+
+fn set_matrix_volume(cx: &mut App, track_idx: usize, volume: f32) {
+    let volume = volume.clamp(0.0, 1.0);
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if let Some(t) = s.matrix_state.tracks.get_mut(track_idx) {
+            t.volume = volume;
+        }
+        if let Some(live) = s.live_tracks.get_mut(track_idx + 1) {
+            live.volume = volume;
+        }
+        s.audio_proxy.send(GuiCommand::SetTrackVolume {
+            track_idx,
+            volume_db: volume,
+        });
+        cx.notify();
+    });
+}
+
+fn set_matrix_pan(cx: &mut App, track_idx: usize, pan: f32) {
+    let pan = pan.clamp(-1.0, 1.0);
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if let Some(t) = s.matrix_state.tracks.get_mut(track_idx) {
+            t.pan = pan;
+        }
+        if let Some(live) = s.live_tracks.get_mut(track_idx + 1) {
+            live.pan = pan;
+        }
+        s.audio_proxy.send(GuiCommand::SetTrackPan { track_idx, pan });
+        cx.notify();
+    });
+}
+
+/// Slider horizontal compacto para el volumen del header.
+///
+/// `norm` es el volumen lineal 0..=1. Click salta al punto, drag horizontal
+/// (`delta_x`) ajusta en tiempo real y doble-clic llama `on_reset`.
+///
+/// La hitbox es un wrapper con padding vertical extra (22px de alto total):
+/// los eventos viven afuera del dibujo para que el hover/click no se corte
+/// en los bordes del riel. El canvas registra los bounds del dibujo interno,
+/// así que el padding no desplaza el mapeo puntero→valor.
+fn h_mix_slider(
+    id: String,
+    norm: f32,
+    on_change: impl Fn(f32, &mut App) + 'static,
+    on_reset: impl Fn(&mut App) + 'static,
+) -> AnyElement {
+    let norm = norm.clamp(0.0, 1.0);
+    // El canvas invisible registra los bounds para traducir el puntero a
+    // valor; el drag vive en un flag local (mismo patrón que los faders del
+    // Arranger, pero sin estado global: el header es efímero por frame).
+    let bounds_slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
+    let dragging: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    let b_down = bounds_slot.clone();
+    let b_move = bounds_slot.clone();
+    let b_paint = bounds_slot.clone();
+    let d_down = dragging.clone();
+    let d_move = dragging.clone();
+    let d_up = dragging.clone();
+
+    let norm_from_x = move |b: [f32; 4], x: f32| {
+        let travel = (b[2] - MIX_THUMB_W).max(1.0);
+        ((x - b[0] - MIX_THUMB_W / 2.0) / travel).clamp(0.0, 1.0)
+    };
+    let norm_down = norm_from_x;
+    let norm_move = norm_from_x;
+    // `Fn` no es `Copy`: se comparte por `Rc` entre los handlers de
+    // mouse-down (salto + inicio de drag) y mouse-move (drag).
+    let on_change: Rc<dyn Fn(f32, &mut App)> = Rc::new(on_change);
+    let on_down = on_change.clone();
+    let on_move = on_change.clone();
+
+    let thumb_x = MIX_THUMB_W / 2.0 + norm * (MIX_SLIDER_W - MIX_THUMB_W);
+
+    div()
+        .id(SharedString::from(id))
+        .test_support()
+        .flex()
+        .items_center()
+        .py(px(MIX_SLIDER_PAD_Y))
+        .flex_shrink_0()
+        .rounded(px(3.0))
+        .cursor_pointer()
+        .hover(|this| this.bg(rgb(0x232329)))
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            if event.click_count >= 2 {
+                d_down.set(false);
+                on_reset(cx);
+                return;
+            }
+            d_down.set(true);
+            let v = norm_down(b_down.get(), event.position.x.as_f32());
+            on_down(v, cx);
+        })
+        .on_mouse_move(move |event, _, cx| {
+            if !d_move.get() {
+                return;
+            }
+            let v = norm_move(b_move.get(), event.position.x.as_f32());
+            on_move(v, cx);
+        })
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, _| {
+            d_up.set(false);
+        })
+        .child(
+            div()
+                .relative()
+                .w(px(MIX_SLIDER_W))
+                .h(px(MIX_SLIDER_H))
+                .flex_shrink_0()
+                .child(
+                    canvas(
+                        move |bounds, _, _| {
+                            b_paint.set([
+                                bounds.origin.x.as_f32(),
+                                bounds.origin.y.as_f32(),
+                                bounds.size.width.as_f32(),
+                                bounds.size.height.as_f32(),
+                            ]);
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+                // Riel
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px((MIX_SLIDER_H - 4.0) / 2.0))
+                        .w(px(MIX_SLIDER_W))
+                        .h(px(4.0))
+                        .bg(rgb(0x2D2D2D))
+                        .rounded(px(1.0)),
+                )
+                // Relleno desde la izquierda
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px((MIX_SLIDER_H - 4.0) / 2.0))
+                        .w(px(thumb_x.max(1.0)))
+                        .h(px(4.0))
+                        .bg(rgb(0x0096BE)),
+                )
+                // Thumb
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(thumb_x - MIX_THUMB_W / 2.0))
+                        .top(px(1.0))
+                        .w(px(MIX_THUMB_W))
+                        .h(px(MIX_SLIDER_H - 2.0))
+                        .bg(rgb(0x00A2E8))
+                        .border_1()
+                        .border_color(rgb(0x000000)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// Diámetro del knob de pan, en píxeles.
+const PAN_KNOB_SIZE: f32 = 28.0;
+/// Padding alrededor del knob: la hitbox queda en 38×38 para que el agarre
+/// no exija puntería de 1px.
+const PAN_KNOB_PAD: f32 = 5.0;
+/// Píxeles de drag vertical para recorrer el paneo entero (L→R).
+const PAN_KNOB_TRAVEL: f32 = 150.0;
+
+/// Knob rotativo de pan para el header (`Pan: ( O ) C`).
+///
+/// Disco + aguja pintados en canvas (misma técnica que el dial de
+/// `controls.rs`): el ángulo va de −135° (L) a +135° (R) medidos desde las
+/// 12, con el centro arriba.
+///
+/// Interacción (las tres dan feedback inmediato en la aguja y la lectura):
+/// - Clic: salta al ángulo apuntado (0° = arriba/C, ±135° = extremos).
+/// - Drag vertical desde ahí: arriba → R, abajo → L (relativo al punto de
+///   agarre, recorrido completo en `PAN_KNOB_TRAVEL` px).
+/// - Doble-clic: vuelve exacto al centro.
+fn pan_knob(track_idx: usize, pan: f32) -> AnyElement {
+    let pan = if pan.is_finite() {
+        pan.clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+    // Bounds del knob para traducir el clic a ángulo. Los registra el canvas
+    // en pre-paint (igual que los sliders de volumen).
+    let bounds_slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
+    let b_down = bounds_slot.clone();
+    let b_paint = bounds_slot.clone();
+    // Estado del gesto: `[y_inicial, pan_inicial]`. Local al widget porque el
+    // header se reconstruye en cada frame (igual que los sliders de volumen).
+    let gesture: Rc<Cell<Option<[f32; 2]>>> = Rc::new(Cell::new(None));
+    let g_down = gesture.clone();
+    let g_move = gesture.clone();
+    let g_up = gesture.clone();
+
+    div()
+        .id(SharedString::from(format!("matrix_panknob_{}", track_idx)))
+        .test_support()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p(px(PAN_KNOB_PAD))
+        .flex_shrink_0()
+        .rounded(px(19.0))
+        .cursor_pointer()
+        .hover(|this| this.bg(rgb(0x232329)))
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            if event.click_count >= 2 {
+                g_down.set(None);
+                set_matrix_pan(cx, track_idx, 0.0);
+                return;
+            }
+            // Salto al ángulo apuntado: 0° arriba, +horario hacia R. Fuera
+            // del arco (±135°) se acota al extremo más cercano.
+            let y = event.position.y.as_f32();
+            let b = b_down.get();
+            let dx = event.position.x.as_f32() - (b[0] + b[2] / 2.0);
+            let dy = y - (b[1] + b[3] / 2.0);
+            let jumped = (dx.atan2(-dy).to_degrees() / 135.0).clamp(-1.0, 1.0);
+            set_matrix_pan(cx, track_idx, jumped);
+            // El drag continúa en relativo desde el punto de agarre.
+            g_down.set(Some([y, jumped]));
+        })
+        .on_mouse_move(move |event, _, cx| {
+            let Some([y0, p0]) = g_move.get() else {
+                return;
+            };
+            let v = p0 + (y0 - event.position.y.as_f32()) / PAN_KNOB_TRAVEL;
+            set_matrix_pan(cx, track_idx, v);
+        })
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, _| {
+            g_up.set(None);
+        })
+        .child(
+            div()
+                .w(px(PAN_KNOB_SIZE))
+                .h(px(PAN_KNOB_SIZE))
+                .flex_shrink_0()
+                .child(
+                    canvas(
+                move |bounds, _, _| {
+                    b_paint.set([
+                        bounds.origin.x.as_f32(),
+                        bounds.origin.y.as_f32(),
+                        bounds.size.width.as_f32(),
+                        bounds.size.height.as_f32(),
+                    ]);
+                },
+                move |bounds, _, window, _| {
+                    let side = bounds
+                        .size
+                        .width
+                        .as_f32()
+                        .min(bounds.size.height.as_f32());
+                    let cx0 = bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
+                    let cy0 = bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
+                    let radius = side / 2.0 - 1.0;
+                    // Disco: quad con los cuatro radios a la mitad del lado.
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(px(cx0 - radius), px(cy0 - radius)),
+                            size(px(radius * 2.0), px(radius * 2.0)),
+                        ),
+                        background: rgb(0x232329).into(),
+                        border_color: rgb(0x3D3D3D).into(),
+                        corner_radii: gpui_kit::Corners {
+                            top_left: px(radius),
+                            top_right: px(radius),
+                            bottom_right: px(radius),
+                            bottom_left: px(radius),
+                        },
+                        border_widths: gpui_kit::Edges {
+                            top: px(1.0),
+                            right: px(1.0),
+                            bottom: px(1.0),
+                            left: px(1.0),
+                        },
+                        border_style: BorderStyle::default(),
+                    });
+                    // Aguja: −135° (L) .. +135° (R) desde las 12 en punto.
+                    let angle = pan * 135.0 * std::f32::consts::PI / 180.0;
+                    let len = (radius - 4.0).max(0.0);
+                    let mut needle = PathBuilder::stroke(px(2.0));
+                    needle.move_to(point(px(cx0), px(cy0)));
+                    needle.line_to(point(
+                        px(cx0 + len * angle.sin()),
+                        px(cy0 - len * angle.cos()),
+                    ));
+                    if let Ok(needle) = needle.build() {
+                        window.paint_path(needle, rgb(0x00A2E8));
+                    }
+                    // Punto central.
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(px(cx0 - 2.0), px(cy0 - 2.0)),
+                            size(px(4.0), px(4.0)),
+                        ),
+                        background: rgb(0x808080).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners {
+                            top_left: px(2.0),
+                            top_right: px(2.0),
+                            bottom_right: px(2.0),
+                            bottom_left: px(2.0),
+                        },
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                },
+            )
+            .w(px(PAN_KNOB_SIZE))
+            .h(px(PAN_KNOB_SIZE)),
+                )
+        )
+        .into_any_element()
+}
+
+/// Cabecera de pista con mezcla integrada (layout legacy de una sola fila):
+///
+///   Fila superior: nombre (ellipsis) + [M] [S].
+///   Fila de mezcla: knob de pan + lectura C/Lxx/Rxx + fader de volumen + dB.
+///
+/// ```text
+/// +-------------------------------------+
+/// | Track 1                     [M] [S] |
+/// | (O) C   [|======------] -3.2dB      |
+/// +-------------------------------------+
+/// ```
+fn track_header(
+    track_idx: usize,
+    name: String,
+    muted: bool,
+    soloed: bool,
+    volume: f32,
+    pan: f32,
+) -> AnyElement {
+    v_flex()
+        .w(px(HEADER_WIDTH))
+        .bg(rgb(0x1C1C20))
+        .border_1()
+        .border_color(rgb(0x2D2D37))
+        .rounded(px(4.0))
+        .p(px(4.0))
+        .gap(px(2.0))
+        .child(
+            h_flex()
+                .items_center()
+                .justify_between()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(
+                            Label::new(name)
+                                .text_xs()
+                                .text_color(rgb(0xE0E0E0))
+                                .text_ellipsis(),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap(px(2.0))
+                        .flex_shrink_0()
+                        .child(
+                            Button::new(format!("track_mute_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
+                                .label("M")
+                                .compact()
+                                .bg(rgb(0x3D3D3D))
+                                .text_color(rgb(0xE0E0E0))
+                                .when(muted, |b| b.text_color(rgb(0xFF5050)))
+                                .on_click(move |_, _, cx| {
+                                    let st = state(cx);
+                                    st.update(cx, |state, cx| {
+                                        state.matrix_state.tracks[track_idx].muted =
+                                            !state.matrix_state.tracks[track_idx].muted;
+                                        state.audio_proxy.send(GuiCommand::SetTrackMute {
+                                            track_idx,
+                                            mute: state.matrix_state.tracks[track_idx].muted,
+                                        });
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new(format!("track_solo_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
+                                .label("S")
+                                .compact()
+                                .bg(rgb(0x3D3D3D))
+                                .text_color(rgb(0xE0E0E0))
+                                .when(soloed, |b| b.text_color(rgb(0xFFC800)))
+                                .on_click(move |_, _, cx| {
+                                    let st = state(cx);
+                                    st.update(cx, |state, cx| {
+                                        state.matrix_state.tracks[track_idx].soloed =
+                                            !state.matrix_state.tracks[track_idx].soloed;
+                                        state.audio_proxy.send(GuiCommand::SetTrackSolo {
+                                            track_idx,
+                                            solo: state.matrix_state.tracks[track_idx].soloed,
+                                        });
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                ),
+        )
+        // Fila única de mezcla (layout legacy):
+        //   [Knob Pan] [Pan Text] | [Vol Slider] [Vol dB Text]
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(pan_knob(track_idx, pan))
+                .child(
+                    Label::new(pan_text(pan))
+                        .text_size(px(9.0))
+                        .text_color(rgb(0xE0E0E0))
+                        .w(px(24.0)),
+                )
+                .child(h_mix_slider(
+                    format!("matrix_vol_{}", track_idx),
+                    volume,
+                    move |v, cx| set_matrix_volume(cx, track_idx, v),
+                    move |cx| set_matrix_volume(cx, track_idx, VOLUME_RESET),
+                ))
+                .child(
+                    Label::new(db_text(volume))
+                        .text_size(px(9.0))
+                        .text_color(rgb(0xE0E0E0))
+                        .w(px(42.0)),
+                ),
+        )
+        .into_any_element()
+}
+
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
     // Snapshot mínimo para no mantener el borrow durante el armado de la UI.
@@ -1384,7 +1870,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
 
     let mut track_rows: Vec<AnyElement> = Vec::new();
     for track_idx in 0..tracks_len {
-        let (track_name, track_muted, track_soloed, track_volume, _track_pan) =
+        let (track_name, track_muted, track_soloed, track_volume, track_pan) =
             tracks_meta[track_idx].clone();
         let mut scene_cells: Vec<AnyElement> = Vec::new();
 
@@ -1415,67 +1901,14 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         track_rows.push(
             h_flex()
                 .gap(px(4.0))
-                .child(
-                    v_flex()
-                        .w(px(126.0))
-                        .bg(rgb(0x1C1C20))
-                        .border_1()
-                        .border_color(rgb(0x2D2D37))
-                        .rounded(px(4.0))
-                        .p(px(4.0))
-                        .gap(px(2.0))
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .justify_between()
-                                .child(Label::new(track_name.clone()).text_xs().text_color(rgb(0xE0E0E0)))
-                                .child(
-                                    h_flex()
-                                        .gap(px(2.0))
-                                        .child(
-                                            Button::new(format!("track_solo_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                                .label("S")
-                                                .compact()
-                                                .bg(rgb(0x3D3D3D))
-                                                .text_color(rgb(0xE0E0E0))
-                                                .when(track_soloed, |b| b.text_color(rgb(0xFFC800)))
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |state, cx| {
-                                                        state.matrix_state.tracks[track_idx].soloed =
-                                                            !state.matrix_state.tracks[track_idx].soloed;
-                                                        state.audio_proxy.send(GuiCommand::SetTrackSolo {
-                                                            track_idx,
-                                                            solo: state.matrix_state.tracks[track_idx].soloed,
-                                                        });
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .child(
-                                            Button::new(format!("track_mute_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                                .label("M")
-                                                .compact()
-                                                .bg(rgb(0x3D3D3D))
-                                                .text_color(rgb(0xE0E0E0))
-                                                .when(track_muted, |b| b.text_color(rgb(0xFF5050)))
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |state, cx| {
-                                                        state.matrix_state.tracks[track_idx].muted =
-                                                            !state.matrix_state.tracks[track_idx].muted;
-                                                        state.audio_proxy.send(GuiCommand::SetTrackMute {
-                                                            track_idx,
-                                                            mute: state.matrix_state.tracks[track_idx].muted,
-                                                        });
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        ),
-                                ),
-                        )
-                        .child(Label::new(db_text(track_volume)).text_xs().text_color(rgb(0xE0E0E0))),
-                )
+                .child(track_header(
+                    track_idx,
+                    track_name.clone(),
+                    track_muted,
+                    track_soloed,
+                    track_volume,
+                    track_pan,
+                ))
                 .children(scene_cells)
                 .into_any_element(),
         );
@@ -1564,7 +1997,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             h_flex()
                 .gap(px(4.0))
                 .px(px(8.0))
-                .child(div().w(px(118.0)))
+                .child(div().w(px(HEADER_SPACER_W)))
                 .children(scene_headers),
         )
         .child(

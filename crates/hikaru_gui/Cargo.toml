@@ -31,3 +31,8 @@ rfd = "0.15"
 [[bin]]
 name = "hikaru_openlive"
 path = "src/main.rs"
+
+[dev-dependencies]
+# Harness headless de GPUI para tests de interacción (click_at con
+# hit-testing real). Solo afecta a `cargo test`.
+gpui-kit = { version = "0.6.6", features = ["test-support"] }
