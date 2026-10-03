@@ -1372,13 +1372,17 @@ fn pan_text(pan: f32) -> String {
 const HEADER_WIDTH: f32 = 196.0;
 /// Ancho del espaciador sobre la columna de cabeceras (= ancho − padding raíz).
 const HEADER_SPACER_W: f32 = 188.0;
+/// Botones M/S compactos: altura y padding fijos (el `Button` del kit fija su
+/// alto por tema y no baja de ~24px).
+const MS_BTN_W: f32 = 22.0;
+const MS_BTN_H: f32 = 18.0;
 /// Ancho fijo del riel de volumen: el thumb se posiciona en px deterministas.
 const MIX_SLIDER_W: f32 = 72.0;
 const MIX_SLIDER_H: f32 = 16.0;
 const MIX_THUMB_W: f32 = 10.0;
-/// Padding vertical extra alrededor del slider: la hitbox queda en 22px de
+/// Padding vertical extra alrededor del slider: la hitbox queda en 20px de
 /// alto para que el drag horizontal no se corte por 1px arriba o abajo.
-const MIX_SLIDER_PAD_Y: f32 = 3.0;
+const MIX_SLIDER_PAD_Y: f32 = 2.0;
 
 /// 0.0dB en la curva de `db_text` (lineal 0..=1 con el 0.75 como 0 dB).
 const VOLUME_RESET: f32 = 0.75;
@@ -1538,7 +1542,7 @@ fn h_mix_slider(
         .test_support()
         .flex()
         .items_center()
-        .py(px(MIX_SLIDER_PAD_Y))
+        .py(px(MIX_SLIDER_PAD_Y)) // ACÁ ESTABAS HDP, ME REFIERO AL SLIDER DE LOS HEADERS
         .flex_shrink_0()
         .rounded(px(3.0))
         .when(dragging_this, |d| d.cursor_grabbing())
@@ -1618,9 +1622,9 @@ fn h_mix_slider(
 
 /// Diámetro del knob de pan, en píxeles.
 const PAN_KNOB_SIZE: f32 = 28.0;
-/// Padding alrededor del knob: la hitbox queda en 38×38 para que el agarre
+/// Padding alrededor del knob: la hitbox queda en 36×36 para que el agarre
 /// no exija puntería de 1px.
-const PAN_KNOB_PAD: f32 = 5.0;
+const PAN_KNOB_PAD: f32 = 4.0;
 /// Píxeles de drag vertical para recorrer el paneo entero (L→R).
 const PAN_KNOB_TRAVEL: f32 = 150.0;
 
@@ -1764,6 +1768,46 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// Mini-toggle M/S de altura fija para el header.
+///
+/// El `Button` del kit fija su alto por tema (~24px+); este div de 22×18
+/// compacta la fila del título y con ella toda la caja del header. Mismo
+/// contrato que los botones originales (id + `test_support` + click).
+fn ms_button(
+    id: String,
+    glyph: &'static str,
+    active: bool,
+    active_color: Rgba,
+    on_toggle: impl Fn(&mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(SharedString::from(id))
+        .test_support()
+        .w(px(MS_BTN_W))
+        .h(px(MS_BTN_H))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(2.0))
+        .bg(rgb(0x3D3D3D))
+        .hover(|this| this.bg(rgb(0x4D4D4D)))
+        .active(|this| this.bg(rgb(0x5A5A5A)))
+        .cursor_pointer()
+        .child(
+            Label::new(glyph)
+                .text_size(px(10.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(if active {
+                    active_color
+                } else {
+                    rgb(0xE0E0E0)
+                }),
+        )
+        .on_click(move |_, _, cx| on_toggle(cx))
+        .into_any_element()
+}
+
 /// Cabecera de pista con mezcla integrada (layout legacy de una sola fila):
 ///
 ///   Fila superior: nombre (ellipsis) + [M] [S].
@@ -1790,8 +1834,8 @@ fn track_header(
         .border_1()
         .border_color(rgb(0x2D2D37))
         .rounded(px(4.0))
-        .p(px(4.0))
-        .gap(px(2.0))
+        .p(px(3.0))
+        .gap(px(1.0))
         .child(
             h_flex()
                 .items_center()
@@ -1813,46 +1857,42 @@ fn track_header(
                     h_flex()
                         .gap(px(2.0))
                         .flex_shrink_0()
-                        .child(
-                            Button::new(format!("track_mute_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label("M")
-                                .compact()
-                                .bg(rgb(0x3D3D3D))
-                                .text_color(rgb(0xE0E0E0))
-                                .when(muted, |b| b.text_color(rgb(0xFF5050)))
-                                .on_click(move |_, _, cx| {
-                                    let st = state(cx);
-                                    st.update(cx, |state, cx| {
-                                        state.matrix_state.tracks[track_idx].muted =
-                                            !state.matrix_state.tracks[track_idx].muted;
-                                        state.audio_proxy.send(GuiCommand::SetTrackMute {
-                                            track_idx,
-                                            mute: state.matrix_state.tracks[track_idx].muted,
-                                        });
-                                        cx.notify();
+                        .child(ms_button(
+                            format!("track_mute_{}", track_idx),
+                            "M",
+                            muted,
+                            rgb(0xFF5050),
+                            move |cx| {
+                                let st = state(cx);
+                                st.update(cx, |state, cx| {
+                                    state.matrix_state.tracks[track_idx].muted =
+                                        !state.matrix_state.tracks[track_idx].muted;
+                                    state.audio_proxy.send(GuiCommand::SetTrackMute {
+                                        track_idx,
+                                        mute: state.matrix_state.tracks[track_idx].muted,
                                     });
-                                }),
-                        )
-                        .child(
-                            Button::new(format!("track_solo_{}", track_idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label("S")
-                                .compact()
-                                .bg(rgb(0x3D3D3D))
-                                .text_color(rgb(0xE0E0E0))
-                                .when(soloed, |b| b.text_color(rgb(0xFFC800)))
-                                .on_click(move |_, _, cx| {
-                                    let st = state(cx);
-                                    st.update(cx, |state, cx| {
-                                        state.matrix_state.tracks[track_idx].soloed =
-                                            !state.matrix_state.tracks[track_idx].soloed;
-                                        state.audio_proxy.send(GuiCommand::SetTrackSolo {
-                                            track_idx,
-                                            solo: state.matrix_state.tracks[track_idx].soloed,
-                                        });
-                                        cx.notify();
+                                    cx.notify();
+                                });
+                            },
+                        ))
+                        .child(ms_button(
+                            format!("track_solo_{}", track_idx),
+                            "S",
+                            soloed,
+                            rgb(0xFFC800),
+                            move |cx| {
+                                let st = state(cx);
+                                st.update(cx, |state, cx| {
+                                    state.matrix_state.tracks[track_idx].soloed =
+                                        !state.matrix_state.tracks[track_idx].soloed;
+                                    state.audio_proxy.send(GuiCommand::SetTrackSolo {
+                                        track_idx,
+                                        solo: state.matrix_state.tracks[track_idx].soloed,
                                     });
-                                }),
-                        ),
+                                    cx.notify();
+                                });
+                            },
+                        )),
                 ),
         )
         // Fila única de mezcla (layout legacy):

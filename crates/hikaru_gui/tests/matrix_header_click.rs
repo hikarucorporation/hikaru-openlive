@@ -115,11 +115,11 @@ fn clicking_pan_knob_jumps_to_angle(cx: &mut TestAppContext) {
     let handle = open_matrix(cx);
     assert_eq!(track_mix(handle, cx).1, 0.0);
 
-    // Lado derecho del knob (hitbox 38×38, visual centrada en 19,19):
+    // Lado derecho del knob (hitbox 36×36, visual centrada en 18,18):
     // ~+90° → R.
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
-        window.click_at("matrix_panknob_0", point(px(32.0), px(19.0)), cx);
+        window.click_at("matrix_panknob_0", point(px(31.0), px(18.0)), cx);
     })
     .unwrap();
     let right = track_mix(handle, cx).1;
@@ -131,7 +131,7 @@ fn clicking_pan_knob_jumps_to_angle(cx: &mut TestAppContext) {
     // Lado izquierdo: ~−90° → L.
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
-        window.click_at("matrix_panknob_0", point(px(6.0), px(19.0)), cx);
+        window.click_at("matrix_panknob_0", point(px(5.0), px(18.0)), cx);
     })
     .unwrap();
     let left = track_mix(handle, cx).1;
@@ -143,7 +143,7 @@ fn clicking_pan_knob_jumps_to_angle(cx: &mut TestAppContext) {
     // Arriba en punto: centro.
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
-        window.click_at("matrix_panknob_0", point(px(19.0), px(9.0)), cx);
+        window.click_at("matrix_panknob_0", point(px(18.0), px(8.0)), cx);
     })
     .unwrap();
     assert!(
