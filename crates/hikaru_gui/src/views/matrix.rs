@@ -1828,7 +1828,8 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
 /// El `Button` del kit fija su alto por tema (~24px+); este div de 22×18
 /// compacta la fila del título y con ella toda la caja del header. Mismo
 /// contrato que los botones originales (id + `test_support` + click).
-fn ms_button(
+/// También lo reutiliza el channel strip del Arranger (S/M/R compactos).
+pub fn ms_button(
     id: String,
     glyph: &'static str,
     active: bool,

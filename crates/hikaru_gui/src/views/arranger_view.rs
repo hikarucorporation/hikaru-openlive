@@ -32,6 +32,9 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::{FluentBuilder as _, InteractiveElement as _, Styled as _};
+// Registro para el harness de tests headless (`tests/arranger_columns_fit`):
+// sin la feature `test-support` es identidad y no cambia nada en producción.
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 
 use crate::app::{state, AppMode, HikaruApp};
@@ -47,15 +50,16 @@ use crate::views::playlist::ClipType;
 
 const SCENE_LABEL_WIDTH: f32 = 124.0;
 const TRACK_WIDTH: f32 = 140.0;
-const PAD_HEIGHT: f32 = 28.0;
+/// Alto de pads y launchers: 22px para que 8 escenas + strip quepan en 720p.
+const PAD_HEIGHT: f32 = 22.0;
 const PAD_GAP: f32 = 2.0;
-const HEADER_HEIGHT: f32 = 40.0;
+const HEADER_HEIGHT: f32 = 32.0;
 
 /// Alto del contenedor vertical de waveform (modo OpenStudio).
-const WAVEFORM_HEIGHT: f32 = 220.0;
+const WAVEFORM_HEIGHT: f32 = 192.0;
 /// Alto fijo de la lista de devices: mantiene PAN / STATE / FADER alineados
 /// entre columnas aunque las pistas tengan distinto número de plugins.
-const DEVICES_HEIGHT: f32 = 64.0;
+const DEVICES_HEIGHT: f32 = 32.0;
 
 const PAN_WIDTH: f32 = 90.0;
 const PAN_HEIGHT: f32 = 20.0;
@@ -63,8 +67,9 @@ const PAN_THUMB_W: f32 = 12.0;
 
 const FADER_WIDTH: f32 = 30.0;
 /// Mantener igual a `mixer::VU_HEIGHT` para lectura paralela VU <-> fader.
-const FADER_HEIGHT: f32 = 160.0;
-const FADER_THUMB_H: f32 = 18.0;
+/// 88px para que el strip completo quepa en 720p sin scrollbar.
+const FADER_HEIGHT: f32 = 88.0;
+const FADER_THUMB_H: f32 = 12.0;
 const FADER_RAIL_W: f32 = 24.0;
 
 // =========================================================================
@@ -701,34 +706,33 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
 
 /// Botones [S] Solo, [M] Mute, [R] Record-arm del blueprint.
 fn smr_buttons(id_prefix: &str, target: StripTarget, soloed: bool, muted: bool, armed: bool) -> AnyElement {
+    // Mini-toggles 22×18 como los M/S de los headers (el `Button` del kit no
+    // baja de ~24px y empujaba el pie del canal fuera de pantalla).
     h_flex()
         .gap(px(4.0))
         .flex_shrink_0()
         .justify_center()
-        .child(
-            Button::new(SharedString::from(format!("{}_solo", id_prefix)))
-                .label("S")
-                .compact()
-                .rounded(ButtonRounded::None)
-                .when(soloed, |b| b.text_color(rgb(0xE6C84C)))
-                .on_click(move |_, _, cx| toggle_solo_target(cx, target)),
-        )
-        .child(
-            Button::new(SharedString::from(format!("{}_mute", id_prefix)))
-                .label("M")
-                .compact()
-                .rounded(ButtonRounded::None)
-                .when(muted, |b| b.text_color(rgb(0xE06060)))
-                .on_click(move |_, _, cx| toggle_mute_target(cx, target)),
-        )
-        .child(
-            Button::new(SharedString::from(format!("{}_rec", id_prefix)))
-                .label("R")
-                .compact()
-                .rounded(ButtonRounded::None)
-                .when(armed, |b| b.text_color(rgb(0xFF3C3C)))
-                .on_click(move |_, _, cx| toggle_arm_target(cx, target)),
-        )
+        .child(matrix::ms_button(
+            format!("{}_solo", id_prefix),
+            "S",
+            soloed,
+            rgb(0xE6C84C),
+            move |cx| toggle_solo_target(cx, target),
+        ))
+        .child(matrix::ms_button(
+            format!("{}_mute", id_prefix),
+            "M",
+            muted,
+            rgb(0xE06060),
+            move |cx| toggle_mute_target(cx, target),
+        ))
+        .child(matrix::ms_button(
+            format!("{}_rec", id_prefix),
+            "R",
+            armed,
+            rgb(0xFF3C3C),
+            move |cx| toggle_arm_target(cx, target),
+        ))
         .into_any_element()
 }
 
@@ -738,7 +742,7 @@ fn smr_buttons(id_prefix: &str, target: StripTarget, soloed: bool, muted: bool, 
 
 fn section_label(text: &str) -> AnyElement {
     Label::new(text.to_string())
-        .text_size(px(9.0))
+        .text_size(px(8.0))
         .font_weight(FontWeight::BOLD)
         .text_color(theme::TEXT_MUTED)
         .into_any_element()
@@ -774,7 +778,7 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                 let is_sel = snap.is_selected_track && snap.selected_slot == slot;
                 h_flex()
                     .w_full()
-                    .h(px(18.0))
+                    .h(px(14.0))
                     .flex_shrink_0()
                     .items_center()
                     .gap(px(4.0))
@@ -806,7 +810,7 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                         } else {
                             name
                         })
-                        .text_size(px(9.0))
+                        .text_size(px(8.0))
                         .text_color(if active {
                             rgb(0xE0E0E0)
                         } else {
@@ -821,14 +825,14 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     v_flex()
         .w_full()
         .flex_shrink_0()
-        .gap(px(2.0))
+        .gap(px(1.0))
         .child(section_label("DEVICES:"))
         .child(
             div()
                 .w_full()
                 .h(px(DEVICES_HEIGHT))
                 .overflow_y_scrollbar()
-                .child(v_flex().w_full().gap(px(2.0)).children(rows)),
+                .child(v_flex().w_full().gap(px(1.0)).children(rows)),
         )
         .into_any_element()
 }
@@ -879,7 +883,7 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     v_flex()
         .w_full()
         .flex_shrink_0()
-        .gap(px(2.0))
+        .gap(px(1.0))
         .child(section_label("ROUTING / SENDS:"))
         .children(rows)
         .into_any_element()
@@ -901,18 +905,18 @@ fn fader_vu_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         .w_full()
         .flex_shrink_0()
         .items_center()
-        .gap(px(4.0))
+        .gap(px(2.0))
         .child(section_label("FADER & VU METER"))
         .child(
             h_flex()
                 .w_full()
                 .justify_center()
                 .items_start()
-                .gap(px(10.0))
+                .gap(px(6.0))
                 .child(
                     v_flex()
                         .items_center()
-                        .gap(px(2.0))
+                        .gap(px(1.0))
                         .child(
                             Label::new("VU")
                                 .text_size(px(8.0))
@@ -928,7 +932,7 @@ fn fader_vu_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                 .child(
                     v_flex()
                         .items_center()
-                        .gap(px(2.0))
+                        .gap(px(1.0))
                         .child(
                             Label::new("Vol")
                                 .text_size(px(8.0))
@@ -956,7 +960,7 @@ fn channel_strip(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     v_flex()
         .w_full()
         .flex_shrink_0()
-        .gap(px(4.0))
+        .gap(px(2.0))
         .child(strip_separator())
         .child(devices_section(snap, id_prefix))
         .child(strip_separator())
@@ -967,19 +971,11 @@ fn channel_strip(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                 .w_full()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(2.0))
+                .gap(px(1.0))
                 .child(section_label("PAN / BALANCE"))
                 .child(pan_slider(pan_target, snap.pan)),
         )
         .child(strip_separator())
-        .child(
-            v_flex()
-                .w_full()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(2.0))
-                .child(section_label("TRACK STATE CONTROLS")),
-        )
         .child(fader_vu_section(snap, id_prefix))
         .into_any_element()
 }
@@ -1105,10 +1101,10 @@ fn render_pad(
         .child(
             div()
                 .absolute()
-                .left(px(5.0))
-                .top(px(5.0))
-                .w(px(18.0))
-                .h(px(18.0))
+                .left(px(4.0))
+                .top(px(4.0))
+                .w(px(14.0))
+                .h(px(14.0))
                 .rounded(px(2.0))
                 .bg(if has_clip { rgb(0x1B6FB5) } else { rgb(0x32323C) })
                 .border_1()
@@ -1143,18 +1139,18 @@ fn render_pad(
                 })
                 .child(if has_clip {
                     Label::new("▶")
-                        .text_size(px(9.0))
+                        .text_size(px(8.0))
                         .text_color(rgb(0xFFFFFF))
                         .into_any_element()
                 } else {
-                    div().w(px(6.0)).h(px(6.0)).bg(rgb(0xFFFFFF)).into_any_element()
+                    div().w(px(5.0)).h(px(5.0)).bg(rgb(0xFFFFFF)).into_any_element()
                 }),
         )
         // Nombre del clip (recortado al pad)
         .child(
             div()
                 .absolute()
-                .left(px(28.0))
+                .left(px(22.0))
                 .right(px(4.0))
                 .top_0()
                 .bottom_0()
@@ -1163,7 +1159,7 @@ fn render_pad(
                 .overflow_hidden()
                 .child(
                     Label::new(display_text)
-                        .text_size(px(9.0))
+                        .text_size(px(8.0))
                         .text_color(rgb(0xFFFFFF)),
                 ),
         );
@@ -1431,7 +1427,7 @@ fn scene_launcher_cell(scene_idx: usize, name: &str) -> AnyElement {
         })
         .child(
             Label::new(format!("▶ {}", name))
-                .text_size(px(10.0))
+                .text_size(px(9.0))
                 .text_color(rgb(0xFFFFFF)),
         )
         .into_any_element()
@@ -1446,8 +1442,8 @@ fn track_column(width: f32, header: AnyElement, top: AnyElement, strip: AnyEleme
         .border_1()
         .border_color(theme::BORDER_COLOR)
         .rounded(px(4.0))
-        .p(px(6.0))
-        .gap(px(4.0))
+        .p(px(3.0))
+        .gap(px(2.0))
         .child(header)
         .child(top)
         .child(strip)
@@ -1647,7 +1643,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .items_center()
         .gap(px(6.0))
         .px(px(4.0))
-        .py(px(4.0))
+        .py(px(2.0))
         .child(
             Button::new("arr_openlive")
                 .rounded(ButtonRounded::None)
@@ -1854,23 +1850,36 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .size_full()
         .bg(theme::WINDOW_BG)
         .child(toolbar)
+        // Wrapper observable del área de columnas (para el test de encaje):
+        // el `Scrollable` interno sobrescribe el id de su contenido, así que
+        // la medición vive en este `div` externo.
         .child(
             div()
+                .id("arranger_columns")
+                .test_support()
                 .flex_1()
                 .w_full()
                 .min_h_0()
-                .overflow_y_scrollbar()
+                .flex()
+                .flex_col()
                 .child(
                     div()
+                        .flex_1()
                         .w_full()
-                        .overflow_x_scrollbar()
-                        .p(px(6.0))
+                        .min_h_0()
+                        .overflow_y_scrollbar()
                         .child(
-                            h_flex()
-                                .gap(px(PAD_GAP))
-                                .items_start()
-                                .flex_shrink_0()
-                                .children(columns),
+                            div()
+                                .w_full()
+                                .overflow_x_scrollbar()
+                                .p(px(6.0))
+                                .child(
+                                    h_flex()
+                                        .gap(px(PAD_GAP))
+                                        .items_start()
+                                        .flex_shrink_0()
+                                        .children(columns),
+                                ),
                         ),
                 ),
         )

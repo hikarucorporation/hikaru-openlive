@@ -146,7 +146,8 @@ pub fn level_db_text(level: f32) -> String {
 /// Ancho fijo del VU según blueprint (columna estrecha a la izquierda).
 pub const VU_WIDTH: f32 = 14.0;
 /// Alto fijo del VU: idéntico al recorrido del fader para lectura paralela.
-pub const VU_HEIGHT: f32 = 160.0;
+/// 88px para que el strip completo quepa en 720p sin scrollbar.
+pub const VU_HEIGHT: f32 = 88.0;
 
 /// Color del relleno según tramo: verde -> ámbar -> rojo de clip.
 pub fn vu_fill_color(level: f32) -> Hsla {
