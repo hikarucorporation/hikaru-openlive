@@ -71,6 +71,8 @@ const FADER_WIDTH: f32 = 30.0;
 const FADER_HEIGHT: f32 = 68.0;
 const FADER_THUMB_H: f32 = 12.0;
 const FADER_RAIL_W: f32 = 24.0;
+/// Volumen unity del reset con doble-clic: 0.75 lineal = 0.0 dB.
+const VOLUME_RESET: f32 = 0.75;
 
 // =========================================================================
 // DESTINO DE PISTA DEL CHANNEL STRIP
@@ -543,6 +545,12 @@ fn pan_slider(target: FaderTarget, pan: f32) -> AnyElement {
         .h(px(PAN_HEIGHT))
         .flex_shrink_0()
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            if event.click_count >= 2 {
+                // Doble-clic: pan de vuelta al centro (C).
+                stop_fader_drag(cx, target);
+                set_pan(cx, target, 0.0);
+                return;
+            }
             let b = b_down.get();
             start_fader_drag(cx, target);
             set_pan(cx, target, pan_from_pointer(b, event.position.x.as_f32()));
@@ -646,6 +654,12 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
         .h(px(FADER_HEIGHT))
         .flex_shrink_0()
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            if event.click_count >= 2 {
+                // Doble-clic: volumen de vuelta a unity (0.0 dB).
+                stop_fader_drag(cx, target);
+                set_volume(cx, target, VOLUME_RESET);
+                return;
+            }
             let b = b_down.get();
             start_fader_drag(cx, target);
             set_volume(cx, target, volume_from_pointer(b, event.position.y.as_f32()));
