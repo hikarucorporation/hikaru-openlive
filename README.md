@@ -147,6 +147,17 @@ This program is free software under the terms of the **GNU Affero General Public
 
 ---
 
-### P.S.:
+### 🛡️ Note on Development and Licensing (GNU AGPLv3)
 
-Personal note: Switch the graphics framework from **`egui`** to **`gpui-kit`** when you've done most of the stuff in **`egui`**: **COMPLETED**
+To those in the community crying *"AI Slop"* just for using LLMs/OpenCode to translate architecture and design vision into functional Rust code:
+
+> **Hikaru OpenLive / OpenStudio is 100% Free Software under the GNU AGPLv3 license.** (as stated above)
+
+This means that:
+1. You can use, study, modify, redistribute it and even commercialize it or deploy it on Cloud services.
+2. **DON'T BE A SH!T:** If you use Hikaru OpenLive code for a cloud service (like Ableton Cloud, FL Studio Web, Splice or SaaS platforms), AGPLv3 **explicitly requires you to release the source code of your modifications** to the community.
+3. You don't need to release your server's private infrastructure, but **ANY change, wrapper, kernel/OS-level binding or adaptation of the Hikaru OpenLive engine MUST BE PUBLISHED** under the same license. Tivoization and closed code in the cloud are strictly prohibited.
+
+If you didn't understand how free software works under AGPLv3 nor how artificial intelligence is used as a high-level idea compiler... the fault is not in the code, it's on you as an irresponsible sysadmin XD. 🚀
+
+---
