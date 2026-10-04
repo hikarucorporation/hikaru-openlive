@@ -556,6 +556,13 @@ fn pan_slider(target: FaderTarget, pan: f32) -> AnyElement {
             set_pan(cx, target, pan_from_pointer(b, event.position.x.as_f32()));
         })
         .on_mouse_move(move |event, _, cx| {
+            // Si el botón se soltó fuera del slider, el `mouse_up` nunca
+            // llega y el drag quedaría colgado siguiendo al cursor: ante un
+            // move sin botón presionado se cierra el gesto.
+            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                stop_fader_drag(cx, target);
+                return;
+            }
             if !is_fader_dragging(cx, target) {
                 return;
             }
@@ -665,6 +672,12 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
             set_volume(cx, target, volume_from_pointer(b, event.position.y.as_f32()));
         })
         .on_mouse_move(move |event, _, cx| {
+            // Igual que en el pan: move sin botón = el `mouse_up` se perdió
+            // fuera del fader, se cierra el gesto colgado.
+            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                stop_fader_drag(cx, target);
+                return;
+            }
             if !is_fader_dragging(cx, target) {
                 return;
             }
