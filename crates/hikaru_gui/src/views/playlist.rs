@@ -1,4 +1,15 @@
+// Playlist / Timeline (OpenStudio) — lienzo de composición lineal.
+//
+// LÍMITE DEL MÓDULO: esta vista es SÓLO tiempo. Contiene la regla de
+// compases (ruler), filas horizontales limpias por pista, grilla con snap,
+// clips de audio/MIDI y playhead. NO contiene ningún control de mezcla
+// (faders, pan, S/M/R, volúmenes en dB): esos viven en el mixer lateral de
+// `arranger_view.rs` y no deben sangrar adentro del lienzo temporal. El
+// lienzo sólo recibe arrastre de samples, creación/selección de clips y
+// navegación temporal (seek, zoom, scroll).
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
@@ -232,14 +243,76 @@ impl PlaylistState {
     }
 }
 
+/// Geometría compartida de la Playlist / Timeline (OpenStudio).
+///
+/// `TRACK_ROW_H` es la altura de cada fila del grid y **debe** coincidir con
+/// la altura de fila que use el mixer lateral: el scroll vertical de ambos
+/// paneles se sincroniza por índice de fila (`scroll_top = first_row * TRACK_ROW_H`),
+/// así que si un panel cambia esta constante sin el otro, las filas se desalinean.
+pub const TRACK_ROW_H: f32 = 54.0;
+/// Alto de la regla de compases (ruler / timebar superior).
+pub const RULER_H: f32 = 24.0;
+/// Límites del zoom temporal (px por tick).
+pub const MIN_ZOOM_X: f32 = 0.005;
+pub const MAX_ZOOM_X: f32 = 2.0;
+
 #[inline]
 fn px_to_ticks(px: f32, zoom_x: f32) -> u64 {
-    (px.max(0.0) / zoom_x) as u64
+    (px.max(0.0) / zoom_x.max(0.0001)) as u64
 }
 
 #[inline]
 fn ticks_to_px(ticks: u64, zoom_x: f32) -> f32 {
     ticks as f32 * zoom_x
+}
+
+/// Ticks por compás según la firma actual (`SIG num/den`).
+///
+/// Un compás tiene `beats_per_bar` negras; cada negra son `ppqn` ticks.
+/// La división (`den`) no cambia la duración en este secuenciador (el PPQN es
+/// por negra), pero se conserva como parámetro para validar la firma.
+pub fn ticks_per_bar(ppqn: u64, beats_per_bar: u32) -> u64 {
+    ppqn.max(1) * beats_per_bar.max(1) as u64
+}
+
+/// Número de compás (1-based) que contiene `tick`.
+pub fn bar_number_at_tick(tick: u64, ticks_per_bar: u64) -> u32 {
+    (tick / ticks_per_bar.max(1)) as u32 + 1
+}
+
+/// Posición X (px, relativa al inicio del grid) del compás `bar` (1-based).
+pub fn bar_to_px(bar: u32, ticks_per_bar: u64, zoom_x: f32) -> f32 {
+    (bar.saturating_sub(1) as u64 * ticks_per_bar.max(1)) as f32 * zoom_x
+}
+
+/// Ticks de la subdivisión de grilla (`quantize`) para un `denominador` dado.
+///
+/// `1/4` = una negra (`ppqn`), `1/8` = media negra, `1/16` = un cuarto.
+/// El numerador se ignora a propósito: el snap siempre subdivide la redonda
+/// (`4/den` de compás de 4/4), igual que el selector del footer.
+pub fn snap_step_ticks(ppqn: u64, grid_denominator: u32) -> u64 {
+    let ppqn = ppqn.max(1);
+    match grid_denominator.max(1) {
+        2 => ppqn * 2,
+        4 => ppqn,
+        8 => ppqn / 2,
+        16 => ppqn / 4,
+        d => ppqn * 4 / d as u64,
+    }
+    .max(1)
+}
+
+/// Zoom con acote a `[MIN_ZOOM_X, MAX_ZOOM_X]`. Función pura para testear.
+pub fn clamped_zoom(zoom: f32) -> f32 {
+    if !zoom.is_finite() {
+        return 0.04;
+    }
+    zoom.clamp(MIN_ZOOM_X, MAX_ZOOM_X)
+}
+
+/// Factor de zoom tras pulsar `+` / `-` (×1.25 / ÷1.25, acotado).
+pub fn step_zoom(zoom: f32, zoom_in: bool) -> f32 {
+    clamped_zoom(if zoom_in { zoom * 1.25 } else { zoom / 1.25 })
 }
 
 pub fn snap_ticks(ticks: u64, grid_ticks: u64) -> u64 {
@@ -382,35 +455,13 @@ pub fn build_audio_clip(
     }
 }
 
-fn db_text(volume: f32) -> String {
-    let db_val = if volume <= 0.0 {
-        -60.0
-    } else if volume <= 0.75 {
-        -60.0 + (volume / 0.75) * 60.0
-    } else {
-        ((volume - 0.75) / 0.25) * 6.0
-    };
-    format!("{:.1}dB", db_val)
-}
-
-fn pan_text(pan: f32) -> String {
-    let v = (pan * 100.0).round() as i32;
-    if v == 0 {
-        "C".to_string()
-    } else if v < 0 {
-        format!("L{}", v.abs())
-    } else {
-        format!("R{}", v)
-    }
-}
-
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
     let pl = &app.playlist_state;
     let ppqn = pl.ppqn.max(1);
     let zoom_x = pl.zoom_x;
     let header_width = pl.header_width;
-    let grid_num = pl.grid_numerator;
+    let _grid_num = pl.grid_numerator;
     let grid_den = pl.grid_denominator;
     let playhead_tick = pl.playhead_tick;
     let loop_start = pl.loop_start_ticks;
@@ -421,16 +472,18 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let audio_proxy = app.audio_proxy.clone();
     let bpm = app.transport.bpm;
     let sample_rate = app.transport.sample_rate.get() as u32;
-    let transport_sc = app.transport.sample_count;
     let beats_per_bar = app.transport.beats_per_bar;
+    let beat_division = app.transport.beat_division;
     let tracks = match app.mode {
         crate::app::AppMode::OpenLive => &app.live_tracks,
         crate::app::AppMode::OpenStudio => &app.studio_tracks,
     };
     let dragged_sample = app.dragged_sample.clone();
+    let selected_track = app.selected_track_index;
     drop(app);
 
-    let ticks_per_bar = ppqn * beats_per_bar as u64;
+    // Compás real según SIG (BPM sólo afecta a segundos, no a ticks).
+    let ticks_per_bar_val = ticks_per_bar(ppqn, beats_per_bar);
     let display_tick = loop_display_tick(playhead_tick, loop_start, loop_end, is_looping && loop_active);
 
     let non_master: Vec<(usize, &Track)> = tracks
@@ -439,76 +492,55 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .filter(|(_, t)| !t.is_master)
         .collect();
 
-    let track_height = 54.0_f32;
-    let ruler_h = 24.0_f32;
-    let canvas_h = ruler_h + non_master.len() as f32 * track_height;
-    let total_ticks = (ppqn * 4 * 128).max(playhead_tick + ticks_per_bar * 16);
+    let track_height = TRACK_ROW_H;
+    let ruler_h = RULER_H;
+    // Geometría del lienzo: columna fija de headers a la izquierda y grilla
+    // temporal a su derecha. `grid_ox` es el origen X de TODO lo temporal
+    // (regla, líneas, clips, playhead, zonas de seek/drop): el compás 1
+    // arranca exactamente ahí y el área bajo él queda limpia para clips.
+    let grid_ox = header_width;
+    // Altura sincronizada con el mixer lateral: N filas × TRACK_ROW_H.
+    let row_count = non_master.len().max(1);
+    let canvas_h = ruler_h + row_count as f32 * track_height;
+    let total_ticks = (ticks_per_bar_val * 128).max(playhead_tick + ticks_per_bar_val * 16);
     let canvas_w = (header_width + total_ticks as f32 * zoom_x).max(800.0);
+    let grid_w = (canvas_w - header_width).max(1.0);
 
+    // Cabeceras de fila LIMPIAS: sólo identidad de pista (número + nombre).
+    // Sin faders, sin pan, sin S/M/R, sin dB — la mezcla vive en el mixer
+    // lateral (`arranger_view.rs`). El click selecciona la pista destino
+    // (navegación de arreglo, no mezcla).
     let mut track_headers: Vec<AnyElement> = Vec::new();
     for (idx, track) in &non_master {
-        let tid = track.id;
+        let vec_idx = *idx;
         let tname = track.name.clone();
-        let tvol = track.volume;
-        let tpan = track.pan;
-        let tmute = track.mute;
-        let tsolo = track.solo;
+        let row_label = format!("TRK {:02}", track.id);
+        let is_selected_row = selected_track == vec_idx;
         track_headers.push(
             v_flex()
                 .w(px(header_width))
                 .h(px(track_height))
                 .bg(rgb(0x1C1C20))
                 .border_1()
-                .border_color(rgb(0x2D2D37))
+                .border_color(if is_selected_row {
+                    rgb(0x5AB4FF)
+                } else {
+                    rgb(0x2D2D37)
+                })
                 .p(px(4.0))
-                .gap(px(2.0))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .justify_between()
-                        .child(Label::new(tname.clone()).text_xs())
-                        .child(
-                            h_flex()
-                                .gap(px(2.0))
-                                .child(
-                                    Button::new(format!("pl_track_solo_{}", tid)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                        .label("S")
-                                        .compact()
-                                        .when(tsolo, |b| b.text_color(rgb(0xC8A000)))
-                                        .on_click(move |_, _, cx| {
-                                            let st = state(cx);
-                                            st.update(cx, |state, cx| {
-                                                if let Some(t) = state.live_tracks.iter_mut().find(|t| t.id == tid) {
-                                                    t.solo = !t.solo;
-                                                }
-                                                if let Some(t) = state.studio_tracks.iter_mut().find(|t| t.id == tid) {
-                                                    t.solo = !t.solo;
-                                                }
-                                                cx.notify();
-                                            });
-                                        }),
-                                )
-                                .child(
-                                    Button::new(format!("pl_track_mute_{}", tid)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                        .label("M")
-                                        .compact()
-                                        .when(tmute, |b| b.text_color(rgb(0xC80000)))
-                                        .on_click(move |_, _, cx| {
-                                            let st = state(cx);
-                                            st.update(cx, |state, cx| {
-                                                if let Some(t) = state.live_tracks.iter_mut().find(|t| t.id == tid) {
-                                                    t.mute = !t.mute;
-                                                }
-                                                if let Some(t) = state.studio_tracks.iter_mut().find(|t| t.id == tid) {
-                                                    t.mute = !t.mute;
-                                                }
-                                                cx.notify();
-                                            });
-                                        }),
-                                ),
-                        ),
-                )
-                .child(Label::new(db_text(tvol)).text_xs())
+                .gap(px(1.0))
+                .justify_center()
+                .id(format!("pl_row_{}", vec_idx))
+                .test_support()
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, cx| {
+                        state.selected_track_index = vec_idx;
+                        cx.notify();
+                    });
+                })
+                .child(Label::new(row_label).text_xs())
+                .child(Label::new(tname).text_xs())
                 .into_any_element(),
         );
     }
@@ -519,135 +551,198 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let clip_name = clip.name.clone();
         let clip_start = clip.start_tick;
         let clip_dur = clip.duration_ticks;
-        let clip_x = ticks_to_px(clip_start, zoom_x);
+        let clip_x = grid_ox + ticks_to_px(clip_start, zoom_x);
         let clip_w = ticks_to_px(clip_dur, zoom_x).max(12.0);
         let track_row = non_master.iter().position(|(i, _)| *i == *track_id).unwrap_or(0);
         let clip_y = ruler_h + track_row as f32 * track_height + 1.0;
         let clip_h = track_height - 2.0;
         let clip_id = clip.id;
 
+        // --- ClipView: bloque horizontal con título + contenido ---------------
+        // Posición dinámica: x = grid_ox + start_tick × zoom (siempre a la
+        // derecha de los headers), w = duration × zoom,
+        // y = fila de `track_index` × TRACK_ROW_H (sincronizada con el mixer).
+        let title_h = 14.0_f32;
+        let body_h = (clip_h - title_h).max(8.0);
+        let clip_bg: Hsla = if is_sel { rgb(0x325078).into() } else { clip.color };
+        let clip_border = if is_sel {
+            rgb(0xFFC800)
+        } else {
+            rgba(0xFFFFFF66)
+        };
+        let title_text = clip_name.clone();
+        let base_clip = div()
+            .w(px(clip_w))
+            .h(px(clip_h))
+            .absolute()
+            .left(px(clip_x))
+            .top(px(clip_y))
+            .bg(clip_bg)
+            .border_1()
+            .border_color(clip_border)
+            .rounded(px(2.0))
+            .overflow_hidden()
+            .id(format!("pl_clip_{}", clip_id))
+            .test_support()
+            .on_click(move |event, _, cx| {
+                let shift = event.modifiers().shift;
+                let st = state(cx);
+                st.update(cx, |state, cx| {
+                    if shift {
+                        if state.playlist_state.selected_clips.contains(&clip_id) {
+                            state.playlist_state.selected_clips.retain(|&id| id != clip_id);
+                        } else {
+                            state.playlist_state.selected_clips.push(clip_id);
+                        }
+                    } else {
+                        state.playlist_state.selected_clips = vec![clip_id];
+                    }
+                    cx.notify();
+                });
+            })
+            // Título del clip (ej. "Cymatics - X Full Drum Loop 29").
+            .child(
+                div()
+                    .w_full()
+                    .h(px(title_h))
+                    .flex_shrink_0()
+                    .bg(rgba(0x00000066))
+                    .px(px(4.0))
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .child(Label::new(title_text).text_xs()),
+            );
         if let ClipType::Audio { peaks, sample_offset_ticks, total_sample_ticks, .. } = &clip.clip_type {
             let peaks = peaks.clone();
             let soff = *sample_offset_ticks;
-            let ttot = *sample_offset_ticks + *total_sample_ticks;
-            let clip_el = div()
-                .w(px(clip_w))
-                .h(px(clip_h))
-                .absolute()
-                .left(px(clip_x))
-                .top(px(clip_y))
-                .bg(if is_sel {
-                    rgb(0x325078)
-                } else {
-                    rgb(0x205F91)
-                })
-                .border_1()
-                .border_color(if is_sel {
-                    rgb(0xFFC800)
-                } else {
-                    rgba(0xFFFFFF66)
-                })
-                .id(format!("pl_clip_{}", clip_id))
-                .on_click(move |event, _, cx| {
-                    let shift = event.modifiers().shift;
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        if shift {
-                            if state.playlist_state.selected_clips.contains(&clip_id) {
-                                state.playlist_state.selected_clips.retain(|&id| id != clip_id);
-                            } else {
-                                state.playlist_state.selected_clips.push(clip_id);
-                            }
-                        } else {
-                            state.playlist_state.selected_clips = vec![clip_id];
+            let ttot = (*sample_offset_ticks + *total_sample_ticks).max(1);
+            let clip_el = base_clip.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let cx0 = bounds.origin.x;
+                        let cy = bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
+                        let n = peaks.len();
+                        if n == 0 {
+                            return;
                         }
-                        cx.notify();
-                    });
-                })
-                .child(canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let cx0 = bounds.origin.x;
-                    let cy = bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
-                    let max_h = bounds.size.height.as_f32() * 0.4;
-                    let n = peaks.len();
-                    if n == 0 || ttot <= 0 {
-                        return;
-                    }
-                    let start_ratio = soff as f32 / ttot as f32;
-                    let dur_ratio = clip_dur as f32 / ttot as f32;
-                    let step = 2.0;
-                    let steps = (bounds.size.width.as_f32() / step) as usize;
-                    for i in 0..steps {
-                        let local = i as f32 / steps as f32;
-                        let sample_norm = start_ratio + local * dur_ratio;
-                        let peak_idx = (sample_norm * n as f32) as usize;
-                        if let Some(&pv) = peaks.get(peak_idx) {
-                            let bh = bounds.size.height.as_f32() * 0.8 * pv;
-                            if bh > 0.5 {
-                                let x = cx0 + px(i as f32 * step);
-                                let mut path = PathBuilder::fill();
-                                path.move_to(point(x, cy - px(bh * 0.5)));
-                                path.line_to(point(x + px(1.0), cy - px(bh * 0.5)));
-                                path.line_to(point(x + px(1.0), cy + px(bh * 0.5)));
-                                path.line_to(point(x, cy + px(bh * 0.5)));
-                                path.close();
-                                window.paint_path(path.build().unwrap(), rgba(0xFFFFFFB3));
+                        let start_ratio = soff as f32 / ttot as f32;
+                        let dur_ratio = clip_dur as f32 / ttot as f32;
+                        let step = 2.0;
+                        let steps = (bounds.size.width.as_f32() / step) as usize;
+                        for i in 0..steps {
+                            let local = i as f32 / steps.max(1) as f32;
+                            let sample_norm = start_ratio + local * dur_ratio;
+                            let peak_idx = (sample_norm * n as f32) as usize;
+                            if let Some(&pv) = peaks.get(peak_idx) {
+                                let bh = bounds.size.height.as_f32() * 0.8 * pv;
+                                if bh > 0.5 {
+                                    let x = cx0 + px(i as f32 * step);
+                                    let mut path = PathBuilder::fill();
+                                    path.move_to(point(x, cy - px(bh * 0.5)));
+                                    path.line_to(point(x + px(1.0), cy - px(bh * 0.5)));
+                                    path.line_to(point(x + px(1.0), cy + px(bh * 0.5)));
+                                    path.line_to(point(x, cy + px(bh * 0.5)));
+                                    path.close();
+                                    if let Ok(p) = path.build() {
+                                        window.paint_path(p, rgba(0xFFFFFFB3));
+                                    }
+                                }
                             }
                         }
-                    }
-                },
-            ));
+                    },
+                )
+                .w_full()
+                .h(px(body_h)),
+            );
             clip_elems.push(clip_el.into_any_element());
         } else {
-            let clip_el = div()
-                .w(px(clip_w))
-                .h(px(clip_h))
-                .absolute()
-                .left(px(clip_x))
-                .top(px(clip_y))
-                .bg(rgb(0x205F91))
-                .border_1()
-                .border_color(rgba(0xFFFFFF66))
-                .id(format!("pl_clip_{}", clip_id))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        state.playlist_state.selected_clips = vec![clip_id];
-                        cx.notify();
-                    });
-                });
+            // Pattern / Automation / MIDI: bloques de eventos proporcionales.
+            let is_pattern = matches!(clip.clip_type, ClipType::Pattern { .. });
+            let clip_el = base_clip.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let w = bounds.size.width.as_f32();
+                        let h = bounds.size.height.as_f32();
+                        if w <= 0.0 || h <= 0.0 {
+                            return;
+                        }
+                        if is_pattern {
+                            // 16 pasos estilo step-sequencer como placeholder
+                            // de eventos MIDI hasta que el clip guarde notas.
+                            let steps = 16usize;
+                            let bw = (w / steps as f32 * 0.6).max(2.0);
+                            for i in 0..steps {
+                                if i % 2 == 0 {
+                                    continue;
+                                }
+                                let x = bounds.origin.x + px(i as f32 * w / steps as f32 + 1.0);
+                                let bh = h * 0.55;
+                                let mut path = PathBuilder::fill();
+                                path.move_to(point(x, bounds.origin.y + px((h - bh) / 2.0)));
+                                path.line_to(point(x + px(bw), bounds.origin.y + px((h - bh) / 2.0)));
+                                path.line_to(point(x + px(bw), bounds.origin.y + px((h + bh) / 2.0)));
+                                path.line_to(point(x, bounds.origin.y + px((h + bh) / 2.0)));
+                                path.close();
+                                if let Ok(p) = path.build() {
+                                    window.paint_path(p, rgba(0xFFFFFFB3));
+                                }
+                            }
+                        } else {
+                            // Automation: línea horizontal central.
+                            let mut path = PathBuilder::stroke(px(1.0));
+                            let y = bounds.origin.y + bounds.size.height / 2.0;
+                            path.move_to(point(bounds.origin.x, y));
+                            path.line_to(point(bounds.origin.x + bounds.size.width, y));
+                            if let Ok(p) = path.build() {
+                                window.paint_path(p, rgba(0xFFFFFFB3));
+                            }
+                        }
+                    },
+                )
+                .w_full()
+                .h(px(body_h)),
+            );
             clip_elems.push(clip_el.into_any_element());
         }
     }
 
     let playhead_x = ticks_to_px(display_tick, zoom_x);
-    let snap_step_ticks = (ppqn * 4 * grid_num as u64) / grid_den as u64;
-    let step_w = ticks_to_px(snap_step_ticks, zoom_x);
+    // Grilla según quantize actual (1/4, 1/8, 1/16): subdivisión de la redonda.
+    // Las líneas principales caen cada compás SIG (`ticks_per_bar_val`).
+    let snap_step_ticks = snap_step_ticks(ppqn, grid_den).max(1);
     let mut grid_lines: Vec<AnyElement> = Vec::new();
     let mut step = 0u64;
     let mut bar_num = 1u32;
-    let steps_per_bar = (grid_den / grid_num).max(1) as u32;
     while step <= total_ticks {
         let x = ticks_to_px(step, zoom_x);
-        if x > canvas_w {
+        if x > grid_w {
             break;
         }
-        let is_main = (step / snap_step_ticks) % steps_per_bar as u64 == 0;
+        // Toda línea temporal cuelga de `grid_ox`: el compás 1 (x=0) queda
+        // justo a la derecha de los headers, nunca debajo.
+        let gx = grid_ox + x;
+        let is_main = step % ticks_per_bar_val == 0;
         grid_lines.push(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    let y0 = bounds.origin.y + px(ruler_h);
                     let col = if is_main { rgb(0x323232) } else { rgb(0x1C1C1C) };
                     let mut path = PathBuilder::stroke(px(1.0));
-                    path.move_to(point(px(x), y0));
-                    path.line_to(point(px(x), y0 + bounds.size.height - px(ruler_h)));
-                    window.paint_path(path.build().unwrap(), col);
+                    path.move_to(point(bounds.origin.x, bounds.origin.y));
+                    path.line_to(point(
+                        bounds.origin.x,
+                        bounds.origin.y + bounds.size.height,
+                    ));
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, col);
+                    }
                 },
             )
             .absolute()
-            .left(px(x))
+            .left(px(gx))
             .top(px(ruler_h))
             .w(px(1.0))
             .h(px(canvas_h - ruler_h))
@@ -658,7 +753,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 Label::new(bar_num.to_string())
                     .text_xs()
                     .absolute()
-                    .left(px(x + 4.0))
+                    .left(px(gx + 4.0))
                     .top(px(2.0))
                     .into_any_element(),
             );
@@ -695,15 +790,23 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
+    // Bounds de la zona de grilla en coords de ventana (patrón `record_bounds`
+    // del arranger): `mouse_position()` viene en coords de ventana, así que el
+    // mapeo px→ticks/fila resta el origen real medido cada frame, no una
+    // constante. La zona ES la grilla (arranca en `grid_ox`), sin headers.
+    let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
+    let zone_bounds_drop = zone_bounds.clone();
+    let zone_bounds_rec = zone_bounds.clone();
+
     let drop_handler = if dragged_sample.is_some() {
         let audio_proxy = audio_proxy.clone();
         let track_ids: Vec<usize> = non_master.iter().map(|(tid, _)| *tid).collect();
         Some(
             div()
                 .absolute()
-                .left(px(0.0))
+                .left(px(grid_ox))
                 .top(px(ruler_h))
-                .w(px(canvas_w))
+                .w(px(grid_w))
                 .h(px(canvas_h - ruler_h))
                 .id("pl_drop_handler")
                 .on_click(move |event, _, cx| {
@@ -713,10 +816,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             let Some(pos) = event.mouse_position() else {
                                 return;
                             };
-                            let rel_x = pos.x.as_f32() - header_width;
+                            let zb = zone_bounds_drop.get();
+                            let rel_x = pos.x.as_f32() - zb[0];
                             let raw = px_to_ticks(rel_x.max(0.0), zoom_x);
                             let drop_tick = snap_ticks(raw, snap_step_ticks);
-                            let rel_y = pos.y.as_f32() - ruler_h;
+                            let rel_y = pos.y.as_f32() - zb[1];
                             let track_idx = (rel_y / track_height).floor() as usize;
                             if track_idx < track_ids.len() {
                                 let target_tid = track_ids[track_idx];
@@ -760,18 +864,35 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         None
     };
 
+    let zone_bounds_seek = zone_bounds.clone();
     let seek_zone = div()
         .absolute()
-        .left(px(0.0))
+        .left(px(grid_ox))
         .top(px(ruler_h))
-        .w(px(canvas_w))
+        .w(px(grid_w))
         .h(px(canvas_h - ruler_h))
         .id("pl_seek_zone")
+        .child(
+            canvas(
+                move |bounds, _, _| {
+                    zone_bounds_rec.set([
+                        bounds.origin.x.as_f32(),
+                        bounds.origin.y.as_f32(),
+                        bounds.size.width.as_f32(),
+                        bounds.size.height.as_f32(),
+                    ]);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
         .on_click(move |event, _, cx| {
             let Some(pos) = event.mouse_position() else {
                 return;
             };
-            let rel_x = pos.x.as_f32() - header_width;
+            let zb = zone_bounds_seek.get();
+            let rel_x = pos.x.as_f32() - zb[0];
             let clicked = px_to_ticks(rel_x.max(0.0), zoom_x);
             let st = state(cx);
             st.update(cx, |state, _| {
@@ -780,52 +901,78 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             });
         });
 
+    // Fondo de la regla: sólo sobre la grilla (arranca en `grid_ox`).
+    // La esquina superior-izquierda (sobre los headers) la pinta `corner`.
     let children = vec![
         div()
+            .absolute()
+            .left(px(grid_ox))
+            .top(px(0.0))
+            .w(px(grid_w))
             .h(px(ruler_h))
-            .w(px(canvas_w))
             .bg(rgb(0x18181E))
+            .into_any_element(),
+        div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(0.0))
+            .w(px(header_width))
+            .h(px(ruler_h))
+            .bg(rgb(0x141418))
+            .border_r_1()
+            .border_color(rgb(0x2D2D37))
             .into_any_element(),
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let y0 = bounds.origin.y + px(ruler_h);
                 let col = rgb(0x1C1C1C);
                 let mut path = PathBuilder::stroke(px(1.0));
-                path.move_to(point(bounds.origin.x, y0));
-                path.line_to(point(bounds.origin.x, y0 + bounds.size.height - px(ruler_h)));
-                window.paint_path(path.build().unwrap(), col);
+                path.move_to(point(bounds.origin.x, bounds.origin.y));
+                path.line_to(point(
+                    bounds.origin.x,
+                    bounds.origin.y + bounds.size.height,
+                ));
+                if let Ok(p) = path.build() {
+                    window.paint_path(p, col);
+                }
             },
         )
         .absolute()
-        .left(px(0.0))
+        .left(px(grid_ox))
         .top(px(ruler_h))
-        .w(px(canvas_w))
+        .w(px(1.0))
         .h(px(canvas_h - ruler_h))
         .into_any_element(),
     ];
 
+    // Playhead y bordes de loop en coords de grilla: el canvas cubre todo el
+    // contenido pero pinta relativo a su propio origen + `grid_ox`, así sigue
+    // alineado con compases y clips haya scroll o no.
+    let playhead_win_x = grid_ox + playhead_x;
+    let loop_win = loop_render.map(|(a, b)| (grid_ox + a, grid_ox + b));
     let playhead_canvas = canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
+            // Playhead: marcador de posición de reproducción actual.
+            let x = bounds.origin.x + px(playhead_win_x);
             let mut playhead_path = PathBuilder::stroke(px(2.0));
-            playhead_path.move_to(point(px(playhead_x), bounds.origin.y));
-            playhead_path.line_to(point(
-                px(playhead_x),
-                bounds.origin.y + bounds.size.height,
-            ));
-            window.paint_path(playhead_path.build().unwrap(), rgb(0x00FFFF));
-            if let Some((lx0, lx1)) = loop_render {
+            playhead_path.move_to(point(x, bounds.origin.y));
+            playhead_path.line_to(point(x, bounds.origin.y + bounds.size.height));
+            if let Ok(p) = playhead_path.build() {
+                window.paint_path(p, rgb(0x00FFFF));
+            }
+            if let Some((lx0, lx1)) = loop_win {
                 let top = bounds.origin.y;
                 let bot = bounds.origin.y + bounds.size.height;
-                let mut loop_path = PathBuilder::stroke(px(2.0));
-                loop_path.move_to(point(px(lx0), top));
-                loop_path.line_to(point(px(lx0), bot));
-                window.paint_path(loop_path.build().unwrap(), rgb(0x00C8FF));
-                let mut loop_path = PathBuilder::stroke(px(2.0));
-                loop_path.move_to(point(px(lx1), top));
-                loop_path.line_to(point(px(lx1), bot));
-                window.paint_path(loop_path.build().unwrap(), rgb(0x00C8FF));
+                for lx in [lx0, lx1] {
+                    let mut loop_path = PathBuilder::stroke(px(2.0));
+                    let lx = bounds.origin.x + px(lx);
+                    loop_path.move_to(point(lx, top));
+                    loop_path.line_to(point(lx, bot));
+                    if let Ok(p) = loop_path.build() {
+                        window.paint_path(p, rgb(0x00C8FF));
+                    }
+                }
             }
         },
     )
@@ -836,12 +983,16 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .h(px(canvas_h));
 
     let mut all: Vec<AnyElement> = Vec::new();
+    // Ruler / Timebar superior: título + compás SIG + quantize clicable.
+    // La numeración de compases (1, 2, 3…) se dibuja en `grid_lines` alineada
+    // a `ticks_per_bar_val` (SIG real), no a la subdivisión de snap.
     all.push(
         h_flex()
             .items_center()
             .gap(px(6.0))
             .child(Label::new("PLAYLIST / TIMELINE").text_sm().font_weight(FontWeight::BOLD))
-            .child(Label::new(format!("Grid {}/{}", grid_num, grid_den)).text_xs())
+            .child(Label::new(format!("SIG {}/{} @ {:.1} BPM", beats_per_bar, beat_division, bpm)).text_xs())
+            .child(Label::new(format!("1/{}", grid_den)).text_xs())
             .id("pl_grid_header")
             .on_click(move |_, _, cx| {
                 let st = state(cx);
@@ -855,22 +1006,53 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     cx.notify();
                 });
             })
+            .child(
+                Button::new("pl_zoom_out").rounded(gpui_kit::component::button::ButtonRounded::None)
+                    .label("-")
+                    .compact()
+                    .on_click(move |_, _, cx| {
+                        let st = state(cx);
+                        st.update(cx, |state, cx| {
+                            state.playlist_state.zoom_x = step_zoom(state.playlist_state.zoom_x, false);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("pl_zoom_in").rounded(gpui_kit::component::button::ButtonRounded::None)
+                    .label("+")
+                    .compact()
+                    .on_click(move |_, _, cx| {
+                        let st = state(cx);
+                        st.update(cx, |state, cx| {
+                            state.playlist_state.zoom_x = step_zoom(state.playlist_state.zoom_x, true);
+                            cx.notify();
+                        });
+                    }),
+            )
             .into_any_element(),
     );
+    // Navegación: scroll horizontal independiente + scroll vertical con id
+    // estable (`playlist_scroll`) para sincronizar con el mixer lateral por
+    // índice de fila (misma constante TRACK_ROW_H en ambos paneles).
     all.push(
         div()
             .flex_1()
             .overflow_x_scrollbar()
+            .id("playlist_scroll")
             .child(
                 div()
-                    .w(px(canvas_w + header_width))
+                    .w(px(canvas_w))
                     .h(px(canvas_h))
                     .relative()
+                    // Columna fija de headers: apilada en vertical desde la
+                    // regla, una cabecera de `TRACK_ROW_H` por fila — misma
+                    // altura y mismo `top` que su fila de la grilla.
                     .child(
-                        h_flex()
+                        v_flex()
                             .absolute()
                             .left(px(0.0))
-                            .top(px(0.0))
+                            .top(px(ruler_h))
                             .children(track_headers),
                     )
                     .children(children)
@@ -893,15 +1075,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .on_click(move |_, _, cx| {
                         let st = state(cx);
                         st.update(cx, |state, cx| {
-                            let next_id = state
-                                .live_tracks
-                                .iter()
-                                .map(|t| t.id)
-                                .max()
-                                .unwrap_or(0)
-                                + 1;
-                            let n = state.live_tracks.iter().filter(|t| !t.is_master).count();
-                            state.live_tracks.push(Track::new(
+                            // Las filas de la playlist pertenecen al set de
+                            // pistas del modo activo: nunca se toca el otro.
+                            let tracks = state.tracks_mut();
+                            let next_id =
+                                tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                            let n = tracks.iter().filter(|t| !t.is_master).count();
+                            tracks.push(Track::new(
                                 next_id,
                                 format!("TRACK {:02}", n + 1),
                                 false,
@@ -917,24 +1097,25 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .on_click(move |_, _, cx| {
                         let st = state(cx);
                         st.update(cx, |state, cx| {
-                            if let Some(pos) = state
-                                .live_tracks
-                                .iter()
-                                .rposition(|t| !t.is_master)
+                            let tracks = state.tracks_mut();
+                            if let Some(pos) =
+                                tracks.iter().rposition(|t| !t.is_master)
                             {
-                                state.live_tracks.remove(pos);
+                                tracks.remove(pos);
                             }
                             cx.notify();
                         });
                     }),
             )
             .child(Label::new(format!("PPQN {}", ppqn)).text_xs())
-            .child(Label::new(format!("{:.2} bars", playhead_tick as f64 / ticks_per_bar as f64)).text_xs())
+            .child(Label::new(format!("{:.2} bars", playhead_tick as f64 / ticks_per_bar_val.max(1) as f64)).text_xs())
+            .child(Label::new(format!("Bar {} | Tick {}", bar_number_at_tick(playhead_tick, ticks_per_bar_val), playhead_tick)).text_xs())
             .into_any_element(),
     );
 
     v_flex()
         .id("playlist")
+        .test_support()
         .size_full()
         .gap(px(4.0))
         .children(all)

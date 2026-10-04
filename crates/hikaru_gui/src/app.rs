@@ -251,6 +251,11 @@ pub struct AppState {
     pub sig_input: Entity<InputState>,
     pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
     pub show_dsp_rack: bool,
+    /// OpenStudio: el mixer lateral y la Playlist / Timeline son vistas
+    /// independientes sobre el mismo `studio_tracks`. Con `true` van
+    /// divididas (mixer a la izquierda, timeline flexible a la derecha);
+    /// con `false` la Playlist ocupa todo el ancho para composición.
+    pub show_studio_mixer: bool,
     pub show_about: bool,
     pub is_recording: bool,
     pub show_explorer: bool,
@@ -545,6 +550,7 @@ impl HikaruApp {
             sig_input: sig_input.clone(),
             global_loop_synced_to_engine: None,
             show_dsp_rack: false,
+            show_studio_mixer: true,
             show_about: false,
             is_recording: false,
             show_explorer: false,
@@ -694,6 +700,12 @@ impl HikaruApp {
         self.state.update(cx, |state, cx| {
             state.transport.sample_count = position_clock.load(Ordering::Relaxed);
             state.playlist_state.ppqn = state.transport.ppqn();
+            // Playhead de la Playlist / Timeline: deriva del reloj del motor
+            // (samples) con el tempo real, así la regla y el marcador avanzan
+            // juntos aunque cambien BPM o SIG.
+            state.playlist_state.playhead_tick = state
+                .transport
+                .samples_to_ticks(state.transport.sample_count);
 
             // Suavizado de picos para los VU del Arranger (ataque rápido,
             // liberación lenta): los canvas de tamaño fijo leen estos valores
