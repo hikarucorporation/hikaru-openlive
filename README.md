@@ -151,7 +151,7 @@ This program is free software under the terms of the **GNU Affero General Public
 
 To those in the community crying *"AI Slop"* just for using LLMs/OpenCode to translate architecture and design vision into functional Rust code:
 
-> **Hikaru OpenLive / OpenStudio is 100% Free Software under the GNU AGPLv3 license.** (as stated above)
+> **Hikaru OpenLive / OpenStudio is 100% Free and Open Software under the GNU AGPLv3 license.** (as stated above)
 
 This means that:
 1. You can use, study, modify, redistribute it and even commercialize it or deploy it on Cloud services.
