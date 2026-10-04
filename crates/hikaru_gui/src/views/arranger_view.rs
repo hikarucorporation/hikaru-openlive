@@ -59,7 +59,7 @@ const HEADER_HEIGHT: f32 = 32.0;
 const WAVEFORM_HEIGHT: f32 = 192.0;
 /// Alto fijo de la lista de devices: mantiene PAN / STATE / FADER alineados
 /// entre columnas aunque las pistas tengan distinto número de plugins.
-const DEVICES_HEIGHT: f32 = 32.0;
+const DEVICES_HEIGHT: f32 = 28.0;
 
 const PAN_WIDTH: f32 = 90.0;
 const PAN_HEIGHT: f32 = 20.0;
@@ -67,8 +67,8 @@ const PAN_THUMB_W: f32 = 12.0;
 
 const FADER_WIDTH: f32 = 30.0;
 /// Mantener igual a `mixer::VU_HEIGHT` para lectura paralela VU <-> fader.
-/// 88px para que el strip completo quepa en 720p sin scrollbar.
-const FADER_HEIGHT: f32 = 88.0;
+/// 68px para margen en viewports reales (ver `VU_HEIGHT`).
+const FADER_HEIGHT: f32 = 68.0;
 const FADER_THUMB_H: f32 = 12.0;
 const FADER_RAIL_W: f32 = 24.0;
 
@@ -905,7 +905,7 @@ fn fader_vu_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         .w_full()
         .flex_shrink_0()
         .items_center()
-        .gap(px(2.0))
+        .gap(px(1.0))
         .child(section_label("FADER & VU METER"))
         .child(
             h_flex()
@@ -960,7 +960,7 @@ fn channel_strip(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     v_flex()
         .w_full()
         .flex_shrink_0()
-        .gap(px(2.0))
+        .gap(px(1.0))
         .child(strip_separator())
         .child(devices_section(snap, id_prefix))
         .child(strip_separator())
