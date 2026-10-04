@@ -147,6 +147,17 @@ pub enum OpenLiveView {
     ArrangerView,
 }
 
+/// Vista central del modo OpenStudio (flujo producción / timeline).
+///
+/// Son dos vistas independientes sobre el mismo `studio_tracks`: la Playlist
+/// compone clips en tiempo y el Arranger/Mixer mezcla canales. `Tab` / `F9`
+/// conmutan entre ambas sin salir nunca de OpenStudio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenStudioView {
+    Playlist,
+    ArrangerMixer,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanMode {
     Stereo,
@@ -251,11 +262,9 @@ pub struct AppState {
     pub sig_input: Entity<InputState>,
     pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
     pub show_dsp_rack: bool,
-    /// OpenStudio: el mixer lateral y la Playlist / Timeline son vistas
-    /// independientes sobre el mismo `studio_tracks`. Con `true` van
-    /// divididas (mixer a la izquierda, timeline flexible a la derecha);
-    /// con `false` la Playlist ocupa todo el ancho para composición.
-    pub show_studio_mixer: bool,
+    /// Vista central activa en OpenStudio (`Tab` / `F9` conmutan entre la
+    /// Playlist / Timeline y el Arranger / Mixer sin cambiar de modo).
+    pub openstudio_view: OpenStudioView,
     pub show_about: bool,
     pub is_recording: bool,
     pub show_explorer: bool,
@@ -406,33 +415,33 @@ pub struct HikaruApp {
     pub wavetable_viewport: WavetableViewportHandle,
 }
 
+/// Conmuta la vista central según el modo activo, sin cambiar de modo:
+///
+/// - OpenLive: Session Matrix ↔ Arranger View.
+/// - OpenStudio: Playlist / Timeline ↔ Arranger / Mixer.
+///
+/// `Tab` y `F9` comparten este comportamiento contextual.
+pub fn toggle_central_view(state: &mut AppState) {
+    match state.mode {
+        AppMode::OpenLive => {
+            state.openlive_view = match state.openlive_view {
+                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
+                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+            };
+        }
+        AppMode::OpenStudio => {
+            state.openstudio_view = match state.openstudio_view {
+                OpenStudioView::Playlist => OpenStudioView::ArrangerMixer,
+                OpenStudioView::ArrangerMixer => OpenStudioView::Playlist,
+            };
+        }
+    }
+}
+
 pub fn handle_global_key(key: &str, cx: &mut App) {
     match key {
-        "tab" => {
-            update_state(cx, |state| match state.mode {
-                AppMode::OpenLive => {
-                    state.openlive_view = match state.openlive_view {
-                        OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
-                        OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
-                    };
-                }
-                AppMode::OpenStudio => {
-                    state.mode = AppMode::OpenLive;
-                }
-            });
-        }
-        "f9" => {
-            // El dock del mixer ya no existe (sus faders/VU viven en el
-            // channel strip de cada columna del Arranger): F9 conmuta la
-            // vista de sesión y el Arranger en OpenLive.
-            update_state(cx, |state| {
-                if state.mode == AppMode::OpenLive {
-                    state.openlive_view = match state.openlive_view {
-                        OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
-                        OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
-                    };
-                }
-            });
+        "tab" | "f9" => {
+            update_state(cx, toggle_central_view);
         }
         "f10" => {
             update_state(cx, |state| {
@@ -550,7 +559,7 @@ impl HikaruApp {
             sig_input: sig_input.clone(),
             global_loop_synced_to_engine: None,
             show_dsp_rack: false,
-            show_studio_mixer: true,
+            openstudio_view: OpenStudioView::Playlist,
             show_about: false,
             is_recording: false,
             show_explorer: false,

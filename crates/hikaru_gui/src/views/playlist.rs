@@ -1032,19 +1032,27 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             )
             .into_any_element(),
     );
-    // Navegación: scroll horizontal independiente + scroll vertical con id
-    // estable (`playlist_scroll`) para sincronizar con el mixer lateral por
-    // índice de fila (misma constante TRACK_ROW_H en ambos paneles).
+    // Navegación: scroll vertical externo + horizontal interno (mismo patrón
+    // anidado que el arranger). La columna de headers viaja DENTRO del
+    // contenido, así cada cabecera queda pegada a su fila haya scroll o no;
+    // la correspondencia vertical con el mixer es por índice de fila (misma
+    // constante TRACK_ROW_H en ambos paneles).
     all.push(
         div()
             .flex_1()
-            .overflow_x_scrollbar()
-            .id("playlist_scroll")
+            .min_h_0()
+            .overflow_y_scrollbar()
+            .id("playlist_vscroll")
             .child(
                 div()
-                    .w(px(canvas_w))
-                    .h(px(canvas_h))
-                    .relative()
+                    .w_full()
+                    .overflow_x_scrollbar()
+                    .id("playlist_scroll")
+                    .child(
+                        div()
+                            .w(px(canvas_w))
+                            .h(px(canvas_h))
+                            .relative()
                     // Columna fija de headers: apilada en vertical desde la
                     // regla, una cabecera de `TRACK_ROW_H` por fila — misma
                     // altura y mismo `top` que su fila de la grilla.
@@ -1062,6 +1070,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .when_some(drop_handler, |v, h| v.child(h))
                     .child(seek_zone.into_any_element())
                     .child(playhead_canvas.into_any_element()),
+                    )
             )
             .into_any_element(),
     );

@@ -107,6 +107,16 @@ impl Track {
     }
 }
 
+/// Clona la cadena de DEVICES de una pista para compartirla con otro canal.
+///
+/// Los slots son valores `Clone` (sin aliasing): la copia es transparente
+/// entre canales de OpenLive y OpenStudio porque ambos trabajan sobre el
+/// mismo tipo [`Track`]. El canal destino procesa sus clips con la cadena
+/// recibida sin más pasos.
+pub fn duplicate_device_chain(slots: &[DspSlot]) -> Vec<DspSlot> {
+    slots.to_vec()
+}
+
 // =========================================================================
 // CURVAS DE dB
 // =========================================================================

@@ -1,17 +1,17 @@
 // crates/hikaru_gui/tests/studio_playlist_layout.rs
 //
-// Layout del modo OpenStudio: Vista de Mezcla + Vista de Arreglo.
+// Vistas centrales de OpenStudio: Playlist / Timeline vs Arranger / Mixer.
 //
-// La Playlist / Timeline es SÓLO tiempo (ruler, filas limpias, grilla,
-// clips, playhead): ningún control de mezcla (S/M/R, faders, dB, pan) puede
-// sangrar adentro del lienzo. La mezcla vive en `studio_mixer_panel` y el
-// botón MIXER conmuta entre pantalla dividida y timeline a todo el ancho.
+// `Tab` / `F9` conmutan entre ambas SIN cambiar de modo (`toggle_central_view`);
+// en OpenLive conmutan Session Matrix ↔ Arranger. La Playlist es SÓLO tiempo
+// (ruler, filas limpias, grilla, clips, playhead): ningún control de mezcla
+// (S/M/R, faders, dB, pan) puede sangrar adentro del lienzo.
 //
-// Regresión 1: el `Scrollable` de gpui-component consume el `id` de su
-// contenido y no debe usarse directamente como flex-item del layout —
-// hacerlo encogía el panel a su padding (12px) y empujaba toda la playlist
-// fuera de la ventana (x ≈ 1280). Por eso el scroll vive en un hijo interno
-// y el flex-item es un `div` plano (mismo patrón que `arranger_columns`).
+// Regresión layout: el `Scrollable` de gpui-component consume el `id` de su
+// contenido y no debe usarse directamente como flex-item — hacerlo encogía el
+// panel a su padding (12px) y empujaba la vista fuera de la ventana. Por eso
+// el scroll vive en un hijo interno y el flex-item es un `div` plano (mismo
+// patrón que `arranger_columns`).
 
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
@@ -19,8 +19,9 @@ use std::sync::Arc;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{px, size, AppContext, Context, TestAppContext, Window};
 
-use hikaru_gui::app::{AppMode, HikaruApp};
+use hikaru_gui::app::{AppMode, HikaruApp, OpenLiveView, OpenStudioView};
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
+use hikaru_gui::views::mixer::{duplicate_device_chain, DspSlot};
 use hikaru_gui::views::playlist::{ClipType, PlaylistClip};
 
 fn test_app(window: &mut Window, cx: &mut Context<HikaruApp>) -> HikaruApp {
@@ -53,50 +54,63 @@ fn open_studio(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<HikaruApp> {
     handle
 }
 
-/// En OpenStudio la Playlist / Timeline comparte el área central con el
-/// mixer lateral y queda visible dentro de la ventana, sin controles de
-/// mezcla adentro del lienzo temporal.
+fn open_live_arranger(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<HikaruApp> {
+    cx.update(gpui_kit::init);
+    let handle = cx.add_window(|window, cx| test_app(window, cx));
+    cx.simulate_window_resize(handle.into(), size(px(1280.0), px(720.0)));
+    cx.update_window(handle.into(), |view, _, cx| {
+        let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+        app.update(cx, |app, cx| {
+            app.state.update(cx, |s, cx| {
+                s.mode = AppMode::OpenLive;
+                s.openlive_view = OpenLiveView::ArrangerView;
+                cx.notify();
+            });
+        });
+    })
+    .unwrap();
+    handle
+}
+
+fn studio_view(
+    handle: gpui_kit::WindowHandle<HikaruApp>,
+    cx: &mut TestAppContext,
+) -> (AppMode, OpenStudioView) {
+    cx.update_window(handle.into(), |view, _, cx| {
+        let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+        app.update(cx, |app, cx| {
+            let st = app.state.read(cx);
+            (st.mode, st.openstudio_view)
+        })
+    })
+    .unwrap()
+}
+
+/// Vista default de OpenStudio: Playlist a todo el ancho, sin mixer y sin
+/// controles de mezcla adentro del lienzo temporal.
 #[gpui_kit::gpui::test]
-fn openstudio_playlist_panel_is_visible_beside_mixer(cx: &mut TestAppContext) {
+fn openstudio_defaults_to_full_width_playlist(cx: &mut TestAppContext) {
     let handle = open_studio(cx);
+    assert_eq!(studio_view(handle, cx).1, OpenStudioView::Playlist);
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
         let area = window.find("arranger_columns").bounds();
-        let mixer = window.find("studio_mixer_panel").bounds();
         let panel = window.find("studio_playlist_panel").bounds();
         println!(
-            "studio layout: área {:.0}x{:.0}, mixer x={:.0} w={:.0}, playlist x={:.0} w={:.0}",
+            "studio playlist: área {:.0}x{:.0}, panel x={:.0} w={:.0}",
             area.size.width.as_f32(),
             area.size.height.as_f32(),
-            mixer.origin.x.as_f32(),
-            mixer.size.width.as_f32(),
             panel.origin.x.as_f32(),
             panel.size.width.as_f32(),
         );
-        // El mixer lateral conserva su ancho de columnas…
         assert!(
-            mixer.size.width.as_f32() > 200.0,
-            "mixer lateral colapsado: {:?}",
-            mixer.size.width
-        );
-        // …y la playlist ocupa el resto (a 1280, más de 400px)…
-        assert!(
-            panel.size.width.as_f32() > 400.0,
-            "panel playlist colapsado (se vio de 12px): {:?}",
-            panel.size.width
-        );
-        // …empezando donde termina el mixer, no fuera de la ventana.
-        let mixer_right = mixer.origin.x.as_f32() + mixer.size.width.as_f32();
-        assert!(
-            (panel.origin.x.as_f32() - mixer_right).abs() < 2.0,
-            "playlist desalineada del mixer: panel x={:.0}, mixer right={:.0}",
-            panel.origin.x.as_f32(),
-            mixer_right
+            panel.origin.x.as_f32() < 2.0,
+            "la playlist debería empezar en x≈0: {:?}",
+            panel.origin
         );
         assert!(
-            panel.origin.x.as_f32() + panel.size.width.as_f32() <= area.size.width.as_f32() + 1.0,
-            "playlist fuera de la ventana: origen {:?} tamaño {:?}",
-            panel.origin,
+            panel.size.width.as_f32() >= area.size.width.as_f32() - 24.0,
+            "la playlist debería ocupar casi todo el ancho: {:?}",
             panel.size
         );
         // Cabecera (zoom/quantize), fila limpia y pie visibles y en ventana.
@@ -116,8 +130,95 @@ fn openstudio_playlist_panel_is_visible_beside_mixer(cx: &mut TestAppContext) {
                 "sangrado del mixer en la playlist: {id} no debería existir"
             );
         }
+        // En la vista Playlist no hay consola de mezcla en el árbol.
+        assert!(
+            window.try_find("studio_mixer_panel").is_none(),
+            "el mixer no debería renderizarse en la vista Playlist"
+        );
     })
     .unwrap();
+}
+
+/// `Tab` en OpenStudio alterna Playlist ↔ Arranger/Mixer sin salir del modo.
+#[gpui_kit::gpui::test]
+fn openstudio_tab_toggles_playlist_and_mixer(cx: &mut TestAppContext) {
+    let handle = open_studio(cx);
+    assert_eq!(
+        studio_view(handle, cx),
+        (AppMode::OpenStudio, OpenStudioView::Playlist)
+    );
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        window.press("tab", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        studio_view(handle, cx),
+        (AppMode::OpenStudio, OpenStudioView::ArrangerMixer),
+        "Tab debería llevar al mixer SIN salir de OpenStudio"
+    );
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        // Consola visible a todo el ancho, playlist fuera del árbol.
+        let panel = window.find("studio_mixer_panel").bounds();
+        assert!(panel.size.width.as_f32() > 400.0, "mixer colapsado");
+        assert!(
+            window.try_find("studio_playlist_panel").is_none(),
+            "la playlist no debería renderizarse en la vista Mixer"
+        );
+        let rec = window.try_find("arr_studio_1_rec").expect("strip TRK 01");
+        assert!(rec.visible(), "canal TRK 01 no visible en el mixer");
+        window.press("tab", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        studio_view(handle, cx),
+        (AppMode::OpenStudio, OpenStudioView::Playlist),
+        "el segundo Tab debería volver a la Playlist"
+    );
+}
+
+/// `F9` comparte el comportamiento contextual de `Tab` en OpenStudio.
+#[gpui_kit::gpui::test]
+fn openstudio_f9_matches_tab(cx: &mut TestAppContext) {
+    let handle = open_studio(cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        window.press("f9", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        studio_view(handle, cx),
+        (AppMode::OpenStudio, OpenStudioView::ArrangerMixer),
+        "F9 debería llevar al mixer SIN salir de OpenStudio"
+    );
+}
+
+/// `Tab` en OpenLive sigue alternando Session Matrix ↔ Arranger sin
+/// tocar OpenStudio.
+#[gpui_kit::gpui::test]
+fn openlive_tab_still_toggles_matrix_and_arranger(cx: &mut TestAppContext) {
+    let handle = open_live_arranger(cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        window.press("tab", cx);
+    })
+    .unwrap();
+    let (mode, live_view) = cx
+        .update_window(handle.into(), |view, _, cx| {
+            let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+            app.update(cx, |app, cx| {
+                let st = app.state.read(cx);
+                (st.mode, st.openlive_view)
+            })
+        })
+        .unwrap();
+    assert_eq!(mode, AppMode::OpenLive);
+    assert_eq!(
+        live_view,
+        OpenLiveView::SessionMatrix,
+        "Tab en OpenLive debería volver a la Session Matrix"
+    );
 }
 
 /// Un clip que arranca en el tick 0 se renderiza a la derecha de la columna
@@ -165,15 +266,19 @@ fn openstudio_clip_at_tick_zero_starts_right_of_headers(cx: &mut TestAppContext)
     .unwrap();
 }
 
-/// El botón MIXER oculta la consola y la Playlist pasa a todo el ancho.
+/// Clic en la cabecera de la Playlist selecciona el canal del Mixer lateral:
+/// `selected_track_index` es la única fuente que miran el strip (`S/M/R`,
+/// faders, DEVICES) y el DSP Rack (`safe_track_index`), así que un clic
+/// deja el canal listo para editar.
 #[gpui_kit::gpui::test]
-fn openstudio_mixer_toggle_gives_playlist_full_width(cx: &mut TestAppContext) {
+fn openstudio_playlist_header_click_selects_mixer_channel(cx: &mut TestAppContext) {
     let handle = open_studio(cx);
+    // Selección inicial en el master para que el clic cambie algo observable.
     cx.update_window(handle.into(), |view, _, cx| {
         let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
         app.update(cx, |app, cx| {
             app.state.update(cx, |s, cx| {
-                s.show_studio_mixer = false;
+                s.selected_track_index = 0;
                 cx.notify();
             });
         });
@@ -181,26 +286,53 @@ fn openstudio_mixer_toggle_gives_playlist_full_width(cx: &mut TestAppContext) {
     .unwrap();
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
-        assert!(
-            window.try_find("studio_mixer_panel").is_none(),
-            "el mixer debería estar oculto con show_studio_mixer=false"
-        );
-        let area = window.find("arranger_columns").bounds();
-        let panel = window.find("studio_playlist_panel").bounds();
-        assert!(
-            panel.origin.x.as_f32() < 2.0,
-            "playlist debería empezar en x≈0: {:?}",
-            panel.origin
-        );
-        assert!(
-            panel.size.width.as_f32() >= area.size.width.as_f32() - 24.0,
-            "playlist debería ocupar casi todo el ancho: {:?} vs área {:?}",
-            panel.size,
-            area.size
-        );
-        // La cabecera de la playlist sigue operativa a todo el ancho.
-        let zoom = window.try_find("pl_zoom_in").expect("zoom debe existir");
-        assert!(zoom.visible(), "zoom no visible a todo el ancho");
+        window.click("pl_row_1", cx);
     })
     .unwrap();
+    let (selected, safe, name) = cx
+        .update_window(handle.into(), |view, _, cx| {
+            let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+            app.update(cx, |app, cx| {
+                let st = app.state.read(cx);
+                (
+                    st.selected_track_index,
+                    st.safe_track_index(),
+                    st.tracks()[st.safe_track_index()].name.clone(),
+                )
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        selected, 1,
+        "el clic en TRK 01 debería seleccionar el canal 1 (quedó en {selected})"
+    );
+    assert_eq!(safe, 1, "el DSP Rack debería resolver el mismo canal");
+    assert!(
+        name.contains("TRACK 01"),
+        "el canal seleccionado debería ser TRACK 01 (es {name})"
+    );
+}
+
+/// La cadena de DEVICES se comparte entre canales por valor: clonar la de
+/// una pista la deja lista en el destino (mismo u otro modo) con nombres,
+/// bypass y orden intactos.
+#[test]
+fn device_chain_duplicates_transparently_across_channels() {
+    let mut src = DspSlot::new(0, "OpenWavetable".to_string());
+    src.active = true;
+    let mut fx = DspSlot::new(1, "OpenSpectralFX".to_string());
+    fx.active = false;
+    let chain = vec![src, fx];
+
+    let copy = duplicate_device_chain(&chain);
+
+    assert_eq!(copy.len(), 2);
+    assert_eq!(copy[0].name, "OpenWavetable");
+    assert!(copy[0].active);
+    assert_eq!(copy[1].name, "OpenSpectralFX");
+    assert!(!copy[1].active);
+    // Sin aliasing: mutar la copia no toca el origen.
+    let mut mutated = copy;
+    mutated[0].name = "Otro".to_string();
+    assert_eq!(chain[0].name, "OpenWavetable");
 }

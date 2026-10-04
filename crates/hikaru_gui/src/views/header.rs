@@ -155,7 +155,10 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
     let is_recording = app.is_recording;
     let is_live = app.mode == AppMode::OpenLive;
     let is_studio = app.mode == AppMode::OpenStudio;
-    let show_arranger = is_live && app.openlive_view == OpenLiveView::ArrangerView;
+    // `ARRANGER (F9)` es contextual como `Tab`/`F9`: en OpenLive indica el
+    // Arranger y en OpenStudio el Arranger/Mixer (ver `toggle_central_view`).
+    let show_arranger = (is_live && app.openlive_view == OpenLiveView::ArrangerView)
+        || (is_studio && app.openstudio_view == crate::app::OpenStudioView::ArrangerMixer);
     let show_dsp_rack = app.show_dsp_rack;
     let show_explorer = app.show_explorer;
     let bpm = transport.bpm;
@@ -410,12 +413,7 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
                 .on_click(move |_, _, cx| {
                     let st = state(cx);
                     st.update(cx, |state, cx| {
-                        if state.mode == AppMode::OpenLive {
-                            state.openlive_view = match state.openlive_view {
-                                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
-                                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
-                            };
-                        }
+                        crate::app::toggle_central_view(state);
                         cx.notify();
                     });
                 }),

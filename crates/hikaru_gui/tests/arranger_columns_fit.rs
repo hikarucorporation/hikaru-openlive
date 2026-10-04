@@ -69,6 +69,11 @@ fn set_mode(
                 if live_view_arranger {
                     s.openlive_view = hikaru_gui::app::OpenLiveView::ArrangerView;
                 }
+                if mode == AppMode::OpenStudio {
+                    // La consola de mezcla vive en su propia vista
+                    // (`OpenStudioView::ArrangerMixer`, reachable con Tab/F9).
+                    s.openstudio_view = hikaru_gui::app::OpenStudioView::ArrangerMixer;
+                }
                 cx.notify();
             });
         });

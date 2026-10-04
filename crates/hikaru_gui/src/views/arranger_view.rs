@@ -1502,7 +1502,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         selected_track,
         selected_slot,
         track_count,
-        show_studio_mixer,
+        openstudio_view,
     ) = {
         let app = state(cx).read(cx);
         let track_names: Vec<String> = app
@@ -1658,7 +1658,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             app.selected_track_index,
             app.selected_slot_index,
             app.matrix_state.tracks.len() + app.studio_tracks.len(),
-            app.show_studio_mixer,
+            app.openstudio_view,
         )
     };
 
@@ -1765,23 +1765,16 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 }),
         )
         .child(Label::new(format!("TOTAL: {}", track_count)).text_xs())
-        // OpenStudio: conmuta la consola de mezcla. Las vistas son
-        // independientes — ocultar el mixer deja la Playlist / Timeline a
-        // todo el ancho sin que nada de un módulo sangren adentro del otro.
+        // OpenStudio: la vista central conmuta con `Tab` / `F9`
+        // (`OpenStudioView::Playlist` ↔ `OpenStudioView::ArrangerMixer`);
+        // este rótulo sólo indica cuál está activa.
         .when(!is_live, |t| {
             t.child(
-                Button::new("arr_toggle_mixer")
-                    .rounded(ButtonRounded::None)
-                    .label("MIXER")
-                    .compact()
-                    .when(show_studio_mixer, |b| b.text_color(rgb(0xFF6E00)))
-                    .on_click(move |_, _, cx| {
-                        let st = state(cx);
-                        st.update(cx, |state, cx| {
-                            state.show_studio_mixer = !state.show_studio_mixer;
-                            cx.notify();
-                        });
-                    }),
+                Label::new(match openstudio_view {
+                    crate::app::OpenStudioView::Playlist => "VIEW: PLAYLIST",
+                    crate::app::OpenStudioView::ArrangerMixer => "VIEW: MIXER",
+                })
+                .text_xs(),
             )
         })
         .into_any_element();
@@ -1896,87 +1889,86 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     };
 
     // -------------------------------------------------------------
-    // Layout OpenStudio: Vista de Mezcla + Vista de Arreglo (independientes)
+    // Layout OpenStudio: vistas EXCLUSIVAS (`Tab` / `F9` conmutan).
     // -------------------------------------------------------------
-    // Jerarquía:
-    //   - Vista de Mezcla (`studio_mixer_panel`): consola de channel strips
-    //     verticales — faders, pan, S/M/R, devices, routing. Vive acá y sólo
-    //     acá.
-    //   - Vista de Arreglo (`studio_playlist_panel` → `playlist::render`):
-    //     lienzo temporal — ruler, filas limpias, grilla, clips, playhead.
-    //     No contiene ningún control de mezcla.
-    // Ambas leen el mismo `studio_tracks`: añadir/quitar pistas actualiza
-    // filas del grid y canales a la vez. El botón MIXER de la toolbar
-    // (`show_studio_mixer`) conmuta la consola: oculta, la Playlist ocupa
-    // todo el ancho para composición.
+    // Jerarquía (`OpenStudioView`):
+    //   - Playlist: lienzo temporal a todo el ancho (`studio_playlist_panel`
+    //     → `playlist::render`): ruler, filas limpias, grilla, clips,
+    //     playhead. No contiene ningún control de mezcla.
+    //   - ArrangerMixer: consola de channel strips (`studio_mixer_panel`):
+    //     faders, pan, S/M/R, devices, routing, waveform. No contiene grilla.
+    // Ambas leen el mismo `studio_tracks`: la selección y los DEVICES se
+    // comparten. Los flex-items son `div` planos y cada scroll vive en un
+    // hijo interno (el `Scrollable` consume el `id` de su contenido).
     if !is_live {
         let mixer_columns = columns;
+        // Wrapper observable del área (mismo `id` que en OpenLive para el
+        // harness `arranger_columns_fit`): la medición vive acá porque el
+        // `Scrollable` interno sobrescribe el id de su contenido.
+        let area = div()
+            .id("arranger_columns")
+            .test_support()
+            .flex_1()
+            .w_full()
+            .min_h_0()
+            .flex()
+            .flex_col();
+        if openstudio_view == crate::app::OpenStudioView::Playlist {
+            return v_flex()
+                .id("arranger_view")
+                .size_full()
+                .bg(theme::WINDOW_BG)
+                .child(toolbar)
+                .child(
+                    area.child(
+                        div()
+                            .id("studio_playlist_panel")
+                            .test_support()
+                            .flex_1()
+                            .w_full()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .p(px(6.0))
+                            .child(playlist::render(cx)),
+                    ),
+                )
+                .into_any_element();
+        }
         return v_flex()
             .id("arranger_view")
             .size_full()
             .bg(theme::WINDOW_BG)
             .child(toolbar)
-            // Wrapper observable del área (mismo `id` que en OpenLive para el
-            // harness `arranger_columns_fit`): la medición vive acá porque el
-            // `Scrollable` interno sobrescribe el id de su contenido.
             .child(
-                div()
-                    .id("arranger_columns")
-                    .test_support()
-                    .flex_1()
-                    .w_full()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        h_flex()
-                            .id("studio_playlist_layout")
-                            .test_support()
-                            .flex_1()
-                            .w_full()
-                            .min_h_0()
-                            .overflow_hidden()
-                            // Vista de Mezcla: ancho fijo según nº de pistas,
-                            // scroll vertical propio. El flex-item es un `div`
-                            // plano (el `Scrollable` consume el `id` de su
-                            // contenido, así que el scroll vive en el hijo).
-                            .when(show_studio_mixer, |l| {
-                                l.child(
+                area.child(
+                    div()
+                        .id("studio_mixer_panel")
+                        .test_support()
+                        .flex_1()
+                        .w_full()
+                        .min_h_0()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .h_full()
+                                .w_full()
+                                .overflow_y_scrollbar()
+                                .child(
                                     div()
-                                        .id("studio_mixer_panel")
-                                        .test_support()
-                                        .flex_shrink_0()
-                                        .h_full()
+                                        .w_full()
+                                        .overflow_x_scrollbar()
+                                        .p(px(6.0))
                                         .child(
-                                            div()
-                                                .h_full()
-                                                .w_full()
-                                                .overflow_y_scrollbar()
-                                                .p(px(6.0))
-                                                .child(
-                                                    h_flex()
-                                                        .gap(px(PAD_GAP))
-                                                        .items_start()
-                                                        .flex_shrink_0()
-                                                        .children(mixer_columns),
-                                                ),
+                                            h_flex()
+                                                .gap(px(PAD_GAP))
+                                                .items_start()
+                                                .flex_shrink_0()
+                                                .children(mixer_columns),
                                         ),
-                                )
-                            })
-                            // Vista de Arreglo: panel flexible (ruler + grid +
-                            // clips + scrollbar horizontal y zoom propios).
-                            .child(
-                                div()
-                                    .id("studio_playlist_panel")
-                                    .test_support()
-                                    .flex_1()
-                                    .h_full()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .p(px(6.0))
-                                    .child(playlist::render(cx)),
-                            ),
-                    ),
+                                ),
+                        ),
+                ),
             )
             .into_any_element();
     }
