@@ -152,6 +152,12 @@ pub struct PlaylistState {
     /// `None` = sin gesto. Global por la misma razón que `clip_drag`: la
     /// grilla se reconstruye cada frame.
     pub marquee: Option<MarqueeState>,
+    /// Gesto de recorte de un borde de clip en curso. `None` = sin gesto.
+    /// Global por la misma razón que `clip_drag`/`marquee`.
+    pub trim_drag: Option<TrimDrag>,
+    /// Clip cuyo borde está bajo el cursor y por cuál lado, para pintar el
+    /// cursor `e-resize`/`w-resize` y resaltar el handle.
+    pub trim_hover: Option<(usize, TrimEdge)>,
 }
 
 impl Default for PlaylistState {
@@ -181,6 +187,8 @@ impl Default for PlaylistState {
             clip_drag: None,
             clip_click_suppress: false,
             marquee: None,
+            trim_drag: None,
+            trim_hover: None,
         }
     }
 }
@@ -396,6 +404,159 @@ pub fn clamped_row_h(h: f32) -> f32 {
     h.clamp(MIN_ROW_H, MAX_ROW_H)
 }
 
+/// Inicia un gesto de recorte al agarrar un borde del clip.
+///
+/// Congela los valores originales (para arrastre incremental e inversión de
+/// dirección sin zona muerta) y el offset del cursor respecto del borde.
+fn start_clip_trim(cx: &mut App, clip_id: usize, edge: TrimEdge, cursor_x: f32, edge_x: f32) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some((_, clip)) = s.playlist_state.clips.iter().find(|(_, c)| c.id == clip_id) else {
+            return;
+        };
+        let (orig_offset, orig_total) = match clip.clip_type {
+            ClipType::Audio {
+                sample_offset_ticks,
+                total_sample_ticks,
+                ..
+            } => (sample_offset_ticks, total_sample_ticks),
+            // Pattern/MIDI no tienen audio que recortar: no hay gesto.
+            _ => return,
+        };
+        s.playlist_state.trim_drag = Some(TrimDrag {
+            clip_id,
+            edge,
+            orig_edge_tick: match edge {
+                TrimEdge::Left => clip.start_tick,
+                TrimEdge::Right => clip.start_tick.saturating_add(clip.duration_ticks),
+            },
+            orig_start: clip.start_tick,
+            orig_duration: clip.duration_ticks,
+            orig_offset,
+            orig_total,
+            grab_dx_px: cursor_x - edge_x,
+            moved: false,
+        });
+        cx.notify();
+    });
+}
+
+/// Aplica un paso del recorte: snap del borde al cursor, en vivo.
+///
+/// `zone` son los bounds de la grilla para pasar de px de ventana a ticks.
+fn update_clip_trim(cx: &mut App, cursor_x: f32, zone: [f32; 4]) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some(drag) = s.playlist_state.trim_drag else {
+            return;
+        };
+        let ppqn = s.playlist_state.ppqn.max(1);
+        let zoom = s.playlist_state.zoom_x;
+        let grid = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
+        let min_ticks = min_clip_ticks(ppqn);
+        // Cursor menos agarre → px relativos a la grilla → ticks → snap.
+        let rel_x = (cursor_x - drag.grab_dx_px - zone[0]).max(0.0);
+        let edge_tick = snap_ticks(px_to_ticks(rel_x, zoom), grid);
+        let Some((_, clip)) = s.playlist_state.clips.iter_mut().find(|(_, c)| c.id == drag.clip_id)
+        else {
+            s.playlist_state.trim_drag = None;
+            return;
+        };
+        let (start, dur, offset) = trim_apply(
+            drag.orig_start,
+            drag.orig_duration,
+            drag.orig_offset,
+            drag.orig_total,
+            drag.edge,
+            edge_tick,
+            grid,
+            min_ticks,
+        );
+        if clip.start_tick == start && clip.duration_ticks == dur {
+            return;
+        }
+        clip.start_tick = start;
+        clip.duration_ticks = dur;
+        if let ClipType::Audio {
+            sample_offset_ticks,
+            ..
+        } = &mut clip.clip_type
+        {
+            *sample_offset_ticks = offset;
+        }
+        if let Some(d) = s.playlist_state.trim_drag.as_mut() {
+            d.moved = true;
+        }
+        cx.notify();
+    });
+}
+
+/// Cierra el gesto de recorte y sincroniza el clip con el motor.
+///
+/// Se manda un único `UpdateClipBounds` al soltar (no por frame), igual que el
+/// drag de clips: el motor así no reprograma la Scheduler en cada mousemove.
+fn finish_clip_trim(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some(drag) = s.playlist_state.trim_drag.take() else {
+            return;
+        };
+        if drag.moved {
+            // El gesto de trim no debe disparar la re-selección del `on_click`.
+            s.playlist_state.clip_click_suppress = true;
+            let ppqn = s.playlist_state.ppqn.max(1);
+            let bpm = s.transport.bpm;
+            let found = s
+                .playlist_state
+                .clips
+                .iter()
+                .find(|(_, c)| c.id == drag.clip_id)
+                .map(|(k, c)| (*k, c.start_tick, c.duration_ticks, c.clip_type.clone()));
+            if let Some((key, start, dur, clip_type)) = found {
+                if let ClipType::Audio {
+                    sample_offset_ticks, ..
+                } = clip_type
+                {
+                    s.audio_proxy.send(GuiCommand::UpdateClipBounds {
+                        clip_id: drag.clip_id,
+                        track_index: key,
+                        scene_index: 0,
+                        position_secs: ticks_to_secs_precise(start, ppqn, bpm),
+                        duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
+                        offset_secs: ticks_to_secs_precise(sample_offset_ticks, ppqn, bpm),
+                    });
+                }
+            }
+        }
+        cx.notify();
+    });
+}
+
+/// Handle visual de un borde de clip (indicador de que se puede recortar).
+///
+/// Es decorativo: la zona de agarre real la decide `trim_edge_at` en el
+/// `mouse_down`/`mouse_move` del clip, así el hit test no depende del layout
+/// de estos hijos. Se resalta (más ancho y claro) cuando el cursor está encima
+/// o cuando ese borde está siendo arrastrado.
+fn clip_edge_handle(id: String, side: TrimEdge, active: bool) -> AnyElement {
+    let w = if active { 3.0 } else { 2.0 };
+    let col = if active {
+        rgb(0xFFFFFF)
+    } else {
+        rgba(0xFFFFFF80)
+    };
+    let base = div()
+        .id(SharedString::from(id))
+        .test_support()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .w(px(w))
+        .bg(col);
+    base.left(px(if side == TrimEdge::Left { 0.0 } else { -w }))
+        .into_any_element()
+}
+
 /// Origen de la grilla (panel temporal) en coords de VENTANA, a partir de los
 /// bounds medidos de la zona de seek.
 ///
@@ -552,6 +713,151 @@ pub fn handle_edit_shortcut(key: &str, shift: bool, cx: &mut App) -> bool {
         }
         _ => false,
     }
+}
+
+// =========================================================================
+// RECORTE DE CLIPS (TRIMMING) EN LOS BORDES
+// =========================================================================
+
+/// Ancho en px de la zona de agarre de cada borde del clip (izq/der).
+///
+/// 6px es la zona "de facility" de un DAW: entra sin Require Precisión pero
+/// todavía es fácil de(err)ar fuera porque el resto del clip es superficie de
+/// arrastre. Los handles dibujados son más angostos que esta zona para no
+/// tapar el waveform.
+pub const TRIM_EDGE_PX: f32 = 6.0;
+
+/// Duración mínima de un clip en ticks. Nunca 0: un clip de duración 0 no se
+/// puede renderizar ni recortar. Es la unidad del snap más gruesa dividida.
+pub fn min_clip_ticks(ppqn: u64) -> u64 {
+    (ppqn.max(1) / 4).max(1)
+}
+
+/// Qué borde del clip se está arrastrando.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimEdge {
+    Left,
+    Right,
+}
+
+impl TrimEdge {
+    pub fn cursor(self) -> CursorStyle {
+        match self {
+            TrimEdge::Left => CursorStyle::ResizeLeft,
+            TrimEdge::Right => CursorStyle::ResizeRight,
+        }
+    }
+}
+
+/// Gesto de recorte en curso: mantiene los valores ORIGINALES del clip para
+/// que el arrastre sea incremental (como el drag de clips) y para poder
+/// invertir la dirección en un borde sin zona muerta.
+///
+/// `grab_dx_px` es la distancia entre el cursor y el borde agarrado, para que
+/// el clip no salte al agarrarlo fuera del borde.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrimDrag {
+    pub clip_id: usize,
+    pub edge: TrimEdge,
+    /// Ticks del borde agarrado al iniciar (start si `Left`, end si `Right`).
+    pub orig_edge_tick: u64,
+    /// Start/duración/offset de audio originales.
+    pub orig_start: u64,
+    pub orig_duration: u64,
+    pub orig_offset: u64,
+    pub orig_total: u64,
+    pub grab_dx_px: f32,
+    pub moved: bool,
+}
+
+/// Hit test de los bordes: devuelve el borde agarrable del clip bajo el cursor.
+///
+/// `x` es la posición del cursor en coords de VENTANA; `clip_x/w` también (los
+///中日 los lee `render` del mismo espacio que los eventos). La zona se
+/// extiende un poco más si el clip es angosto que `edge_px`, para que siempre
+/// haya superficie agarrable. Función pura para testear.
+pub fn trim_edge_at(x: f32, clip_x: f32, clip_w: f32, edge_px: f32) -> Option<TrimEdge> {
+    if clip_w <= 0.0 {
+        return None;
+    }
+    // Los bordes están donde están; lo que se expande es la ZONA de agarre
+    // (hacia adentro) cuando el clip es más angosto que 2 zonas, para que
+    // siempre haya superficie agarrable sin mover el borde real.
+    let left = clip_x;
+    let right = clip_x + clip_w;
+    // El centro del clip gana: si `x` cae en ambos bordes, el más cercano.
+    if x >= left && x <= left + edge_px {
+        if x - left <= right - x {
+            return Some(TrimEdge::Left);
+        }
+    }
+    if x >= right - edge_px && x <= right {
+        if right - x <= x - left {
+            return Some(TrimEdge::Right);
+        }
+    }
+    None
+}
+
+/// Resultado de un recorte: `(start_tick, duration_ticks, offset_ticks)`.
+///
+/// `orig_start/dur/offset` son los valores antes del gesto, `edge_tick` el tick
+/// al que se snapió el borde agarrado. Función pura para testear.
+///
+/// - Borde derecho: sólo cambia la duración. Al alargarlo más allá del audio
+///   disponible se recorta contra `max_dur` (fin real del sample), así no
+///   aparece silencio inventado.
+/// - Borde izquierdo: se mueve el inicio del clip Y el offset interno del
+///   audio en la misma cantidad, de modo que el waveform no "salta" dentro del
+///   clip (esto es el trim clásico: el contenido bajo la grilla no se mueve).
+///   No se deja pasar del offset 0 ni del final del audio.
+pub fn trim_apply(
+    orig_start: u64,
+    orig_dur: u64,
+    orig_offset: u64,
+    orig_total: u64,
+    edge: TrimEdge,
+    edge_tick: u64,
+    grid_ticks: u64,
+    min_ticks: u64,
+) -> (u64, u64, u64) {
+    match edge {
+        TrimEdge::Right => {
+            // El largo real del sample es `orig_total`; desde el offset
+            // actual quedan `total - offset` ticks de audio. El fin no puede
+            // pasar de ahí (si no, aparecería silencio inventado).
+            let audio_left = orig_total.saturating_sub(orig_offset);
+            let audio_end = orig_start
+                .saturating_add(audio_left)
+                .max(orig_start.saturating_add(min_ticks));
+            let new_end = edge_tick
+                .max(orig_start.saturating_add(min_ticks))
+                .min(audio_end);
+            let dur = new_end.saturating_sub(orig_start).max(min_ticks);
+            (orig_start, dur, orig_offset)
+        }
+        TrimEdge::Left => {
+            // El offset nunca puede ser negativo (no hay audio antes del
+            // sample) ni pasar del fin del sample.
+            let max_tick = orig_start
+                .saturating_add(orig_dur)
+                .saturating_sub(min_ticks);
+            let new_start = edge_tick.clamp(orig_offset, max_tick);
+            let offset = orig_offset.saturating_add(new_start.saturating_sub(orig_start));
+            let dur = orig_start
+                .saturating_add(orig_dur)
+                .saturating_sub(new_start)
+                .max(min_ticks);
+            let _ = (grid_ticks, orig_total);
+            (new_start, dur, offset)
+        }
+    }
+}
+
+/// Extremos temporales de un clip de audio: `(offset_disponible, fin_audio)`.
+/// Funciones puras auxiliares para los tests de trimming.
+pub fn audio_span(offset: u64, total: u64) -> (u64, u64) {
+    (offset, offset.saturating_add(total))
 }
 
 // =========================================================================
@@ -1293,6 +1599,22 @@ fn playlist_track_header_with_selected(
         .into_any_element()
 }
 
+/// Cursor de recorte activo por clip: `clip_id` bajo el que hay un borde
+/// agarrable, o `None` para volver a la flecha.
+///
+/// Vive en `PlaylistState` porque el clip se reconstruye cada frame: el cursor
+/// se decide en el render desde acá (igual que `clip_drag`), no en un closure.
+fn set_clip_edge_cursor(cx: &mut App, clip_id: usize, edge: Option<TrimEdge>) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let next = edge.map(|e| (clip_id, e));
+        if s.playlist_state.trim_hover != next {
+            s.playlist_state.trim_hover = next;
+            cx.notify();
+        }
+    });
+}
+
 /// Finaliza el gesto de arrastre activo, si lo hay.
 ///
 /// Si hubo movimiento y es un clip de audio, sincroniza la nueva posición
@@ -1619,6 +1941,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     // abajo) también lo necesitan para traducir el cursor a ticks/fila.
     let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
     let zone_bounds_clip = zone_bounds.clone();
+    let zone_bounds_move = zone_bounds.clone();
     let zone_bounds_drop = zone_bounds.clone();
     let zone_bounds_rec = zone_bounds.clone();
 
@@ -1634,6 +1957,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let clip_y = ruler_h + track_row as f32 * track_height + 1.0;
         let clip_h = track_height - 2.0;
         let clip_id = clip.id;
+        let clip_x_for_edge = clip_x;
+        let clip_w_for_edge = clip_w;
+        // Cursor/estado de recorte: el handle activo usa el cursor de resize.
+        let trim_state = pl.trim_drag.filter(|d| d.clip_id == clip_id);
+        let hover_edge = pl.trim_hover.filter(|(id, _)| *id == clip_id).map(|(_, e)| e);
+        let edge_cursor = match trim_state {
+            Some(d) => Some(d.edge.cursor()),
+            None => hover_edge.map(|e| e.cursor()),
+        };
 
         // --- ClipView: bloque horizontal con título + contenido ---------------
         // Posición dinámica: x = start_tick × zoom (origen del panel
@@ -1658,6 +1990,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .map(|d| d.clip_id == clip_id)
             .unwrap_or(false);
         let zone_down = zone_bounds_clip.clone();
+        let zone_move = zone_bounds_move.clone();
         let base_clip = div()
             .w(px(clip_w))
             .h(px(clip_h))
@@ -1674,14 +2007,31 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             // Cursor de movimiento durante el arrastre (GPUI no tiene
             // `Move`/`Grabbing`: `ClosedHand` es el equivalente, igual que
             // en el pan del mixer).
-            .cursor(if dragging_this {
+            .cursor(if let Some(c) = edge_cursor {
+                c
+            } else if dragging_this {
                 CursorStyle::ClosedHand
             } else {
                 CursorStyle::Arrow
             })
             .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
                 let zb = zone_down.get();
+                let cursor_x = event.position.x.as_f32();
+                // Los bordes recortan; el resto del clip mueve. Se decide por
+                // posición del cursor, no por hijo: los handles son decorativos
+                // (sólo cursor) y así la zona de agarre no depende del layout.
+                let clip_left = zb[0] + clip_x_for_edge;
+                let clip_right = clip_left + clip_w_for_edge;
+                let hit = trim_edge_at(cursor_x, clip_left, clip_right - clip_left, TRIM_EDGE_PX);
                 let st = state(cx);
+                if let Some(edge) = hit {
+                    let edge_x = match edge {
+                        TrimEdge::Left => clip_left,
+                        TrimEdge::Right => clip_right,
+                    };
+                    start_clip_trim(cx, clip_id, edge, cursor_x, edge_x);
+                    return;
+                }
                 st.update(cx, |s, cx| {
                     let (key, start) = match s
                         .playlist_state
@@ -1702,8 +2052,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         clip_id,
                         orig_tick: start,
                         orig_track: key,
-                        grab_dx_px: event.position.x.as_f32()
-                            - (zb[0] + ticks_to_px(start, zoom)),
+                        grab_dx_px: cursor_x - (zb[0] + ticks_to_px(start, zoom)),
                         grab_dy_px: event.position.y.as_f32()
                             - (zb[1] + row as f32 * row_h + 1.0),
                         moved: false,
@@ -1714,6 +2063,24 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     s.playlist_state.clip_click_suppress = false;
                     cx.notify();
                 });
+            })
+            // Cursor de recorte sobre los bordes: `on_mouse_move` sin botón
+            // cambia el cursor a e-resize/w-resize según el borde más cercano.
+            .on_mouse_move(move |event, _, cx| {
+                if state(cx).read(cx).playlist_state.trim_drag.is_some() {
+                    return;
+                }
+                if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
+                    return;
+                }
+                let zb = zone_move.get();
+                let hit = trim_edge_at(
+                    event.position.x.as_f32(),
+                    zb[0] + clip_x_for_edge,
+                    clip_w_for_edge,
+                    TRIM_EDGE_PX,
+                );
+                set_clip_edge_cursor(cx, clip_id, hit);
             })
             .on_click(move |event, _, cx| {
                 let shift = event.modifiers().shift;
@@ -1793,6 +2160,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .w_full()
                 .h(px(body_h)),
             );
+            // Handles de recorte en los dos bordes (encima del waveform).
+            let clip_el = clip_el
+                .child(clip_edge_handle(
+                    format!("pl_trim_left_{}", clip_id),
+                    TrimEdge::Left,
+                    hover_edge == Some(TrimEdge::Left)
+                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Left),
+                ))
+                .child(clip_edge_handle(
+                    format!("pl_trim_right_{}", clip_id),
+                    TrimEdge::Right,
+                    hover_edge == Some(TrimEdge::Right)
+                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Right),
+                ));
             clip_elems.push(clip_el.into_any_element());
         } else {
             // Pattern / Automation / MIDI: bloques de eventos proporcionales.
@@ -1842,6 +2223,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .w_full()
                 .h(px(body_h)),
             );
+            // Handles de recorte en los dos bordes (encima del waveform).
+            let clip_el = clip_el
+                .child(clip_edge_handle(
+                    format!("pl_trim_left_{}", clip_id),
+                    TrimEdge::Left,
+                    hover_edge == Some(TrimEdge::Left)
+                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Left),
+                ))
+                .child(clip_edge_handle(
+                    format!("pl_trim_right_{}", clip_id),
+                    TrimEdge::Right,
+                    hover_edge == Some(TrimEdge::Right)
+                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Right),
+                ));
             clip_elems.push(clip_el.into_any_element());
         }
     }
@@ -2415,11 +2810,24 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             // y los handlers del propio clip dejarían de
                                             // disparar. Acá cubren toda la zona.
                                             .on_mouse_move(move |event, _, cx| {
+                                                // Un gesto de recorte tiene
+                                                // prioridad: el borde arrastrado
+                                                // manda sobre el drag de clip.
+                                                if state(cx).read(cx).playlist_state.trim_drag.is_some() {
+                                                    let zb = zone_grid_move.get();
+                                                    update_clip_trim(
+                                                        cx,
+                                                        event.position.x.as_f32(),
+                                                        zb,
+                                                    );
+                                                    return;
+                                                }
                                                 if event.pressed_button
                                                     != Some(gpui_kit::MouseButton::Left)
                                                 {
                                                     // Botón soltado fuera: se consolida.
                                                     finish_clip_drag(cx);
+                                                    finish_clip_trim(cx);
                                                     return;
                                                 }
                                                 if state(cx).read(cx).playlist_state.clip_drag.is_none() {
@@ -2437,7 +2845,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             })
                                             .on_mouse_up(
                                                 gpui_kit::MouseButton::Left,
-                                                move |_, _, cx| finish_clip_drag(cx),
+                                                move |_, _, cx| {
+                                                    finish_clip_drag(cx);
+                                                    finish_clip_trim(cx);
+                                                },
                                             )
                                             // Marquee: click DERECHO + arrastrar dibuja
                                             // el rectángulo de selección. El
