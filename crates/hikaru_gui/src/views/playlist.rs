@@ -715,7 +715,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         // y = fila de `track_index` × TRACK_ROW_H (sincronizada con el mixer).
         let title_h = 14.0_f32;
         let body_h = (clip_h - title_h).max(8.0);
-        let clip_bg: Hsla = if is_sel { rgb(0x325078).into() } else { clip.color };
+        // Fondo del clip SIEMPRE opaco (`a = 1.0`): el rectángulo del clip
+        // debe tapar las líneas verticales de la grilla que pasan por detrás.
+        // El orden de pintado (grilla → clips → playhead) pone la grilla
+        // debajo, y la opacidad total garantiza que no se transparente.
+        let mut clip_bg: Hsla = if is_sel { rgb(0x325078).into() } else { clip.color };
+        clip_bg.a = 1.0;
         let clip_border = if is_sel {
             rgb(0xFFC800)
         } else {
@@ -1292,8 +1297,14 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             .children(track_headers),
                     )
                     .children(children)
-                    .children(clip_elems)
+                    // Orden de capas (z-ordering):
+                    //   1. Fondo + líneas verticales de grilla (detrás).
+                    //   2. Clips de audio/MIDI con fondo opaco (tapan la grilla).
+                    //   3. Overlays de drop/seek + playhead (encima de todo).
+                    // Antes `grid_lines` iba DESPUÉS de `clip_elems` y las
+                    // líneas atravesaban la forma de onda del clip.
                     .children(grid_lines)
+                    .children(clip_elems)
                     .children(drop_zones)
                     .when_some(drop_handler, |v, h| v.child(h))
                     .child(seek_zone.into_any_element())
