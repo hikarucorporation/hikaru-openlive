@@ -396,6 +396,42 @@ pub fn clamped_row_h(h: f32) -> f32 {
     h.clamp(MIN_ROW_H, MAX_ROW_H)
 }
 
+/// Origen de la grilla (panel temporal) en coords de VENTANA, a partir de los
+/// bounds medidos de la zona de seek.
+///
+/// `zone_bounds` registra la zona de seek, que va Montada en `top = ruler_h`
+/// dentro del panel: su origen en Y es el del panel + la regla. Por eso acá se
+/// descuenta `ruler_h` para recuperar el origen real del panel (donde arranca
+/// el compás 1 y donde se posiciona el rect del marquee).
+///
+/// Se usa en los HANDLERS (no en el render): leer el `Cell` durante el render
+/// da el valor del frame anterior, y en el primer frame del marquee todavía
+/// valía 0 — eso corría el rect por todo el ancho de los headers + la regla.
+pub fn grid_origin_from_zone(zone: [f32; 4], ruler_h: f32) -> (f32, f32) {
+    (zone[0], zone[1] - ruler_h)
+}
+
+/// Avanza el rectángulo del marquee con la posición del cursor.
+///
+/// Se llama desde el catcher global (así el gesto sobrevive aunque el cursor
+/// pase por encima de un clip o salga del panel). La posición del evento viene en
+/// coords de ventana y se convierte a LOCALES de la grilla al vuelo, así el
+/// estado siempre vive en el mismo sistema que `clip_rects`.
+fn update_marquee(x: f32, y: f32, zone: [f32; 4], ruler_h: f32, cx: &mut App) {
+    let (gx, gy) = grid_origin_from_zone(zone, ruler_h);
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if let Some(m) = s.playlist_state.marquee {
+            s.playlist_state.marquee = Some(MarqueeState {
+                cur_x: x - gx,
+                cur_y: y - gy,
+                ..m
+            });
+            cx.notify();
+        }
+    });
+}
+
 /// Cierra el gesto de marquee tras soltar el botón derecho.
 ///
 /// - Si el gesto superó `MARQUEE_DRAG_THRESHOLD`: selecciona todos los clips
@@ -408,19 +444,23 @@ pub fn clamped_row_h(h: f32) -> f32 {
 fn finish_marquee(
     cur: (f32, f32),
     zone: [f32; 4],
+    ruler_h: f32,
     clip_rects: &[(usize, usize, f32, f32, f32, f32)],
     additive: bool,
     cx: &mut App,
 ) {
+    let (gx, gy) = grid_origin_from_zone(zone, ruler_h);
     let st = state(cx);
     st.update(cx, |s, cx| {
         let Some(m) = s.playlist_state.marquee else {
             return;
         };
         s.playlist_state.marquee = None;
+        // El ancla quedó fijada en coords LOCALES al apretar; sólo el extremo
+        // final viene en coords de ventana y se convierte acá.
         let end = MarqueeState {
-            cur_x: cur.0,
-            cur_y: cur.1,
+            cur_x: cur.0 - gx,
+            cur_y: cur.1 - gy,
             ..m
         };
         // Click simple: no hay caja que aplicar, el menú contextual abre.
@@ -428,16 +468,9 @@ fn finish_marquee(
             cx.notify();
             return;
         }
-        // El gesto vive en coords de VENTANA pero `clip_rects` se calculó en
-        // coords de la GRILLA (origen x=0), así que se resta el origen medido
-        // de la zona para comparar en el mismo espacio.
-        let (rx0, ry0, rx1, ry1) = end.normalized();
-        let rect = (
-            rx0 - zone[0],
-            ry0 - zone[1],
-            rx1 - zone[0],
-            ry1 - zone[1],
-        );
+        // Ambos extremos ya están en coords de grilla, igual que `clip_rects`:
+        // se comparan sin ninguna conversión adicional.
+        let rect = end.normalized();
         let keys = playlist_row_keys(s);
         let hits = clips_in_marquee(clip_rects, rect, &keys);
         if additive {
@@ -449,7 +482,6 @@ fn finish_marquee(
         } else {
             s.playlist_state.selected_clips = hits;
         }
-        let _ = zone;
         cx.notify();
     });
 }
@@ -1984,25 +2016,28 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         })
         .collect();
 
+    // Capa más alta del lienzo: el rectángulo de marquee. Se registra al FINAL
+    // de los hijos del panel temporal (después de clips, seek y playhead) para
+    // que quede por encima de todo lo demás al pintarse.
     let marquee_overlay = match pl.marquee {
         Some(m) if m.is_drag() => {
             let (x0, y0, x1, y1) = m.normalized();
-            // Estilo KDE Plasma / escritorio: relleno translúcido + borde
-            // definido de 1px. El rect se posiciona en coords de la grilla
-            // (origen x=0) porque el marquee vive dentro del panel temporal.
-            let zb = zone_bounds.get();
-            let left = x0 - zb[0];
-            let top = y0 - zb[1];
+            // El estado ya está en coords LOCALES de la grilla (se convierten
+            // en el handler del mouse, donde los bounds medidos ya están
+            // frescos), así que acá el rect se posiciona directo: sin restar
+            // offsets a mano y sin depender de un `Cell` leído en el render.
             Some(
                 div()
+                    .id("pl_marquee_overlay")
+                    .test_support()
                     .absolute()
-                    .left(px(left))
-                    .top(px(top))
+                    .left(px(x0))
+                    .top(px(y0))
                     .w(px((x1 - x0).max(1.0)))
                     .h(px((y1 - y0).max(1.0)))
-                    .bg(rgba(0x0096BE40))
+                    .bg(rgba(0x0096BE59))
                     .border_1()
-                    .border_color(rgb(0x0096BE))
+                    .border_color(rgb(0x00B4E4))
                     .rounded(px(1.0))
                     .into_any_element(),
             )
@@ -2010,9 +2045,26 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         _ => None,
     };
 
+    // Delegador del gesto a ventana completa: mientras la caja está viva, este
+    // overlay captura los `mouse_move`/`mouse_up` aunque el cursor pase por
+    // encima de un clip o salga del panel temporal hacia los headers. Así la
+    // selección la maneja SIEMPRE la caja global y nunca un clip individual
+    // (que además tiene su propio drag de botón izquierdo). Se monta más abajo,
+    // en `all`, cuando ya existe el vector.
+    // El catcher global necesita copias propias de los closures (dos handlers
+    // de mouse_up) y del rect de clips.
+    let catcher_zone_right = zone_bounds.clone();
+    let catcher_zone_left = zone_bounds.clone();
+    let catcher_zone_move = zone_bounds.clone();
+    let catcher_rects_right: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> = Rc::new(clip_rects.clone());
+    let catcher_rects_left = catcher_rects_right.clone();
+    let clip_rects_marquee_rc: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> =
+        Rc::new(clip_rects);
+
     let zone_bounds_seek = zone_bounds.clone();
     let zone_grid_move = zone_bounds.clone();
     let zone_bounds_marquee = zone_bounds.clone();
+    let zone_bounds_marquee_up = zone_bounds_marquee.clone();
     let seek_zone = div()
         .absolute()
         .left(px(0.0))
@@ -2398,42 +2450,52 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             .on_mouse_down(
                                                 gpui_kit::MouseButton::Right,
                                                 move |event, _, cx| {
+                                                    // El ancla se fija en coords
+                                                    // LOCALES de la grilla: se
+                                                    // resta el origen medido del
+                                                    // panel (y no el de la zona
+                                                    // de seek, que está +
+                                                    // `ruler_h` más abajo).
+                                                    let (gx, gy) =
+                                                        grid_origin_from_zone(
+                                                            zone_bounds_marquee.get(),
+                                                            ruler_h,
+                                                        );
                                                     let st = state(cx);
                                                     st.update(cx, |s, cx| {
-                                                        let p = (
-                                                            event.position.x.as_f32(),
-                                                            event.position.y.as_f32(),
-                                                        );
+                                                        let px =
+                                                            event.position.x.as_f32() - gx;
+                                                        let py =
+                                                            event.position.y.as_f32() - gy;
                                                         s.playlist_state.marquee = Some(MarqueeState {
-                                                            start_x: p.0,
-                                                            start_y: p.1,
-                                                            cur_x: p.0,
-                                                            cur_y: p.1,
+                                                            start_x: px,
+                                                            start_y: py,
+                                                            cur_x: px,
+                                                            cur_y: py,
                                                         });
                                                         cx.notify();
                                                     });
                                                 },
                                             )
                                             .on_mouse_move(move |event, _, cx| {
+                                                // Durante el marquee manda el
+                                                // catcher global: el clip no
+                                                // debe interceptar el gesto.
+                                                if state(cx).read(cx).playlist_state.marquee.is_some() {
+                                                    return;
+                                                }
                                                 let st = state(cx);
                                                 st.update(cx, |s, cx| {
-                                                    let Some(m) = s.playlist_state.marquee else {
+                                                    if s.playlist_state.marquee.is_none() {
                                                         return;
-                                                    };
+                                                    }
                                                     // Botón soltado fuera: el
                                                     // `mouse_up` no llega, así que
                                                     // se cierra el gesto acá.
                                                     if event.pressed_button.is_none() {
                                                         s.playlist_state.marquee = None;
                                                         cx.notify();
-                                                        return;
                                                     }
-                                                    s.playlist_state.marquee = Some(MarqueeState {
-                                                        cur_x: event.position.x.as_f32(),
-                                                        cur_y: event.position.y.as_f32(),
-                                                        ..m
-                                                    });
-                                                    cx.notify();
                                                 });
                                             })
                                             .on_mouse_up(
@@ -2444,8 +2506,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                             event.position.x.as_f32(),
                                                             event.position.y.as_f32(),
                                                         ),
-                                                        zone_bounds_marquee.get(),
-                                                        &clip_rects,
+                                                        zone_bounds_marquee_up.get(),
+                                                        ruler_h,
+                                                        &clip_rects_marquee_rc.as_ref(),
                                                         event.modifiers.shift,
                                                         cx,
                                                     );
@@ -2484,11 +2547,14 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     .children(clip_elems)
                                     // Marquee por encima de los clips (es el
                                     // feedback del gesto en curso).
-                                    .when_some(marquee_overlay, |v, h| v.child(h))
                                     .children(drop_zones)
                                     .when_some(drop_handler, |v, h| v.child(h))
                                     .child(seek_zone.into_any_element())
-                                    .child(playhead_canvas.into_any_element()),
+                                    .child(playhead_canvas.into_any_element())
+                                    // El overlay del marquee va AL FINAL: al
+                                    // pintarse de atrás hacia adelante, queda
+                                    // por encima de clips, grilla y playhead.
+                                    .when_some(marquee_overlay, |v, h| v.child(h)),
                                 )
                             )
                         )
@@ -2549,6 +2615,54 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     // mouse_move/mouse_up aunque el cursor salga del control (mismo patrón que
     // `matrix_mix_drag_catcher`). Se monta sólo durante el gesto y lee el
     // tag global compartido, así sirve igual para Matrix y Playlist.
+    // Delegador del marquee a ventana completa: captura el gesto aunque el
+    // cursor esté sobre un clip o fuera del panel temporal, así la caja global
+    // manda y ningún control la intercepta.
+    if pl.marquee.is_some() {
+        all.push(
+            div()
+                .id("playlist_marquee_catcher")
+                .test_support()
+                .absolute()
+                .inset_0()
+                .on_mouse_move(move |event, _, cx| {
+                    let zone = catcher_zone_move.get();
+                    update_marquee(
+                        event.position.x.as_f32(),
+                        event.position.y.as_f32(),
+                        zone,
+                        ruler_h,
+                        cx,
+                    );
+                })
+                .on_mouse_up(gpui_kit::MouseButton::Right, move |event, _, cx| {
+                    let zone = catcher_zone_right.get();
+                    let rects = catcher_rects_right.clone();
+                    finish_marquee(
+                        (event.position.x.as_f32(), event.position.y.as_f32()),
+                        zone,
+                        ruler_h,
+                        &rects,
+                        event.modifiers.shift,
+                        cx,
+                    );
+                })
+                .on_mouse_up(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                    let zone = catcher_zone_left.get();
+                    let rects = catcher_rects_left.clone();
+                    finish_marquee(
+                        (event.position.x.as_f32(), event.position.y.as_f32()),
+                        zone,
+                        ruler_h,
+                        &rects,
+                        event.modifiers.shift,
+                        cx,
+                    );
+                })
+                .into_any_element(),
+        );
+    }
+
     if mix_drag.is_some() {
         all.push(
             div()

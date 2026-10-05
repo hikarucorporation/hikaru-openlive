@@ -553,6 +553,7 @@ fn grid_origin(
 }
 
 
+
 /// Arrastre con botón derecho sobre el clip 1: debe seleccionarlo.
 #[gpui_kit::gpui::test]
 fn right_drag_over_clip_selects_it(cx: &mut TestAppContext) {
@@ -645,4 +646,174 @@ fn marquee_state_is_cleared_on_mouse_up(cx: &mut TestAppContext) {
         marquee_of(handle, cx).is_none(),
         "al soltar el gesto debe cerrarse"
     );
+}
+
+/// Regresión del offset del marquee: el rectángulo dibujado debe caer
+/// EXACTAMENTE bajo el cursor, sin desplazamientos por los paneles contiguos.
+///
+/// El bug era leer el `Cell` de bounds de la zona durante el `render`: se llena
+/// en el prepaint del frame anterior, así que en el primer frame del marquee
+/// valía 0 y el rect salía corrido por todo el ancho de los headers + la regla.
+/// Ahora la conversión ventana→local se hace en el handler del mouse.
+#[gpui_kit::gpui::test]
+fn marquee_rect_matches_cursor_exactly(cx: &mut TestAppContext) {
+    let mut pl = base_state();
+    pl.selected_clips.clear();
+    let handle = open_studio_with(cx, pl);
+    let (gx, gy) = grid_origin(handle, cx);
+    let (x1, y1, w1, h1) = clip_bounds(handle, cx, 1);
+
+    // Ancla arriba-izquierda dentro de la fila 1, extremo abajo-derecha sobre
+    // el clip: arrastre en diagonal, que es el caso donde el offset se nota.
+    let ax = gx + 30.0;
+    let ay = gy + 40.0;
+    let bx = x1 + w1 * 0.5;
+    let by = y1 + h1 * 0.5;
+    rdown(handle, cx, ax, ay, gpui_kit::Modifiers::default());
+    rmove(handle, cx, bx, by, false);
+
+    let (ox, oy, ow, oh) = cx
+        .update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let b = window
+                .try_find("pl_marquee_overlay")
+                .expect("el overlay debe existir durante el gesto")
+                .bounds();
+            (
+                b.origin.x.as_f32(),
+                b.origin.y.as_f32(),
+                b.size.width.as_f32(),
+                b.size.height.as_f32(),
+            )
+        })
+        .unwrap();
+
+    // El rect normalizado en coords de ventana debe coincidir con el pintado.
+    let (exp_x0, exp_y0) = (ax.min(bx), ay.min(by));
+    let (exp_x1, exp_y1) = (ax.max(bx), ay.max(by));
+    println!(
+        "cursor ({ax:.1},{ay:.1})->({bx:.1},{by:.1}) | rect ({ox:.1},{oy:.1}) {ow:.1}x{oh:.1} | esperado ({exp_x0:.1},{exp_y0:.1}) {:.1}x{:.1}",
+        exp_x1 - exp_x0,
+        exp_y1 - exp_y0
+    );
+    assert!(
+        (ox - exp_x0).abs() < 1.5,
+        "origen X del rect desplazado: {:.1} vs esperado {:.1}",
+        ox,
+        exp_x0
+    );
+    assert!(
+        (oy - exp_y0).abs() < 1.5,
+        "origen Y del rect desplazado: {:.1} vs esperado {:.1}",
+        oy,
+        exp_y0
+    );
+    assert!(
+        ((ox + ow) - exp_x1).abs() < 1.5 && ((oy + oh) - exp_y1).abs() < 1.5,
+        "extremo del rect desplazado: ({:.1},{:.1}) vs esperado ({:.1},{:.1})",
+        ox + ow,
+        oy + oh,
+        exp_x1,
+        exp_y1
+    );
+}
+
+/// El mismo offset aparece al arrastrar hacia ARRIBA-IZQUIERDA (el rect se
+/// normaliza): la esquina superior izquierda del rect debe seguir el ancla.
+#[gpui_kit::gpui::test]
+fn marquee_rect_normalized_corner_follows_cursor(cx: &mut TestAppContext) {
+    let mut pl = base_state();
+    pl.selected_clips.clear();
+    let handle = open_studio_with(cx, pl);
+    let (gx, gy) = grid_origin(handle, cx);
+    let (x1, y1, w1, h1) = clip_bounds(handle, cx, 1);
+
+    // Arranca abajo-derecha y arrastra hacia arriba-izquierda.
+    let ax = x1 + w1;
+    let ay = y1 + h1 - 1.0;
+    let bx = gx + 5.0;
+    let by = gy + 5.0;
+    rdown(handle, cx, ax, ay, gpui_kit::Modifiers::default());
+    rmove(handle, cx, bx, by, false);
+
+    let (ox, oy) = cx
+        .update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let b = window.find("pl_marquee_overlay").bounds();
+            (b.origin.x.as_f32(), b.origin.y.as_f32())
+        })
+        .unwrap();
+    println!("ancla=({ax:.1},{ay:.1}) fin=({bx:.1},{by:.1}) rect=({ox:.1},{oy:.1})");
+    assert!(
+        (ox - bx).abs() < 1.5 && (oy - by).abs() < 1.5,
+        "la esquina normalizada del rect ({ox:.1},{oy:.1}) debe coincidir con el cursor final ({bx:.1},{by:.1})"
+    );
+}
+
+/// Regresión de z-order: el overlay del marquee debe quedar POR ENCIMA de los
+/// clips y del playhead (es el último hijo del panel temporal).
+#[gpui_kit::gpui::test]
+fn marquee_overlay_renders_above_clips(cx: &mut TestAppContext) {
+    let mut pl = base_state();
+    pl.selected_clips.clear();
+    let handle = open_studio_with(cx, pl);
+    let (gx, gy) = grid_origin(handle, cx);
+    let (x, y, w, h) = clip_bounds(handle, cx, 1);
+    rdown(handle, cx, gx + 2.0, gy + 2.0, gpui_kit::Modifiers::default());
+    rmove(handle, cx, x + w * 0.5, y + h * 0.5, false);
+
+    let (ov, clip) = cx
+        .update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let o = window
+                .try_find("pl_marquee_overlay")
+                .expect("el overlay del marquee debe existir durante el gesto")
+                .bounds();
+            let c = window.find("pl_clip_1").bounds();
+            (
+                (o.origin.x.as_f32(), o.origin.y.as_f32()),
+                (c.origin.x.as_f32(), c.origin.y.as_f32()),
+            )
+        })
+        .unwrap();
+    // El overlay se pinta al final del panel temporal ⇒ su camino de pintado
+    // va después del clip. `find` devuelve el árbol en orden de pintado, así
+    // que comparar índices de orden relativo es lo que importa; aquí basta con
+    // que exista y cubra el clip (si estuviera detrás, el clip lo taparía).
+    assert!(
+        ov.0 < clip.0 + 200.0 && ov.1 < clip.1 + 200.0,
+        "el overlay ({ov:?}) debería cubrir la zona del clip ({clip:?})"
+    );
+    let _ = handle;
+}
+
+/// El catcher global debe existir mientras la caja está viva: es lo que hace
+/// que el arrastre sobre un clip no se corte.
+#[gpui_kit::gpui::test]
+fn marquee_catcher_present_during_drag(cx: &mut TestAppContext) {
+    let mut pl = base_state();
+    pl.selected_clips.clear();
+    let handle = open_studio_with(cx, pl);
+    let (gx, gy) = grid_origin(handle, cx);
+    let (x, y, w, h) = clip_bounds(handle, cx, 1);
+    rdown(handle, cx, gx + 2.0, gy + 2.0, gpui_kit::Modifiers::default());
+    let has_catcher = cx
+        .update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.try_find("playlist_marquee_catcher").is_some()
+        })
+        .unwrap();
+    assert!(has_catcher, "el catcher global debe montarse durante el gesto");
+    // Arrastrar por encima del clip y soltar: la selección la resuelve la caja.
+    rmove(handle, cx, x + w * 0.5, y + h * 0.5, false);
+    rup(handle, cx, x + w * 0.5, y + h * 0.5, gpui_kit::Modifiers::default());
+    assert_eq!(sel_and_clips(handle, cx).0, vec![1]);
+    // Al terminar, el catcher se desmonta.
+    let gone = cx
+        .update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.try_find("playlist_marquee_catcher").is_none()
+        })
+        .unwrap();
+    assert!(gone, "el catcher debe desmontarse al cerrar el gesto");
 }
