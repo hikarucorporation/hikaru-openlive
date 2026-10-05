@@ -20,7 +20,7 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::prelude::StatefulInteractiveElement as _;
 use gpui_kit::*;
 
-use crate::app::{state, HikaruApp};
+use crate::app::{state, AppState, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::views::mixer::Track;
 use hikaru_transport::DEFAULT_PPQN;
@@ -92,6 +92,23 @@ pub enum LoopDragHandle {
     Body,
 }
 
+/// Arrastre de un clip de audio/MIDI por la grilla (botón izquierdo).
+///
+/// `grab_dx_px` / `grab_dy_px` son el offset del cursor respecto al origen
+/// del clip (coords de ventana) al momento del agarre: durante el `MouseMove`
+/// la nueva posición se calcula como `cursor - grab`, así el clip no salta
+/// al agarrarlo fuera de su esquina. `moved` distingue click de drag para
+/// suprimir la re-selección del `on_click` posterior al drop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaylistClipDrag {
+    pub clip_id: usize,
+    pub orig_tick: u64,
+    pub orig_track: usize,
+    pub grab_dx_px: f32,
+    pub grab_dy_px: f32,
+    pub moved: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct PlaylistState {
     pub clips: Vec<(usize, PlaylistClip)>,
@@ -114,6 +131,13 @@ pub struct PlaylistState {
     pub loop_preview_active: bool,
     pub loop_drag_handle: LoopDragHandle,
     pub loop_drag_completed_this_frame: bool,
+    /// Gesto de arrastre de clip en curso (`None` = sin drag). Global —y no
+    /// flag local del widget— porque los clips se reconstruyen en cada frame
+    /// (mismo motivo que los drags del mixer en `AppState`).
+    pub clip_drag: Option<PlaylistClipDrag>,
+    /// Suprime el `on_click` de selección que sigue al `mouse_up` de un drag
+    /// con movimiento (la selección ya quedó fijada al agarrar el clip).
+    pub clip_click_suppress: bool,
 }
 
 impl Default for PlaylistState {
@@ -139,6 +163,8 @@ impl Default for PlaylistState {
             loop_preview_active: false,
             loop_drag_handle: LoopDragHandle::None,
             loop_drag_completed_this_frame: false,
+            clip_drag: None,
+            clip_click_suppress: false,
         }
     }
 }
@@ -455,6 +481,120 @@ pub fn build_audio_clip(
     }
 }
 
+// =========================================================================
+// DRAG & DROP DE CLIPS (botón izquierdo sobre el clip)
+// =========================================================================
+
+/// Claves de pista (índices al vector del modo activo) en orden de fila.
+fn playlist_row_keys(s: &AppState) -> Vec<usize> {
+    match s.mode {
+        crate::app::AppMode::OpenLive => &s.live_tracks,
+        crate::app::AppMode::OpenStudio => &s.studio_tracks,
+    }
+    .iter()
+    .enumerate()
+    .filter(|(_, t)| !t.is_master)
+    .map(|(i, _)| i)
+    .collect()
+}
+
+/// Finaliza el gesto de arrastre activo, si lo hay.
+///
+/// Si hubo movimiento y es un clip de audio, sincroniza la nueva posición
+/// con el motor (`UpdateClipBounds`, un solo mensaje al soltar, no por
+/// frame). Siempre limpia el gesto, arma la supresión del click posterior y
+/// notifica (repaint inmediato).
+fn finish_clip_drag(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some(drag) = s.playlist_state.clip_drag.take() else {
+            return;
+        };
+        let clip_id = drag.clip_id;
+        if drag.moved {
+            s.playlist_state.clip_click_suppress = true;
+            let ppqn = s.playlist_state.ppqn.max(1);
+            let bpm = s.transport.bpm;
+            let found = s
+                .playlist_state
+                .clips
+                .iter()
+                .find(|(_, c)| c.id == clip_id)
+                .map(|(k, c)| (*k, c.start_tick, c.duration_ticks, c.clip_type.clone()));
+            if let Some((key, start, dur, clip_type)) = found {
+                if let ClipType::Audio {
+                    sample_offset_ticks,
+                    ..
+                } = clip_type
+                {
+                    s.audio_proxy.send(GuiCommand::UpdateClipBounds {
+                        clip_id,
+                        track_index: key,
+                        scene_index: 0,
+                        position_secs: ticks_to_secs_precise(start, ppqn, bpm),
+                        duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
+                        offset_secs: ticks_to_secs_precise(sample_offset_ticks, ppqn, bpm),
+                    });
+                }
+            }
+        }
+        cx.notify();
+    });
+}
+
+/// Aplica un paso del arrastre: nueva posición con snap + fila destino.
+///
+/// Traduce `cursor - grab` (coords de ventana) a ticks/fila con el origen
+/// medido de la zona (`zone`), reasigna el clip EN VIVO —el propio clip en
+/// movimiento con su borde de selección es la previsualización en tiempo
+/// real— y notifica (un frame por evento, como los faders).
+fn update_clip_drag(cx: &mut App, cursor: (f32, f32), zone: [f32; 4]) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some(drag) = s.playlist_state.clip_drag else {
+            return;
+        };
+        let clip_id = drag.clip_id;
+        let ppqn = s.playlist_state.ppqn.max(1);
+        let zoom = s.playlist_state.zoom_x;
+        let grid_step = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
+        // Horizontal: cursor menos agarre → px relativos a la zona → ticks → snap.
+        let rel_x = (cursor.0 - drag.grab_dx_px - zone[0]).max(0.0);
+        let new_tick = snap_ticks(px_to_ticks(rel_x, zoom), grid_step);
+        // Vertical: fila bajo el punto de agarre, acotada a las existentes.
+        let rows = playlist_row_keys(s);
+        if rows.is_empty() {
+            return;
+        }
+        let rel_y = cursor.1 - drag.grab_dy_px - zone[1];
+        let row = ((rel_y / TRACK_ROW_H).floor() as isize)
+            .clamp(0, rows.len() as isize - 1) as usize;
+        let new_key = rows[row];
+        let mut changed = false;
+        if let Some(entry) = s
+            .playlist_state
+            .clips
+            .iter_mut()
+            .find(|(_, c)| c.id == clip_id)
+        {
+            if entry.1.start_tick != new_tick {
+                entry.1.start_tick = new_tick;
+                changed = true;
+            }
+            if entry.0 != new_key {
+                entry.0 = new_key;
+                changed = true;
+            }
+        }
+        if changed {
+            if let Some(d) = s.playlist_state.clip_drag.as_mut() {
+                d.moved = true;
+            }
+        }
+        cx.notify();
+    });
+}
+
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
     let pl = &app.playlist_state;
@@ -545,6 +685,17 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
+    // Bounds de la zona de grilla en coords de ventana (patrón `record_bounds`
+    // del arranger): `mouse_position()` viene en coords de ventana, así que el
+    // mapeo px→ticks/fila resta el origen real medido cada frame, no una
+    // constante. La zona ES la grilla (arranca en `grid_ox`), sin headers.
+    // Se crea acá arriba porque los handlers de drag de los clips (definidos
+    // abajo) también lo necesitan para traducir el cursor a ticks/fila.
+    let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
+    let zone_bounds_clip = zone_bounds.clone();
+    let zone_bounds_drop = zone_bounds.clone();
+    let zone_bounds_rec = zone_bounds.clone();
+
     let mut clip_elems: Vec<AnyElement> = Vec::new();
     for (track_id, clip) in &pl.clips {
         let is_sel = selected.contains(&clip.id);
@@ -571,6 +722,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             rgba(0xFFFFFF66)
         };
         let title_text = clip_name.clone();
+        let dragging_this = pl
+            .clip_drag
+            .map(|d| d.clip_id == clip_id)
+            .unwrap_or(false);
+        let zone_down = zone_bounds_clip.clone();
         let base_clip = div()
             .w(px(clip_w))
             .h(px(clip_h))
@@ -584,10 +740,59 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .overflow_hidden()
             .id(format!("pl_clip_{}", clip_id))
             .test_support()
+            // Cursor de movimiento durante el arrastre (GPUI no tiene
+            // `Move`/`Grabbing`: `ClosedHand` es el equivalente, igual que
+            // en el pan del mixer).
+            .cursor(if dragging_this {
+                CursorStyle::ClosedHand
+            } else {
+                CursorStyle::Arrow
+            })
+            .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                let zb = zone_down.get();
+                let st = state(cx);
+                st.update(cx, |s, cx| {
+                    let (key, start) = match s
+                        .playlist_state
+                        .clips
+                        .iter()
+                        .find(|(_, c)| c.id == clip_id)
+                    {
+                        Some((k, c)) => (*k, c.start_tick),
+                        None => return,
+                    };
+                    let zoom = s.playlist_state.zoom_x;
+                    let row = playlist_row_keys(s)
+                        .iter()
+                        .position(|k| *k == key)
+                        .unwrap_or(0);
+                    s.playlist_state.clip_drag = Some(PlaylistClipDrag {
+                        clip_id,
+                        orig_tick: start,
+                        orig_track: key,
+                        grab_dx_px: event.position.x.as_f32()
+                            - (zb[0] + ticks_to_px(start, zoom)),
+                        grab_dy_px: event.position.y.as_f32()
+                            - (zb[1] + row as f32 * TRACK_ROW_H + 1.0),
+                        moved: false,
+                    });
+                    // El clip agarrado queda seleccionado (borde amarillo que
+                    // lo sigue en vivo = feedback del arrastre).
+                    s.playlist_state.selected_clips = vec![clip_id];
+                    s.playlist_state.clip_click_suppress = false;
+                    cx.notify();
+                });
+            })
             .on_click(move |event, _, cx| {
                 let shift = event.modifiers().shift;
                 let st = state(cx);
                 st.update(cx, |state, cx| {
+                    if state.playlist_state.clip_click_suppress {
+                        // Click que cierra un drag con movimiento: la
+                        // selección ya quedó fijada al agarrar.
+                        state.playlist_state.clip_click_suppress = false;
+                        return;
+                    }
                     if shift {
                         if state.playlist_state.selected_clips.contains(&clip_id) {
                             state.playlist_state.selected_clips.retain(|&id| id != clip_id);
@@ -790,14 +995,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
-    // Bounds de la zona de grilla en coords de ventana (patrón `record_bounds`
-    // del arranger): `mouse_position()` viene en coords de ventana, así que el
-    // mapeo px→ticks/fila resta el origen real medido cada frame, no una
-    // constante. La zona ES la grilla (arranca en `grid_ox`), sin headers.
-    let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
-    let zone_bounds_drop = zone_bounds.clone();
-    let zone_bounds_rec = zone_bounds.clone();
-
     let drop_handler = if dragged_sample.is_some() {
         let audio_proxy = audio_proxy.clone();
         let track_ids: Vec<usize> = non_master.iter().map(|(tid, _)| *tid).collect();
@@ -865,6 +1062,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     };
 
     let zone_bounds_seek = zone_bounds.clone();
+    let zone_grid_move = zone_bounds.clone();
     let seek_zone = div()
         .absolute()
         .left(px(grid_ox))
@@ -1050,9 +1248,39 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .id("playlist_scroll")
                     .child(
                         div()
+                            .id("playlist_grid")
                             .w(px(canvas_w))
                             .h(px(canvas_h))
                             .relative()
+                            // Move/Up del drag de clips a nivel de grilla (no
+                            // del clip): el cursor sale del clip al arrastrar
+                            // y los handlers del propio clip dejarían de
+                            // disparar. Acá cubren toda la zona.
+                            .on_mouse_move(move |event, _, cx| {
+                                if event.pressed_button
+                                    != Some(gpui_kit::MouseButton::Left)
+                                {
+                                    // Botón soltado fuera: se consolida.
+                                    finish_clip_drag(cx);
+                                    return;
+                                }
+                                if state(cx).read(cx).playlist_state.clip_drag.is_none() {
+                                    return;
+                                }
+                                let zb = zone_grid_move.get();
+                                update_clip_drag(
+                                    cx,
+                                    (
+                                        event.position.x.as_f32(),
+                                        event.position.y.as_f32(),
+                                    ),
+                                    zb,
+                                );
+                            })
+                            .on_mouse_up(
+                                gpui_kit::MouseButton::Left,
+                                move |_, _, cx| finish_clip_drag(cx),
+                            )
                     // Columna fija de headers: apilada en vertical desde la
                     // regla, una cabecera de `TRACK_ROW_H` por fila — misma
                     // altura y mismo `top` que su fila de la grilla.
