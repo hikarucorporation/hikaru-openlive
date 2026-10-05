@@ -1079,6 +1079,15 @@ fn render_pad(
                     }
                 }
                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                // El Clip Editor sigue a la selección de la matriz: seleccionar
+                // un pad lo carga acá (es el binding bidireccional pedido).
+                crate::views::clip_editor::select_target(
+                    s,
+                    Some(crate::views::clip_editor::ClipEditorTarget::Matrix {
+                        track: track_idx,
+                        scene: scene_idx,
+                    }),
+                );
                 if has_clip {
                     // Con clip (Stopped/Playing/...): el pad completo es disparador.
                     let proxy = s.audio_proxy.clone();
@@ -1200,6 +1209,13 @@ fn render_pad(
                             let st = state(cx);
                             st.update(cx, |s, cx| {
                                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                                crate::views::clip_editor::select_target(
+                                    s,
+                                    Some(crate::views::clip_editor::ClipEditorTarget::Matrix {
+                                        track: track_idx,
+                                        scene: scene_idx,
+                                    }),
+                                );
                                 if has_clip {
                                     let proxy = s.audio_proxy.clone();
                                     trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
@@ -2094,8 +2110,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let selected = app.matrix_state.selected_slot;
     // Gesto de mezcla en curso (para cursores y el overlay de captura).
     let mix_drag = app.matrix_mix_drag;
-    let show_editor = app.matrix_state.show_editor;
-    let editor_height = app.matrix_state.editor_height;
     let clipboard_ready = app.matrix_clipboard.has_content();
     let drop_sample_ready = app.dragged_sample.is_some();
     let engine_handle = app.engine_handle.clone();
@@ -2257,39 +2271,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .children(track_rows),
                 ),
         )
-        .when(show_editor, |this| {
-            // Barra del Clip Editor: muestra explícitamente el slot actual.
-            let hint = match selected {
-                Some((t, s)) => {
-                    let clip_label = slots
-                        .get(t)
-                        .and_then(|r| r.get(s))
-                        .and_then(|(_, n, _)| n.clone())
-                        .unwrap_or_default();
-                    if clip_label.is_empty() {
-                        format!("CLIP EDITOR — Track {} | Scene {}", t + 1, s + 1)
-                    } else {
-                        format!(
-                            "CLIP EDITOR — Track {} | Scene {} — {}",
-                            t + 1,
-                            s + 1,
-                            clip_label
-                        )
-                    }
-                }
-                None => "CLIP EDITOR".to_string(),
-            };
-            this.child(
-                div()
-                    .h(px(editor_height))
-                    .bg(rgb(0x141418))
-                    .border_1()
-                    .border_color(rgb(0x2D3741))
-                    .rounded(px(4.0))
-                    .p(px(6.0))
-                    .child(Label::new(hint).text_xs().text_color(rgb(0x9AA4B2))),
-            )
-        })
         // Capturador de drag a ventana completa: mientras hay un gesto de
         // mezcla en curso, este overlay invisible recibe TODOS los
         // mouse_move/mouse_up aunque el cursor se salga del control, así el

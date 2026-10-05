@@ -19,7 +19,8 @@ use hikaru_plugin_host::{spawn_floating_gui, PluginFormat, PluginInstance};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::render::WavetableViewportHandle;
 use crate::views::{
-    about, arranger_view, audio_settings, dsp_rack, explorer, external_plugins_settings, footer,
+    about, arranger_view, audio_settings, clip_editor, dsp_rack, explorer,
+    external_plugins_settings, footer,
     header, matrix, menu_bar, mixer, piano_roll, playlist,
 };
 
@@ -276,6 +277,10 @@ pub struct AppState {
     pub plugin_settings_state: external_plugins_settings::PluginSettingsState,
     pub playlist_state: playlist::PlaylistState,
     pub matrix_state: matrix::SessionMatrixState,
+    /// Estado del Clip Editor (visualizador + sidebar). Es una entidad
+    /// propia —y no un campo de la matriz— porque lo alimentan TANTO la
+    /// Session Matrix como la Playlist/Timeline.
+    pub clip_editor: clip_editor::ClipEditorState,
     pub matrix_clipboard: matrix::MatrixClipboard,
     pub dragged_sample: Option<PathBuf>,
     /// Slot del rack al que va la próxima wavetable que se elija en el
@@ -614,6 +619,7 @@ impl HikaruApp {
             audio_settings_state: audio_settings::AudioSettingsState::default(),
             plugin_settings_state: external_plugins_settings::PluginSettingsState::default(),
             playlist_state: playlist::PlaylistState::default(),
+            clip_editor: clip_editor::ClipEditorState::default(),
             matrix_state,
             matrix_clipboard: matrix::MatrixClipboard::default(),
             dragged_sample: None,
@@ -1029,6 +1035,8 @@ impl Render for HikaruApp {
         let openlive_view = app_state.openlive_view;
         let show_piano_roll = app_state.show_piano_roll;
         let show_dsp_rack = app_state.show_dsp_rack;
+        let show_clip_editor = app_state.clip_editor.show_editor;
+        let clip_editor_height = app_state.clip_editor.editor_height.max(120.0);
         let show_explorer = app_state.show_explorer;
         let show_about = app_state.show_about;
         let audio_settings_open = app_state.audio_settings_state.is_open;
@@ -1092,6 +1100,20 @@ impl Render for HikaruApp {
                                     .child(render_central(mode, openlive_view, cx)),
                             )
                             
+                            // PANEL INFERIOR PLEGABLE: CLIP EDITOR
+                            // Alimentado por Session Matrix Y Playlist, así que
+                            // vive acá (global) y no dentro de la matriz.
+                            .when(show_clip_editor, |this| {
+                                this.child(
+                                    div()
+                                        .h(px(clip_editor_height))
+                                        .w_full()
+                                        .flex_shrink_0()
+                                        .border_t_1()
+                                        .border_color(crate::theme::BORDER_COLOR)
+                                        .child(clip_editor::render(cx)),
+                                )
+                            })
                             // PANEL INFERIOR PLEGABLE: PIANO ROLL (F9/F10)
                             .when(show_piano_roll, |this| {
                                 this.child(

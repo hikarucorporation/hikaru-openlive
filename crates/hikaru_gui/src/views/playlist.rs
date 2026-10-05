@@ -23,8 +23,9 @@ use gpui_kit::*;
 
 use crate::app::{state, AppState, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::views::clip_editor::ClipEditorTarget;
 use crate::views::matrix::{
-    self, end_mix_drag, h_mix_slider_ex, ms_button, pan_knob_ex, start_pan_drag, step_mix_pan_gesture,
+    self, end_mix_drag, h_mix_slider_ex, ms_button, pan_knob_ex, step_mix_pan_gesture,
     step_mix_slider_gesture, MatrixMixTarget,
 };
 use crate::views::mixer::Track;
@@ -2148,8 +2149,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         moved: false,
                     });
                     // El clip agarrado queda seleccionado (borde amarillo que
-                    // lo sigue en vivo = feedback del arrastre).
+                    // lo sigue en vivo = feedback del arrastre) y el Clip
+                    // Editor se carga con ese clip.
                     s.playlist_state.selected_clips = vec![clip_id];
+                    crate::views::clip_editor::select_target(
+                        s,
+                        Some(ClipEditorTarget::Playlist { clip_id }),
+                    );
                     s.playlist_state.clip_click_suppress = false;
                     cx.notify();
                 });
@@ -2190,6 +2196,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }
                     } else {
                         state.playlist_state.selected_clips = vec![clip_id];
+                    }
+                    // El Clip Editor sigue a la selección de la Playlist.
+                    if let Some(id) = state.playlist_state.selected_clips.first().copied() {
+                        crate::views::clip_editor::select_target(
+                            state,
+                            Some(ClipEditorTarget::Playlist { clip_id: id }),
+                        );
                     }
                     cx.notify();
                 });

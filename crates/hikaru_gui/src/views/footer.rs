@@ -9,7 +9,7 @@ use crate::app::{state, HikaruApp};
 pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
     let app = state(cx).read(cx);
 
-    let clip_icon = if app.matrix_state.show_editor {
+    let clip_icon = if app.clip_editor.show_editor {
         "🎛 CLIP EDITOR [▼]"
     } else {
         "🎛 CLIP EDITOR [▲]"
@@ -46,8 +46,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .on_click(move |_, _, cx| {
                     let state = state(cx);
                     state.update(cx, |state, cx| {
-                        state.matrix_state.show_editor = !state.matrix_state.show_editor;
-                        if state.matrix_state.show_editor {
+                        state.clip_editor.show_editor = !state.clip_editor.show_editor;
+                        if state.clip_editor.show_editor {
                             state.show_piano_roll = false;
                             state.show_dsp_rack = false;
                         }
@@ -66,7 +66,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                     state.update(cx, |state, cx| {
                         state.show_piano_roll = !state.show_piano_roll;
                         if state.show_piano_roll {
-                            state.matrix_state.show_editor = false;
+                            state.clip_editor.show_editor = false;
                             state.show_dsp_rack = false;
                         }
                         cx.notify();
@@ -84,7 +84,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                     state.update(cx, |state, cx| {
                         state.show_dsp_rack = !state.show_dsp_rack;
                         if state.show_dsp_rack {
-                            state.matrix_state.show_editor = false;
+                            state.clip_editor.show_editor = false;
                             state.show_piano_roll = false;
                         }
                         cx.notify();
