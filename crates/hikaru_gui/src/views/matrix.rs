@@ -1337,7 +1337,9 @@ fn render_scene_launcher(scene_idx: usize, name: String, has_any_clip: bool) -> 
         .into_any_element()
 }
 
-fn db_text(volume: f32) -> String {
+/// Texto de dB del volumen lineal (misma curva que el mixer): lo reutiliza el
+/// header de la Playlist para que ambas vistas lean igual.
+pub fn db_text(volume: f32) -> String {
     let db_val = if volume <= 0.0 {
         -60.0
     } else if volume <= 0.75 {
@@ -1348,7 +1350,8 @@ fn db_text(volume: f32) -> String {
     format!("{:.1}dB", db_val)
 }
 
-fn pan_text(pan: f32) -> String {
+/// Texto de posición de paneo (`C` / `Lxx` / `Rxx`): compartido con la Playlist.
+pub fn pan_text(pan: f32) -> String {
     let v = (pan * 100.0).round() as i32;
     if v == 0 {
         "C".to_string()
@@ -1444,7 +1447,8 @@ const MIX_THUMB_W: f32 = 8.0;
 const MIX_SLIDER_PAD_Y: f32 = 2.0;
 
 /// 0.0dB en la curva de `db_text` (lineal 0..=1 con el 0.75 como 0 dB).
-const VOLUME_RESET: f32 = 0.75;
+/// Valor del doble-clic en los sliders de volumen (matriz y playlist).
+pub const VOLUME_RESET: f32 = 0.75;
 
 /// Destino del drag de mezcla en curso en los headers.
 ///
@@ -1456,14 +1460,6 @@ const VOLUME_RESET: f32 = 0.75;
 pub enum MatrixMixTarget {
     Volume(usize),
     Pan(usize),
-}
-
-fn set_matrix_volume(cx: &mut App, track_idx: usize, volume: f32) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        apply_matrix_volume(s, track_idx, volume);
-        cx.notify();
-    });
 }
 
 /// Escritura efectiva de volumen (matriz + espejo `live_tracks` + motor).
@@ -1480,14 +1476,6 @@ fn apply_matrix_volume(s: &mut AppState, track_idx: usize, volume: f32) {
     s.audio_proxy.send(GuiCommand::SetTrackVolume {
         track_idx,
         volume_db: volume,
-    });
-}
-
-fn set_matrix_pan(cx: &mut App, track_idx: usize, pan: f32) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        apply_matrix_pan(s, track_idx, pan);
-        cx.notify();
     });
 }
 
@@ -1508,15 +1496,24 @@ fn norm_from_slider_x(bounds: [f32; 4], x: f32) -> f32 {
     ((x - bounds[0] - MIX_THUMB_W / 2.0) / travel).clamp(0.0, 1.0)
 }
 
-/// Inicia el drag de volumen: registra el gesto en el estado global (sobrevive
-/// a los re-renders), congela los bounds del riel para el overlay y salta al
-/// punto clicado.
-fn start_vol_drag(cx: &mut App, track_idx: usize, bounds: [f32; 4], x: f32) {
+/// Inicia un gesto de slider de mezcla con un apply genérico.
+///
+/// Misma máquina que `start_vol_drag` pero con la escritura parametrizada:
+/// la reutilizan los headers de la Playlist (mismo gesto global
+/// `matrix_mix_drag`, otra tienda destino). El tag es opaco y vive sólo lo
+/// que dura el gesto de un único mouse, así que no colisiona entre vistas.
+pub fn begin_mix_slider_gesture(
+    cx: &mut App,
+    track_idx: usize,
+    bounds: [f32; 4],
+    x: f32,
+    apply: impl FnOnce(&mut AppState, usize, f32),
+) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         s.matrix_mix_drag = Some(MatrixMixTarget::Volume(track_idx));
         s.matrix_mix_bounds = bounds;
-        apply_matrix_volume(s, track_idx, norm_from_slider_x(bounds, x));
+        apply(s, track_idx, norm_from_slider_x(bounds, x));
         cx.notify();
     });
 }
@@ -1524,20 +1521,33 @@ fn start_vol_drag(cx: &mut App, track_idx: usize, bounds: [f32; 4], x: f32) {
 /// Paso del drag de volumen (`delta_x`): el overlay y el propio slider llaman
 /// acá leyendo el gesto global, así ningún re-render lo corta.
 fn continue_vol_drag(cx: &mut App, track_idx: usize, x: f32) {
+    step_mix_slider_gesture(cx, track_idx, x, apply_matrix_volume);
+}
+
+/// Paso de un gesto de slider con apply genérico (ver
+/// `begin_mix_slider_gesture`): ignora el evento si el tag global no es este
+/// control y mapea con los bounds congelados al iniciar el gesto.
+pub fn step_mix_slider_gesture(
+    cx: &mut App,
+    track_idx: usize,
+    x: f32,
+    apply: impl FnOnce(&mut AppState, usize, f32),
+) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         if s.matrix_mix_drag != Some(MatrixMixTarget::Volume(track_idx)) {
             return;
         }
         let bounds = s.matrix_mix_bounds;
-        apply_matrix_volume(s, track_idx, norm_from_slider_x(bounds, x));
+        apply(s, track_idx, norm_from_slider_x(bounds, x));
         cx.notify();
     });
 }
 
 /// Inicia el drag de pan: solo siembra la base relativa con el valor actual
 /// (como cualquier knob de DAW: agarrar NO cambia el valor, solo el drag).
-fn start_pan_drag(cx: &mut App, track_idx: usize, y: f32, current: f32) {
+/// Ya es genérico (no escribe nada): lo comparten matriz y playlist.
+pub fn start_pan_drag(cx: &mut App, track_idx: usize, y: f32, current: f32) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         s.matrix_mix_drag = Some(MatrixMixTarget::Pan(track_idx));
@@ -1548,20 +1558,33 @@ fn start_pan_drag(cx: &mut App, track_idx: usize, y: f32, current: f32) {
 
 /// Paso del drag de pan (`delta_y` relativo a la base global).
 fn continue_pan_drag(cx: &mut App, track_idx: usize, y: f32) {
+    step_mix_pan_gesture(cx, track_idx, y, apply_matrix_pan);
+}
+
+/// Paso de un gesto de pan con apply genérico (ver
+/// `begin_mix_slider_gesture`): drag vertical relativo a la base sembrada al
+/// agarrar, recorrido completo en `PAN_KNOB_TRAVEL` px.
+pub fn step_mix_pan_gesture(
+    cx: &mut App,
+    track_idx: usize,
+    y: f32,
+    apply: impl FnOnce(&mut AppState, usize, f32),
+) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         if s.matrix_mix_drag != Some(MatrixMixTarget::Pan(track_idx)) {
             return;
         }
         if let Some((y0, p0)) = s.matrix_pan_gesture {
-            apply_matrix_pan(s, track_idx, p0 + (y0 - y) / PAN_KNOB_TRAVEL);
+            apply(s, track_idx, p0 + (y0 - y) / PAN_KNOB_TRAVEL);
         }
         cx.notify();
     });
 }
 
 /// Cierra cualquier drag de mezcla (soltar el botón en cualquier lado).
-fn end_mix_drag(cx: &mut App) {
+/// Genérico: lo comparten matriz y playlist (mismo gesto global).
+pub fn end_mix_drag(cx: &mut App) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         if s.matrix_mix_drag.is_some() {
@@ -1587,6 +1610,30 @@ fn h_mix_slider(
     norm: f32,
     dragging_this: bool,
 ) -> AnyElement {
+    h_mix_slider_ex(
+        id,
+        track_idx,
+        norm,
+        dragging_this,
+        VOLUME_RESET,
+        apply_matrix_volume,
+    )
+}
+
+/// Versión reutilizable del slider con escritura parametrizada.
+///
+/// Idéntica máquina de gestos (mismo tag/bounds globales), pero `apply`
+/// decide la tienda destino: la matriz la fija a `apply_matrix_volume` y la
+/// Playlist le pasa su apply por modo (matriz+live o studio). `reset_value`
+/// es el valor del doble-clic (0.75 lineal = 0.0dB en ambas vistas).
+pub fn h_mix_slider_ex(
+    id: String,
+    track_idx: usize,
+    norm: f32,
+    dragging_this: bool,
+    reset_value: f32,
+    apply: impl Fn(&mut AppState, usize, f32) + Copy + 'static,
+) -> AnyElement {
     let norm = norm.clamp(0.0, 1.0);
     // Solo se miden bounds (canvas invisible); el flag de drag es global
     // (`matrix_mix_drag`) para que los re-renders no corten el gesto.
@@ -1610,13 +1657,17 @@ fn h_mix_slider(
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
                 end_mix_drag(cx);
-                set_matrix_volume(cx, track_idx, VOLUME_RESET);
+                let st = state(cx);
+                st.update(cx, |s, cx| {
+                    apply(s, track_idx, reset_value);
+                    cx.notify();
+                });
                 return;
             }
-            start_vol_drag(cx, track_idx, b_down.get(), event.position.x.as_f32());
+            begin_mix_slider_gesture(cx, track_idx, b_down.get(), event.position.x.as_f32(), apply);
         })
         .on_mouse_move(move |event, _, cx| {
-            continue_vol_drag(cx, track_idx, event.position.x.as_f32());
+            step_mix_slider_gesture(cx, track_idx, event.position.x.as_f32(), apply);
         })
         .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
             end_mix_drag(cx);
@@ -1699,6 +1750,25 @@ const PAN_KNOB_TRAVEL: f32 = 150.0;
 ///   agarre, recorrido completo en `PAN_KNOB_TRAVEL` px).
 /// - Doble-clic: vuelve exacto al centro.
 fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
+    pan_knob_ex(
+        SharedString::from(format!("matrix_panknob_{}", track_idx)),
+        track_idx,
+        pan,
+        dragging_this,
+        apply_matrix_pan,
+    )
+}
+
+/// Versión reutilizable del knob con escritura parametrizada (ver
+/// `h_mix_slider_ex`): misma máquina de gestos, otro destino. El doble-clic
+/// siempre vuelve al centro exacto en ambas vistas.
+pub fn pan_knob_ex(
+    id: SharedString,
+    track_idx: usize,
+    pan: f32,
+    dragging_this: bool,
+    apply: impl Fn(&mut AppState, usize, f32) + Copy + 'static,
+) -> AnyElement {
     // Display con detent central: aguja y etiqueta ven el mismo valor.
     let pan = snap_center_pan(if pan.is_finite() {
         pan.clamp(-1.0, 1.0)
@@ -1708,7 +1778,7 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
     // Sin bounds locales: agarrar no mapea posición a valor, así que el knob
     // no necesita medir nada (el gesto relativo vive en el estado global).
     div()
-        .id(SharedString::from(format!("matrix_panknob_{}", track_idx)))
+        .id(id)
         .test_support()
         .flex()
         .items_center()
@@ -1722,13 +1792,17 @@ fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
                 end_mix_drag(cx);
-                set_matrix_pan(cx, track_idx, 0.0);
+                let st = state(cx);
+                st.update(cx, |s, cx| {
+                    apply(s, track_idx, 0.0);
+                    cx.notify();
+                });
                 return;
             }
             start_pan_drag(cx, track_idx, event.position.y.as_f32(), pan);
         })
         .on_mouse_move(move |event, _, cx| {
-            continue_pan_drag(cx, track_idx, event.position.y.as_f32());
+            step_mix_pan_gesture(cx, track_idx, event.position.y.as_f32(), apply);
         })
         .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
             end_mix_drag(cx);

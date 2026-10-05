@@ -4,8 +4,10 @@
 //
 // `Tab` / `F9` conmutan entre ambas SIN cambiar de modo (`toggle_central_view`);
 // en OpenLive conmutan Session Matrix ↔ Arranger. La Playlist es SÓLO tiempo
-// (ruler, filas limpias, grilla, clips, playhead): ningún control de mezcla
-// (S/M/R, faders, dB, pan) puede sangrar adentro del lienzo.
+// (ruler, grilla, clips, playhead): sus Track Headers replican la caja de
+// mezcla del Session Matrix (M/S + pan + volumen, replicated on purpose), pero
+// la CONSOLA completa de channel strips (faders verticales, dB por canal, DSP)
+// vive exclusivamente en la vista ArrangerMixer.
 //
 // Regresión layout: el `Scrollable` de gpui-component consume el `id` de su
 // contenido y no debe usarse directamente como flex-item — hacerlo encogía el
@@ -123,17 +125,19 @@ fn openstudio_defaults_to_full_width_playlist(cx: &mut TestAppContext) {
                 el.bounds()
             );
         }
-        // …y ningún control de mezcla adentro del lienzo de la playlist.
-        for id in ["pl_track_solo_1", "pl_track_mute_1"] {
+        // Los Track Headers de la Playlist replican la caja de mezcla del
+        // Session Matrix (M/S/pan/volumen): es el diseño pedido, no un
+        // "sangrado" del mixer lateral. Lo que NO debe aparecer es la CONSOLA
+        // completa de channel strips (faders verticales, dB por canal, DSP).
+        for id in ["pl_track_mute_1", "pl_track_solo_1", "pl_vol_1"] {
             assert!(
-                window.try_find(id).is_none(),
-                "sangrado del mixer en la playlist: {id} no debería existir"
+                window.try_find(id).is_some(),
+                "el track header de la playlist debería traer el control {id}"
             );
         }
-        // En la vista Playlist no hay consola de mezcla en el árbol.
         assert!(
             window.try_find("studio_mixer_panel").is_none(),
-            "el mixer no debería renderizarse en la vista Playlist"
+            "la consola de mezcla completa no debería renderizarse en la vista Playlist"
         );
     })
     .unwrap();

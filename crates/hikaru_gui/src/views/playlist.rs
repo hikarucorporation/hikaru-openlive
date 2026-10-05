@@ -22,6 +22,10 @@ use gpui_kit::*;
 
 use crate::app::{state, AppState, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::views::matrix::{
+    self, end_mix_drag, h_mix_slider_ex, ms_button, pan_knob_ex, start_pan_drag, step_mix_pan_gesture,
+    step_mix_slider_gesture, MatrixMixTarget,
+};
 use crate::views::mixer::Track;
 use hikaru_transport::DEFAULT_PPQN;
 
@@ -287,11 +291,13 @@ impl PlaylistState {
 /// Geometría compartida de la Playlist / Timeline (OpenStudio).
 ///
 /// `TRACK_ROW_H` es la altura de fila POR DEFECTO (`PlaylistState::row_h`
-/// arranca acá, sincronizada con el mixer lateral). El zoom vertical
-/// (`Alt` + rueda) la cambia sólo en la playlist: el scroll vertical de ambos
-/// paneles se sincroniza por índice de fila, así que con zoom vertical activo
-/// las filas pueden desalinearse del mixer — se acepta a cambio del zoom.
-pub const TRACK_ROW_H: f32 = 54.0;
+/// arranca acá). Son 68px porque el Track Header ahora replica la caja de
+/// mezcla del Session Matrix (nombre + M/S + knob de pan de 22px + fader de
+/// volumen de 12px + lecturas dB/pan): con los 54px de antes los controles se
+/// superponían. El zoom vertical (`Alt` + rueda) la cambia sólo en la playlist,
+/// y `MIN_ROW_H` mantiene el mínimo justo para que la caja siga entrando sin
+/// solaparse.
+pub const TRACK_ROW_H: f32 = 68.0;
 /// Alto de la regla de compases (ruler / timebar superior).
 pub const RULER_H: f32 = 24.0;
 /// Límites del zoom temporal (px por tick).
@@ -299,10 +305,12 @@ pub const MIN_ZOOM_X: f32 = 0.005;
 pub const MAX_ZOOM_X: f32 = 2.0;
 /// Límites del zoom vertical (altura de fila en px).
 ///
-/// `MIN_ROW_H` deja lugar al título del clip (14px) + forma de onda mínima;
-/// `MAX_ROW_H` evita filas gigantes que rompan el scroll o el layout.
-pub const MIN_ROW_H: f32 = 28.0;
-pub const MAX_ROW_H: f32 = 160.0;
+/// `MIN_ROW_H` es la caja de mezcla del header completa (68px por defecto:
+/// 28px del knob + padding de 3px de cada lado + la fila del título) para que
+/// los controles nunca se pisen al achicar; `MAX_ROW_H` evita filas gigantes
+/// que rompan el scroll o el layout.
+pub const MIN_ROW_H: f32 = 60.0;
+pub const MAX_ROW_H: f32 = 180.0;
 
 #[inline]
 fn px_to_ticks(px: f32, zoom_x: f32) -> u64 {
@@ -596,6 +604,290 @@ fn playlist_row_keys(s: &AppState) -> Vec<usize> {
     .collect()
 }
 
+// =========================================================================
+// MEZCLA EN LOS TRACK HEADERS (M/S/volumen/pan) — espejo del Session Matrix
+// =========================================================================
+//
+// Los headers de la Playlist usan los MISMOS widgets que el Session Matrix
+// (`matrix::h_mix_slider_ex`, `pan_knob_ex`, `ms_button`), así que el diseño
+// es idéntico y sólo cambia la destino de la escritura: los helpers de abajo
+// escriben en la pista del MODO ACTIVO y espejan al mixer y a la Session
+// Matrix (más el `GuiCommand` al motor). Así M/S/vol/pan quedan
+// bidireccionales entre Playlist, Mixer y Matrix.
+
+/// Índice de fila de la playlist → índice de pista del motor.
+///
+/// En OpenStudio la fila 0 es `studio_tracks[0]` (el índice coincide con el
+/// vector); en OpenLive la fila 0 es `live_tracks[1]` (el 0 es el master y la
+/// Matrix indexa sus pistas desde 0). Es la misma convención de
+/// `playlist_row_keys` + `arranger_view::StripTarget`.
+fn playlist_row_to_engine_idx(s: &AppState, row: usize) -> usize {
+    match s.mode {
+        crate::app::AppMode::OpenLive => row,
+        crate::app::AppMode::OpenStudio => row,
+    }
+}
+
+/// Escribe el volumen en la pista del modo activo, espejando al resto de vistas.
+fn apply_playlist_volume(s: &mut AppState, row: usize, volume: f32) {
+    let volume = volume.clamp(0.0, 1.0);
+    let engine_idx = playlist_row_to_engine_idx(s, row);
+    match s.mode {
+        crate::app::AppMode::OpenLive => {
+            if let Some(t) = s.matrix_state.tracks.get_mut(row) {
+                t.volume = volume;
+            }
+            if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
+                live.volume = volume;
+            }
+        }
+        crate::app::AppMode::OpenStudio => {
+            if let Some(t) = s.studio_tracks.get_mut(engine_idx) {
+                t.volume = volume;
+            }
+        }
+    }
+    s.audio_proxy.send(GuiCommand::SetTrackVolume {
+        track_idx: engine_idx,
+        volume_db: volume,
+    });
+}
+
+/// Escribe el paneo en la pista del modo activo, espejando al resto de vistas.
+fn apply_playlist_pan(s: &mut AppState, row: usize, pan: f32) {
+    let pan = pan.clamp(-1.0, 1.0);
+    let engine_idx = playlist_row_to_engine_idx(s, row);
+    match s.mode {
+        crate::app::AppMode::OpenLive => {
+            if let Some(t) = s.matrix_state.tracks.get_mut(row) {
+                t.pan = pan;
+            }
+            if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
+                live.pan = pan;
+            }
+        }
+        crate::app::AppMode::OpenStudio => {
+            if let Some(t) = s.studio_tracks.get_mut(engine_idx) {
+                t.pan = pan;
+            }
+        }
+    }
+    s.audio_proxy.send(GuiCommand::SetTrackPan {
+        track_idx: engine_idx,
+        pan,
+    });
+}
+
+/// Invierte Mute: pista del modo activo + espejo Matrix/Mixer + motor.
+fn toggle_playlist_mute(cx: &mut App, row: usize) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let engine_idx = playlist_row_to_engine_idx(s, row);
+        let muted = match s.mode {
+            crate::app::AppMode::OpenLive => {
+                let muted = s
+                    .matrix_state
+                    .tracks
+                    .get(row)
+                    .map(|t| !t.muted)
+                    .unwrap_or(false);
+                if let Some(t) = s.matrix_state.tracks.get_mut(row) {
+                    t.muted = muted;
+                }
+                if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
+                    live.mute = muted;
+                }
+                muted
+            }
+            crate::app::AppMode::OpenStudio => {
+                let Some(t) = s.studio_tracks.get_mut(engine_idx) else {
+                    return;
+                };
+                t.mute = !t.mute;
+                t.mute
+            }
+        };
+        s.audio_proxy.send(GuiCommand::SetTrackMute {
+            track_idx: engine_idx,
+            mute: muted,
+        });
+        cx.notify();
+    });
+}
+
+/// Invierte Solo: pista del modo activo + espejo Matrix/Mixer + motor.
+fn toggle_playlist_solo(cx: &mut App, row: usize) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let engine_idx = playlist_row_to_engine_idx(s, row);
+        let soloed = match s.mode {
+            crate::app::AppMode::OpenLive => {
+                let soloed = s
+                    .matrix_state
+                    .tracks
+                    .get(row)
+                    .map(|t| !t.soloed)
+                    .unwrap_or(false);
+                if let Some(t) = s.matrix_state.tracks.get_mut(row) {
+                    t.soloed = soloed;
+                }
+                if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
+                    live.solo = soloed;
+                }
+                soloed
+            }
+            crate::app::AppMode::OpenStudio => {
+                let Some(t) = s.studio_tracks.get_mut(engine_idx) else {
+                    return;
+                };
+                t.solo = !t.solo;
+                t.solo
+            }
+        };
+        s.audio_proxy.send(GuiCommand::SetTrackSolo {
+            track_idx: engine_idx,
+            solo: soloed,
+        });
+        cx.notify();
+    });
+}
+
+/// Estado de mezcla de una fila para pintar el header (nombre, M, S, vol, pan).
+fn playlist_row_mix(s: &AppState, row: usize) -> (String, bool, bool, f32, f32) {
+    let engine_idx = playlist_row_to_engine_idx(s, row);
+    match s.mode {
+        crate::app::AppMode::OpenLive => {
+            let live = s.live_tracks.get(engine_idx + 1);
+            let mx = s.matrix_state.tracks.get(row);
+            match (live, mx) {
+                (Some(l), Some(m)) => (l.name.clone(), m.muted, m.soloed, m.volume, m.pan),
+                (Some(l), None) => (l.name.clone(), l.mute, l.solo, l.volume, l.pan),
+                _ => (format!("TRK {:02}", row + 1), false, false, 0.75, 0.0),
+            }
+        }
+        crate::app::AppMode::OpenStudio => match s.studio_tracks.get(engine_idx) {
+            Some(t) => (t.name.clone(), t.mute, t.solo, t.volume, t.pan),
+            None => (format!("TRK {:02}", row + 1), false, false, 0.75, 0.0),
+        },
+    }
+}
+
+/// Header de pista de la Playlist con la MISMA caja de mezcla que la Session
+/// Matrix: nombre (con ellipsis) + [M] [S], y debajo knob de pan + lectura
+/// C/Lxx/Rxx + fader de volumen + dB.
+///
+/// Los widgets son los de `matrix` (reutilizados vía `*_ex` con el apply de
+/// esta vista), así el comportamiento de drag/doble-clic es idéntico y sólo
+/// cambia la escritura. El click en el fondo selecciona la pista destino.
+fn playlist_track_header_with_selected(
+    row: usize,
+    vec_idx: usize,
+    name: String,
+    muted: bool,
+    soloed: bool,
+    volume: f32,
+    pan: f32,
+    mix_drag: Option<MatrixMixTarget>,
+    selected_row: bool,
+) -> AnyElement {
+    v_flex()
+        .w_full()
+        .h_full()
+        .bg(rgb(0x1C1C20))
+        .border_1()
+        .border_color(if selected_row {
+            rgb(0x5AB4FF)
+        } else {
+            rgb(0x2D2D37)
+        })
+        .rounded(px(4.0))
+        .p(px(1.0))
+        .gap(px(1.0))
+        .overflow_hidden()
+        .id(format!("pl_row_{}", vec_idx))
+        .test_support()
+        .on_click(move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                state.selected_track_index = vec_idx;
+                cx.notify();
+            });
+        })
+        .child(
+            h_flex()
+                .items_center()
+                .justify_between()
+                .gap(px(4.0))
+                .flex_shrink_0()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(
+                            Label::new(name)
+                                .text_xs()
+                                .text_color(rgb(0xE0E0E0))
+                                .text_ellipsis(),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap(px(2.0))
+                        .flex_shrink_0()
+                        .child(ms_button(
+                            format!("pl_track_mute_{}", vec_idx),
+                            "M",
+                            muted,
+                            rgb(0xFF5050),
+                            move |cx| toggle_playlist_mute(cx, row),
+                        ))
+                        .child(ms_button(
+                            format!("pl_track_solo_{}", vec_idx),
+                            "S",
+                            soloed,
+                            rgb(0xFFC800),
+                            move |cx| toggle_playlist_solo(cx, row),
+                        )),
+                ),
+        )
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .flex_shrink_0()
+                .overflow_hidden()
+                .child(pan_knob_ex(
+                    SharedString::from(format!("pl_panknob_{}", vec_idx)),
+                    row,
+                    pan,
+                    mix_drag == Some(MatrixMixTarget::Pan(row)),
+                    apply_playlist_pan,
+                ))
+                .child(
+                    Label::new(matrix::pan_text(matrix::snap_center_pan(pan)))
+                        .text_size(px(9.0))
+                        .text_color(rgb(0xE0E0E0))
+                        .w(px(24.0)),
+                )
+                .child(h_mix_slider_ex(
+                    format!("pl_vol_{}", vec_idx),
+                    row,
+                    volume,
+                    mix_drag == Some(MatrixMixTarget::Volume(row)),
+                    matrix::VOLUME_RESET,
+                    apply_playlist_volume,
+                ))
+                .child(
+                    Label::new(matrix::db_text(volume))
+                        .text_size(px(9.0))
+                        .text_color(rgb(0xE0E0E0))
+                        .w(px(42.0)),
+                ),
+        )
+        .into_any_element()
+}
+
 /// Finaliza el gesto de arrastre activo, si lo hay.
 ///
 /// Si hubo movimiento y es un clip de audio, sincroniza la nueva posición
@@ -844,7 +1136,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let selected_track = app.selected_track_index;
     let playlist_scroll_h = app.playlist_scroll_h.clone();
     let playlist_scroll_v = app.playlist_scroll_v.clone();
-    drop(app);
+    // Gesto de mezcla en curso (compartido con la Session Matrix: mismo tag
+    // global, así el drag no se corta al re-render de los headers).
+    let mix_drag = app.matrix_mix_drag;
 
     // Compás real según SIG (BPM sólo afecta a segundos, no a ticks).
     let ticks_per_bar_val = ticks_per_bar(ppqn, beats_per_bar);
@@ -854,6 +1148,17 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .iter()
         .enumerate()
         .filter(|(_, t)| !t.is_master)
+        .collect();
+
+    // Snapshot de mezcla por fila (nombre, M, S, vol, pan) para los headers:
+    // se copia acá porque el render no puede mantener el borrow de `app`
+    // mientras arma la UI.
+    let rows_mix: Vec<(usize, String, bool, bool, f32, f32)> = non_master
+        .iter()
+        .map(|(idx, _)| {
+            let (name, muted, soloed, volume, pan) = playlist_row_mix(&app, *idx);
+            (*idx, name, muted, soloed, volume, pan)
+        })
         .collect();
 
     let track_height = clamped_row_h(pl.row_h);
@@ -871,42 +1176,30 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let canvas_w = (header_width + total_ticks as f32 * zoom_x).max(800.0);
     let grid_w = (canvas_w - header_width).max(1.0);
 
-    // Cabeceras de fila LIMPIAS: sólo identidad de pista (número + nombre).
-    // Sin faders, sin pan, sin S/M/R, sin dB — la mezcla vive en el mixer
-    // lateral (`arranger_view.rs`). El click selecciona la pista destino
-    // (navegación de arreglo, no mezcla).
+    // Cabeceras de fila con la MISCA caja de mezcla del Session Matrix
+    // (nombre + M/S + knob de pan + fader de volumen con dB). El id de
+    // control sigue siendo `pl_row_{idx}` (lo usan los tests de click) y el
+    // apply de cada gesto escribe en la pista del modo activo espejando
+    // mixer/matriz/motor, así queda bidireccional.
     let mut track_headers: Vec<AnyElement> = Vec::new();
-    for (idx, track) in &non_master {
-        let vec_idx = *idx;
-        let tname = track.name.clone();
-        let row_label = format!("TRK {:02}", track.id);
-        let is_selected_row = selected_track == vec_idx;
+    for (row, name, muted, soloed, volume, pan) in &rows_mix {
+        let vec_idx = *row;
+        // Resaltado de la fila seleccionada: se pasa por el borde del header
+        // comparando contra el estado leído en el snapshot del render.
+        let selected_border = selected_track == vec_idx;
         track_headers.push(
-            v_flex()
-                .w(px(header_width))
-                .h(px(track_height))
-                .bg(rgb(0x1C1C20))
-                .border_1()
-                .border_color(if is_selected_row {
-                    rgb(0x5AB4FF)
-                } else {
-                    rgb(0x2D2D37)
-                })
-                .p(px(4.0))
-                .gap(px(1.0))
-                .justify_center()
-                .id(format!("pl_row_{}", vec_idx))
-                .test_support()
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        state.selected_track_index = vec_idx;
-                        cx.notify();
-                    });
-                })
-                .child(Label::new(row_label).text_xs())
-                .child(Label::new(tname).text_xs())
-                .into_any_element(),
+            playlist_track_header_with_selected(
+                *row,
+                vec_idx,
+                name.clone(),
+                *muted,
+                *soloed,
+                *volume,
+                *pan,
+                mix_drag,
+                selected_border,
+            )
+            .into_any_element(),
         );
     }
 
@@ -1656,9 +1949,51 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .into_any_element(),
     );
 
+    // Capturador de drag de mezcla a ventana completa: mientras haya un gesto
+    // de volumen/pan vivo en los headers, este overlay recibe TODOS los
+    // mouse_move/mouse_up aunque el cursor salga del control (mismo patrón que
+    // `matrix_mix_drag_catcher`). Se monta sólo durante el gesto y lee el
+    // tag global compartido, así sirve igual para Matrix y Playlist.
+    if mix_drag.is_some() {
+        all.push(
+            div()
+                .absolute()
+                .inset_0()
+                .id("playlist_mix_drag_catcher")
+                .cursor_grabbing()
+                .on_mouse_move(move |event, _, cx| {
+                    if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                        end_mix_drag(cx);
+                        return;
+                    }
+                    let drag = state(cx).read(cx).matrix_mix_drag;
+                    match drag {
+                        Some(MatrixMixTarget::Volume(idx)) => step_mix_slider_gesture(
+                            cx,
+                            idx,
+                            event.position.x.as_f32(),
+                            apply_playlist_volume,
+                        ),
+                        Some(MatrixMixTarget::Pan(idx)) => step_mix_pan_gesture(
+                            cx,
+                            idx,
+                            event.position.y.as_f32(),
+                            apply_playlist_pan,
+                        ),
+                        None => {}
+                    }
+                })
+                .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    end_mix_drag(cx);
+                })
+                .into_any_element(),
+        );
+    }
+
     v_flex()
         .id("playlist")
         .test_support()
+        .relative()
         .size_full()
         .gap(px(4.0))
         .children(all)
