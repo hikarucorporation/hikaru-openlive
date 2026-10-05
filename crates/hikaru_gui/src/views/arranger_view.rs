@@ -269,6 +269,10 @@ fn with_mixer_pan(div: Stateful<Div>, panning: bool) -> Stateful<Div> {
 /// `min_w_full`, de modo que mide el ancho REAL de las columnas (y no el del
 /// viewport). Sin eso el `scroll_max` horizontal queda en ~0 y aparece un
 /// "muro invisible" que impide llegar a las últimas pistas.
+///
+/// La scrollbar horizontal es una tira explícita propia
+/// (`mixer_scrollbar_strip`), no el overlay del kit: así el thumb responde a
+/// la fórmula exacta sobre el mismo handle.
 fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, panning: bool) -> Stateful<Div> {
     with_mixer_pan(
         div()
@@ -284,7 +288,6 @@ fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, pann
     .overflow_x_scroll()
     .restrict_scroll_to_axis()
     .track_scroll(scroll_h)
-    .horizontal_scrollbar(scroll_h)
     .child(
         div()
             .flex_none()
@@ -299,6 +302,218 @@ fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, pann
                     .children(content_columns),
             ),
     )
+}
+
+// =========================================================================
+// SCROLLBAR HORIZONTAL EXPLÍCITA DEL MIXER
+// =========================================================================
+//
+// Tira siempre visible al pie del área de columnas, con matemática propia y
+// exacta sobre el MISMO `mixer_scroll_h` que mueve el MMB drag:
+//
+// - Recorrido dinámico: `max = contenido - viewport`, recalculado en cada
+//   layout (agregar/quitar pistas o redimensionar actualiza solo).
+// - Thumb proporcional: `thumb_w = viewport / contenido * track`,
+//   `thumb_x = (magnitud / max) * (track - thumb_w)`.
+// - Bidireccional: el drag izquierdo del thumb/strip escribe el mismo offset
+//   clampado `[-max, 0]` que el pan.
+// - Convención de signos (la de GPUI): offset `<= 0`; `magnitud = -offset`.
+
+/// Alto de la tira de scrollbar + ancho mínimo del thumb.
+pub const MIXER_BAR_HEIGHT: f32 = 10.0;
+pub const MIXER_THUMB_MIN_W: f32 = 24.0;
+
+/// Geometría de la scrollbar, en px y coordenadas LOCALES de la tira.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixerBarGeom {
+    /// Ancho de la tira (= viewport: la tira es `w_full` en la misma columna).
+    pub track_w: f32,
+    /// Ancho del thumb (proporción visible del contenido).
+    pub thumb_w: f32,
+    /// X local del borde izquierdo del thumb.
+    pub thumb_x: f32,
+    /// Recorrido máximo (`contenido - viewport`, `>= 0`).
+    pub max: f32,
+}
+
+/// Calcula la geometría desde valores vivos (función pura: testeable sin ventana).
+pub fn mixer_bar_geom(offset_x: f32, max_x: f32, viewport_w: f32) -> MixerBarGeom {
+    let max = max_x.max(0.0);
+    let track_w = viewport_w.max(0.0);
+    if max <= 0.0 || track_w <= 0.0 {
+        // Sin desborde: thumb a todo lo ancho, sin recorrido.
+        return MixerBarGeom {
+            track_w,
+            thumb_w: track_w,
+            thumb_x: 0.0,
+            max: 0.0,
+        };
+    }
+    let content = max + track_w;
+    let thumb_w = ((track_w / content) * track_w).clamp(MIXER_THUMB_MIN_W, track_w);
+    let travel = (track_w - thumb_w).max(0.0);
+    let magnitude = (-offset_x).clamp(0.0, max);
+    let thumb_x = magnitude / max * travel;
+    MixerBarGeom {
+        track_w,
+        thumb_w,
+        thumb_x,
+        max,
+    }
+}
+
+/// Inversa: magnitud `[0, max]` desde una X local de thumb.
+fn mixer_bar_magnitude(thumb_x: f32, geom: &MixerBarGeom) -> f32 {
+    let travel = (geom.track_w - geom.thumb_w).max(0.0);
+    if travel <= 0.0 || geom.max <= 0.0 {
+        return 0.0;
+    }
+    (thumb_x / travel).clamp(0.0, 1.0) * geom.max
+}
+
+/// Geometría con los valores vivos del handle.
+fn live_bar_geom(cx: &mut App) -> MixerBarGeom {
+    let s = state(cx).read(cx);
+    let h = &s.mixer_scroll_h;
+    mixer_bar_geom(
+        h.offset().x.as_f32(),
+        h.max_offset().x.as_f32(),
+        h.bounds().size.width.as_f32(),
+    )
+}
+
+/// Escribe la magnitud en el handle compartido con el MISMO clamp que el pan.
+fn apply_bar_offset(cx: &mut App, magnitude: f32) {
+    let st = state(cx);
+    let h = st.read(cx).mixer_scroll_h.clone();
+    let max = h.max_offset().x.as_f32().max(0.0);
+    h.set_offset(point(px(-magnitude.clamp(0.0, max)), h.offset().y));
+}
+
+fn start_bar_drag(cx: &mut App, cursor_local_x: f32) {
+    let geom = live_bar_geom(cx);
+    // Agarre: si el click cae sobre el thumb se conserva el punto de agarre
+    // para que no salte; si cae en la pista se centra el thumb en el click.
+    let grab = if cursor_local_x >= geom.thumb_x
+        && cursor_local_x <= geom.thumb_x + geom.thumb_w
+    {
+        cursor_local_x - geom.thumb_x
+    } else {
+        geom.thumb_w / 2.0
+    };
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.mixer_bar_drag = Some(grab);
+        cx.notify();
+    });
+    apply_bar_offset(cx, mixer_bar_magnitude(cursor_local_x - grab, &geom));
+}
+
+fn update_bar_drag(cx: &mut App, cursor_local_x: f32) {
+    let st = state(cx);
+    let (grab, geom) = {
+        let s = st.read(cx);
+        (
+            s.mixer_bar_drag,
+            mixer_bar_geom(
+                s.mixer_scroll_h.offset().x.as_f32(),
+                s.mixer_scroll_h.max_offset().x.as_f32(),
+                s.mixer_scroll_h.bounds().size.width.as_f32(),
+            ),
+        )
+    };
+    let Some(grab) = grab else {
+        return;
+    };
+    apply_bar_offset(cx, mixer_bar_magnitude(cursor_local_x - grab, &geom));
+    // Repaint en tiempo real: mutar el handle no invalida por sí solo.
+    st.update(cx, |_, cx| cx.notify());
+}
+
+fn stop_bar_drag(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.mixer_bar_drag.take().is_some() {
+            cx.notify();
+        }
+    });
+}
+
+/// Tira de scrollbar horizontal explícita (siempre visible).
+///
+/// El thumb se posiciona por fórmula exacta sobre el handle vivo, así que
+/// refleja el viewport 1:1 en cada frame, venga el scroll del MMB drag, de
+/// la rueda o de su propio drag izquierdo.
+fn mixer_scrollbar_strip(scroll_h: &ScrollHandle, panning: bool, bar_dragging: bool) -> AnyElement {
+    let geom = mixer_bar_geom(
+        scroll_h.offset().x.as_f32(),
+        scroll_h.max_offset().x.as_f32(),
+        scroll_h.bounds().size.width.as_f32(),
+    );
+    // Bounds en pantalla para traducir el puntero a X local de la tira
+    // (mismo patrón que los faders: canvas que registra bounds).
+    let strip_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
+    let b_down = strip_bounds.clone();
+    let b_move = strip_bounds.clone();
+    let b_paint = strip_bounds.clone();
+
+    with_mixer_pan(div().id("arranger_mixer_scrollbar"), panning)
+        .test_support()
+        .w_full()
+        .h(px(MIXER_BAR_HEIGHT))
+        .flex_shrink_0()
+        .bg(rgb(0x141416))
+        .border_t_1()
+        .border_color(rgb(0x2D2D37))
+        .cursor(if bar_dragging {
+            CursorStyle::ClosedHand
+        } else {
+            CursorStyle::Arrow
+        })
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            let b = b_down.get();
+            start_bar_drag(cx, event.position.x.as_f32() - b[0]);
+        })
+        .on_mouse_move(move |event, _, cx| {
+            // Igual que el pan: move sin botón = gesto colgado, se cierra.
+            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                stop_bar_drag(cx);
+                return;
+            }
+            if state(cx).read(cx).mixer_bar_drag.is_none() {
+                return;
+            }
+            let b = b_move.get();
+            update_bar_drag(cx, event.position.x.as_f32() - b[0]);
+        })
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            stop_bar_drag(cx)
+        })
+        .child(
+            canvas(
+                move |bounds, _, _| record_bounds(&b_paint, bounds),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .child(
+            div()
+                .id("arranger_mixer_scroll_thumb")
+                .test_support()
+                .absolute()
+                .left(px(geom.thumb_x))
+                .top(px(1.0))
+                .bottom(px(1.0))
+                .w(px(geom.thumb_w))
+                .rounded(px(2.0))
+                .bg(if bar_dragging {
+                    rgb(0x7AC8FF)
+                } else {
+                    rgb(0x3E6E8E)
+                }),
+        )
+        .into_any_element()
 }
 
 fn set_pan(cx: &mut App, target: FaderTarget, pan: f32) {
@@ -2084,10 +2299,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     // scrollbar del kit en vez del `Scrollable` implícito: el handle lo posee
     // `AppState` (`mixer_scroll_h/v`) para que el gesto MMB pueda fijar el
     // offset sin pasar por el keyed-state interno de la ventana.
-    let (mixer_panning, mixer_scroll_h, mixer_scroll_v) = {
+    let (mixer_panning, mixer_bar_dragging, mixer_scroll_h, mixer_scroll_v) = {
         let app = state(cx).read(cx);
         (
             app.mixer_pan.is_some(),
+            app.mixer_bar_drag.is_some(),
             app.mixer_scroll_h.clone(),
             app.mixer_scroll_v.clone(),
         )
@@ -2141,14 +2357,21 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .w_full()
                         .min_h_0()
                         .min_w_0()
+                        .flex()
+                        .flex_col()
                         .child(
-                            with_mixer_pan(div().id("arranger_mixer_vscroll").flex().flex_col().h_full().w_full(), mixer_panning)
+                            with_mixer_pan(div().id("arranger_mixer_vscroll").flex().flex_col().flex_1().min_h_0().w_full(), mixer_panning)
                                 .overflow_y_scroll()
                                 .restrict_scroll_to_axis()
                                 .track_scroll(&mixer_scroll_v)
                                 .vertical_scrollbar(&mixer_scroll_v)
                                 .child(mixer_hscroll(mixer_columns, &mixer_scroll_h, mixer_panning)),
-                        ),
+                        )
+                        .child(mixer_scrollbar_strip(
+                            &mixer_scroll_h,
+                            mixer_panning,
+                            mixer_bar_dragging,
+                        )),
                 ),
             )
             .into_any_element();
@@ -2178,7 +2401,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .track_scroll(&mixer_scroll_v)
                         .vertical_scrollbar(&mixer_scroll_v)
                         .child(mixer_hscroll(columns, &mixer_scroll_h, mixer_panning)),
-                ),
+                )
+                .child(mixer_scrollbar_strip(
+                    &mixer_scroll_h,
+                    mixer_panning,
+                    mixer_bar_dragging,
+                )),
         )
         .into_any_element()
 }

@@ -311,6 +311,10 @@ pub struct AppState {
     /// Arranger. Global —y no flag local del widget— por el mismo motivo que
     /// `arranger_fader_drag`: el área se reconstruye en cada frame.
     pub mixer_pan: Option<arranger_view::MixerPanState>,
+    /// Arrastre del thumb de la scrollbar horizontal explícita del Mixer con
+    /// botón izquierdo: guarda el agarre (`click_x - thumb_x`, px) para que
+    /// el thumb no salte al agarrarlo fuera del centro. `None` = sin drag.
+    pub mixer_bar_drag: Option<f32>,
     /// Gesto de mezcla en curso en los headers de la Session Matrix
     /// (volumen/pan por pista). Global —y no flag local del widget— porque
     /// el header se reconstruye en cada frame y el primer `notify` del drag
@@ -597,6 +601,7 @@ impl HikaruApp {
             mixer_scroll_h: ScrollHandle::new(),
             mixer_scroll_v: ScrollHandle::new(),
             mixer_pan: None,
+            mixer_bar_drag: None,
             matrix_mix_drag: None,
             matrix_pan_gesture: None,
             matrix_mix_bounds: [0.0; 4],
