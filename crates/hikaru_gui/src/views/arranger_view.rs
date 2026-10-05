@@ -2056,7 +2056,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     };
 
     // -------------------------------------------------------------
-    // Barra superior: modo + pistas (reemplaza la cabecera del dock mixer)
+    // Barra superior: pistas (el selector de modo OpenLive/OpenStudio vive
+    // únicamente en la barra de transporte principal; acá sólo quedan los
+    // controles propios del área: [+], [-], TOTAL y la vista activa).
     // -------------------------------------------------------------
     let is_live = mode == AppMode::OpenLive;
     let toolbar = h_flex()
@@ -2066,32 +2068,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .gap(px(6.0))
         .px(px(4.0))
         .py(px(2.0))
-        .child(
-            Button::new("arr_openlive")
-                .rounded(ButtonRounded::None)
-                .label("OPENLIVE")
-                .compact()
-                .when(is_live, |b| b.text_color(rgb(0x00B4D8)))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.mode = AppMode::OpenLive;
-                    });
-                }),
-        )
-        .child(
-            Button::new("arr_openstudio")
-                .rounded(ButtonRounded::None)
-                .label("OPENSTUDIO")
-                .compact()
-                .when(!is_live, |b| b.text_color(rgb(0xFF6E00)))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.mode = AppMode::OpenStudio;
-                    });
-                }),
-        )
         .child(
             Button::new("arr_add_track")
                 .rounded(ButtonRounded::None)
