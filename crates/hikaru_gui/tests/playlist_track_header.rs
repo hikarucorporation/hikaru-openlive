@@ -23,6 +23,8 @@ use gpui_kit::{
 use hikaru_gui::app::{AppMode, HikaruApp};
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
 use hikaru_gui::views::mixer::Track;
+use hikaru_gui::views::playlist;
+use hikaru_gui::views::playlist::{ClipType, PlaylistClip};
 
 fn test_app(window: &mut Window, cx: &mut Context<HikaruApp>) -> HikaruApp {
     let (tx, _rx) = std::sync::mpsc::channel::<GuiCommand>();
@@ -46,6 +48,32 @@ fn open_studio(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<HikaruApp> {
         app.update(cx, |app, cx| {
             app.state.update(cx, |s, cx| {
                 s.mode = AppMode::OpenStudio;
+                while s.studio_tracks.len() < 5 {
+                    let next_id = s.studio_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                    let n = s.studio_tracks.iter().filter(|t| !t.is_master).count();
+                    s.studio_tracks.push(Track::new(next_id, format!("TRACK {:02}", n + 1), false));
+                }
+                // Un clip por fila (id == fila) para comparar la base del
+                // header contra la del carril de la grilla.
+                for row in 1..=4usize {
+                    let id = 100 + row;
+                    s.playlist_state.clips.push((
+                        row,
+                        PlaylistClip {
+                            id,
+                            name: format!("Clip {row}"),
+                            start_tick: row as u64 * s.playlist_state.ppqn,
+                            duration_ticks: s.playlist_state.ppqn,
+                            clip_type: ClipType::Audio {
+                                sample_path: "x.wav".to_string(),
+                                peaks: vec![0.5; 32],
+                                sample_offset_ticks: 0,
+                                total_sample_ticks: s.playlist_state.ppqn,
+                            },
+                            color: gpui_kit::rgb(0x205F91).into(),
+                        },
+                    ));
+                }
                 cx.notify();
             });
         });
@@ -339,4 +367,77 @@ fn playlist_pan_drag_updates_track(cx: &mut TestAppContext) {
         after > before + 0.05,
         "arrastrar el knob hacia arriba debería panear a la derecha ({before:.3} -> {after:.3})"
     );
+}
+
+/// Regresión de la asimetría de alto: el Track Header debe medir EXACTAMENTE lo
+/// mismo que el carril de la grilla. Con `h_full()` (el bug) el header medía el
+/// alto de su contenido (73.5px) contra los 68px del carril y cada fila acumulaba
+/// ~5.5px de desfase respecto del clip de su fila.
+///
+/// Se mide en tres filas y con zoom vertical (que es lo que ata el header al
+/// `row_h` actual): el offset header-vs-clip debe ser 0 en todas.
+#[gpui_kit::gpui::test]
+fn header_height_matches_track_row_and_does_not_drift(cx: &mut TestAppContext) {
+    let handle = open_studio(cx);
+    // (y del header, y del clip) por fila, con `row_h` dado.
+    fn sample(
+        handle: gpui_kit::WindowHandle<HikaruApp>,
+        cx: &mut TestAppContext,
+        row_h: f32,
+    ) -> Vec<(f32, f32)> {
+        cx.update_window(handle.into(), |view, _, cx| {
+            let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+            app.update(cx, |app, cx| {
+                app.state.update(cx, |s, _| s.playlist_state.row_h = row_h);
+            });
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            (1..=3)
+                .map(|i| {
+                    let h = window.find(format!("pl_row_{i}")).bounds();
+                    // Los clips del fixture usan id 100 + fila.
+                    let c = window.find(format!("pl_clip_{}", 100 + i)).bounds();
+                    (
+                        h.origin.y.as_f32() + h.size.height.as_f32(),
+                        c.origin.y.as_f32() + c.size.height.as_f32(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap()
+    }
+
+    for row_h in [playlist::MIN_ROW_H, playlist::TRACK_ROW_H, playlist::MAX_ROW_H] {
+        let rows = sample(handle, cx, row_h);
+        for (i, (header_bottom, clip_bottom)) in rows.iter().enumerate() {
+                let row = i + 1;
+            // Tolerancia de 2px: el clip se dibuja 1px por dentro del carril
+            // (`clip_y = fila*row_h + 1`, `clip_h = row_h - 2`) y su borde
+            // redondea. Lo que no puede pasar es la DERIVA: el desfase debe
+            // ser el MISMO en todas las filas, no crecer con el índice.
+            let drift = header_bottom - clip_bottom;
+            assert!(
+                drift.abs() <= 2.0,
+                "fila {row} con row_h={row_h}: base del header {header_bottom:.1} vs base del clip {clip_bottom:.1} (desfase {drift:.1}px)"
+            );
+        }
+        // Sin deriva acumulada: el salto entre bases de filas consecutivas
+        // debe ser exactamente `row_h`. Con el bug (header 73.5 vs carril 68)
+        // este salto crecía fila a fila y el desfase se acumulaba.
+        for i in 1..rows.len() {
+            let step = rows[i].0 - rows[i - 1].0;
+            let clip_step = rows[i].1 - rows[i - 1].1;
+            assert!(
+                (step - row_h).abs() < 1.0,
+                "con row_h={row_h}: el salto del header entre las filas {i} y {} es {step:.1} (debería ser {row_h:.1})",
+                i + 1
+            );
+            assert!(
+                (step - clip_step).abs() < 1.0,
+                "con row_h={row_h}: header avanza {step:.1} por fila pero el clip {clip_step:.1} (se separan)"
+            );
+        }
+        println!("row_h={row_h:.0}: headers alineados con los clips en {} filas", rows.len());
+    }
 }

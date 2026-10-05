@@ -789,10 +789,18 @@ fn playlist_track_header_with_selected(
     pan: f32,
     mix_drag: Option<MatrixMixTarget>,
     selected_row: bool,
+    row_h: f32,
 ) -> AnyElement {
     v_flex()
         .w_full()
-        .h_full()
+        // Alto EXPLÍCITO = alto del carril de la grilla. Antes usaba
+        // `h_full()`, que dentro de la `v_flex` de headers resuelve al alto
+        // del CONTENIDO (título + caja de mezcla), no al del carril: medía
+        // 73.5px contra los 68px de la fila y acumulaba 5.5px de desfase por
+        // pista. Fijarlo acá además ata el header al zoom vertical, porque
+        // ambos leen el mismo `track_height` acotado.
+        .h(px(row_h))
+        .flex_shrink_0()
         .bg(rgb(0x1C1C20))
         .border_1()
         .border_color(if selected_row {
@@ -1198,6 +1206,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 *pan,
                 mix_drag,
                 selected_border,
+                track_height,
             )
             .into_any_element(),
         );
