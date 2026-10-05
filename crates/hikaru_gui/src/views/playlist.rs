@@ -659,7 +659,95 @@ fn sync_clips_to_engine(s: &mut AppState, _cx: &mut App) {
     s.playlist_state.sync_all_clips_to_engine(&proxy, bpm);
 }
 
-/// Atajo de edición de clips (`Ctrl`/`Cmd` + tecla). `shift` distingue
+/// Gesto de desplazamiento con botón central (ruedita) en curso.
+///
+/// Igual que `MixerPanState` pero para la Playlist: se guarda la última
+/// posición vista del puntero y cada `MouseMove` aplica sólo el delta
+/// incremental. Es incremental (no absoluto `ancla + offset inicial`) porque
+/// un esquema absoluto acumularía valor crudo fuera de rango al pasar un límite
+/// y el viewport tardaría en responder al volver: así no hay zonas muertas.
+///
+/// Los offsets de scroll viven en `ScrollHandle` con signo NEGATIVO
+/// (`[-max_offset, 0]`), por eso el clamp de `clamp_scroll_offset` es a la
+/// izquierda, no a 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaylistPanState {
+    pub last: (f32, f32),
+}
+
+/// Sensibilidad del pan: 1px de mouse = 1px de viewport.
+///
+/// 1:1 da control preciso compás por compás. El alcance se logra con trazos
+/// largos; amplificar volvería el gesto incontrolable y haría que el viewport
+/// salte de un límite al otro con un flick corto.
+pub const PAN_SENSITIVITY: f32 = 1.0;
+
+/// Acota un offset de scroll al rango real del handle: `[-max, 0]`.
+///
+/// Devolver el valor YA acotado es lo que mantiene sincronizada la scrollbar
+/// (que lee el mismo handle) paso a paso.
+pub fn clamp_scroll_offset(current: f32, max: f32) -> f32 {
+    (current).clamp(-max.max(0.0), 0.0)
+}
+
+fn is_playlist_panning(cx: &mut App) -> bool {
+    state(cx).read(cx).playlist_pan.is_some()
+}
+
+/// Inicia el pan: sembramos la referencia del gesto.
+fn start_playlist_pan(cx: &mut App, position: Point<Pixels>) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.playlist_pan = Some(PlaylistPanState {
+            last: (position.x.as_f32(), position.y.as_f32()),
+        });
+        cx.notify();
+    });
+}
+
+/// Aplica un paso del pan: delta incremental del cursor sobre los dos ejes.
+fn update_playlist_pan(cx: &mut App, position: Point<Pixels>) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some(pan) = s.playlist_pan else {
+            return;
+        };
+        // El viewport sigue al cursor: arrastrar a la derecha/abajo lo mueve
+        // en ese sentido, y con offsets negativos eso es restar el delta.
+        let dx = (position.x.as_f32() - pan.last.0) * PAN_SENSITIVITY;
+        let dy = (position.y.as_f32() - pan.last.1) * PAN_SENSITIVITY;
+
+        let h = s.playlist_scroll_h.clone();
+        let new_x = clamp_scroll_offset(h.offset().x.as_f32() - dx, h.max_offset().x.as_f32());
+        h.set_offset(point(px(new_x), h.offset().y));
+
+        let v = s.playlist_scroll_v.clone();
+        let new_y = clamp_scroll_offset(v.offset().y.as_f32() - dy, v.max_offset().y.as_f32());
+        v.set_offset(point(v.offset().x, px(new_y)));
+
+        // Avanza la referencia: el próximo evento acumula desde acá. (Si el
+        // mismo evento burbujea por los dos contenedores, la segunda pasada ve
+        // delta cero y es no-op.)
+        if let Some(p) = s.playlist_pan.as_mut() {
+            p.last = (position.x.as_f32(), position.y.as_f32());
+        }
+        // El `notify` es obligatorio: mutar un `ScrollHandle` no invalida nada
+        // por sí solo, así que sin esto el viewport se movería a saltos.
+        cx.notify();
+    });
+}
+
+/// Cierra el pan y restaura el cursor por defecto.
+fn stop_playlist_pan(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.playlist_pan.take().is_some() {
+            cx.notify();
+        }
+    });
+}
+
+/// Cursor de edición de clips (`Ctrl`/`Cmd` + tecla). `shift` distingue
 /// `Ctrl+Shift+V` (pegarasure-style) del pegado normal.
 ///
 /// Trabaja sobre `&mut AppState` para que el pegado también sincronice al motor
@@ -1865,6 +1953,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let selected_track = app.selected_track_index;
     let playlist_scroll_h = app.playlist_scroll_h.clone();
     let playlist_scroll_v = app.playlist_scroll_v.clone();
+    // Pan con botón central en curso (cursor de puño cerrado mientras dura).
+    let playlist_panning = app.playlist_pan.is_some();
     // Gesto de mezcla en curso (compartido con la Session Matrix: mismo tag
     // global, así el drag no se corta al re-render de los headers).
     let mix_drag = app.matrix_mix_drag;
@@ -2805,6 +2895,16 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                     .w(px(grid_w))
                                                     .h(px(canvas_h))
                                                     .relative()
+                                                    // Puño cerrado mientras se
+                                                    // navega con el botón
+                                                    // central (GPUI 0.3.x no
+                                                    // tiene `Grabbing`: es el
+                                                    // equivalente CSS).
+                                                    .cursor(if playlist_panning {
+                                                        CursorStyle::ClosedHand
+                                                    } else {
+                                                        CursorStyle::Arrow
+                                                    })
                                             // Move/Up del drag de clips a nivel de grilla (no
                                             // del clip): el cursor sale del clip al arrastrar
                                             // y los handlers del propio clip dejarían de
@@ -2822,12 +2922,23 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                     );
                                                     return;
                                                 }
+                                                // Botón central: el pan manda sobre
+                                                // cualquier otro gesto.
+                                                if event.pressed_button
+                                                    == Some(gpui_kit::MouseButton::Middle)
+                                                {
+                                                    if is_playlist_panning(cx) {
+                                                        update_playlist_pan(cx, event.position);
+                                                    }
+                                                    return;
+                                                }
                                                 if event.pressed_button
                                                     != Some(gpui_kit::MouseButton::Left)
                                                 {
                                                     // Botón soltado fuera: se consolida.
                                                     finish_clip_drag(cx);
                                                     finish_clip_trim(cx);
+                                                    stop_playlist_pan(cx);
                                                     return;
                                                 }
                                                 if state(cx).read(cx).playlist_state.clip_drag.is_none() {
@@ -2849,6 +2960,22 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                     finish_clip_drag(cx);
                                                     finish_clip_trim(cx);
                                                 },
+                                            )
+                                            // Navegación con botón central
+                                            // (ruedita): MMB + arrastrar mueve
+                                            // el viewport en ambos ejes. El
+                                            // cursor pasa a puño cerrado
+                                            // mientras dura el gesto (el
+                                            // `cursor` se lee en el render).
+                                            .on_mouse_down(
+                                                gpui_kit::MouseButton::Middle,
+                                                move |event, _, cx| {
+                                                    start_playlist_pan(cx, event.position);
+                                                },
+                                            )
+                                            .on_mouse_up(
+                                                gpui_kit::MouseButton::Middle,
+                                                move |_, _, cx| stop_playlist_pan(cx),
                                             )
                                             // Marquee: click DERECHO + arrastrar dibuja
                                             // el rectángulo de selección. El
@@ -3026,6 +3153,36 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     // mouse_move/mouse_up aunque el cursor salga del control (mismo patrón que
     // `matrix_mix_drag_catcher`). Se monta sólo durante el gesto y lee el
     // tag global compartido, así sirve igual para Matrix y Playlist.
+    // Delegador del pan a ventana completa: mientras el botón central está
+    // presionado, este overlay recibe TODOS los mouse_move aunque el cursor
+    // salga del panel (o del clip que lo empezó). Es lo que hace el gesto
+    // continuo en vez de cortarse al cruzar el borde. Se desmonta al soltar.
+    if playlist_panning {
+        all.push(
+            div()
+                .id("playlist_pan_catcher")
+                .test_support()
+                .absolute()
+                .inset_0()
+                .cursor_grabbing()
+                .on_mouse_move(move |event, _, cx| {
+                    // Botón soltado fuera de la ventana: el `mouse_up` no
+                    // llega, así que se cierra el gesto acá.
+                    if event.pressed_button != Some(gpui_kit::MouseButton::Middle) {
+                        stop_playlist_pan(cx);
+                        return;
+                    }
+                    if is_playlist_panning(cx) {
+                        update_playlist_pan(cx, event.position);
+                    }
+                })
+                .on_mouse_up(gpui_kit::MouseButton::Middle, move |_, _, cx| {
+                    stop_playlist_pan(cx);
+                })
+                .into_any_element(),
+        );
+    }
+
     // Delegador del marquee a ventana completa: captura el gesto aunque el
     // cursor esté sobre un clip o fuera del panel temporal, así la caja global
     // manda y ningún control la intercepta.

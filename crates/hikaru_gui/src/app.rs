@@ -316,6 +316,10 @@ pub struct AppState {
     /// cambiar `zoom_x` / `row_h`.
     pub playlist_scroll_h: ScrollHandle,
     pub playlist_scroll_v: ScrollHandle,
+    /// Gesto de navegación con botón central (ruedita) sobre la Playlist.
+    /// Mismo patrón que `mixer_pan`: vive global porque el área se reconstruye
+    /// cada frame (un flag local moriría con el primer `notify`).
+    pub playlist_pan: Option<playlist::PlaylistPanState>,
     /// Gesto de pan de navegación con botón central (MMB) sobre el Mixer /
     /// Arranger. Global —y no flag local del widget— por el mismo motivo que
     /// `arranger_fader_drag`: el área se reconstruye en cada frame.
@@ -628,6 +632,7 @@ impl HikaruApp {
             mixer_scroll_v: ScrollHandle::new(),
             playlist_scroll_h: ScrollHandle::new(),
             playlist_scroll_v: ScrollHandle::new(),
+            playlist_pan: None,
             mixer_pan: None,
             mixer_bar_drag: None,
             matrix_mix_drag: None,
