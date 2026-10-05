@@ -123,6 +123,184 @@ fn is_fader_dragging(cx: &mut App, target: FaderTarget) -> bool {
     state(cx).read(cx).arranger_fader_drag == Some(target)
 }
 
+// =========================================================================
+// PAN DE NAVEGACIÓN (Middle Mouse Drag Scroll sobre el Mixer / Arranger)
+// =========================================================================
+//
+// Mantener el botón central (`MouseButton::Middle`) y arrastrar desplaza el
+// viewport de columnas en horizontal y vertical siguiendo al cursor, con el
+// cursor en estilo agarre (`ClosedHand`, el "grabbing" de GPUI) mientras dura
+// el gesto y restauración al cursor por defecto (`Arrow`) al soltar.
+//
+// El gesto vive en `AppState::mixer_pan` (global, como los drags de faders)
+// porque el área de columnas se reconstruye en cada frame: un flag local
+// moriría con el primer `notify`. Los offsets se aplican sobre los
+// `ScrollHandle` explícitos del estado (`mixer_scroll_h/v`), ya clampeados a
+// `[-max_offset, 0]` en cada paso para que el thumb de la scrollbar (que lee
+// el mismo handle) nunca se desincronice del viewport.
+
+/// Gesto de pan en curso: última posición vista del puntero.
+///
+/// `last` son coordenadas de ventana (px). Cada `MouseMove` aplica SOLO el
+/// delta incremental desde `last` (`actual - last`) y avanza `last`: así el
+/// desplazamiento es continuo, sin saltos ni zonas muertas en los bordes
+/// (un esquema absoluto `ancla + offset inicial` acumularía valor crudo fuera
+/// de rango al pasar un límite y el viewport tardaría en responder al volver).
+/// El viewport sigue al cursor: `offset -= delta * SENSITIVITY`.
+///
+/// NOTA de cursores (GPUI 0.3.x no tiene `Grabbing`/`Default`): el "agarre"
+/// es `CursorStyle::ClosedHand` (CSS `grabbing`) y el default es
+/// `CursorStyle::Arrow`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixerPanState {
+    pub last: (f32, f32),
+}
+
+/// Sensibilidad del pan con botón central: 1px de mouse = 1px de viewport.
+///
+/// 1:1 para control preciso pista por pista (el alcance se logra con trazos
+/// largos, no con amplificación: amplificar vuelve el gesto incontrolable y
+/// hace que el viewport salte de un límite al otro con un flick corto).
+pub const MIXER_PAN_SENSITIVITY: f32 = 1.0;
+
+fn is_mixer_panning(cx: &mut App) -> bool {
+    state(cx).read(cx).mixer_pan.is_some()
+}
+
+fn start_mixer_pan(cx: &mut App, position: Point<Pixels>) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.mixer_pan = Some(MixerPanState {
+            last: (position.x.as_f32(), position.y.as_f32()),
+        });
+        cx.notify();
+    });
+}
+
+fn update_mixer_pan(cx: &mut App, position: Point<Pixels>) {
+    let st = state(cx);
+    let (pan, scroll_h, scroll_v) = {
+        let s = st.read(cx);
+        (
+            s.mixer_pan,
+            s.mixer_scroll_h.clone(),
+            s.mixer_scroll_v.clone(),
+        )
+    };
+    let Some(pan) = pan else {
+        return;
+    };
+    // Delta incremental desde el último evento, amplificado por la
+    // sensibilidad. El viewport sigue al cursor: arrastrar a la derecha/abajo
+    // mueve la vista a la derecha/abajo (el offset se vuelve más negativo,
+    // igual que con la rueda del mouse).
+    let dx = (position.x.as_f32() - pan.last.0) * MIXER_PAN_SENSITIVITY;
+    let dy = (position.y.as_f32() - pan.last.1) * MIXER_PAN_SENSITIVITY;
+    // Clamp explícito a `[-max_offset, 0]` (los mismos límites que aplica el
+    // layout): el handle SIEMPRE guarda el valor visible, así el thumb de la
+    // scrollbar —que lee este mismo handle— queda sincronizado paso a paso y
+    // no hay zona muerta al invertir la dirección en un borde.
+    let max_h = scroll_h.max_offset();
+    let new_x = (scroll_h.offset().x.as_f32() - dx).clamp(-max_h.x.as_f32(), 0.0);
+    scroll_h.set_offset(point(px(new_x), scroll_h.offset().y));
+    let max_v = scroll_v.max_offset();
+    let new_y = (scroll_v.offset().y.as_f32() - dy).clamp(-max_v.y.as_f32(), 0.0);
+    scroll_v.set_offset(point(scroll_v.offset().x, px(new_y)));
+    // Avanza el punto de referencia: el próximo evento acumula desde acá.
+    // (Si el mismo evento burbujea por los dos contenedores, la segunda
+    // pasada ve delta cero y es no-op.)
+    //
+    // El `notify` es OBLIGATORIO acá: mutar el `ScrollHandle` no invalida nada
+    // por sí solo y `dispatch_event` solo repinta si algo notificó (la rueda
+    // del mouse sí lo hace en `div.rs`). Sin este notify el viewport y el
+    // thumb de la scrollbar solo se actualizarían cuando otro evento forzara
+    // un frame, y el pan se vería a saltos bruscos en vez de continuo.
+    st.update(cx, |s, cx| {
+        if let Some(pan) = s.mixer_pan.as_mut() {
+            pan.last = (position.x.as_f32(), position.y.as_f32());
+        }
+        cx.notify();
+    });
+}
+
+fn stop_mixer_pan(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.mixer_pan.take().is_some() {
+            cx.notify();
+        }
+    });
+}
+
+/// Conecta un contenedor del área de columnas al pan con botón central:
+/// cursor de agarre mientras `mixer_pan` está activo y tríada
+/// `mouse_down` / `mouse_move` / `mouse_up` para `MouseButton::Middle`.
+fn with_mixer_pan(div: Stateful<Div>, panning: bool) -> Stateful<Div> {
+    div.cursor(if panning {
+        CursorStyle::ClosedHand
+    } else {
+        CursorStyle::Arrow
+    })
+    .on_mouse_down(gpui_kit::MouseButton::Middle, move |event, _, cx| {
+        start_mixer_pan(cx, event.position);
+    })
+    .on_mouse_move(move |event, _, cx| {
+        // Si el botón se soltó fuera del área, el `mouse_up` nunca llega y
+        // el gesto quedaría colgado siguiendo al cursor: ante un move sin el
+        // botón central presionado se cierra el gesto (igual que los faders).
+        if event.pressed_button != Some(gpui_kit::MouseButton::Middle) {
+            stop_mixer_pan(cx);
+            return;
+        }
+        if !is_mixer_panning(cx) {
+            return;
+        }
+        update_mixer_pan(cx, event.position);
+    })
+    .on_mouse_up(gpui_kit::MouseButton::Middle, move |_, _, cx| {
+        stop_mixer_pan(cx)
+    })
+}
+
+/// Scroller horizontal del área de columnas con su contenido medido.
+///
+/// Replica la estructura del `Scrollable` original: el área es flex-row de
+/// tamaño del viewport y el contenido es un item `flex_none` con `w_auto` +
+/// `min_w_full`, de modo que mide el ancho REAL de las columnas (y no el del
+/// viewport). Sin eso el `scroll_max` horizontal queda en ~0 y aparece un
+/// "muro invisible" que impide llegar a las últimas pistas.
+fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, panning: bool) -> Stateful<Div> {
+    with_mixer_pan(
+        div()
+            .id("arranger_mixer_hscroll")
+            .flex()
+            .flex_row()
+            .flex_none()
+            .h_auto()
+            .min_h_full()
+            .w_full(),
+        panning,
+    )
+    .overflow_x_scroll()
+    .restrict_scroll_to_axis()
+    .track_scroll(scroll_h)
+    .horizontal_scrollbar(scroll_h)
+    .child(
+        div()
+            .flex_none()
+            .w_auto()
+            .min_w_full()
+            .p(px(6.0))
+            .child(
+                h_flex()
+                    .gap(px(PAD_GAP))
+                    .items_start()
+                    .flex_shrink_0()
+                    .children(content_columns),
+            ),
+    )
+}
+
 fn set_pan(cx: &mut App, target: FaderTarget, pan: f32) {
     let pan = pan.clamp(-1.0, 1.0);
     let st = state(cx);
@@ -1899,7 +2077,21 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     //     faders, pan, S/M/R, devices, routing, waveform. No contiene grilla.
     // Ambas leen el mismo `studio_tracks`: la selección y los DEVICES se
     // comparten. Los flex-items son `div` planos y cada scroll vive en un
-    // hijo interno (el `Scrollable` consume el `id` de su contenido).
+    // hijo interno con handles explícitos del estado (el pan con botón
+    // central los mueve directo, ver `with_mixer_pan`).
+    //
+    // Los scrolls son `div` con `overflow_*_scroll` + `track_scroll` +
+    // scrollbar del kit en vez del `Scrollable` implícito: el handle lo posee
+    // `AppState` (`mixer_scroll_h/v`) para que el gesto MMB pueda fijar el
+    // offset sin pasar por el keyed-state interno de la ventana.
+    let (mixer_panning, mixer_scroll_h, mixer_scroll_v) = {
+        let app = state(cx).read(cx);
+        (
+            app.mixer_pan.is_some(),
+            app.mixer_scroll_h.clone(),
+            app.mixer_scroll_v.clone(),
+        )
+    };
     if !is_live {
         let mixer_columns = columns;
         // Wrapper observable del área (mismo `id` que en OpenLive para el
@@ -1950,23 +2142,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .min_h_0()
                         .min_w_0()
                         .child(
-                            div()
-                                .h_full()
-                                .w_full()
-                                .overflow_y_scrollbar()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .overflow_x_scrollbar()
-                                        .p(px(6.0))
-                                        .child(
-                                            h_flex()
-                                                .gap(px(PAD_GAP))
-                                                .items_start()
-                                                .flex_shrink_0()
-                                                .children(mixer_columns),
-                                        ),
-                                ),
+                            with_mixer_pan(div().id("arranger_mixer_vscroll").flex().flex_col().h_full().w_full(), mixer_panning)
+                                .overflow_y_scroll()
+                                .restrict_scroll_to_axis()
+                                .track_scroll(&mixer_scroll_v)
+                                .vertical_scrollbar(&mixer_scroll_v)
+                                .child(mixer_hscroll(mixer_columns, &mixer_scroll_h, mixer_panning)),
                         ),
                 ),
             )
@@ -1979,8 +2160,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .bg(theme::WINDOW_BG)
         .child(toolbar)
         // Wrapper observable del área de columnas (para el test de encaje):
-        // el `Scrollable` interno sobrescribe el id de su contenido, así que
-        // la medición vive en este `div` externo.
+        // los scrolls internos usan handles explícitos del estado, así que la
+        // medición sigue viviendo en este `div` externo.
         .child(
             div()
                 .id("arranger_columns")
@@ -1991,24 +2172,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .flex()
                 .flex_col()
                 .child(
-                    div()
-                        .flex_1()
-                        .w_full()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .child(
-                            div()
-                                .w_full()
-                                .overflow_x_scrollbar()
-                                .p(px(6.0))
-                                .child(
-                                    h_flex()
-                                        .gap(px(PAD_GAP))
-                                        .items_start()
-                                        .flex_shrink_0()
-                                        .children(columns),
-                                ),
-                        ),
+                    with_mixer_pan(div().id("arranger_mixer_vscroll").flex().flex_col().flex_1().w_full().min_h_0(), mixer_panning)
+                        .overflow_y_scroll()
+                        .restrict_scroll_to_axis()
+                        .track_scroll(&mixer_scroll_v)
+                        .vertical_scrollbar(&mixer_scroll_v)
+                        .child(mixer_hscroll(columns, &mixer_scroll_h, mixer_panning)),
                 ),
         )
         .into_any_element()

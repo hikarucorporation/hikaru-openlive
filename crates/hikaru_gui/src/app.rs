@@ -300,6 +300,17 @@ pub struct AppState {
 
     pub openlive_view: OpenLiveView,
     pub arranger_fader_drag: Option<arranger_view::FaderTarget>,
+    /// Handles de scroll del área de columnas del Arranger/Mixer.
+    ///
+    /// Son explícitos (viven en el estado y no en el `Scrollable` implícito)
+    /// para que el gesto de pan con botón central pueda mover el viewport
+    /// directamente con `ScrollHandle::set_offset`.
+    pub mixer_scroll_h: ScrollHandle,
+    pub mixer_scroll_v: ScrollHandle,
+    /// Gesto de pan de navegación con botón central (MMB) sobre el Mixer /
+    /// Arranger. Global —y no flag local del widget— por el mismo motivo que
+    /// `arranger_fader_drag`: el área se reconstruye en cada frame.
+    pub mixer_pan: Option<arranger_view::MixerPanState>,
     /// Gesto de mezcla en curso en los headers de la Session Matrix
     /// (volumen/pan por pista). Global —y no flag local del widget— porque
     /// el header se reconstruye en cada frame y el primer `notify` del drag
@@ -583,6 +594,9 @@ impl HikaruApp {
             smoothed_master_peak: 0.0,
             openlive_view: OpenLiveView::SessionMatrix,
             arranger_fader_drag: None,
+            mixer_scroll_h: ScrollHandle::new(),
+            mixer_scroll_v: ScrollHandle::new(),
+            mixer_pan: None,
             matrix_mix_drag: None,
             matrix_pan_gesture: None,
             matrix_mix_bounds: [0.0; 4],
