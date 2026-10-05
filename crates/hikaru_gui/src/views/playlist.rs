@@ -775,6 +775,48 @@ fn apply_playlist_wheel_zoom(
     true
 }
 
+/// Punto de entrada compartido del zoom con rueda (`Ctrl`/`Alt` + wheel).
+///
+/// Lo usan tanto la grilla temporal como la columna fija de headers (ambos
+/// están bajo el cursor en distintas zonas): traduce el evento a
+/// `apply_playlist_wheel_zoom` y frena la propagación sólo si se consumió
+/// (si no, la rueda sigue scrolleando normal).
+fn playlist_wheel_zoomed(
+    delta: ScrollDelta,
+    control: bool,
+    alt: bool,
+    shift: bool,
+    cursor_win: (f32, f32),
+    total_ticks: u64,
+    header_width: f32,
+    ruler_h: f32,
+    row_count: usize,
+    cx: &mut App,
+) {
+    let st = state(cx);
+    let mut consumed = false;
+    st.update(cx, |s, cx| {
+        consumed = apply_playlist_wheel_zoom(
+            s,
+            &delta,
+            control,
+            alt,
+            shift,
+            cursor_win,
+            total_ticks,
+            header_width,
+            ruler_h,
+            row_count,
+        );
+        if consumed {
+            cx.notify();
+        }
+    });
+    if consumed {
+        cx.stop_propagation();
+    }
+}
+
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
     let pl = &app.playlist_state;
@@ -816,11 +858,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
 
     let track_height = clamped_row_h(pl.row_h);
     let ruler_h = RULER_H;
-    // Geometría del lienzo: columna fija de headers a la izquierda y grilla
-    // temporal a su derecha. `grid_ox` es el origen X de TODO lo temporal
-    // (regla, líneas, clips, playhead, zonas de seek/drop): el compás 1
-    // arranca exactamente ahí y el área bajo él queda limpia para clips.
-    let grid_ox = header_width;
+    // Geometría del lienzo en DOS columnas (headers fijos + grilla temporal):
+    // la columna izquierda (`header_width`) viaja SÓLO en vertical junto a
+    // las filas, y el contenido temporal (regla, líneas, clips, playhead)
+    // vive en su propio panel derecho con scroll horizontal independiente.
+    // Dentro de ese panel el compás 1 arranca en x=0: NADA suma ya el ancho
+    // de headers (`grid_ox` anterior) a las coords temporales.
     // Altura del lienzo: N filas × altura actual (zoom vertical).
     let row_count = non_master.len().max(1);
     let canvas_h = ruler_h + row_count as f32 * track_height;
@@ -870,7 +913,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     // Bounds de la zona de grilla en coords de ventana (patrón `record_bounds`
     // del arranger): `mouse_position()` viene en coords de ventana, así que el
     // mapeo px→ticks/fila resta el origen real medido cada frame, no una
-    // constante. La zona ES la grilla (arranca en `grid_ox`), sin headers.
+    // constante. La zona ES la grilla (el panel derecho, sin headers).
     // Se crea acá arriba porque los handlers de drag de los clips (definidos
     // abajo) también lo necesitan para traducir el cursor a ticks/fila.
     let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
@@ -884,7 +927,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let clip_name = clip.name.clone();
         let clip_start = clip.start_tick;
         let clip_dur = clip.duration_ticks;
-        let clip_x = grid_ox + ticks_to_px(clip_start, zoom_x);
+        let clip_x = ticks_to_px(clip_start, zoom_x);
         let clip_w = ticks_to_px(clip_dur, zoom_x).max(12.0);
         let track_row = non_master.iter().position(|(i, _)| *i == *track_id).unwrap_or(0);
         let clip_y = ruler_h + track_row as f32 * track_height + 1.0;
@@ -892,8 +935,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let clip_id = clip.id;
 
         // --- ClipView: bloque horizontal con título + contenido ---------------
-        // Posición dinámica: x = grid_ox + start_tick × zoom (siempre a la
-        // derecha de los headers), w = duration × zoom,
+        // Posición dinámica: x = start_tick × zoom (origen del panel
+        // temporal, a la derecha de los headers fijos), w = duration × zoom,
         // y = fila de `track_index` × altura actual (`track_height`).
         let title_h = 14.0_f32;
         let body_h = (clip_h - title_h).max(8.0);
@@ -1114,9 +1157,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         if x > grid_w {
             break;
         }
-        // Toda línea temporal cuelga de `grid_ox`: el compás 1 (x=0) queda
-        // justo a la derecha de los headers, nunca debajo.
-        let gx = grid_ox + x;
+        // El compás 1 (x=0) es el origen del panel temporal: los headers
+        // fijos viven en su propia columna y nunca quedan debajo.
+        let gx = x;
         let is_main = step % ticks_per_bar_val == 0;
         grid_lines.push(
             canvas(
@@ -1173,7 +1216,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         drop_zones.push(
             div()
                 .absolute()
-                .left(px(header_width + 10.0))
+                .left(px(10.0))
                 .top(px(ruler_h + 10.0))
                 .bg(rgba(0x0096BE80))
                 .rounded(px(4.0))
@@ -1189,7 +1232,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         Some(
             div()
                 .absolute()
-                .left(px(grid_ox))
+                .left(px(0.0))
                 .top(px(ruler_h))
                 .w(px(grid_w))
                 .h(px(canvas_h - ruler_h))
@@ -1253,7 +1296,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let zone_grid_move = zone_bounds.clone();
     let seek_zone = div()
         .absolute()
-        .left(px(grid_ox))
+        .left(px(0.0))
         .top(px(ruler_h))
         .w(px(grid_w))
         .h(px(canvas_h - ruler_h))
@@ -1287,26 +1330,16 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             });
         });
 
-    // Fondo de la regla: sólo sobre la grilla (arranca en `grid_ox`).
-    // La esquina superior-izquierda (sobre los headers) la pinta `corner`.
+    // Fondo de la regla: cubre el panel temporal (la esquina sobre los
+    // headers la pinta la columna fija, no este contenido scrolleable).
     let children = vec![
-        div()
-            .absolute()
-            .left(px(grid_ox))
-            .top(px(0.0))
-            .w(px(grid_w))
-            .h(px(ruler_h))
-            .bg(rgb(0x18181E))
-            .into_any_element(),
         div()
             .absolute()
             .left(px(0.0))
             .top(px(0.0))
-            .w(px(header_width))
+            .w(px(grid_w))
             .h(px(ruler_h))
-            .bg(rgb(0x141418))
-            .border_r_1()
-            .border_color(rgb(0x2D2D37))
+            .bg(rgb(0x18181E))
             .into_any_element(),
         canvas(
             |_, _, _| {},
@@ -1324,23 +1357,22 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             },
         )
         .absolute()
-        .left(px(grid_ox))
+        .left(px(0.0))
         .top(px(ruler_h))
         .w(px(1.0))
         .h(px(canvas_h - ruler_h))
         .into_any_element(),
     ];
 
-    // Playhead y bordes de loop en coords de grilla: el canvas cubre todo el
-    // contenido pero pinta relativo a su propio origen + `grid_ox`, así sigue
-    // alineado con compases y clips haya scroll o no.
-    let playhead_win_x = grid_ox + playhead_x;
-    let loop_win = loop_render.map(|(a, b)| (grid_ox + a, grid_ox + b));
+    // Playhead y bordes de loop en coords del panel temporal (origen x=0):
+    // el canvas los pinta relativo a su propio origen, así siguen alineados
+    // con compases y clips haya scroll o no.
+    let loop_win = loop_render;
     let playhead_canvas = canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             // Playhead: marcador de posición de reproducción actual.
-            let x = bounds.origin.x + px(playhead_win_x);
+            let x = bounds.origin.x + px(playhead_x);
             let mut playhead_path = PathBuilder::stroke(px(2.0));
             playhead_path.move_to(point(x, bounds.origin.y));
             playhead_path.line_to(point(x, bounds.origin.y + bounds.size.height));
@@ -1365,7 +1397,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .absolute()
     .left(px(0.0))
     .top(px(0.0))
-    .w(px(canvas_w))
+    .w(px(grid_w))
     .h(px(canvas_h));
 
     let mut all: Vec<AnyElement> = Vec::new();
@@ -1418,9 +1450,22 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             )
             .into_any_element(),
     );
+    // Esquina superior-izquierda fija (sobre la columna de headers).
+    let corner = div()
+        .w_full()
+        .h(px(ruler_h))
+        .bg(rgb(0x141418))
+        .border_r_1()
+        .border_color(rgb(0x2D2D37))
+        .into_any_element();
     // Navegación: scroll vertical externo + horizontal interno (mismo patrón
-    // anidado que el arranger). La columna de headers viaja DENTRO del
-    // contenido, así cada cabecera queda pegada a su fila haya scroll o no.
+    // anidado que el arranger). La fila interna tiene DOS columnas: headers
+    // fijos a la izquierda y panel temporal a la derecha. El scroll vertical
+    // mueve la fila entera (sincronía gratis entre headers y pistas) y el
+    // horizontal vive SÓLO en el panel derecho, así los headers nunca salen
+    // de vista en X. El panel derecho recorta (`overflow_x_scroll`) TODO lo
+    // temporal: clips y regla mueren en su borde, sin z-index ni overlaps
+    // sobre la columna fija.
     // Los scrolls usan handles explícitos del estado (`playlist_scroll_h/v`,
     // como el mixer) para que el zoom con rueda anclado al cursor pueda
     // compensar el viewport; las scrollbars visibles las pinta el kit sobre
@@ -1439,21 +1484,59 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .track_scroll(&playlist_scroll_v)
                     .child(
                         div()
+                            .flex()
+                            .flex_row()
                             .w_full()
-                            .relative()
-                            .horizontal_scrollbar(&playlist_scroll_h)
+                            .child(
+                                // Columna FIJA de headers: fuera del scroll
+                                // horizontal, una cabecera de `track_height`
+                                // por fila. Comparte el zoom de rueda de la
+                                // grilla para que `Ctrl`/`Alt` + rueda
+                                // funcionen también con el cursor acá.
+                                v_flex()
+                                    .flex_none()
+                                    .w(px(header_width))
+                                    .id("playlist_headers")
+                                    .on_scroll_wheel(move |event, _, cx| {
+                                        playlist_wheel_zoomed(
+                                            event.delta,
+                                            event.modifiers.control
+                                                || event.modifiers.platform,
+                                            event.modifiers.alt,
+                                            event.modifiers.shift,
+                                            (
+                                                event.position.x.as_f32(),
+                                                event.position.y.as_f32(),
+                                            ),
+                                            total_ticks,
+                                            header_width,
+                                            ruler_h,
+                                            row_count,
+                                            cx,
+                                        );
+                                    })
+                                    .child(corner)
+                                    .children(track_headers),
+                            )
                             .child(
                                 div()
-                                    .id("playlist_scroll")
-                                    .w_full()
-                                    .overflow_x_scroll()
-                                    .track_scroll(&playlist_scroll_h)
+                                    .flex_1()
+                                    .min_w_0()
+                                    .relative()
+                                    .horizontal_scrollbar(&playlist_scroll_h)
                                     .child(
                                         div()
-                                            .id("playlist_grid")
-                                            .w(px(canvas_w))
-                                            .h(px(canvas_h))
-                                            .relative()
+                                            .id("playlist_scroll")
+                                            .w_full()
+                                            .overflow_x_scroll()
+                                            .track_scroll(&playlist_scroll_h)
+                                            .child(
+                                                div()
+                                                    .id("playlist_grid")
+                                                    .test_support()
+                                                    .w(px(grid_w))
+                                                    .h(px(canvas_h))
+                                                    .relative()
                                             // Move/Up del drag de clips a nivel de grilla (no
                                             // del clip): el cursor sale del clip al arrastrar
                                             // y los handlers del propio clip dejarían de
@@ -1488,48 +1571,23 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             // `Ctrl` + `Shift` + rueda) = altura de filas. Sin
                                             // modificadores se deja pasar (scroll normal).
                                             .on_scroll_wheel(move |event, _, cx| {
-                                                let control =
-                                                    event.modifiers.control || event.modifiers.platform;
-                                                let alt = event.modifiers.alt;
-                                                let shift = event.modifiers.shift;
-                                                let cursor = (
-                                                    event.position.x.as_f32(),
-                                                    event.position.y.as_f32(),
+                                                playlist_wheel_zoomed(
+                                                    event.delta,
+                                                    event.modifiers.control
+                                                        || event.modifiers.platform,
+                                                    event.modifiers.alt,
+                                                    event.modifiers.shift,
+                                                    (
+                                                        event.position.x.as_f32(),
+                                                        event.position.y.as_f32(),
+                                                    ),
+                                                    total_ticks,
+                                                    header_width,
+                                                    ruler_h,
+                                                    row_count,
+                                                    cx,
                                                 );
-                                                let delta = event.delta;
-                                                let st = state(cx);
-                                                let mut consumed = false;
-                                                st.update(cx, |s, cx| {
-                                                    consumed = apply_playlist_wheel_zoom(
-                                                        s,
-                                                        &delta,
-                                                        control,
-                                                        alt,
-                                                        shift,
-                                                        cursor,
-                                                        total_ticks,
-                                                        header_width,
-                                                        ruler_h,
-                                                        row_count,
-                                                    );
-                                                    if consumed {
-                                                        cx.notify();
-                                                    }
-                                                });
-                                                if consumed {
-                                                    cx.stop_propagation();
-                                                }
                                             })
-                                    // Columna fija de headers: apilada en vertical desde la
-                                    // regla, una cabecera de `track_height` por fila — misma
-                                    // altura y mismo `top` que su fila de la grilla.
-                                    .child(
-                                        v_flex()
-                                            .absolute()
-                                            .left(px(0.0))
-                                            .top(px(ruler_h))
-                                            .children(track_headers),
-                                    )
                                     .children(children)
                                     // Orden de capas (z-ordering):
                                     //   1. Fondo + líneas verticales de grilla (detrás).
@@ -1546,6 +1604,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 )
                             )
                         )
+                    )
                 )
             .into_any_element(),
     );

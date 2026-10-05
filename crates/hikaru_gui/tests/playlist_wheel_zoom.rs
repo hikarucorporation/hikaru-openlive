@@ -17,6 +17,7 @@ use gpui_kit::{
 
 use hikaru_gui::app::{AppMode, HikaruApp};
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
+use hikaru_gui::views::mixer::Track;
 use hikaru_gui::views::playlist::{
     anchor_h_offset, anchor_v_offset, clamped_row_h, step_row_h, wheel_zoom_in, MAX_ROW_H,
     MAX_ZOOM_X, MIN_ROW_H, MIN_ZOOM_X, TRACK_ROW_H,
@@ -296,4 +297,128 @@ fn plain_wheel_does_not_zoom(cx: &mut TestAppContext) {
     wheel(handle, cx, x, y, -3.0, Modifiers::default());
     let after = zooms(handle, cx);
     assert_eq!(before, after, "la rueda sin modificadores no debería cambiar el zoom");
+}
+
+// =========================================================================
+// Headers fijos (sticky): la columna izquierda no scrollea en X pero sí en Y
+// =========================================================================
+
+/// Punto visible sobre el panel temporal: 100px a la derecha del borde
+/// derecho del header de la primera fila, a media altura de esa fila.
+fn grid_visible_point(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext) -> (f32, f32) {
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let b = window.find("pl_row_1").bounds();
+        (
+            (b.origin.x + b.size.width).as_f32() + 100.0,
+            (b.origin.y + b.size.height / 2.0).as_f32(),
+        )
+    })
+    .unwrap()
+}
+
+/// Rueda SIN modificadores (scroll puro) en un punto visible del panel.
+fn scroll_at(
+    handle: gpui_kit::WindowHandle<HikaruApp>,
+    cx: &mut TestAppContext,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+) {
+    cx.update_window(handle.into(), |_, window, cx| {
+        use gpui_kit::{InputEvent as _, MouseMoveEvent};
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: point(px(x), px(y)),
+                pressed_button: None,
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            ScrollWheelEvent {
+                position: point(px(x), px(y)),
+                delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
+                modifiers: Modifiers::default(),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .unwrap();
+}
+
+/// `(x del header, x de la grilla, y del header, y de la grilla)`.
+fn header_and_grid(
+    handle: gpui_kit::WindowHandle<HikaruApp>,
+    cx: &mut TestAppContext,
+) -> (f32, f32, f32, f32) {
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let h = window.find("pl_row_1").bounds();
+        let g = window.find("playlist_grid").bounds();
+        (
+            h.origin.x.as_f32(),
+            g.origin.x.as_f32(),
+            h.origin.y.as_f32(),
+            g.origin.y.as_f32(),
+        )
+    })
+    .unwrap()
+}
+
+#[gpui_kit::gpui::test]
+fn headers_stay_fixed_on_horizontal_scroll(cx: &mut TestAppContext) {
+    let handle = open_studio(cx);
+    let (x, y) = grid_visible_point(handle, cx);
+    let (hx0, gx0, _, _) = header_and_grid(handle, cx);
+    scroll_at(handle, cx, x, y, -400.0, 0.0);
+    let (hx1, gx1, _, _) = header_and_grid(handle, cx);
+    assert!(
+        (hx1 - hx0).abs() < 1.0,
+        "los headers deberían quedar fijos en X ({hx0} -> {hx1})"
+    );
+    assert!(
+        gx1 < gx0 - 200.0,
+        "la grilla temporal debería scrollear en X ({gx0} -> {gx1})"
+    );
+}
+
+#[gpui_kit::gpui::test]
+fn headers_scroll_vertically_in_sync(cx: &mut TestAppContext) {
+    let handle = open_studio(cx);
+    // Filas de sobra para que haya recorrido vertical.
+    cx.update_window(handle.into(), |view, _, cx| {
+        let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+        app.update(cx, |app, cx| {
+            app.state.update(cx, |s, cx| {
+                while s.studio_tracks.iter().filter(|t| !t.is_master).count() < 12 {
+                    let next_id = s.studio_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                    let n = s.studio_tracks.iter().filter(|t| !t.is_master).count();
+                    s.studio_tracks.push(Track::new(
+                        next_id,
+                        format!("TRACK {:02}", n + 1),
+                        false,
+                    ));
+                }
+                cx.notify();
+            });
+        });
+    })
+    .unwrap();
+    let (x, y) = grid_visible_point(handle, cx);
+    let (_, _, hy0, gy0) = header_and_grid(handle, cx);
+    scroll_at(handle, cx, x, y, 0.0, -150.0);
+    let (_, _, hy1, gy1) = header_and_grid(handle, cx);
+    let dh = hy1 - hy0;
+    let dg = gy1 - gy0;
+    assert!(dh < -50.0, "el scroll vertical debería mover los headers ({hy0} -> {hy1})");
+    assert!(
+        (dh - dg).abs() < 1.0,
+        "headers y grilla deberían moverse juntos en Y ({dh} vs {dg})"
+    );
 }
