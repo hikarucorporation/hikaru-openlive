@@ -307,6 +307,15 @@ pub struct AppState {
     /// directamente con `ScrollHandle::set_offset`.
     pub mixer_scroll_h: ScrollHandle,
     pub mixer_scroll_v: ScrollHandle,
+    /// Handles de scroll de la Playlist/Timeline (OpenStudio).
+    ///
+    /// Son explícitos (viven en el estado y no en el `Scrollable` implícito,
+    /// como los del mixer) para que el zoom con rueda anclado al cursor
+    /// (`Ctrl`/`Alt` + wheel) pueda compensar el viewport con
+    /// `ScrollHandle::set_offset` y el tick bajo el cursor no se mueva al
+    /// cambiar `zoom_x` / `row_h`.
+    pub playlist_scroll_h: ScrollHandle,
+    pub playlist_scroll_v: ScrollHandle,
     /// Gesto de pan de navegación con botón central (MMB) sobre el Mixer /
     /// Arranger. Global —y no flag local del widget— por el mismo motivo que
     /// `arranger_fader_drag`: el área se reconstruye en cada frame.
@@ -600,6 +609,8 @@ impl HikaruApp {
             arranger_fader_drag: None,
             mixer_scroll_h: ScrollHandle::new(),
             mixer_scroll_v: ScrollHandle::new(),
+            playlist_scroll_h: ScrollHandle::new(),
+            playlist_scroll_v: ScrollHandle::new(),
             mixer_pan: None,
             mixer_bar_drag: None,
             matrix_mix_drag: None,
