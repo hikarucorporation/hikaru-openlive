@@ -1702,17 +1702,105 @@ fn load_clip_into_slot(
 // =========================================================================
 // CONTENEDOR VERTICAL DE WAVEFORM (Modo OpenStudio)
 // =========================================================================
+//
+// Caja vertical unificada de la pista: ventana temporal MÓVIL en cascada
+// sobre el playhead (el futuro entra por arriba y desciende hacia la línea
+// de presente al centro; el pasado sale por abajo). Cada fila mapea su tick
+// al clip de audio activo en ese instante; fuera de clips (o sin clips) se
+// pinta sólo el eje central = silencio. En reproducción el playhead avanza
+// con el reloj del motor y el contenido baja solo (el repaint continuo lo
+// motoriza `sync_frame`); en parada muestra el segmento del instante actual.
+// Tamaño fijo: sin relayout.
 
-/// Caja vertical unificada de la pista: pinta los picos del primer clip de
-/// audio en orientación vertical (el tiempo corre de arriba a abajo). Sin clip
-/// muestra el placeholder del blueprint. Tamaño fijo: no hay relayout.
-fn waveform_container(track_name: &str, peaks: Option<Vec<f32>>) -> AnyElement {
-    let has_wave = peaks.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
+/// Ventana temporal del waveform en compases SIG (2 = pasado + futuro).
+pub const WAVEFORM_WINDOW_BARS: u64 = 2;
+
+/// Fuente de la ventana: el clip de audio bajo el playhead (o silencio).
+#[derive(Clone)]
+struct WaveformView {
+    label: String,
+    /// La pista tiene ≥1 clip de audio (aunque ninguno suene ahora).
+    has_audio: bool,
+    peaks: Vec<f32>,
+    start_tick: u64,
+    duration_ticks: u64,
+    sample_offset_ticks: u64,
+    total_sample_ticks: u64,
+    playhead_tick: u64,
+    window_ticks: u64,
+}
+
+impl WaveformView {
+    fn silent(label: String, playhead_tick: u64, window_ticks: u64) -> Self {
+        Self {
+            label,
+            has_audio: false,
+            peaks: Vec::new(),
+            start_tick: 0,
+            duration_ticks: 0,
+            sample_offset_ticks: 0,
+            total_sample_ticks: 0,
+            playhead_tick,
+            window_ticks,
+        }
+    }
+}
+
+/// Tick de la fila `row` (0 = arriba) de la ventana móvil.
+///
+/// Orientación en cascada: el futuro entra por arriba y desciende hacia la
+/// línea de presente (centro); el pasado sale por abajo. Al avanzar la
+/// reproducción, un evento fijo baja fila a fila, igual que una waterfall.
+/// Satura en 0 (sin underflow) cuando el playhead está antes de media ventana.
+pub fn waveform_window_tick(
+    playhead_tick: u64,
+    window_ticks: u64,
+    row: usize,
+    rows: usize,
+) -> u64 {
+    if rows == 0 || window_ticks == 0 {
+        return playhead_tick;
+    }
+    let span = window_ticks as i64;
+    let tick =
+        playhead_tick as i64 + span / 2 - (row as i64 * span) / rows.max(1) as i64;
+    tick.max(0) as u64
+}
+
+/// Pico 0..=1 del clip en `tick`, o 0.0 (silencio) si cae fuera del clip.
+///
+/// Función pura para testear el mapeo tiempo→muestra sin ventana.
+pub fn waveform_peak_at_tick(
+    peaks: &[f32],
+    start_tick: u64,
+    duration_ticks: u64,
+    sample_offset_ticks: u64,
+    total_sample_ticks: u64,
+    tick: u64,
+) -> f32 {
+    if peaks.is_empty() || total_sample_ticks == 0 {
+        return 0.0;
+    }
+    let end = start_tick.saturating_add(duration_ticks);
+    if tick < start_tick || tick >= end {
+        return 0.0;
+    }
+    let pos = sample_offset_ticks.saturating_add(tick - start_tick);
+    if pos >= total_sample_ticks {
+        return 0.0;
+    }
+    let idx = (pos as f64 / total_sample_ticks as f64 * peaks.len() as f64) as usize;
+    peaks.get(idx).copied().unwrap_or(0.0).clamp(0.0, 1.0)
+}
+
+fn waveform_container(view: &WaveformView) -> AnyElement {
+    let has_wave = view.has_audio;
     let label = if has_wave {
-        track_name.to_string()
+        view.label.clone()
     } else {
         "INSERTAR WAVEFORM VERTICAL".to_string()
     };
+    let view = view.clone();
     div()
         .w_full()
         .h(px(WAVEFORM_HEIGHT))
@@ -1727,46 +1815,67 @@ fn waveform_container(track_name: &str, peaks: Option<Vec<f32>>) -> AnyElement {
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    let Some(ref peaks) = peaks else { return };
-                    if peaks.is_empty() {
-                        return;
-                    }
-                    let n = peaks.len();
                     let w = bounds.size.width.as_f32();
                     let h = bounds.size.height.as_f32();
                     if w <= 0.0 || h <= 0.0 {
                         return;
                     }
                     let cx0 = bounds.origin.x + px(w / 2.0);
-                    let step = 2.0_f32;
-                    let steps = (h / step) as usize;
-                    for i in 0..steps {
-                        let norm = i as f32 / steps as f32;
-                        let peak_idx = (norm * n as f32) as usize;
-                        let Some(&pv) = peaks.get(peak_idx) else {
-                            continue;
-                        };
-                        let bw = (w * 0.86 * pv.clamp(0.0, 1.0)).max(1.0);
-                        if bw < 0.75 {
-                            continue;
-                        }
-                        let y = bounds.origin.y + px(i as f32 * step);
-                        let mut path = PathBuilder::fill();
-                        path.move_to(point(cx0 - px(bw * 0.5), y));
-                        path.line_to(point(cx0 + px(bw * 0.5), y));
-                        path.line_to(point(cx0 + px(bw * 0.5), y + px(1.0)));
-                        path.line_to(point(cx0 - px(bw * 0.5), y + px(1.0)));
-                        path.close();
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, rgba(0x5AB4FFCC));
-                        }
-                    }
-                    // Línea central de referencia.
+                    // Eje central de referencia (silencio): siempre visible.
                     let mut axis = PathBuilder::stroke(px(1.0));
                     axis.move_to(point(cx0, bounds.origin.y));
                     axis.line_to(point(cx0, bounds.origin.y + bounds.size.height));
                     if let Ok(axis) = axis.build() {
                         window.paint_path(axis, rgb(0x32323C));
+                    }
+                    // Ventana móvil en cascada: el futuro entra por arriba y
+                    // desciende hacia la línea de presente (centro); el pasado
+                    // sale por abajo. Matemática entera exacta.
+                    let n = view.peaks.len();
+                    let step = 2.0_f32;
+                    let steps = (h / step) as usize;
+                    if n > 0 && view.window_ticks > 0 && steps > 0 {
+                        for i in 0..steps {
+                            let tick = waveform_window_tick(
+                                view.playhead_tick,
+                                view.window_ticks,
+                                i,
+                                steps,
+                            );
+                            let pv = waveform_peak_at_tick(
+                                &view.peaks,
+                                view.start_tick,
+                                view.duration_ticks,
+                                view.sample_offset_ticks,
+                                view.total_sample_ticks,
+                                tick,
+                            );
+                            let bw = (w * 0.86 * pv).max(1.0);
+                            if bw < 0.75 {
+                                continue;
+                            }
+                            let y = bounds.origin.y + px(i as f32 * step);
+                            let mut path = PathBuilder::fill();
+                            path.move_to(point(cx0 - px(bw * 0.5), y));
+                            path.line_to(point(cx0 + px(bw * 0.5), y));
+                            path.line_to(point(cx0 + px(bw * 0.5), y + px(1.0)));
+                            path.line_to(point(cx0 - px(bw * 0.5), y + px(1.0)));
+                            path.close();
+                            if let Ok(path) = path.build() {
+                                window.paint_path(path, rgba(0x5AB4FFCC));
+                            }
+                        }
+                    }
+                    // Playhead: línea brillante al centro = instante actual.
+                    let cy = bounds.origin.y + bounds.size.height / 2.0;
+                    let mut play = PathBuilder::stroke(px(2.0));
+                    play.move_to(point(bounds.origin.x + px(2.0), cy));
+                    play.line_to(point(
+                        bounds.origin.x + bounds.size.width - px(2.0),
+                        cy,
+                    ));
+                    if let Ok(play) = play.build() {
+                        window.paint_path(play, rgb(0x00E5FF));
                     }
                 },
             )
@@ -1889,7 +1998,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         _master_studio,
         live_devices,
         studio_strips,
-        studio_peaks,
+        studio_waves,
         vu_live,
         vu_master_live,
         selected_track,
@@ -2006,25 +2115,61 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 }
             })
             .collect();
-        // Picos del primer clip de audio por pista de estudio (para la caja de
-        // waveform). Se clonan una vez por frame; son ~512 f32 por pista.
-        let studio_peaks: Vec<Option<Vec<f32>>> = {
+        // Ventana del waveform por pista de estudio: el clip de audio bajo el
+        // playhead (o silencio si ninguno suena ahora). Se clonan una vez por
+        // frame los picos del clip activo (~512 f32); el resto son escalares.
+        let playhead_tick = app.playlist_state.playhead_tick;
+        let window_ticks = WAVEFORM_WINDOW_BARS
+            * playlist::ticks_per_bar(
+                app.playlist_state.ppqn,
+                app.transport.beats_per_bar,
+            );
+        let studio_waves: Vec<WaveformView> = {
             (0..app.studio_tracks.len())
                 .map(|idx| {
-                    app.playlist_state
-                        .clips
-                        .iter()
-                        .find(|(tid, c)| {
-                            *tid == idx
-                                && matches!(
-                                    c.clip_type,
-                                    ClipType::Audio { .. }
-                                )
-                        })
-                        .and_then(|(_, c)| match &c.clip_type {
-                            ClipType::Audio { peaks, .. } => Some(peaks.clone()),
-                            _ => None,
-                        })
+                    let track_name = app
+                        .studio_tracks
+                        .get(idx)
+                        .map(|t| t.name.clone())
+                        .unwrap_or_default();
+                    let mut audio_here = app.playlist_state.clips.iter().filter(|(tid, c)| {
+                        *tid == idx && matches!(c.clip_type, ClipType::Audio { .. })
+                    });
+                    let has_audio = audio_here.clone().next().is_some();
+                    let active = audio_here
+                        .map(|(_, c)| c)
+                        .find(|c| {
+                            playhead_tick >= c.start_tick
+                                && playhead_tick
+                                    < c.start_tick.saturating_add(c.duration_ticks)
+                        });
+                    match active {
+                        Some(c) => match &c.clip_type {
+                            ClipType::Audio {
+                                peaks,
+                                sample_offset_ticks,
+                                total_sample_ticks,
+                                ..
+                            } => WaveformView {
+                                label: track_name,
+                                has_audio: true,
+                                peaks: peaks.clone(),
+                                start_tick: c.start_tick,
+                                duration_ticks: c.duration_ticks,
+                                sample_offset_ticks: *sample_offset_ticks,
+                                total_sample_ticks: *total_sample_ticks,
+                                playhead_tick,
+                                window_ticks,
+                            },
+                            _ => WaveformView::silent(track_name, playhead_tick, window_ticks),
+                        },
+                        None => {
+                            let mut view =
+                                WaveformView::silent(track_name, playhead_tick, window_ticks);
+                            view.has_audio = has_audio;
+                            view
+                        }
+                    }
                 })
                 .collect()
         };
@@ -2045,7 +2190,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             master_studio,
             live_devices,
             studio_strips,
-            studio_peaks,
+            studio_waves,
             vu_live,
             app.smoothed_master_peak,
             app.selected_track_index,
@@ -2236,7 +2381,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .iter()
             .enumerate()
             .map(|(idx, snap)| {
-                let peaks = studio_peaks.get(idx).cloned().unwrap_or(None);
+                let wave = studio_waves.get(idx).cloned().unwrap_or_else(|| {
+                    WaveformView::silent(snap.name.clone(), 0, 0)
+                });
                 let header = track_header_cell(
                     TRACK_WIDTH,
                     &snap.header,
@@ -2250,7 +2397,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 track_column(
                     TRACK_WIDTH,
                     header,
-                    waveform_container(&snap.name, peaks),
+                    waveform_container(&wave),
                     channel_strip(snap, &format!("arr_studio_{}", idx)),
                 )
             })

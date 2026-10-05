@@ -837,6 +837,15 @@ impl HikaruApp {
                 }
             }
 
+            // Repaint continuo durante la reproducción (cualquier modo): el
+            // playhead de la Playlist, el timecode y los waveforms verticales
+            // del mixer leen el reloj del motor en cada frame. Sin este
+            // notify la UI quedaría congelada hasta el próximo input, porque
+            // los canvas sólo repintan cuando hay frame.
+            if state.transport.playback_state == TransportPlaybackState::Playing {
+                cx.notify();
+            }
+
             if let Some((track_idx, scene_idx)) = state.matrix_state.selected_slot {
                 if let Some(slot) = state
                     .matrix_state
