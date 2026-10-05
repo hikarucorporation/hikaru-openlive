@@ -14,6 +14,7 @@ use std::rc::Rc;
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
@@ -147,6 +148,10 @@ pub struct PlaylistState {
     /// Suprime el `on_click` de selección que sigue al `mouse_up` de un drag
     /// con movimiento (la selección ya quedó fijada al agarrar el clip).
     pub clip_click_suppress: bool,
+    /// Gesto de selección rectangular en curso (click derecho + arrastrar).
+    /// `None` = sin gesto. Global por la misma razón que `clip_drag`: la
+    /// grilla se reconstruye cada frame.
+    pub marquee: Option<MarqueeState>,
 }
 
 impl Default for PlaylistState {
@@ -175,6 +180,7 @@ impl Default for PlaylistState {
             loop_drag_completed_this_frame: false,
             clip_drag: None,
             clip_click_suppress: false,
+            marquee: None,
         }
     }
 }
@@ -207,6 +213,17 @@ impl PlaylistState {
         self.loop_preview_active = false;
         self.loop_drag_handle = LoopDragHandle::None;
         self.loop_drag_completed_this_frame = true;
+    }
+
+    /// Tick de pegado por defecto: el playhead visible (con el loop aplicado),
+    /// que es donde un DAW pega por omisión.
+    pub fn paste_tick(&self) -> u64 {
+        loop_display_tick(
+            self.playhead_tick,
+            self.loop_start_ticks,
+            self.loop_end_ticks,
+            self.loop_region_active,
+        )
     }
 
     pub fn total_project_ticks(&self) -> u64 {
@@ -377,6 +394,348 @@ pub fn clamped_row_h(h: f32) -> f32 {
         return TRACK_ROW_H;
     }
     h.clamp(MIN_ROW_H, MAX_ROW_H)
+}
+
+/// Cierra el gesto de marquee tras soltar el botón derecho.
+///
+/// - Si el gesto superó `MARQUEE_DRAG_THRESHOLD`: selecciona todos los clips
+///   que tocan el rectángulo. Con `Shift` la selección se SUMA a la existente;
+///   sin él, reemplaza (comportamiento estándar de caja).
+/// - Si NO lo superó (click simple): es el gesto del menú contextual, así que
+///   sólo se limpia el estado — el menú lo abre el `context_menu` del elemento.
+///
+/// Siempre limpia `marquee` y notifica (un frame por evento).
+fn finish_marquee(
+    cur: (f32, f32),
+    zone: [f32; 4],
+    clip_rects: &[(usize, usize, f32, f32, f32, f32)],
+    additive: bool,
+    cx: &mut App,
+) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let Some(m) = s.playlist_state.marquee else {
+            return;
+        };
+        s.playlist_state.marquee = None;
+        let end = MarqueeState {
+            cur_x: cur.0,
+            cur_y: cur.1,
+            ..m
+        };
+        // Click simple: no hay caja que aplicar, el menú contextual abre.
+        if !end.is_drag() {
+            cx.notify();
+            return;
+        }
+        // El gesto vive en coords de VENTANA pero `clip_rects` se calculó en
+        // coords de la GRILLA (origen x=0), así que se resta el origen medido
+        // de la zona para comparar en el mismo espacio.
+        let (rx0, ry0, rx1, ry1) = end.normalized();
+        let rect = (
+            rx0 - zone[0],
+            ry0 - zone[1],
+            rx1 - zone[0],
+            ry1 - zone[1],
+        );
+        let keys = playlist_row_keys(s);
+        let hits = clips_in_marquee(clip_rects, rect, &keys);
+        if additive {
+            for id in hits {
+                if !s.playlist_state.selected_clips.contains(&id) {
+                    s.playlist_state.selected_clips.push(id);
+                }
+            }
+        } else {
+            s.playlist_state.selected_clips = hits;
+        }
+        let _ = zone;
+        cx.notify();
+    });
+}
+
+/// Re-sincroniza TODOS los clips con el motor tras un cambio en el conjunto
+/// (pegar, duplicar, cortar).
+///
+/// Los clips de audio se recargan con `LoadClip` (mismo id ⇒ el motor
+/// reemplaza el existente). Los de patrón/MIDI no tienen mensaje equivalente
+/// y quedan para el ciclo normal de `needs_full_sync`.
+fn sync_clips_to_engine(s: &mut AppState, _cx: &mut App) {
+    let bpm = s.transport.bpm;
+    let proxy = s.audio_proxy.clone();
+    s.playlist_state.sync_all_clips_to_engine(&proxy, bpm);
+}
+
+/// Atajo de edición de clips (`Ctrl`/`Cmd` + tecla). `shift` distingue
+/// `Ctrl+Shift+V` (pegarasure-style) del pegado normal.
+///
+/// Trabaja sobre `&mut AppState` para que el pegado también sincronice al motor
+/// (ids nuevos → `LoadClip`), igual que el drop por arrastre. Devuelve `true`
+/// si el atajo era de edición y se consumió.
+pub fn handle_edit_shortcut(key: &str, shift: bool, cx: &mut App) -> bool {
+    let st = state(cx);
+    match key {
+        "c" => {
+            st.update(cx, |s, _| {
+                copy_selected_clips(&mut s.playlist_state);
+            });
+            true
+        }
+        "x" => {
+            st.update(cx, |s, cx| {
+                if cut_selected_clips(&mut s.playlist_state) > 0 {
+                    sync_clips_to_engine(s, cx);
+                }
+            });
+            true
+        }
+        "v" => {
+            st.update(cx, |s, cx| {
+                let grid = snap_step_ticks(s.playlist_state.ppqn, s.playlist_state.grid_denominator)
+                    .max(1);
+                // `Ctrl+V` pega en el playhead; `Ctrl+Shift+V` es el pegado
+                // explícito del mismo buffer (ambas rutas usan el clipboard
+                // interno, no el del sistema).
+                let at = s.playlist_state.paste_tick();
+                let keys = playlist_row_keys(s);
+                let ids = paste_clips(&mut s.playlist_state, at, grid, &keys);
+                if ids.is_empty() {
+                    return;
+                }
+                sync_clips_to_engine(s, cx);
+                let _ = shift;
+            });
+            true
+        }
+        "d" => {
+            st.update(cx, |s, cx| {
+                let grid = snap_step_ticks(s.playlist_state.ppqn, s.playlist_state.grid_denominator)
+                    .max(1);
+                let ids = duplicate_selected_clips(&mut s.playlist_state, grid);
+                if !ids.is_empty() {
+                    sync_clips_to_engine(s, cx);
+                }
+            });
+            true
+        }
+        _ => false,
+    }
+}
+
+// =========================================================================
+// SELECCIÓN POR CAJA (marquee / rubber-band) Y EDICIÓN DE CLIPS
+// =========================================================================
+
+/// Desplazamiento mínimo (px) para que un click derecho cuente como arrastre
+/// de marquee y no como "click simple" para abrir el menú contextual.
+///
+/// Por debajo de este umbral el gesto se resuelve como click simple: abrir un
+/// menú por un temblor de 1px al querer seleccionar sería molesto.
+pub const MARQUEE_DRAG_THRESHOLD: f32 = 4.0;
+
+/// Gesto de selección rectangular en curso (click derecho + arrastrar).
+///
+/// Las coordenadas son de VENTANA (las que trae el evento) porque el marquee
+/// se pinta en el mismo espacio que la grilla; el mapeo a ticks/filas se hace
+/// al soltar usando los bounds medidos de la zona (`zone_bounds`).
+///
+/// Vive en `PlaylistState` (global, no flag local del widget) porque la grilla
+/// se reconstruye en cada frame: con un flag local el primer `notify` cortaría
+/// el gesto y el rectángulo no seguiría al cursor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MarqueeState {
+    pub start_x: f32,
+    pub start_y: f32,
+    pub cur_x: f32,
+    pub cur_y: f32,
+}
+
+impl MarqueeState {
+    /// Distancia manhattan recorrida: barata y suficiente para el umbral.
+    pub fn drag_distance(&self) -> f32 {
+        (self.cur_x - self.start_x).abs() + (self.cur_y - self.start_y).abs()
+    }
+
+    /// ¿Superó el umbral para considerarse arrastre y no click simple?
+    pub fn is_drag(&self) -> bool {
+        self.drag_distance() >= MARQUEE_DRAG_THRESHOLD
+    }
+
+    /// Rectángulo normalizado `(x0, y0, x1, y1)`: arrastrar hacia arriba o
+    /// hacia la izquierda invierte los extremos en vez de dar un rect con
+    /// ancho/alto negativo.
+    pub fn normalized(&self) -> (f32, f32, f32, f32) {
+        let x0 = self.start_x.min(self.cur_x);
+        let y0 = self.start_y.min(self.cur_y);
+        let x1 = self.start_x.max(self.cur_x);
+        let y1 = self.start_y.max(self.cur_y);
+        (x0, y0, x1, y1)
+    }
+}
+
+/// Rectángulo normalizado a partir de dos esquinas sueltas. Función pura.
+pub fn normalize_rect(ax: f32, ay: f32, bx: f32, by: f32) -> (f32, f32, f32, f32) {
+    (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by))
+}
+
+/// ¿Se intersectan dos rectángulos `(x0, y0, x1, y1)`?
+///
+/// Toque en el borde cuenta como intersección (el rect del marquee es
+/// translúcido y apenas toca el clip cuando el usuario roza su borde), así que
+/// la comparación es inclusiva (`<=`).
+pub fn rects_intersect(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    a.0 <= b.2 && a.2 >= b.0 && a.1 <= b.3 && a.3 >= b.1
+}
+
+/// Ids de los clips que tocan el rectángulo del marquee.
+///
+/// `rows` son los clips con su geometría ya en px de ventana
+/// `(track_key, clip_id, x, y, w, h)`. Sólo entra el clip si su track sigue
+/// existiendo (`track_keys` acota las filas visibles) — evita seleccionar
+/// clips huérfanos tras borrar una pista. Función pura para testear.
+pub fn clips_in_marquee(
+    rows: &[(usize, usize, f32, f32, f32, f32)],
+    rect: (f32, f32, f32, f32),
+    track_keys: &[usize],
+) -> Vec<usize> {
+    rows.iter()
+        .filter(|(track_key, _, x, y, w, h)| {
+            track_keys.contains(track_key) && rects_intersect(rect, (*x, *y, x + w, y + h))
+        })
+        .map(|(_, clip_id, _, _, _, _)| *clip_id)
+        .collect()
+}
+
+/// Extremos temporales de un conjunto de clips: `(min_start, max_end)`.
+///
+/// `max_end` es el tick final del clip más largo (start + duration). Se usa
+/// para pegar en bloque justo a continuación del final del conjunto.
+fn selection_span(clips: &[(usize, PlaylistClip)]) -> (u64, u64) {
+    let mut min_start = u64::MAX;
+    let mut max_end = 0u64;
+    for (_, c) in clips {
+        min_start = min_start.min(c.start_tick);
+        max_end = max_end.max(c.start_tick.saturating_add(c.duration_ticks));
+    }
+    if min_start == u64::MAX {
+        (0, 0)
+    } else {
+        (min_start, max_end)
+    }
+}
+
+/// Copia los clips seleccionados al buffer interno (sin tocar la grilla).
+///
+/// Devuelve cuántos clips entraron al portapapeles. Sin selección es no-op
+/// (`Ctrl+C` no debe limpiar un clipboard ya lleno).
+pub fn copy_selected_clips(s: &mut PlaylistState) -> usize {
+    if s.selected_clips.is_empty() {
+        return 0;
+    }
+    let picked: Vec<(usize, PlaylistClip)> = s
+        .clips
+        .iter()
+        .filter(|(_, c)| s.selected_clips.contains(&c.id))
+        .cloned()
+        .collect();
+    let n = picked.len();
+    if n > 0 {
+        s.clipboard = picked;
+    }
+    n
+}
+
+/// Copia al buffer y borra los clips seleccionados de la grilla (`Ctrl+X`).
+///
+/// Devuelve cuántos clips se movieron al portapapeles.
+pub fn cut_selected_clips(s: &mut PlaylistState) -> usize {
+    let n = copy_selected_clips(s);
+    if n > 0 {
+        let sel = s.selected_clips.clone();
+        s.clips.retain(|(_, c)| !sel.contains(&c.id));
+        s.selected_clips.clear();
+    }
+    n
+}
+
+/// Generador de ids de clip libre (no colisiona con los ya presentes).
+fn next_free_clip_id(s: &PlaylistState) -> usize {
+    s.clips
+        .iter()
+        .map(|(_, c)| c.id)
+        .max()
+        .unwrap_or(0)
+        .max(s.next_clip_id)
+        + 1
+}
+
+/// Pega el clipboard en `at_tick` (con snap), conservando cada clip en su
+/// pista y su offset relativo al inicio del conjunto copiado.
+///
+/// Devuelve los ids de los clips creados. Si el clipboard está vacío o el
+/// track de destino ya no existe, no inserta nada.
+pub fn paste_clips(
+    s: &mut PlaylistState,
+    at_tick: u64,
+    grid_ticks: u64,
+    track_keys: &[usize],
+) -> Vec<usize> {
+    if s.clipboard.is_empty() {
+        return Vec::new();
+    }
+    let (min_start, _) = selection_span(&s.clipboard);
+    // El primer tick del conjunto queda pegado en `at_tick` (ya snapped por el
+    // llamador) y cada clip conserva su separación relativa original.
+    let delta = at_tick.saturating_sub(min_start);
+    let mut new_ids = Vec::new();
+    for (track_key, clip) in &s.clipboard {
+        if !track_keys.contains(track_key) {
+            continue;
+        }
+        let id = next_free_clip_id(s);
+        let mut copy = clip.clone();
+        copy.id = id;
+        copy.start_tick = snap_ticks(clip.start_tick.saturating_add(delta), grid_ticks);
+        s.clips.push((*track_key, copy));
+        new_ids.push(id);
+        s.next_clip_id = s.next_clip_id.max(id + 1);
+    }
+    s.selected_clips = new_ids.clone();
+    new_ids
+}
+
+/// Duplica los clips seleccionados justo a continuación de su punto final
+/// (`Ctrl+D`): conserva pistas, duración y orden, y queda seleccionado lo nuevo.
+///
+/// Devuelve los ids de los duplicados.
+pub fn duplicate_selected_clips(s: &mut PlaylistState, grid_ticks: u64) -> Vec<usize> {
+    if s.selected_clips.is_empty() {
+        return Vec::new();
+    }
+    let picked: Vec<(usize, PlaylistClip)> = s
+        .clips
+        .iter()
+        .filter(|(_, c)| s.selected_clips.contains(&c.id))
+        .cloned()
+        .collect();
+    if picked.is_empty() {
+        return Vec::new();
+    }
+    let (_, max_end) = selection_span(&picked);
+    // El conjunto duplicado arranca exactamente donde termina el original.
+    let delta = max_end.saturating_sub(selection_span(&picked).0);
+    let mut new_ids = Vec::new();
+    for (track_key, clip) in &picked {
+        let id = next_free_clip_id(s);
+        let mut copy = clip.clone();
+        copy.id = id;
+        copy.start_tick = snap_ticks(clip.start_tick.saturating_add(delta), grid_ticks);
+        s.clips.push((*track_key, copy));
+        new_ids.push(id);
+        s.next_clip_id = s.next_clip_id.max(id + 1);
+    }
+    s.selected_clips = new_ids.clone();
+    new_ids
 }
 
 /// Altura de fila tras un paso de zoom vertical (×1.25 / ÷1.25, acotada).
@@ -593,15 +952,21 @@ pub fn build_audio_clip(
 
 /// Claves de pista (índices al vector del modo activo) en orden de fila.
 fn playlist_row_keys(s: &AppState) -> Vec<usize> {
-    match s.mode {
+    row_keys_of(match s.mode {
         crate::app::AppMode::OpenLive => &s.live_tracks,
         crate::app::AppMode::OpenStudio => &s.studio_tracks,
-    }
-    .iter()
-    .enumerate()
-    .filter(|(_, t)| !t.is_master)
-    .map(|(i, _)| i)
-    .collect()
+    })
+}
+
+/// Índices de fila (no-master) de un vector de pistas. Función pura: la
+/// comparten el render, el drag de clips y las operaciones de clipboard.
+fn row_keys_of(tracks: &[Track]) -> Vec<usize> {
+    tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !t.is_master)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 // =========================================================================
@@ -1130,6 +1495,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let loop_end = pl.loop_end_ticks;
     let loop_active = pl.loop_region_active;
     let selected = pl.selected_clips.clone();
+    // El clipboard de la playlist habilita/deshabilita "Pegar" en el menú.
+    let clipboard_empty = pl.clipboard.is_empty();
     let is_looping = app.is_looping;
     let audio_proxy = app.audio_proxy.clone();
     let bpm = app.transport.bpm;
@@ -1450,7 +1817,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let playhead_x = ticks_to_px(display_tick, zoom_x);
     // Grilla según quantize actual (1/4, 1/8, 1/16): subdivisión de la redonda.
     // Las líneas principales caen cada compás SIG (`ticks_per_bar_val`).
-    let snap_step_ticks = snap_step_ticks(ppqn, grid_den).max(1);
+    // Ticks del snap actual, una vez por frame (la usa el drop y el marquee).
+    let snap_ticks_val = snap_step_ticks(ppqn, grid_den).max(1);
     let mut grid_lines: Vec<AnyElement> = Vec::new();
     let mut step = 0u64;
     let mut bar_num = 1u32;
@@ -1497,7 +1865,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             );
             bar_num += 1;
         }
-        step += snap_step_ticks;
+        step += snap_ticks_val;
     }
 
     let loop_render = if loop_active && loop_end > loop_start {
@@ -1549,7 +1917,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             let zb = zone_bounds_drop.get();
                             let rel_x = pos.x.as_f32() - zb[0];
                             let raw = px_to_ticks(rel_x.max(0.0), zoom_x);
-                            let drop_tick = snap_ticks(raw, snap_step_ticks);
+                            let drop_tick = snap_ticks(raw, snap_ticks_val);
                             let rel_y = pos.y.as_f32() - zb[1];
                             let track_idx = (rel_y / track_height).floor() as usize;
                             if track_idx < track_ids.len() {
@@ -1594,8 +1962,57 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         None
     };
 
+    // Geometría de cada clip en px de VENTANA (para el marquee, que se dibuja
+    // en el mismo espacio): `(track_key, clip_id, x, y, w, h)`. Se calcula una
+    // sola vez por frame y se la lleva el cierre del gesto.
+    let clip_rects: Vec<(usize, usize, f32, f32, f32, f32)> = pl
+        .clips
+        .iter()
+        .map(|(track_key, clip)| {
+            let track_row = non_master
+                .iter()
+                .position(|(i, _)| *i == *track_key)
+                .unwrap_or(0);
+            (
+                *track_key,
+                clip.id,
+                ticks_to_px(clip.start_tick, zoom_x),
+                ruler_h + track_row as f32 * track_height + 1.0,
+                ticks_to_px(clip.duration_ticks, zoom_x).max(12.0),
+                track_height - 2.0,
+            )
+        })
+        .collect();
+
+    let marquee_overlay = match pl.marquee {
+        Some(m) if m.is_drag() => {
+            let (x0, y0, x1, y1) = m.normalized();
+            // Estilo KDE Plasma / escritorio: relleno translúcido + borde
+            // definido de 1px. El rect se posiciona en coords de la grilla
+            // (origen x=0) porque el marquee vive dentro del panel temporal.
+            let zb = zone_bounds.get();
+            let left = x0 - zb[0];
+            let top = y0 - zb[1];
+            Some(
+                div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px((x1 - x0).max(1.0)))
+                    .h(px((y1 - y0).max(1.0)))
+                    .bg(rgba(0x0096BE40))
+                    .border_1()
+                    .border_color(rgb(0x0096BE))
+                    .rounded(px(1.0))
+                    .into_any_element(),
+            )
+        }
+        _ => None,
+    };
+
     let zone_bounds_seek = zone_bounds.clone();
     let zone_grid_move = zone_bounds.clone();
+    let zone_bounds_marquee = zone_bounds.clone();
     let seek_zone = div()
         .absolute()
         .left(px(0.0))
@@ -1818,8 +2235,110 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                         );
                                     })
                                     .child(corner)
-                                    .children(track_headers),
-                            )
+                                            // Menú contextual de la Playlist: se
+                                            // abre con click DERECHO simple (sin
+                                            // arrastre). El marquee consume el
+                                            // gesto largo en `mouse_up`, así que
+                                            // acá sólo llegan los toques.
+                                            .context_menu(move |menu: PopupMenu, _window, _cx| {
+                                                let has_sel = !selected.is_empty();
+                                                let has_clip = !clipboard_empty;
+                                                menu.item(
+                                                    PopupMenuItem::new("Copiar")
+                                                        .disabled(!has_sel)
+                                                        .on_click(move |_, _, cx| {
+                                                            let st = state(cx);
+                                                            st.update(cx, |s, cx| {
+                                                                copy_selected_clips(
+                                                                    &mut s.playlist_state,
+                                                                );
+                                                                cx.notify();
+                                                            });
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Cortar")
+                                                        .disabled(!has_sel)
+                                                        .on_click(move |_, _, cx| {
+                                                            let st = state(cx);
+                                                            st.update(cx, |s, cx| {
+                                                                if cut_selected_clips(
+                                                                    &mut s.playlist_state,
+                                                                ) > 0
+                                                                {
+                                                                    sync_clips_to_engine(s, cx);
+                                                                }
+                                                                cx.notify();
+                                                            });
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Pegar")
+                                                        .disabled(!has_clip)
+                                                        .on_click(move |_, _, cx| {
+                                                            let st = state(cx);
+                                                            st.update(cx, |s, cx| {
+                                                                let grid =
+                                                                    snap_step_ticks(
+                                                                        s.playlist_state.ppqn,
+                                                                        s.playlist_state
+                                                                            .grid_denominator,
+                                                                    )
+                                                                    .max(1);
+                                                                let at =
+                                                                    s.playlist_state.paste_tick();
+                                                                let keys = playlist_row_keys(s);
+                                                                let ids = paste_clips(
+                                                                    &mut s.playlist_state,
+                                                                    at,
+                                                                    grid,
+                                                                    &keys,
+                                                                );
+                                                                if !ids.is_empty() {
+                                                                    sync_clips_to_engine(s, cx);
+                                                                }
+                                                                cx.notify();
+                                                            });
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Duplicar")
+                                                        .disabled(!has_sel)
+                                                        .on_click(move |_, _, cx| {
+                                                            let st = state(cx);
+                                                            st.update(cx, |s, cx| {
+                                                                let grid =
+                                                                    snap_step_ticks(
+                                                                        s.playlist_state.ppqn,
+                                                                        s.playlist_state
+                                                                            .grid_denominator,
+                                                                    )
+                                                                    .max(1);
+                                                                let ids = duplicate_selected_clips(
+                                                                    &mut s.playlist_state,
+                                                                    grid,
+                                                                );
+                                                                if !ids.is_empty() {
+                                                                    sync_clips_to_engine(s, cx);
+                                                                }
+                                                                cx.notify();
+                                                            });
+                                                        }),
+                                                )
+                                                .item(PopupMenuItem::new("Deseleccionar").on_click(
+                                                    move |_, _, cx| {
+                                                        let st = state(cx);
+                                                        st.update(cx, |s, cx| {
+                                                            s.playlist_state
+                                                                .selected_clips
+                                                                .clear();
+                                                            cx.notify();
+                                                        });
+                                                    },
+                                                ))
+                                            })
+                                            .children(track_headers),
+                                    )
                             .child(
                                 div()
                                     .flex_1()
@@ -1868,6 +2387,70 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                 gpui_kit::MouseButton::Left,
                                                 move |_, _, cx| finish_clip_drag(cx),
                                             )
+                                            // Marquee: click DERECHO + arrastrar dibuja
+                                            // el rectángulo de selección. El
+                                            // `mousemove`/`mouseup` viven en la
+                                            // grilla (no en el clip) porque el
+                                            // cursor sale del control al arrastrar.
+                                            // Sólo se registra el gesto; la
+                                            // resolución (seleccionar vs abrir
+                                            // menú) ocurre en el `mouseup`.
+                                            .on_mouse_down(
+                                                gpui_kit::MouseButton::Right,
+                                                move |event, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |s, cx| {
+                                                        let p = (
+                                                            event.position.x.as_f32(),
+                                                            event.position.y.as_f32(),
+                                                        );
+                                                        s.playlist_state.marquee = Some(MarqueeState {
+                                                            start_x: p.0,
+                                                            start_y: p.1,
+                                                            cur_x: p.0,
+                                                            cur_y: p.1,
+                                                        });
+                                                        cx.notify();
+                                                    });
+                                                },
+                                            )
+                                            .on_mouse_move(move |event, _, cx| {
+                                                let st = state(cx);
+                                                st.update(cx, |s, cx| {
+                                                    let Some(m) = s.playlist_state.marquee else {
+                                                        return;
+                                                    };
+                                                    // Botón soltado fuera: el
+                                                    // `mouse_up` no llega, así que
+                                                    // se cierra el gesto acá.
+                                                    if event.pressed_button.is_none() {
+                                                        s.playlist_state.marquee = None;
+                                                        cx.notify();
+                                                        return;
+                                                    }
+                                                    s.playlist_state.marquee = Some(MarqueeState {
+                                                        cur_x: event.position.x.as_f32(),
+                                                        cur_y: event.position.y.as_f32(),
+                                                        ..m
+                                                    });
+                                                    cx.notify();
+                                                });
+                                            })
+                                            .on_mouse_up(
+                                                gpui_kit::MouseButton::Right,
+                                                move |event, _, cx| {
+                                                    finish_marquee(
+                                                        (
+                                                            event.position.x.as_f32(),
+                                                            event.position.y.as_f32(),
+                                                        ),
+                                                        zone_bounds_marquee.get(),
+                                                        &clip_rects,
+                                                        event.modifiers.shift,
+                                                        cx,
+                                                    );
+                                                },
+                                            )
                                             // Zoom con rueda + modificadores, anclado al cursor:
                                             // `Ctrl` + rueda = horizontal, `Alt` + rueda (o
                                             // `Ctrl` + `Shift` + rueda) = altura de filas. Sin
@@ -1899,6 +2482,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     // líneas atravesaban la forma de onda del clip.
                                     .children(grid_lines)
                                     .children(clip_elems)
+                                    // Marquee por encima de los clips (es el
+                                    // feedback del gesto en curso).
+                                    .when_some(marquee_overlay, |v, h| v.child(h))
                                     .children(drop_zones)
                                     .when_some(drop_handler, |v, h| v.child(h))
                                     .child(seek_zone.into_any_element())

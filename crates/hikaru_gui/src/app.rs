@@ -463,6 +463,23 @@ pub fn toggle_central_view(state: &mut AppState) {
 }
 
 pub fn handle_global_key(key: &str, cx: &mut App) {
+    handle_global_key_mod(key, gpui_kit::Modifiers::default(), cx);
+}
+
+/// Igual que `handle_global_key` pero con los modificadores de la tecla, para
+/// los atajos de edición con `Ctrl` (copiar/cortar/pegar/duplicar).
+pub fn handle_global_key_mod(key: &str, mods: gpui_kit::Modifiers, cx: &mut App) {
+    // `Ctrl` o `Super` (Cmd en macOS) count como modificador de comando.
+    let cmd = mods.control || mods.platform;
+    if cmd {
+            let handled = playlist::handle_edit_shortcut(key, mods.shift, cx);
+        if handled {
+            update_state(cx, |_| {});
+            let st = state(cx);
+            st.update(cx, |_, cx| cx.notify());
+            return;
+        }
+    }
     match key {
         "tab" | "f9" => {
             update_state(cx, toggle_central_view);
@@ -1124,12 +1141,13 @@ impl Render for HikaruApp {
                     return;
                 }
                 let key = event.keystroke.key.as_str().to_lowercase();
+                let mods = event.keystroke.modifiers;
                 // La tecla Delete elimina la tarjeta seleccionada del DSP Rack
                 if show_dsp_rack && key == "delete" {
                     dsp_rack::handle_delete_key(cx);
                     return;
                 }
-                handle_global_key(&key, cx);
+                handle_global_key_mod(&key, mods, cx);
             })
     }
 }
