@@ -1,0 +1,194 @@
+                     LICENCIA PÚBLICA GENERAL REDUCIDA DE GNU
+                       Versión 3, 29 de junio de 2007
+
+  Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+  Se permite a cualquiera copiar y distribuir copias textuales
+  de este documento de licencia, pero no se permite modificarlo.
+
+  This is an unofficial translation of the GNU Lesser General Public License
+  version 3 into Spanish.  It was not published by the Free Software
+  Foundation, and does not legally state the distribution terms for software
+  that uses the GNU LGPL -- only the original English text of the GNU LGPL
+  does that.  However, we hope that this translation will help Spanish
+  speakers understand the GNU LGPL better.
+
+  Esta es una traducción no oficial al español de la Licencia Pública
+  General Reducida de GNU (GNU LGPL) versión 3.  No ha sido publicada por la
+  Free Software Foundation y no establece legalmente los términos jurídicos
+  de distribución del software publicado bajo la GNU LGPL: solo el texto
+  original en inglés de la GNU LGPL lo hace.  Sin embargo, esperamos que esta
+  traducción ayude a los hispanohablantes a comprender mejor la GNU LGPL, y a
+  que eso les facilite comprender el proyecto y a sumarse a mantenerlo y a
+  contribuir con sus propios forks, respetando siempre los términos de la
+  GNU LGPL.
+
+  Traducción al español realizada por OpenCode (asistente de inteligencia
+  artificial) para el proyecto Hikaru OpenLive, 2026.  El nombre «Licencia
+  Pública General Reducida de GNU» es el que emplea la Free Software
+  Foundation en sus materiales en español; el nombre en inglés «GNU Lesser
+  General Public License» sigue siendo igualmente válido.
+
+  Esta versión de la Licencia Pública General Reducida de GNU incorpora los
+términos y las condiciones de la versión 3 de la Licencia Pública General
+GNU, complementados por los permisos adicionales que se enumeran a
+continuación.
+
+  0. Definiciones adicionales.
+
+  Tal como se utiliza en el presente documento, "esta Licencia" se refiere a
+la versión 3 de la Licencia Pública General Reducida de GNU, y "la Licencia
+Pública General GNU" se refiere a la versión 3 de la Licencia Pública General
+GNU.
+
+  "La Biblioteca" se refiere a una obra cubierta gobernada por esta Licencia,
+distinta de una Aplicación o de una Obra Combinada tal como se definen a
+continuación.
+
+  Una "Aplicación" es cualquier obra que utilice una interfaz proporcionada
+por la Biblioteca, pero que, por lo demás, no esté basada en la Biblioteca.
+Definir una subclase de una clase definida por la Biblioteca se considera un
+modo de utilizar una interfaz proporcionada por la Biblioteca.
+
+  Una "Obra Combinada" es una obra producida al combinar o enlazar una
+Aplicación con la Biblioteca. La versión concreta de la Biblioteca con la
+que se realizó la Obra Combinada se denomina asimismo la "Versión Enlazada".
+
+  El "Código Fuente Correspondiente Mínimo" para una Obra Combinada
+significa el Código Fuente Correspondiente de la Obra Combinada, excluyendo
+cualquier código fuente de partes de la Obra Combinada que, consideradas de
+forma aislada, estén basadas en la Aplicación y no en la Versión Enlazada.
+
+  El "Código Correspondente de la Aplicación" para una Obra Combinada
+significa el código objeto y/o el código fuente de la Aplicación,
+incluyendo cualesquiera datos y programas utilitarios necesarios para
+reproducir la Obra Combinada a partir de la Aplicación, pero excluyendo las
+Bibliotecas del Sistema de la Obra Combinada.
+
+  1. Excepción a la sección 3 de la Licencia Pública General GNU.
+
+  Puede distribuir una obra cubierta conforme a las secciones 3 y 4 de esta
+Licencia sin quedar obligado por la sección 3 de la Licencia Pública General
+GNU.
+
+  2. Distribución de versiones modificadas.
+
+  Si modifica una copia de la Biblioteca y, en sus modificaciones, alguna
+instalación («facility») hace referencia a una función o a unos datos que
+deben ser proporcionados por una Aplicación que utiliza dicha instalación
+(distintos de un argumento pasado cuando se invoca la instalación), entonces
+puede distribuir una copia de la versión modificada:
+
+   a) conforme a esta Licencia, siempre que haga un esfuerzo de buena fe por
+   asegurar que, en caso de que una Aplicación no proporcione la función o los
+   datos, la instalación sigue funcionando y prosecigue la parte de su
+   propósito que siga siendo significativa; o
+
+   b) conforme a la Licencia Pública General GNU, sin que ninguno de los
+   permisos adicionales de esta Licencia sea aplicable a esa copia.
+
+  3. Código objeto que incorpora material de archivos de cabecera de la
+Biblioteca.
+
+  La forma de código objeto de una Aplicación puede incorporar material de
+un archivo de cabecera que forme parte de la Biblioteca. Puede distribuir
+dicho código objeto en los términos que usted elija, siempre que, si el
+material incorporado no se limita a parámetros numéricos, disposiciones de
+estructuras de datos y funciones de acceso, o a pequeñas macros, funciones
+en línea y plantillas (de diez líneas o menos de longitud), usted haga
+ambas cosas:
+
+   a) Incluir, en cada copia del código objeto, un aviso destacado que indique
+   que se utiliza la Biblioteca en él y que la Biblioteca y su uso están
+   cubiertos por esta Licencia.
+
+   b) Acompañar el código objeto con una copia de la Licencia Pública General
+   GNU y de este documento de licencia.
+
+  4. Obras combinadas.
+
+  Puede distribuir una Obra Combinada en los términos que usted elija que,
+considerados en su conjunto, no restrinjan eficazmente la modificación de las
+partes de la Biblioteca contenidas en la Obra Combinada ni la ingeniería
+inversa con el fin de depurar dichas modificaciones, siempre que usted haga
+también cada una de las cosas siguientes:
+
+   a) Incluir, en cada copia de la Obra Combinada, un aviso destacado que
+   indique que se utiliza la Biblioteca en ella y que la Biblioteca y su uso
+   están cubiertos por esta Licencia.
+
+   b) Acompañar la Obra Combinada con una copia de la Licencia Pública General
+   GNU y de este documento de licencia.
+
+   c) En el caso de una Obra Combinada que muestre avisos de copyright durante
+   la ejecución, incluir entre esos avisos el aviso de copyright de la
+   Biblioteca, así como una referencia que remita al usuario a las copias de
+   la Licencia Pública General GNU y de este documento de licencia.
+
+   d) Hacer una de las cosas siguientes:
+
+       0) Distribuir el Código Fuente Correspondiente Mínimo conforme a los
+       términos de esta Licencia, y el Código Correspondiente de la
+       Aplicación en una forma que sea adecuada y en condiciones que permitan
+       al usuario recombinar o reenlazar la Aplicación con una versión
+       modificada de la Versión Enlazada para producir una Obra Combinada
+       modificada, del modo especificado en la sección 6 de la Licencia
+       Pública General GNU para distribuir el Código Fuente Correspondiente.
+
+       1) Utilizar un mecanismo adecuado de biblioteca compartida para
+       enlazarse con la Biblioteca. Un mecanismo adecuado es aquel que (a) en
+       tiempo de ejecución utiliza una copia de la Biblioteca ya presente en
+       el sistema informático del usuario, y (b) funciona correctamente con
+       una versión modificada de la Biblioteca que sea compatible con la
+       interfaz de la Versión Enlazada.
+
+   e) Proporcionar Información de Instalación, pero solo en caso de que, de
+   otro modo, estuviera obligado a proporcionar dicha información conforme a
+   la sección 6 de la Licencia Pública General GNU, y únicamente en la
+   medida en que dicha información sea necesaria para instalar y ejecutar una
+   versión modificada de la Obra Combinada producida al recombinar o reenlazar
+   la Aplicación con una versión modificada de la Versión Enlazada. (Si
+   utiliza la opción 4d0, la Información de Instalación debe acompañar al
+   Código Fuente Correspondiente Mínimo y al Código Correspondiente de la
+   Aplicación. Si utiliza la opción 4d1, debe proporcionar la Información de
+   Instalación del modo especificado en la sección 6 de la Licencia Pública
+   General GNU para distribuir el Código Fuente Correspondiente.)
+
+  5. Bibliotecas combinadas.
+
+  Puede colocar instalaciones de biblioteca que constitute una obra basada
+en la Biblioteca una al lado de la otra en una única biblioteca, junto con
+otras instalaciones de biblioteca que no sean Aplicaciones ni estén cubiertas
+por esta Licencia, y distribuir dicha biblioteca combinada en los términos
+que usted elija, si hace ambas de las cosas siguientes:
+
+   a) Acompañar la biblioteca combinada con una copia de la misma obra basada
+   en la Biblioteca, sin combinar con ninguna otra instalación de biblioteca,
+   distribuida conforme a los términos de esta Licencia.
+
+   b) Incluir, en la biblioteca combinada, un aviso destacado que indique que
+   una parte de ella es una obra basada en la Biblioteca, y que explique
+   dónde encontrar la forma no combinada de la misma obra.
+
+  6. Versiones revisadas de la Licencia Pública General Reducida de GNU.
+
+  La Free Software Foundation puede publicar de vez en cuando versiones
+revisadas y/o nuevas de la Licencia Pública General Reducida de GNU. Dichas versiones
+nuevas serán similares en espíritu a la presente versión, pero pueden diferir
+en los detalles para abordar nuevos problemas o
+preocupaciones.
+
+  Cada versión recibe un número de versión distintivo. Si la Biblioteca tal
+como la recibió especifica que se le aplica una versión numerada concreta de
+la Licencia Pública General Reducida de GNU "o cualquier versión posterior", usted
+tiene la opción de seguir los términos y las condiciones de esa versión
+publicada o de cualquier versión posterior publicada por la Free Software
+Foundation. Si la Biblioteca tal como la recibió no especifica un número de
+versión de la Licencia Pública General Reducida de GNU, usted puede elegir
+cualquier versión de la Licencia Pública General Reducida de GNU publicada alguna
+vez por la Free Software Foundation.
+
+  Si la Biblioteca tal como la recibió especifica que un representante puede
+decidir si se aplicarán versiones futuras de la Licencia Pública General
+Reducida de GNU, la declaración pública de aceptación de cualquier versión que ese
+representante haga constituye una autorización permanente para que usted
+elija esa versión para la Biblioteca.

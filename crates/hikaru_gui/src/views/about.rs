@@ -8,7 +8,7 @@ use gpui_kit::*;
 use crate::app::{state, AppMode, HikaruApp};
 
 const BUILDER_NAME: &str = "Hikaru Corporation";
-const BUILD_VERSION: &str = "1.12.2";
+const BUILD_VERSION: &str = "2.22.2";
 
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let mode = state(cx).read(cx).mode;
