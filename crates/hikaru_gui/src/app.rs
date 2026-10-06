@@ -345,6 +345,28 @@ pub struct AppState {
 
     pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
     pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
+
+    /// Archivo de proyecto abierto (`None` = sesión sin guardar, la que
+    /// arranca al abrir la app).
+    ///
+    /// Vive en el estado y no en el módulo de proyecto porque es lo que
+    /// decide si `File > Save` escribe donde ya estaba o abre el diálogo de
+    /// "Save As...", y porque el título de la ventana lo muestra.
+    pub project_path: Option<PathBuf>,
+    /// Si el proyecto tiene cambios sin guardar.
+    ///
+    /// Es una bandera de cortesía, no un sistema de undo: la pone el gesto que
+    /// edita algo y la limpia un save exitoso.
+    pub project_dirty: bool,
+
+    /// Menú de la barra superior que está desplegado (`None` = todos cerrados).
+    ///
+    /// Va en el estado y no en una entidad creada dentro de `menu_bar::render`
+    /// porque la barra se REDIBUJA en cada frame: una entidad creada por render
+    /// moriría con el primer `notify` y el menú no llegaría a abrirse nunca.
+    /// El índice es la posición en la lista de menús (`FILE` = 0, `EDIT` = 1,
+    /// `VIEW` = 2, `SETTINGS` = 3, `HELP` = 4).
+    pub open_menu: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -646,6 +668,9 @@ impl HikaruApp {
             matrix_mix_bounds: [0.0; 4],
             active_external_plugins: Vec::new(),
             engine_handle,
+            project_path: None,
+            project_dirty: false,
+            open_menu: None,
         });
 
         cx.set_global(AppStateHandle(state.clone()));

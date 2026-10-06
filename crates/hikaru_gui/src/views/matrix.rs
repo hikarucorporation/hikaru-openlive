@@ -29,6 +29,14 @@ pub enum SlotState {
 pub struct AudioEvent {
     pub id: u64,
     pub name: String,
+    /// De qué archivo se decodificó el sample.
+    ///
+    /// Los samples viven en memoria (`samples`), pero SIN esta ruta el evento
+    /// es irrecuperable al guardar el proyecto: `crate::project` la usa para
+    /// volver a leer el WAV de cada evento y re-armar el pad. Los eventos
+    /// decodificados sin archivo (split, clipboard) la dejan en `None` y no
+    /// entran al `.hikaru`.
+    pub source_path: Option<PathBuf>,
     pub samples: Vec<f32>,
     pub channels: usize,
     pub sample_rate: u32,
@@ -53,6 +61,7 @@ impl AudioEvent {
         Self {
             id,
             name,
+            source_path: None,
             samples,
             channels,
             sample_rate,
@@ -123,6 +132,10 @@ impl AudioEvent {
         let right = AudioEvent {
             id: new_id,
             name: new_name,
+            // La mitad derecha sale del mismo archivo que la izquierda: sin
+            // offset no se puede volver a leer, pero el `trim_left_frames`
+            // ajustado es lo que la reconstruye al recargar.
+            source_path: self.source_path.clone(),
             samples: self.samples.clone(),
             channels: self.channels,
             sample_rate: self.sample_rate,
@@ -790,7 +803,12 @@ pub fn append_sample_as_event(
             .to_string_lossy()
             .to_string();
         if let Some(events) = clip.audio_events_mut() {
-            events.push(AudioEvent::new_full(id, name, samples, channels, sr, start));
+            let mut ev =
+                AudioEvent::new_full(id, name, samples, channels, sr, start);
+            // El sample se decodificó de acá: sin esto el evento no sobrevive
+            // a un guardado del proyecto (ver `AudioEvent::source_path`).
+            ev.source_path = Some(path.clone());
+            events.push(ev);
         }
         clip.refresh_preview();
         // La waveform del pad refleja el clip ya extendido con el sample nuevo.

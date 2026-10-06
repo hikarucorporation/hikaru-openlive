@@ -1287,8 +1287,14 @@ fn ticks_to_samples_precise(ticks: u64, ppqn: u64, bpm: f64, sample_rate: u32) -
     (ticks as f64 * seconds_per_tick * sample_rate as f64).round() as u64
 }
 
+/// Ticks a segundos, sin la precisión de sample.
+///
+/// Es la matemática de posiciones que usa el módulo de proyecto
+/// (`crate::project`) para guardar y recargar la región de loop global en
+/// TICKS: los samples dependen del sample rate de la máquina que abre el
+/// proyecto, los ticks no.
 #[inline]
-fn ticks_to_secs_precise(ticks: u64, ppqn: u64, bpm: f64) -> f32 {
+pub fn ticks_to_secs_precise(ticks: u64, ppqn: u64, bpm: f64) -> f32 {
     if ppqn == 0 || bpm <= 0.0 {
         return 0.0;
     }
@@ -1296,7 +1302,11 @@ fn ticks_to_secs_precise(ticks: u64, ppqn: u64, bpm: f64) -> f32 {
     (ticks as f64 * seconds_per_tick) as f32
 }
 
-fn load_sample_info(path: &PathBuf, ppqn: u64, bpm: f64) -> (u64, Vec<f32>) {
+/// Duración en ticks y picos normalizados de un WAV.
+///
+/// Público porque `crate::project` lo usa al abrir un proyecto: los picos NO
+/// se guardan en el `.hikaru` (son caché derivada) y se releen del sample.
+pub fn load_sample_info(path: &PathBuf, ppqn: u64, bpm: f64) -> (u64, Vec<f32>) {
     let mut peaks = Vec::new();
 
     match hound::WavReader::open(path) {

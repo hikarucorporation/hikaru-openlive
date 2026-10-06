@@ -12,6 +12,8 @@ pub mod app;
 pub mod views;
 pub mod theme;
 pub mod ui;
+/// Formato de proyecto `.hikaru`: qué se guarda, cómo y desde dónde.
+pub mod project;
 
 pub use app::HikaruApp;
 
