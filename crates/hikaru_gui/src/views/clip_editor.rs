@@ -603,6 +603,63 @@ fn ce_loop_enabled(s: &AppState) -> bool {
     s.playlist_state.is_loop_region_valid()
 }
 
+/// Propaga el Loop del Clip Editor al MOTOR y al clip de la grilla.
+///
+/// Sin esto el botón `[ Loop ]` era decorativo: sólo alternaba un flag local y
+/// el motor nunca se enteraba, así que el clip seguía sonando one-shot aunque
+/// la GUI lo mostrara activado. Como `AudioEngine` corre en otro hilo, el estado
+/// tiene que viajar por `GuiCommand::SetClipLoop`.
+///
+/// También escribe el flag en el `MatrixClip`, que es de donde `capture` lo
+/// lleva al `.oplf`: si sólo se tocara el editor, el loop no sobreviviría a un
+/// guardado y se perdería al recargar.
+///
+/// La región sale del editor: si el usuario no eligió una, se manda
+/// `(0, 0)` y es el motor el que loopea el clip entero (ver `set_clip_loop`).
+fn apply_loop_to_engine(s: &mut AppState, enabled: bool) {
+    let Some(target) = s.clip_editor.target.clone() else {
+        return;
+    };
+    let start_secs = s.clip_editor.loop_start_secs.max(0.0) as f32;
+    let end_secs = s.clip_editor.loop_end_secs.max(0.0) as f32;
+
+    match target {
+        ClipEditorTarget::Matrix { track, scene } => {
+            // Se escribe primero en el clip de la grilla: ese es el estado que
+            // se guarda, y el comando al motor lo consume enseguida.
+            if let Some(clip) = s
+                .matrix_state
+                .grid
+                .get_mut(track)
+                .and_then(|row| row.get_mut(scene))
+                .and_then(|slot| slot.clip.as_mut())
+            {
+                clip.loop_enabled = enabled;
+            }
+            s.audio_proxy
+                .send(crate::audio_proxy::GuiCommand::SetClipLoop {
+                    track_idx: track,
+                    scene_idx: scene,
+                    start_secs,
+                    end_secs,
+                    enabled,
+                });
+        }
+        ClipEditorTarget::Playlist { clip_id } => {
+            // En la Playlist el loop ya es un estado propio del clip; sólo hay
+            // que avisarle al motor, que indexa por clip de la timeline.
+            s.audio_proxy
+                .send(crate::audio_proxy::GuiCommand::SetClipLoop {
+                    track_idx: clip_id,
+                    scene_idx: usize::MAX,
+                    start_secs,
+                    end_secs,
+                    enabled,
+                });
+        }
+    }
+}
+
 /// Selecciona un clip para el editor y ABRE el panel.
 ///
 /// Un solo punto de entrada para las dos fuentes (Session Matrix y Playlist),
@@ -791,7 +848,12 @@ fn clip_topbar(
                 .text_color(rgb(0xFFFFFF))
                 .on_click(|_, _, cx| {
                     state(cx).update(cx, |s, cx| {
-                        s.clip_editor.loop_enabled = !s.clip_editor.loop_enabled;
+                        let enabled = !s.clip_editor.loop_enabled;
+                        s.clip_editor.loop_enabled = enabled;
+                        // El flag local alcanza para el pintado, pero el motor
+                        // y el `.oplf` se tienen que enterar ahora: sin esto el
+                        // toggle no cambia lo que se escucha.
+                        apply_loop_to_engine(s, enabled);
                         cx.notify();
                     });
                 }),

@@ -375,8 +375,15 @@ fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
         .selected_slot
         .filter(|(t, s)| *t < next.tracks.len() && *s < next.scenes.len());
 
-    // Avisa al motor de los loops de clip, que es estado que el motor usa al
-    // disparar y no al leer el archivo.
+    // Traduce la grilla recién reconstruida al estado que el motor usa AL
+    // DISPARAR (y que por lo tanto no se deduce de leer el archivo): el registro
+    // de cada clip en `AudioEngine::clips`, sus eventos y su región de loop.
+    //
+    // El PPQN de los loops sale del TRANSPORTE (`transport.ppqn()`, la constante
+    // única del motor) y no del archivo: el PPQN es del timeline lineal y un
+    // `.oplf` no lo guarda. Es también lo correcto, porque la conversión
+    // tick->segundo que necesita el motor depende del PPQN con el que va a
+    // correr la sesión, no del que tuviera guardada la máquina que exportó.
     //
     // El PPQN sale del TRANSPORTE (`transport.ppqn()`, la constante única del
     // motor) y no del archivo: el PPQN es del timeline lineal y un `.oplf` no
@@ -388,6 +395,65 @@ fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
     for (track_idx, row) in next.grid.iter().enumerate() {
         for (scene_idx, slot) in row.iter().enumerate() {
             let Some(clip) = &slot.clip else { continue };
+
+            // =========================================================================
+            // REGISTRO EN EL MOTOR (el orden de estos envíos NO es negociable)
+            // =========================================================================
+            //
+            // `AudioEngine` indexa sus clips por `(track_index, scene_index)` en
+            // `clips: Vec<AudioClipInstance>`, y `set_clip_events` /
+            // `set_clip_loop` hacen `find` sobre un clip que YA tiene que existir:
+            // si no está, no hacen nada. Peor aún, `trigger_clip` itera
+            // `self.clips`, así que un pad sin `AudioClipInstance` registrado es
+            // un pad que suena a silencio sin importar cuántas veces lo
+            // dispongas.
+            //
+            // Es decir: reconstruir la grilla del lado GUI NO alcanza. Por eso
+            // acá se replica lo que hace el gesto que sí funciona (arrastrar un
+            // .wav al pad, `matrix::load_clip_into_slot` /
+            // `matrix::append_sample_as_event`): registrar primero, y recién
+            // después mandar los eventos y el loop.
+            //
+            // Sin este bloque, el proyecto abría con nombres y waveforms
+            // correctos (los picos salen del WAV en `build_clip`) pero todos los
+            // pads mudos.
+            match &clip.content {
+                matrix::ClipData::Audio { .. } => {
+                    // `LoadClip` crea/upserta la instancia. `duration_secs: 0.0`
+                    // hace que el motor derive la longitud real del PCM
+                    // decodificado (`natural_frames`), que es de donde salen los
+                    // límites de voz y de loop.
+                    state.audio_proxy.send(GuiCommand::LoadClip {
+                        clip_id: clip.id,
+                        path: clip.path.to_string_lossy().to_string(),
+                        position_secs: 0.0,
+                        duration_secs: 0.0,
+                        offset_secs: 0.0,
+                        track_index: track_idx,
+                        scene_index: scene_idx,
+                    });
+                    // Multi-sample: los eventos editables del pad (trim, gain,
+                    // fades) van aparte, ya que `LoadClip` sólo carga el sample
+                    // base. Sin esto un pad con varios samples apilados suena
+                    // como uno solo, con el sample crudo.
+                    if !clip.audio_events().is_empty() {
+                        matrix::sync_audio_events_to_engine(
+                            clip,
+                            &state.audio_proxy,
+                            track_idx,
+                            scene_idx,
+                        );
+                    }
+                }
+                matrix::ClipData::Midi { notes } => {
+                    state.audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+                        track_idx,
+                        scene_idx,
+                        notes: notes.clone(),
+                    });
+                }
+            }
+
             state.audio_proxy.send(GuiCommand::SetClipLoop {
                 track_idx,
                 scene_idx,

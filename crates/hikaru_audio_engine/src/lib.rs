@@ -184,6 +184,53 @@ impl AudioClipInstance {
             && self.clip_loop_start < self.natural_frames()
     }
 
+    /// Longitud del loop EXPRESSADA en frames, sin tocar.
+    fn raw_loop_len(&self) -> u64 {
+        let natural = self.natural_frames();
+        let end = self.clip_loop_end.min(natural.max(1)).max(self.clip_loop_start + 1);
+        end.saturating_sub(self.clip_loop_start).max(1)
+    }
+
+    /// Longitud del loop CUANTIZADA a un número entero de beats del transporte.
+    ///
+    /// Por qué hace falta: `natural_frames` sale de `samples.len()/channels`, y
+    /// `samples` viene de `resample_linear`, que calcula los frames con float y
+    /// TRUNCA (`as usize`). A 150 BPM la duración real de un WAV cae en un
+    /// número de frames que casi nunca es múltiplo de `samples_per_beat`. Con
+    /// esa longitud, el wrap del loop va cayendo fuera de la grilla de compases
+    /// en cada vuelta: el clip arranca desfasado respecto del pulso (phase
+    /// drift), y como cada clip tiene una longitud de WAV distinta, dos clips
+    /// que deberían sonar juntos se desfasan entre sí después de la primera
+    /// vuelta.
+    ///
+    /// Redondeando HACIA ABAJO al múltiplo de beat más cercano, dos clips que
+    /// duran lo mismo en beats obtienen la misma longitud de loop, así que
+    /// vuelven a envolver en el mismo instante y el sync entre ellos se
+    /// conserva.
+    ///
+    /// Todo el cálculo es ENTERO a propósito: `samples_per_beat` se redondea una
+    /// sola vez a `u64` y de ahí en adelante se dividen frames, nunca se suman
+    /// floats. Un readout flotante acumulado por sample arrastraría error de
+    /// redondeo y volvería a producir drift en las vueltas largas; con `u64` el
+    /// reset del loop cae exacto en `loop_start`.
+    ///
+    /// Un loop más corto que un beat NO se toca: los loops sub-beat (stutters,
+    /// flams) son intencionales y cuantizarlos los destruiría.
+    pub fn quantized_loop_len(&self, transport: &TransportPosition) -> u64 {
+        let raw_len = self.raw_loop_len();
+        let spb = transport.samples_per_beat();
+        if !(spb > 1.0) {
+            // Sin BPM o SR utilizable no hay grilla: se usa la longitud cruda.
+            return raw_len;
+        }
+        let spb_frames = spb.round() as u64;
+        if spb_frames == 0 || raw_len < spb_frames {
+            return raw_len;
+        }
+        let beats = raw_len / spb_frames;
+        (beats * spb_frames).max(1).min(raw_len)
+    }
+
     pub fn playback_length_frames(&self) -> u64 {
         if self.has_valid_clip_loop() {
             let end = self.clip_loop_end.min(self.natural_frames());
@@ -208,9 +255,10 @@ impl AudioClipInstance {
         let elapsed = global_pos - self.start_frame;
 
         if self.has_valid_clip_loop() {
+            let natural = self.natural_frames();
             let loop_start = self.clip_loop_start.min(natural);
-            let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
-            let loop_len = loop_end.saturating_sub(loop_start).max(1);
+            let loop_end = loop_start + self.quantized_loop_len(transport);
+            let loop_len = loop_end - loop_start;
             if elapsed < loop_end {
                 return Some(elapsed as usize);
             }
@@ -228,7 +276,11 @@ impl AudioClipInstance {
         Some(elapsed as usize)
     }
 
-    pub fn voice_frame_linear(&self, abs_pos: u64) -> Option<usize> {
+    pub fn voice_frame_linear(
+        &self,
+        abs_pos: u64,
+        transport: &TransportPosition,
+    ) -> Option<usize> {
         if abs_pos < self.start_absolute {
             return None;
         }
@@ -240,8 +292,8 @@ impl AudioClipInstance {
 
         if self.has_valid_clip_loop() {
             let loop_start = self.clip_loop_start.min(natural);
-            let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
-            let loop_len = loop_end.saturating_sub(loop_start).max(1);
+            let loop_end = loop_start + self.quantized_loop_len(transport);
+            let loop_len = loop_end - loop_start;
             
             return Some((loop_start + (elapsed % loop_len)) as usize);
         }
@@ -253,7 +305,11 @@ impl AudioClipInstance {
         Some(elapsed as usize)
     }
 
-    pub fn voice_state_linear(&self, abs_pos: u64) -> VoiceState {
+    pub fn voice_state_linear(
+        &self,
+        abs_pos: u64,
+        transport: &TransportPosition,
+    ) -> VoiceState {
         // Modo eventos: activo si hay al menos un evento audible en la posición.
         if !self.events.is_empty() {
             if abs_pos < self.start_absolute {
@@ -266,8 +322,8 @@ impl AudioClipInstance {
             }
             let clip_frame = if self.has_valid_clip_loop() {
                 let loop_start = self.clip_loop_start.min(natural);
-                let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
-                let loop_len = loop_end.saturating_sub(loop_start).max(1);
+                let loop_end = loop_start + self.quantized_loop_len(transport);
+                let loop_len = loop_end - loop_start;
                 (loop_start + (elapsed % loop_len)) as u64
             } else {
                 if elapsed >= self.emission_len_frames() {
@@ -287,7 +343,7 @@ impl AudioClipInstance {
                 VoiceState::Active
             };
         }
-        match self.voice_frame_linear(abs_pos) {
+        match self.voice_frame_linear(abs_pos, transport) {
             Some(_) => VoiceState::Active,
             None => VoiceState::Finished,
         }
@@ -308,15 +364,19 @@ impl AudioClipInstance {
 
     /// Resuelve el frame del timeline (con loop) para un `elapsed` absoluto.
     /// Retorna `None` solo si el clip terminó (sin loop y pasado emisión).
-    pub fn clip_frame_for_elapsed(&self, elapsed: u64) -> Option<u64> {
+    pub fn clip_frame_for_elapsed(
+        &self,
+        elapsed: u64,
+        transport: &TransportPosition,
+    ) -> Option<u64> {
         let natural = self.natural_frames();
         if natural == 0 {
             return None;
         }
         if self.has_valid_clip_loop() {
             let loop_start = self.clip_loop_start.min(natural);
-            let loop_end = self.clip_loop_end.min(natural.max(1)).max(loop_start + 1);
-            let loop_len = loop_end.saturating_sub(loop_start).max(1);
+            let loop_end = loop_start + self.quantized_loop_len(transport);
+            let loop_len = loop_end - loop_start;
             Some((loop_start + (elapsed % loop_len)) as u64)
         } else {
             if elapsed >= self.emission_len_frames() {
@@ -878,10 +938,31 @@ impl<'a> AudioEngine<'a> {
             if natural > 0 {
                 end = end.min(natural);
             }
-            if enabled && end > start && start < natural {
-                clip.clip_loop_enabled = true;
-                clip.clip_loop_start = start;
-                clip.clip_loop_end = end;
+            if enabled && start < natural {
+                // Región vacía (`end <= start`) NO significa "sin loop": un clip
+                // con el Loop activado y sin región elegida loopea el clip
+                // entero. Es la semántica que ya usan `add_clip` (default de
+                // los pads de Matrix) y `Clip::new` en `hikaru_sequencer`.
+                //
+                // Tratar `end <= start` como "desactivar" rompía el loop justo al
+                // abrir un proyecto: `apply_matrix` manda `SetClipLoop` para
+                // cada clip con (0, 0, enabled=true) — que es lo que producen
+                // los pads recién cargados — y eso apagaba el loop que
+                // `add_clip` acababa de dejar puesto.
+                let loop_end = if end > start {
+                    end.min(natural)
+                } else {
+                    natural
+                };
+                if loop_end > start {
+                    clip.clip_loop_enabled = true;
+                    clip.clip_loop_start = start;
+                    clip.clip_loop_end = loop_end;
+                } else {
+                    clip.clip_loop_enabled = false;
+                    clip.clip_loop_start = 0;
+                    clip.clip_loop_end = 0;
+                }
             } else {
                 clip.clip_loop_enabled = false;
                 clip.clip_loop_start = 0;
@@ -1155,7 +1236,7 @@ impl<'a> AudioEngine<'a> {
                 if !clip.is_playing {
                     return false;
                 }
-                clip.voice_state_linear(self.absolute_frame) == VoiceState::Active
+                clip.voice_state_linear(self.absolute_frame, &self.transport) == VoiceState::Active
             }
         }
     }
@@ -1172,7 +1253,7 @@ impl<'a> AudioEngine<'a> {
         if !clip.is_playing {
             return None;
         }
-        if clip.voice_state_linear(self.absolute_frame) != VoiceState::Active {
+        if clip.voice_state_linear(self.absolute_frame, &self.transport) != VoiceState::Active {
             return None;
         }
         Some(self.absolute_frame.saturating_sub(clip.start_absolute))
@@ -1192,10 +1273,10 @@ impl<'a> AudioEngine<'a> {
         if !clip.is_playing {
             return None;
         }
-        if clip.voice_state_linear(self.absolute_frame) != VoiceState::Active {
+        if clip.voice_state_linear(self.absolute_frame, &self.transport) != VoiceState::Active {
             return None;
         }
-        let frame = clip.voice_frame_linear(self.absolute_frame)? as u64;
+        let frame = clip.voice_frame_linear(self.absolute_frame, &self.transport)? as u64;
         let total = clip.natural_frames().max(1);
         Some((frame, total))
     }
@@ -1455,7 +1536,7 @@ impl<'a> AudioEngine<'a> {
                         let mut clip_finished = false;
                         for f in 0..buffer_frames as usize {
                             let elapsed = elapsed_start + f as u64;
-                            let Some(clip_frame) = clip.clip_frame_for_elapsed(elapsed) else {
+                            let Some(clip_frame) = clip.clip_frame_for_elapsed(elapsed, &transport) else {
                                 clip_finished = true;
                                 break;
                             };
@@ -1471,8 +1552,11 @@ impl<'a> AudioEngine<'a> {
 
                     let (loop_start, loop_len) = if has_loop {
                         let ls = clip.clip_loop_start.min(natural);
-                        let le = clip.clip_loop_end.min(natural.max(1)).max(ls + 1);
-                        (ls, le.saturating_sub(ls).max(1))
+                        // Longitud CUANTIZADA a beats: sin esto el wrap cae
+                        // fuera de la grilla en cada vuelta y el clip se
+                        // desfasage del pulso (ver `quantized_loop_len`).
+                        let len = clip.quantized_loop_len(&transport);
+                        (ls, len)
                     } else {
                         (0, 0)
                     };
@@ -1751,6 +1835,176 @@ mod tests {
         engine.set_clip_loop(0, 0, 0.0, 0.0, false);
         assert!(!engine.clips[0].has_valid_clip_loop());
         assert_eq!(engine.clips[0].playback_length_frames(), 44100);
+    }
+
+    #[test]
+    fn loop_activado_sin_region_loopea_el_clip_entero() {
+        // Es el caso que produce `apply_matrix` al abrir un proyecto: un pad
+        // recién cargado tiene `loop_enabled = true` y región (0, 0).
+        // `set_clip_loop` NO debe tomar eso como "desactivar": tiene que dejar
+        // el loop puesto sobre el clip entero.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, vec![0.5f32; 1000 * 2], 0.0, 0.0, 0.0, 2, true);
+        engine.set_clip_loop(0, 0, 0.0, 0.0, true);
+
+        let clip = &engine.clips[0];
+        assert!(
+            clip.has_valid_clip_loop(),
+            "loop activado sin región debe loopear el clip entero, no quedar off"
+        );
+        assert_eq!(clip.clip_loop_start, 0);
+        assert_eq!(clip.clip_loop_end, 1000);
+    }
+
+    #[test]
+    fn un_clip_con_loop_sigue_sonando_pasada_la_longitud_del_buffer() {
+        // Requisito (a): con el loop puesto, la voz entrega muestras VÁLIDAS
+        // indefinidamente. Antes, al llegar al final se terminaba.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        // 100 frames, con un rampa para poder distinguir dónde estamos.
+        let samples: Vec<f32> = (0..100).map(|i| i as f32 / 100.0).collect();
+        engine.add_clip(1, 0, 0, samples.clone(), 0.0, 0.0, 0.0, 1, true);
+        // Loop sobre la región completa.
+        engine.set_clip_loop(0, 0, 0.0, 100.0 / engine.sample_rate, true);
+        assert!(engine.clips[0].has_valid_clip_loop());
+
+        let t = engine.transport;
+        // Dentro del clip: la rampa avanza.
+        assert_eq!(engine.clips[0].voice_frame(0, &t), Some(0));
+        assert_eq!(engine.clips[0].voice_frame(50, &t), Some(50));
+        // PASADA la longitud del buffer: sigue Active, no None.
+        assert_eq!(engine.clips[0].voice_frame(100, &t), Some(0));
+        assert_eq!(engine.clips[0].voice_frame(150, &t), Some(50));
+        // Y mucho más allá: sigue activo y dentro del rango.
+        for pos in [1_000u64, 10_000, 100_000] {
+            let f = engine.clips[0]
+                .voice_frame(pos, &t)
+                .unwrap_or_else(|| panic!("la voz murió en {} con el loop puesto", pos));
+            assert!(f < 100, "lejo fuera del clip: {}", f);
+        }
+        assert_eq!(
+            engine.clips[0].voice_state(10_000, &t),
+            VoiceState::Active
+        );
+    }
+
+    #[test]
+    fn sin_loop_el_clip_se_termina_en_el_final() {
+        // Contracara del test anterior: apagado el loop, la voz se apaga en el
+        // final del buffer (no queda sonando para siempre).
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, vec![0.5f32; 100 * 2], 0.0, 0.0, 0.0, 2, true);
+        engine.set_clip_loop(0, 0, 0.0, 0.0, false);
+        assert!(!engine.clips[0].has_valid_clip_loop());
+
+        let t = engine.transport;
+        assert_eq!(engine.clips[0].voice_frame(99, &t), Some(99));
+        assert_eq!(engine.clips[0].voice_frame(100, &t), None);
+        assert_eq!(
+            engine.clips[0].voice_state(500, &t),
+            VoiceState::Finished
+        );
+    }
+
+    #[test]
+    fn dos_clips_de_igual_duracion_en_beats_no_se_desfasan() {
+        // Este es el bug de phase drift: dos clips que duran LO MISMO en beats
+        // tienen longitudes de WAV distintas (por ejemplo uno 지하 una barra y
+        // el otro cuatro, o el mismo sample recortado), así que la longitud de
+        // loop cruda no coincide. Con la longitud libre, cada uno envuelve en un
+        // instante distinto y se desfasan entre sí a partir de la segunda vuelta.
+        //
+        // 150 BPM a 44100 Hz = 17640 samples por beat exactos.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(150.0);
+        let spb = 17640u64;
+        assert_eq!(engine.transport.samples_per_beat().round() as u64, spb);
+
+        // Un beat y medio exacto de audio en cada uno, pero con "colas" de
+        // distinta longitud que los dejan en 19200 y 21000 frames (ninguno
+        // múltiplo de 17640).
+        engine.add_clip(1, 0, 0, vec![0.5f32; 19200], 0.0, 0.0, 0.0, 1, true);
+        engine.add_clip(2, 0, 1, vec![0.5f32; 21000], 0.0, 0.0, 0.0, 1, true);
+        engine.set_clip_loop(0, 0, 0.0, 19200.0 / 44100.0, true);
+        engine.set_clip_loop(0, 1, 0.0, 21000.0 / 44100.0, true);
+
+        let len_a = engine.clips[0].quantized_loop_len(&engine.transport);
+        let len_b = engine.clips[1].quantized_loop_len(&engine.transport);
+        assert_eq!(
+            len_a, len_b,
+            "clips de la misma duración en beats deben loopear el mismo largo"
+        );
+        assert_eq!(
+            len_a % spb,
+            0,
+            "la longitud del loop tiene que caer exacto en la grilla de beats"
+        );
+        assert_eq!(len_a, spb, "un solo beat de loop (17640 frames)");
+
+        // Y ahora la prueba de verdad: leer MUCHAS vueltas y comprobar que los
+        // dos clips devuelven exactamente la misma fase en cada sample.
+        engine.clips[0].start_absolute = 0;
+        engine.clips[0].start_frame = 0;
+        engine.clips[1].start_absolute = 0;
+        engine.clips[1].start_frame = 0;
+        for pos in 0..(spb * 12) {
+            let a = engine.clips[0].clip_frame_for_elapsed(pos, &engine.transport);
+            let b = engine.clips[1].clip_frame_for_elapsed(pos, &engine.transport);
+            assert_eq!(
+                a, b,
+                "los clips se desfasaron en el sample {} (12 vueltas): {:?} vs {:?}",
+                pos, a, b
+            );
+        }
+    }
+
+#[test]
+    fn el_loop_cai_exacto_en_el_pulso_sin_drift_de_punto_flotante() {
+        // 150 BPM, sample rate 44100: 17640 samples/beat exacto. Tras 50 vueltas
+        // el wrap tiene que seguir cayendo en el frame 0 del clip, sin deriva.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(150.0);
+        let spb = 17640u64;
+        // WAV de 1.234 beats: 21771 frames (no múltiplo de 17640).
+        engine.add_clip(1, 0, 0, vec![0.5f32; 21771], 0.0, 0.0, 0.0, 1, true);
+        engine.set_clip_loop(0, 0, 0.0, 21771.0 / 44100.0, true);
+        let len = engine.clips[0].quantized_loop_len(&engine.transport);
+        assert_eq!(len % spb, 0);
+
+        for vuelta in 1..50u64 {
+            let wrap_at = len * vuelta;
+            assert_eq!(
+                engine.clips[0].clip_frame_for_elapsed(wrap_at, &engine.transport),
+                Some(0),
+                "el wrap de la vuelta {} no cayó en el inicio del clip",
+                vuelta
+            );
+            assert_eq!(
+                engine.clips[0]
+                    .clip_frame_for_elapsed(wrap_at + len - 1, &engine.transport),
+                Some(len - 1),
+                "la vuelta {} no terminó justo antes del wrap",
+                vuelta
+            );
+        }
+    }
+
+    #[test]
+    fn un_loop_menor_a_un_beat_no_se_cuantiza() {
+        // Los loops sub-beat (stutter/flam) son intencionales: cuantizarlos los
+        // rompería, así que se respetan tal cual.
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(150.0);
+        // 500 frames de loop, muy por debajo de un beat (17640).
+        engine.add_clip(1, 0, 0, vec![0.5f32; 20000], 0.0, 0.0, 0.0, 1, true);
+        engine.set_clip_loop(0, 0, 0.0, 500.0 / 44100.0, true);
+        assert_eq!(engine.clips[0].quantized_loop_len(&engine.transport), 500);
     }
 
     #[test]

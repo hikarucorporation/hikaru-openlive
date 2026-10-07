@@ -64,6 +64,12 @@ En la carpeta raíz de tu proyecto (ej; `/miyu-shrine-workspace/*`)
 cargo build --release --bin hikaru_openlive
 ```
 
+### Crear un ejecutable `release-debug`
+
+```bash
+cargo run --profile release-debug -p hikaru_gui
+```
+
 ---
 
 ## Compilación Cruzada para Windows (Cross-compilation)

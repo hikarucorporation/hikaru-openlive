@@ -28,8 +28,12 @@ El archivo `.oplf` es la estructura de datos orientada exclusivamente a la **eje
   Hikaru OpenLive File Format (.oplf) | GNU Lesser General Public License v3.0 (LGPLv3)
 ==========================================================================================
 
+  --------------------------------------------
+
   Hikaru OpenLive CLI Version: 2.22.2
   Hikaru OpenLive File Format Version: 1.0
+
+  --------------------------------------------
 
   Shrine Host OS: "Windows 10 21H2 (x64)"
   Shrine Host Kernel Version: 10.0.19044
@@ -39,7 +43,11 @@ El archivo `.oplf` es la estructura de datos orientada exclusivamente a la **eje
   Shrine Host GPU: Intel(R) UHD Graphics 630
   Shrine Host GPU Memory: 4 GB
 
+  --------------------------------------------
+
   Hikaru VST3/CLAP Host Version: 2.22.2
+
+  --------------------------------------------
 
   File Name: "Tomoyo Sakurai - Yakumo's Squizofrenia.oplf"
   Artist(s): "Tomoyo Sakurai"
@@ -52,47 +60,77 @@ El archivo `.oplf` es la estructura de datos orientada exclusivamente a la **eje
   Scenes Number: 160
   Tracks Number: 20
 
+  --------------------------------------------
+
+  ============================================
   VST3 Devices in Total Project: 15 
-    [(Serum 1) : x10]
-    [(OTT) : x15]
-    [(Chroma) : x20]
-    [(Vital) : x15]
+  ============================================
+  
+  {
+    "Serum 1" : x10,
+    "OTT" : x15,
+    "Chroma" : x20,
+    "Vital" : x15,
+  }
 
+  ============================================
   CLAP Devices in Total Project: 15
-    [(LSP Compressor) : x10]
-    [(LSP Reverb) : x15]
-    [(LSP EQ) : x20]
-    [(LSP Delay) : x15]
+  ============================================
 
+  {
+    "LSP Compressor" : x10,
+    "LSP Reverb" : x15,
+    "LSP EQ" : x20,
+    "LSP Delay" : x15,
+  }
+
+  ============================================
   Hikaru Native Plugins in Total Project: 15
-    [(Hikaru OpenWavetable) : x10]
-    [(Hikaru OpenDMS) : x45]
-    [(Hikaru OpenModulation) : x15]
+  ============================================
+  
+  {
+    "Hikaru OpenWavetable" : x10,
+    "Hikaru OpenDMS" : x45,
+    "Hikaru OpenModulation" : x15,
+  }
 
+  ============================================
   Audio Clips in Total Project: 50
   MIDI Clips in Total Project: 15
+  ============================================
 
+  --------------------------------------------
+
+  ============================================
   Tracks in Total Project: 20
-   [Scene 1:
-      Track 1: Drum Loop 160BPM,
-      Track 2: Future Bass Drop Loop - 160BPM - B minor,
-      Track 3: FX 160BPM,
-      // Rest of tracks...
-    ]
+  ============================================
 
-   [Scene 2:
-      Track 1: Buildup Snare Roll Loop 160BPM,
-      Track 2: FX 160BPM,
+  {
+    "Scene 1" :
+      "Track 1" : ("Drum Loop 160BPM"),
+      "Track 2" : (Future Bass Drop Loop - 160BPM - B minor),
+      "Track 3" : ("FX 160BPM"),
       // Rest of tracks...
-    ]
+    },
 
-   [Scene 3:
-      Track 1: Dubstep Drum Loop 160BPM,
-      Track 2: Dubstep Bass Drop Loop - 160BPM - B minor,
-      Track 3: FX 160BPM,
+   "Scene 2" :
+      "Track 1" : ("Buildup Snare Roll Loop 160BPM"),
+      "Track 2" : ("FX 160BPM"),
       // Rest of tracks...
-    ]
+    },
+
+   "Scene 3" :
+      "Track 1" : ("Dubstep Drum Loop 160BPM"),
+      "Track 2" : ("Dubstep Bass Drop Loop - 160BPM - B minor"),
+      "Track 3" : ("FX 160BPM"),
+      // Rest of tracks...
+    },
+
     // Rest of scenes...
+  }
+
+  --------------------------------------------
+
 */
 
 {

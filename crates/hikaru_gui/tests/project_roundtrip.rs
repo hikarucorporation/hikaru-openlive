@@ -61,6 +61,43 @@ fn open_state(cx: &mut TestAppContext) -> Entity<AppState> {
     .unwrap()
 }
 
+/// Igual que [`open_state`], pero CONSERVA el canal de comandos.
+///
+/// Los tests que necesitan observar lo que la app le manda al motor no pueden
+/// usar [`open_state`], que tira el receptor: sin él, un `GuiCommand` que se
+/// pierde es indistinguible de uno que nunca se mandó.
+fn open_state_with_proxy(
+    cx: &mut TestAppContext,
+) -> (Entity<AppState>, std::sync::mpsc::Receiver<GuiCommand>) {
+    cx.update(gpui_kit::init);
+    let (tx, rx) = std::sync::mpsc::channel::<GuiCommand>();
+    let handle = cx.add_window(|window, cx| {
+        HikaruApp::build(
+            window,
+            cx,
+            AudioProxy::new(tx),
+            None,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU32::new(0.0f32.to_bits())),
+            None,
+        )
+    });
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+    })
+    .unwrap();
+    let st = cx
+        .update_window(handle.into(), |view, _, cx| {
+            view.downcast::<HikaruApp>()
+                .expect("raíz HikaruApp")
+                .read(cx)
+                .state
+                .clone()
+        })
+        .unwrap();
+    (st, rx)
+}
+
 /// `Entity::update` pide `&mut App`, que fuera del ciclo de render sólo se
 /// consigue por `TestAppContext::update`.
 fn mutate<R>(
@@ -543,6 +580,14 @@ fn clip_de_audio_se_recarga_desde_el_disco(cx: &mut TestAppContext) {
             .as_mut()
             .expect("el clip se cargó")
             .loop_end = 1920;
+        // El flag de loop tiene que viajar al `.oplf` y volver: si se pierde,
+        // el proyecto reabre en one-shot aunque el usuario lo hubiera dejado
+        // loopeando.
+        state.matrix_state.grid[0][0]
+            .clip
+            .as_mut()
+            .expect("el clip se cargó")
+            .loop_enabled = true;
         project::save(state, &path).unwrap();
     });
 
@@ -559,6 +604,11 @@ fn clip_de_audio_se_recarga_desde_el_disco(cx: &mut TestAppContext) {
         assert_eq!(clip.name, "kick");
         assert_eq!(clip.path, wav);
         assert_eq!(clip.loop_end, 1920);
+        // Requisito 4b: el flag de loop y su región sobreviven al viaje.
+        assert!(
+            clip.loop_enabled,
+            "el flag de loop se perdió en el viaje por el .oplf"
+        );
         assert_eq!(clip.peaks.len(), MatrixClip::PEAK_BINS);
         assert!(clip.peaks.iter().any(|p| *p > 0.0));
         match &clip.content {
@@ -571,6 +621,88 @@ fn clip_de_audio_se_recarga_desde_el_disco(cx: &mut TestAppContext) {
             other => panic!("esperaba un clip de audio, encontré {:?}", other),
         }
     });
+}
+
+/// Al ABRIR un `.oplf`, cada clip de audio tiene que quedar REGISTRADO en el
+/// motor, no sólo reconstruido en la GUI.
+///
+/// Este es el test del bug "el proyecto abre con nombres y waveforms correctos
+/// pero los pads no suenan". `build_clip` decodificaba el WAV, armaba los
+/// eventos y leía los picos (por eso la Session Matrix se veía bien), pero
+/// `apply_matrix` no mandaba ningún `LoadClip` al motor. Como `AudioEngine`
+/// indexa sus clips por `(track_index, scene_index)` y `trigger_clip` itera esa
+/// lista, un pad sin `LoadClip` es un pad silencioso: se podía disparar
+/// cuantas veces se quisiera y no sonaba nada.
+///
+/// El orden también es contrato: `SetClipEvents` y `SetClipLoop` buscan un clip
+/// que ya exista (hacen `find` y no hacen nada si no está), así que `LoadClip`
+/// tiene que ir primero.
+#[gpui_kit::gpui::test]
+fn abrir_un_oplf_registra_los_clips_en_el_motor(cx: &mut TestAppContext) {
+    let dir = TempDir::new("motor_registro");
+    let wav = dir.join("kick.wav");
+    write_test_wav(&wav);
+    let path = dir.join("sesion.oplf");
+    let (st, rx) = open_state_with_proxy(cx);
+
+    // Un pad con sample, guardado desde el gesto que sí funciona.
+    mutate(cx, &st, |state| {
+        matrix::load_clip_into_slot(
+            &mut state.matrix_state,
+            &state.audio_proxy,
+            0,
+            0,
+            wav.clone(),
+            state.transport.bpm,
+        );
+        project::save(state, &path).unwrap();
+    });
+
+    // Drenar lo que mandó el gesto de arrastrar: no es lo que se está probando.
+    while rx.try_recv().is_ok() {}
+
+    // Ahora el ciclo de carga del proyecto.
+    mutate(cx, &st, |state| {
+        state.matrix_state.grid[0][0].clip = None;
+        project::load(state, &path).unwrap();
+    });
+
+    let comandos: Vec<GuiCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+
+    let pos_load = comandos.iter().position(
+        |c| matches!(c, GuiCommand::LoadClip { track_index: 0, scene_index: 0, .. }),
+    );
+    let pos_eventos = comandos.iter().position(
+        |c| matches!(c, GuiCommand::SetClipEvents { track_idx: 0, scene_idx: 0, .. }),
+    );
+
+    let pos_load = pos_load.expect(
+        "al abrir el proyecto hay que registrar el clip en el motor (GuiCommand::LoadClip); \
+         sin esto el pad queda mudo aunque la GUI muestre nombre y waveform",
+    );
+    let pos_eventos = pos_eventos.expect(
+        "el pad tiene un evento de audio cargado: hay que mandarlo al motor \
+         (GuiCommand::SetClipEvents)",
+    );
+
+    assert!(
+        pos_load < pos_eventos,
+        "LoadClip debe ir ANTES que SetClipEvents: set_clip_events busca un clip que ya \
+         exista y, si no, descarta los eventos en silencio (found load@{pos_load}, events@{pos_eventos})"
+    );
+
+    // La ruta registrada tiene que ser la RESUELTA (absoluta o relativa al
+    // proyecto), no la del motor de render: el motor corre en otro hilo/proceso
+    // lógico y no tiene el `base_dir` del archivo.
+    let ruta_registrada = match &comandos[pos_load] {
+        GuiCommand::LoadClip { path, .. } => path.clone(),
+        _ => unreachable!("pos_load es un LoadClip"),
+    };
+    assert_eq!(
+        std::path::Path::new(&ruta_registrada),
+        wav.as_path(),
+        "el motor tiene que recibir la ruta del sample tal como quedó resuelta al cargar"
+    );
 }
 
 /// Un pad MIDI no toca el disco: sus notas son datos y viajan tal cual.
