@@ -1304,8 +1304,9 @@ pub fn ticks_to_secs_precise(ticks: u64, ppqn: u64, bpm: f64) -> f32 {
 
 /// Duración en ticks y picos normalizados de un WAV.
 ///
-/// Público porque `crate::project` lo usa al abrir un proyecto: los picos NO
-/// se guardan en el `.hikaru` (son caché derivada) y se releen del sample.
+/// Público porque `crate::project::openstudio` lo usa al abrir un proyecto:
+/// los picos NO se guardan en el `.opsf` (son caché derivada) y se releen del
+/// sample.
 pub fn load_sample_info(path: &PathBuf, ppqn: u64, bpm: f64) -> (u64, Vec<f32>) {
     let mut peaks = Vec::new();
 

@@ -299,14 +299,20 @@ fn open_project(cx: &mut App) {
 
 /// `File > Save` / `File > Save As...`.
 ///
+/// El MODO decide el formato: en OpenLive se escribe un `.oplf` (matriz,
+/// live_tracks, transporte) y en OpenStudio un `.opsf` (timeline, ppqn,
+/// studio_tracks). Nunca se mezclan las dos mitades en un mismo archivo.
+///
 /// `force_dialog` es el `Save As`: sin archivo previo, o porque el usuario lo
-/// pidió explícitamente, siempre se pregunta dónde.
+/// pidió explícitamente, siempre se pregunta dónde. El diálogo ofrece una sola
+/// extensión, la del modo actual.
 fn save_project(cx: &mut App, force_dialog: bool) {
     let current = state(cx).read(cx).project_path.clone();
+    let mode = state(cx).read(cx).mode;
 
     let target = match (&current, force_dialog) {
         (Some(path), false) => path.clone(),
-        _ => match project::ask_save_path(current.as_deref()) {
+        _ => match project::ask_save_path(mode, current.as_deref()) {
             Some(path) => path,
             None => return,
         },

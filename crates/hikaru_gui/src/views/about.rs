@@ -6,9 +6,9 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::*;
 
 use crate::app::{state, AppMode, HikaruApp};
+use crate::version::VERSION;
 
 const BUILDER_NAME: &str = "Hikaru Corporation";
-const BUILD_VERSION: &str = "2.22.2";
 
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let mode = state(cx).read(cx).mode;
@@ -63,7 +63,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .w_full()
                 .justify_between()
                 .child(Label::new(daw_name).text_xs())
-                .child(Label::new(format!("Compiled by {} | Version {}", BUILDER_NAME, BUILD_VERSION)).text_xs()),
+                .child(Label::new(format!("Compiled by {} | Version {}", BUILDER_NAME, VERSION)).text_xs()),
         )
         .child(
             Button::new("about_close").rounded(gpui_kit::component::button::ButtonRounded::None)

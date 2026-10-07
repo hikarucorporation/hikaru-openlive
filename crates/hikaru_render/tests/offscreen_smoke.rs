@@ -226,7 +226,12 @@ fn a_perspective_camera_makes_the_wavetable_land_inside_the_viewport() {
         .expect("la malla debería subirse");
 
     let mut camera = Camera::default();
-    camera.fit_to_box([160.0, 100.0], width as f32 / height as f32);
+    // `fit_to_box` toma SEMIEJES 3D: la caja del visor de wavetable es
+    // 320 x 120 x 110, así que el Z va. Sin el, el test no compila; y no es un
+    // detalle cosmético: desde que la vista apila los ciclos, el encuadre se
+    // calcula con las ocho esquinas y un Z de 0 deja la malla pegada al plano
+    // cercano (ver `Camera::fit_to_box`).
+    camera.fit_to_box([160.0, 100.0, 12.0], width as f32 / height as f32);
     let uniforms = camera.uniforms(width as f32 / height as f32, [0.35, 0.85, 1.0, 1.0]);
 
     // Fondo transparente, como en la GUI: si no, el readback daría "contenido"

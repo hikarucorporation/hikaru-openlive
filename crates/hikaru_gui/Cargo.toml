@@ -1,6 +1,6 @@
 [package]
 name = "hikaru_gui"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 authors = ["Hikaru OpenStudio Developers"]
 license = "AGPL-3.0-later"
@@ -21,10 +21,15 @@ gpui-kit = "0.6.6"
 image = "0.25.1"
 hound = "3.5"
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
-# Formato de proyecto `.hikaru` (ver `src/project.rs`). `derive` para los
-# `Serialize`/`Deserialize` del snapshot y `serde_json` para leer/escribir el
-# archivo.
-serde = { version = "1", features = ["derive"] }
+# Formatos de proyecto `.oplf` y `.opsf`. Son crates LGPLv3 aparte: el
+# ESQUEMA del archivo no le importa a esta app, y mantenerlo acá lo ataría al
+# AGPL. Lo que queda en `src/project/` es sólo la conversión entre el estado
+# vivo y esos structs. Ver docs/hikaru-project-files/.
+hikaru_project_file = { path = "../hikaru_project_file" }
+hikaru_openlive_file = { path = "../hikaru_openlive_file" }
+hikaru_openstudio_file = { path = "../hikaru_openstudio_file" }
+# Los tests de round-trip necesitan leer el JSON crudo para verificar la PUREZA
+# formato (que no se colen campos del otro modo).
 serde_json = "1"
 raw-window-handle = "0.6.2"
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }

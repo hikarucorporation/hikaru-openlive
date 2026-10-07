@@ -35,7 +35,7 @@ pub struct AudioEvent {
     /// es irrecuperable al guardar el proyecto: `crate::project` la usa para
     /// volver a leer el WAV de cada evento y re-armar el pad. Los eventos
     /// decodificados sin archivo (split, clipboard) la dejan en `None` y no
-    /// entran al `.hikaru`.
+    /// entran al `.oplf`.
     pub source_path: Option<PathBuf>,
     pub samples: Vec<f32>,
     pub channels: usize,

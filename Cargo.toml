@@ -11,7 +11,19 @@ members = [
     "crates/hikaru_gui",
     "crates/hikaru_audio_drivers",
     "crates/hikaru_render",
+    # Formatos de archivo. LGPLv3, y NO dependen de la app: son la frontera que
+    # permite a un DAW de código cerrado leer/escribir proyectos de Hikaru sin
+    # abrir el motor AGPL. Ver docs/hikaru-project-files/.
+    "crates/hikaru_project_file",
+    "crates/hikaru_openlive_file",
+    "crates/hikaru_openstudio_file",
 ]
+
+[workspace.package]
+# Versión del producto. Es la ÚNICA fuente de verdad: la cabecera de
+# `created_by` de los formatos `.oplf`/`.opsf` y la pantalla About la toman de
+# acá vía `env!("CARGO_PKG_VERSION")`. No hardcodear `2.22.2` en el código.
+version = "2.22.2"
 
 [workspace.dependencies]
 clack-host = "0.2"

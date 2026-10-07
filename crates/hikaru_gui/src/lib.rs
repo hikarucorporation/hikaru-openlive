@@ -12,8 +12,11 @@ pub mod app;
 pub mod views;
 pub mod theme;
 pub mod ui;
-/// Formato de proyecto `.hikaru`: qué se guarda, cómo y desde dónde.
+/// Formatos de proyecto `.oplf` (OpenLive) y `.opsf` (OpenStudio): qué se
+/// guarda, cómo y desde dónde.
 pub mod project;
+/// Versión del producto, única fuente de verdad.
+pub mod version;
 
 pub use app::HikaruApp;
 
