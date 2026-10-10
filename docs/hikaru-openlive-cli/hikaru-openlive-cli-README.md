@@ -35,6 +35,52 @@ yukamo-shrinebsd@server:~$ hikaru_openlive --cli
 
   > Hikaru VST3/CLAP Host Version: 2.22.2
 
+  > Hikaru Audio Backend: JACK (ALSA/JACK Backend Disabled)
+
+  --------------------------------------------------------------------------------------------------
+    > hikaru_openlive --help | Hikaru OpenLive CLI Help
+
+    > hikaru_openlive new <".oplf"/".opsf"> [OPTIONS] 
+      > Creates a new project file (.oplf/.opsf) with default template.
+      [OPTIONS] is optional, is not obligatory.
+      > Example: `hikaru_openlive new my-project.oplf`
+
+    > hikaru_openlive metadata <PATH> [OPTIONS] 
+      > Shows project metadata, clips, tracks, BPM, Key Scale, etc.
+      [OPTIONS] is optional, is not obligatory.
+
+      {
+          "name" : "my-project",
+          "format" : "OpenLive",
+          "schema_version" : "2.22.2",
+          "created_by" : "Hikaru OpenLive 2.22.2",
+          "engine_mode" : "OpenLive",
+          "metadata" : {
+              "title" : "My Project",
+              "artist" : "My Name",
+              "genre" : "Electronic",
+              "key" : "C Minor",
+              "stats" : {
+                  "total_scenes" : 1,
+                  "total_tracks" : 1,
+                  "audio_clips" : 0,
+                  "midi_clips" : 0,
+                  // Más metadatos adicionales...
+      } // Fin del código de metadatos
+
+  --------------------------------------------------------------------------------------------------
+
+[Hikaru OpenLive] Iniciando el editor de proyecto...
+[Hikaru OpenLive] Cargando proyecto...
+[Hikaru OpenLive] Proyecto cargado.
+[Hikaru OpenLive] Iniciando la GUI...
+```
+
+## `hikaru_openlive --help`
+
+```bash
+hikaru_openlive --help
+
 ## El resto de Boludeces...
 
 ```

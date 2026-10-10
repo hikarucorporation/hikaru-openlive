@@ -789,6 +789,7 @@ impl HikaruApp {
             (s.position_clock.clone(), s.audio_proxy.clone())
         };
 
+        let mut piano_roll_needs_frame = false;
         self.state.update(cx, |state, cx| {
             state.transport.sample_count = position_clock.load(Ordering::Relaxed);
             state.playlist_state.ppqn = state.transport.ppqn();
@@ -1036,7 +1037,18 @@ impl HikaruApp {
                 state.selected_track_index,
                 &audio_proxy,
             );
+
+            // Layout inicial del piano roll (zoom al panel + foco en C4). Va
+            // acá y no en el render de la vista porque necesita pedir un frame
+            // de la entidad RAÍZ: el `cx` de este closure es el de `AppState`.
+            if state.show_piano_roll {
+                piano_roll_needs_frame = piano_roll::sync_frame(&mut state.piano_roll_state);
+            }
         });
+
+        if piano_roll_needs_frame {
+            cx.notify();
+        }
     }
 }
 
