@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 pub const EXTENSION: &str = "opsf";
 
 /// Etiqueta del filtro de archivo. El texto EXACTO es contrato de UI.
-pub const FILE_FILTER: &str = "Hikaru OpenStudio Project (*.opsf)";
+pub const FILE_FILTER: &str = "Hikaru OpenStudio File (*.opsf)";
 
 /// Etiqueta de modo que va en la cabecera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

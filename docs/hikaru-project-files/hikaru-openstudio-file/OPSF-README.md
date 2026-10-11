@@ -1,12 +1,16 @@
-# Hikaru OpenStudio File (`.opsf`) - Documentación.
+## Hikaru OpenStudio File (`.opsf`) - Documentación.
 
-El formato `.opsf` es el esquema de archivo de proyecto de Hikaru OpenStudio. El archivo `.opsf` contiene la estructura de la sesión de rendimiento y la información de configuración del modo de reproducción de la Playlist/Timeline.
+El formato `.opsf` es el esquema de archivo de proyecto de Hikaru OpenStudio. El archivo `.opsf` contiene la estructura lineal de la Playlist/Timeline para la producción y arreglo de estudio (equivalente a FL Studio o REAPER), manejando eventos basados en ticks y control de transporte estándar.
 
-La Playlist/Timeline es el equivalente al FL Studio o REAPER, pero con la diferencia de que en ambos casos el modo de reproducción es un clip de audio, mientras que en Hikaru OpenStudio el modo de reproducción es una sesión de rendimiento.
+# Ejemplo de Archivo (`.opsf`) en Windows 10 21H2 (x64) con Hikaru OpenStudio 2.22.2
 
 ```powershell
 PS C:\Users\Tomoyo Sakurai\Hikaru Corporation\Hikaru OpenLive
+
+DIR C:\Users\Tomoyo Sakurai\Hikaru Corporation\Hikaru OpenLive
+
 hikaru_openlive new my_project.opsf
+
 ```
 
 ```json
@@ -113,155 +117,66 @@ hikaru_openlive new my_project.opsf
 
 {
   "$schema": "hikaru-openstudio-file/opsf-v1.json",
-  "format_version": "1.0.0",
-  "engine": {
-    "mode": "OpenStudio",
-    "version": "2.22.2",
-    "license": "GNU AGPLv3"
-  },
+  "format_version": 1,
+  "created_by": "Hikaru OpenStudio 2.22.2",
+  "engine_mode": "OpenStudio",
   "metadata": {
     "title": "Tomoyo Sakurai - Yakumo's Squizofrenia",
     "artist": "Tomoyo Sakurai",
     "genre": "Future Bass / Melodic Dubstep / J-EDM",
-    "created_at": "2026-10-09T20:52:00Z",
-    "modified_at": "2026-10-09T20:52:00Z"
+    "key": "B Minor",
+    "stats": {
+      "total_scenes": 160,
+      "total_tracks": 20,
+      "audio_clips": 50,
+      "midi_clips": 15
+    }
   },
   "transport": {
     "bpm": 160.0,
-    "time_signature": {
-      "numerator": 4,
-      "denominator": 4
-    },
-    "key_signature": "B Minor",
-    "launch_quantization": "1/1",
-    "tap_tempo_enabled": true
+    "beats_per_bar": 4,
+    "beat_division": 4,
+    "loop_start_ticks": 0,
+    "loop_end_ticks": 30720
   },
-  "stats": {
-    "total_scenes": 160,
-    "total_tracks": 20,
-    "total_audio_clips": 50,
-    "total_midi_clips": 15
-  },
-  "plugins": {
-    "vst3": [
-      { "name": "Serum 1", "count": 10 },
-      { "name": "OTT", "count": 15 },
-      { "name": "Chroma", "count": 20 },
-      { "name": "Vital", "count": 15 }
-    ],
-    "clap": [
-      { "name": "LSP Compressor", "count": 10 },
-      { "name": "LSP Reverb", "count": 15 },
-      { "name": "LSP EQ", "count": 20 },
-      { "name": "LSP Delay", "count": 15 }
-    ],
-    "native": [
-      { "name": "Hikaru OpenWavetable", "count": 10 },
-      { "name": "Hikaru OpenDMS", "count": 45 },
-      { "name": "Hikaru OpenModulation", "count": 15 }
-    ]
-  },
-  "timeline": {
-    "tracks": [
+  "playlist": {
+    "ppqn": 96,
+    "clips": [
       {
-        "id": 1,
-        "name": "Track 1",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "Drum Loop 160BPM.wav", "start_beat": 0.0, "length_beats": 16.0 }
-        ]
+        "idx": 1,
+        "clip": {
+          "type": "audio",
+          "name": "Drum Loop 160BPM",
+          "source": "Drum Loop 160BPM.wav",
+          "start_tick": 0,
+          "duration_ticks": 3072,
+          "muted": false,
+          "solo": false
+        }
       },
       {
-        "id": 2,
-        "name": "Track 2",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "Future Bass Drop Loop - 160BPM - B minor.wav", "start_beat": 16.0, "length_beats": 32.0 }
-        ]
+        "idx": 2,
+        "clip": {
+          "type": "audio",
+          "name": "Future Bass Drop Loop",
+          "source": "Future Bass Drop Loop - 160BPM - B minor.wav",
+          "start_tick": 3072,
+          "duration_ticks": 6144,
+          "muted": false,
+          "solo": false
+        }
       },
       {
-        "id": 3,
-        "name": "Track 3",
-        "type": "midi",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "midi", "source": "Hihat Pattern 01 - 160BPM.mid", "start_beat": 0.0, "length_beats": 16.0 }
-        ]
-      },
-      {
-        "id": 4,
-        "name": "Track 4",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "FX 160BPM.wav", "start_beat": 0.0, "length_beats": 8.0 }
-        ]
-      },
-      {
-        "id": 5,
-        "name": "Track 5",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "Buildup Snare Roll Loop 160BPM.wav", "start_beat": 8.0, "length_beats": 8.0 }
-        ]
-      },
-      {
-        "id": 6,
-        "name": "Track 6",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "FX 160BPM.wav", "start_beat": 16.0, "length_beats": 8.0 }
-        ]
-      },
-      {
-        "id": 7,
-        "name": "Track 7",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "Dubstep Drum Loop 160BPM.wav", "start_beat": 48.0, "length_beats": 32.0 }
-        ]
-      },
-      {
-        "id": 8,
-        "name": "Track 8",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "Dubstep Bass Drop Loop - 160BPM - B minor.wav", "start_beat": 48.0, "length_beats": 32.0 }
-        ]
-      },
-      {
-        "id": 9,
-        "name": "Track 9",
-        "type": "audio",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "audio", "source": "FX 160BPM.wav", "start_beat": 48.0, "length_beats": 8.0 }
-        ]
-      },
-      {
-        "id": 10,
-        "name": "Track 10",
-        "type": "midi",
-        "muted": false,
-        "solo": false,
-        "clips": [
-          { "type": "midi", "source": "Hihat Pattern 02 - 160BPM.mid", "start_beat": 48.0, "length_beats": 16.0 }
-        ]
+        "idx": 3,
+        "clip": {
+          "type": "midi",
+          "name": "Hihat Pattern 01",
+          "source": "Hihat Pattern 01 - 160BPM.mid",
+          "start_tick": 0,
+          "duration_ticks": 3072,
+          "muted": false,
+          "solo": false
+        }
       }
     ]
   }
