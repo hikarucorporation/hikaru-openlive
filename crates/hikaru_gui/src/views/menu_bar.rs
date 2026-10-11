@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::Size;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::*;
@@ -55,6 +56,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                     Button::new(format!("menu_{}", name.to_lowercase()))
                         .label((*name).to_string())
                         .compact()
+                        // `Small` en vez del `Medium` por defecto: la fila de
+                        // menús es chrome, no contenido, y `Medium` le robaba
+                        // altura y peso a la barra de transporte de al lado.
+                        // Baja `text_base` → `text_sm` y `h_8` → `h_6`.
+                        .with_size(Size::Small)
                         .bg(if open_menu == Some(idx) {
                             rgb(0x4A4A4A)
                         } else {
