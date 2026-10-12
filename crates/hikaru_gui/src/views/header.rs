@@ -12,12 +12,90 @@ use gpui_kit::base::{Button as BaseButton, NumberInput as BaseNumberInput};
 use crate::app::{format_bpm, format_sig, state, step_sig, AppMode, HikaruApp, OpenLiveView};
 use crate::audio_proxy::{AudioClipData, GuiCommand};
 use crate::ui::text_style_scope::TextStyleScope;
+use crate::views::branding::energy_core_logo_img;
 use crate::views::playlist::ClipType;
 use hikaru_transport::transport_state::TransportPlaybackState;
 
 /// Ancho uniforme de los 3 botones principales de transporte
 /// (Play/Pause, Stop, REC): mismo tamaño, spacing compacto.
 const TRANSPORT_BTN_W: f32 = 40.0;
+
+/// Alto de los controles de la botonera de transporte.
+///
+/// Los `Button` no fijan alto: lo sacan de su `Size` (`Size::Medium` -> 32px)
+/// más el padding del tema. Medido contra el botón de Play, el alto real de la
+/// botonera es 32px, y el logo usa el mismo número. Si un día el tema cambia el
+/// alto de los botones, el test `transport_logo_height_matches_neighbours`
+/// avisa en vez de dejar el logo desalineado.
+const TRANSPORT_BTN_H: f32 = 32.0;
+
+/// Lado del logo dentro de su control.
+///
+/// Menos que el alto del control para que quede aire arriba y abajo y se lea
+/// como un botón con icono, no como un cuadro con un logo pegado al borde.
+const TRANSPORT_LOGO_SIZE: f32 = 20.0;
+
+/// Radio de esquina del control del logo.
+const TRANSPORT_LOGO_RADIUS: f32 = 2.0;
+
+/// El logo "Energy Core" como botón de la barra de transporte.
+///
+/// Va como primer control, a la izquierda del Play, que es donde un DAW
+/// pondría el botón de estudio/dashboard: es el acceso a la marca y al panel
+/// del motor, no un control de transporte.
+///
+/// El `div` a mano (y no un `Button`) es a propósito: `Button` no admite un
+/// hijo `img` arbitrario, y el logo tiene que pintarse a un tamaño exacto para
+/// empatar la altura de los vecinos.
+///
+/// **El `.flex()` explícito no es opcional.** En `gpui-pre` el `div()` no
+/// arranca con `display: flex` (a diferencia del `gpui` upstream, donde
+/// `Div::new()` sí lo hace), así que sin esta línea `align_items` y
+/// `justify_content` se ignoran por completo: el logo se dibujaba pegado a la
+/// esquina superior izquierda del control en vez de centrado. Con `.flex()` el
+/// centro del `img` cae exacto sobre el centro del control, que es lo que
+/// verifica `logo_is_centered_in_its_control` en `tests/transport_logo.rs`.
+/// Lo mismo aplica a cualquier `div` con `items_center` en este repo: usar
+/// `h_flex()`/`v_flex()`, que ya fijan `display: flex`, es más seguro.
+fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let show_dsp_rack = state(cx).read(cx).show_dsp_rack;
+
+    div()
+        .id("transport_energy_core_logo")
+        .flex()
+        .flex_none()
+        .w(px(TRANSPORT_BTN_W))
+        .h(px(TRANSPORT_BTN_H))
+        .rounded(px(TRANSPORT_LOGO_RADIUS))
+        // Mismo fondo que los botones vecinos (`rgb(0x3D3D3D)`), y se ilumina
+        // con el acento cuando el panel del motor ya está abierto, para que el
+        // estado del logo y el del panel no puedan contradecirse.
+        .bg(if show_dsp_rack {
+            rgb(0x4A4A4A)
+        } else {
+            rgb(0x3D3D3D)
+        })
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(0x4A4A4A)))
+        .on_click(move |_, _, cx| {
+            // Mismo comportamiento que el botón "DSP RACK (F10)" de la barra:
+            // abre/cierra el panel del motor, sin duplicar la lógica.
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                state.show_dsp_rack = !state.show_dsp_rack;
+                cx.notify();
+            });
+        })
+        .child(energy_core_logo_img(
+            "transport_energy_core_img",
+            TRANSPORT_LOGO_SIZE,
+        ))
+        // Sin esto el test no lo encuentra: `try_find` sólo ve elementos
+        // registrados (mismo criterio que el punto de "sucio" del menú File).
+        .test_support()
+}
 
 fn format_timecode(bars: f32, bpm: f64) -> String {
     let beats = (bars - 1.0).max(0.0) * 4.0;
@@ -38,6 +116,7 @@ fn format_timecode(bars: f32, bpm: f64) -> String {
 /// bloques opacos: los botones salían blancos y mudos, igual que el texto.
 fn bpm_step_button(button: BaseButton, glyph: &'static str) -> BaseButton {
     button
+        .flex()
         .flex_none()
         .h_full()
         .w(px(22.0))
@@ -57,6 +136,7 @@ fn bpm_step_button(button: BaseButton, glyph: &'static str) -> BaseButton {
 fn sig_step_button(id: &'static str, glyph: &'static str, delta: i32) -> impl IntoElement {
     div()
         .id(id)
+        .flex()
         .flex_none()
         .h_full()
         .w(px(22.0))
@@ -203,11 +283,13 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         }
     }
 
-    // Botonera principal de transporte: exclusivamente Play/Pause (toggle),
-    // Stop y REC, con tamaño uniforme y spacing compacto:
-    //   [▶/⏸] [■ STOP] [● REC] | timecode | modos | BPM | compás | vistas
+    // Botonera principal de transporte: el logo de marca y luego
+    // exclusivamente Play/Pause (toggle), Stop y REC, con tamaño uniforme y
+    // spacing compacto:
+    //   [logo] [▶/⏸] [■ STOP] [● REC] | timecode | modos | BPM | compás | vistas
     h_flex()
         .id("header_bar")
+        .test_support()
         .h(px(40.0))
         .bg(rgb(0x2A2A2A))
         .border_b_1()
@@ -215,6 +297,7 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         .items_center()
         .px(px(8.0))
         .gap(px(6.0))
+        .child(energy_core_transport_button(cx))
         .child(
             // Toggle Play/Pause: el MISMO Button en ambos estados (mismo
             // ancho, padding y centrado `items_center`/`justify_center` del

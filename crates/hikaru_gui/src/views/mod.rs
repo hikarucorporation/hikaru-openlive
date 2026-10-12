@@ -12,6 +12,7 @@ mod open_wavetable_tests;
 pub mod playlist;
 pub mod menu_bar;
 pub mod about;
+pub mod branding;
 pub mod arranger_view;
 pub mod explorer;
 pub mod audio_settings;
