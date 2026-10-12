@@ -2,7 +2,9 @@
 // GNU AGPLv3
 // crates/hikaru_gui/src/app.rs
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 
@@ -298,6 +300,30 @@ pub struct AppState {
     pub selected_track_index: usize,
     pub selected_slot_index: usize,
     pub add_slot_menu_open: bool,
+    /// Texto del buscador del navegador de plugins del DSP rack.
+    ///
+    /// Vive en el estado global (y no en la vista) por el mismo motivo que
+    /// `open_menu`: el navegador se reconstruye en cada frame y un flag
+    /// local moriría con el primer `notify`, perdiendo lo tecleado.
+    pub plugin_browser_query: String,
+    /// Filtro de formato/categoría del navegador de plugins.
+    pub plugin_browser_filter: dsp_rack::PluginBrowserFilter,
+    /// Caja de texto del buscador. Entidad creada al arrancar (como
+    /// `bpm_input`): el `Input` de gpui-kit la necesita para existir.
+    pub plugin_search_input: Entity<InputState>,
+    /// Gesto de knob de parámetro externo en curso (drag vertical sobre la
+    /// barra del parámetro). Global como `mixer_bar_drag`: la tarjeta se
+    /// reconstruye cada frame y un flag local moriría con el primer `notify`,
+    /// cortando el gesto tras un solo paso. `None` = sin drag.
+    pub param_drag: Option<ParamDragState>,
+    /// Resultados del sondeo de parámetros pendientes de aplicar. El sondeo
+    /// corre en hilos aparte (un `dlopen` en el hilo de la GUI congelaría la
+    /// ventana); `drain_param_probes` los vuelca a los slots en el hilo
+    /// principal, llamado desde `sync_frame`.
+    param_probe_tx: Sender<ParamProbeResult>,
+    param_probe_rx: Receiver<ParamProbeResult>,
+    /// Ids de descriptores con sondeo en vuelo (no relanzar uno por frame).
+    param_probing: HashSet<String>,
 
     pub track_peak_bits: Vec<Arc<AtomicU32>>,
     pub smoothed_track_peaks: [f32; 16],
@@ -374,6 +400,76 @@ pub struct AppStateHandle(pub Entity<AppState>);
 
 impl Global for AppStateHandle {}
 
+/// Gesto de knob de parámetro externo en curso.
+///
+/// Drag vertical clásico de DAW: `start_y` es la Y de ventana (px) donde se
+/// agarró y `start_value` el valor normalizado de entonces. El `mouse_move`
+/// calcula `start_value + (start_y - y) * 0.005` (subir = más). Todo en el
+/// estado global porque la tarjeta se reconstruye cada frame.
+#[derive(Clone, Copy, Debug)]
+pub struct ParamDragState {
+    pub track: usize,
+    pub slot: usize,
+    pub param_id: u32,
+    pub start_y: f32,
+    pub start_value: f32,
+}
+
+/// Resultado del sondeo de parámetros de un plugin externo.
+///
+/// Lo produce el hilo de sondeo (que instancia el plugin fuera del hilo de
+/// la GUI) y lo consume `drain_param_probes` en el hilo principal.
+/// `params` trae `(info, valor_actual)`; `error` explica por qué no hay nada
+/// que mostrar (el rack lo pinta en la tarjeta en vez de dejarla vacía).
+pub struct ParamProbeResult {
+    pub descriptor_id: String,
+    pub params: Vec<(hikaru_plugin_host::PluginParamInfo, f32)>,
+    pub error: Option<String>,
+}
+
+/// Sondea los parámetros de un plugin externo en un hilo aparte (ver
+/// `AppState::request_external_params`).
+///
+/// Instancia el plugin SIN audio ni GUI, lee `snapshot_params` y lo suelta:
+/// la instancia es temporal, la caché del slot es lo que vive. CLAP no se
+/// instancia siquiera: sin API segura de `params` no hay nada honesto que
+/// leer, y un `dlopen` para volver vacío sería espera regalada.
+fn probe_external_params(
+    descriptor: &hikaru_plugin_host::PluginDescriptor,
+) -> ParamProbeResult {
+    use hikaru_plugin_host::{PluginInstance, Vst3Instance};
+    if descriptor.format == hikaru_plugin_host::PluginFormat::CLAP {
+        return ParamProbeResult {
+            descriptor_id: descriptor.id.clone(),
+            params: Vec::new(),
+            error: None,
+        };
+    }
+    let mut instance = match Vst3Instance::load(&descriptor.path) {
+        Ok(instance) => instance,
+        Err(message) => {
+            return ParamProbeResult {
+                descriptor_id: descriptor.id.clone(),
+                params: Vec::new(),
+                error: Some(format!("No se pudo instanciar: {message}")),
+            };
+        }
+    };
+    if !instance.params_supported() {
+        return ParamProbeResult {
+            descriptor_id: descriptor.id.clone(),
+            params: Vec::new(),
+            error: Some("El plugin no expone parámetros.".to_string()),
+        };
+    }
+    let params = instance.snapshot_params();
+    ParamProbeResult {
+        descriptor_id: descriptor.id.clone(),
+        params,
+        error: None,
+    }
+}
+
 /// Las pistas del modo activo.
 impl AppState {
     /// Las pistas según el modo: el rack, el mixer y el editor de plugins
@@ -431,6 +527,142 @@ impl AppState {
         self.tracks_mut().get_mut(track_idx)?.effects.get_mut(slot_idx)
     }
 
+    /// Pide el sondeo de parámetros de un plugin externo.
+    ///
+    /// Marca el slot como `Probing` e instancia el plugin en un hilo aparte:
+    /// un `dlopen` + init en el hilo de la GUI congelaría la ventana cientos
+    /// de ms. Es idempotente por descriptor (no relanza uno en vuelo) y no
+    /// hace nada para slots sin externo. El resultado aterriza vía
+    /// `drain_param_probes`, que corre en el hilo principal desde
+    /// `sync_frame`.
+    pub fn request_external_params(
+        &mut self,
+        descriptor: &hikaru_plugin_host::PluginDescriptor,
+    ) {
+        if !self.param_probing.insert(descriptor.id.clone()) {
+            return;
+        }
+        let marked = if let Some(slot) = self
+            .tracks_mut()
+            .iter_mut()
+            .flat_map(|track| track.effects.iter_mut())
+            .find(|slot| {
+                slot.external
+                    .as_ref()
+                    .is_some_and(|ext| ext.id == descriptor.id)
+            }) {
+            slot.params_status = mixer::ExternalParamsStatus::Probing;
+            true
+        } else {
+            false
+        };
+        if !marked {
+            self.param_probing.remove(&descriptor.id);
+            return;
+        }
+
+        let descriptor = descriptor.clone();
+        let tx = self.param_probe_tx.clone();
+        std::thread::spawn(move || {
+            let result = probe_external_params(&descriptor);
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Vuelca los sondeos terminados a sus slots. Corre en el hilo principal.
+    ///
+    /// Empareja por `descriptor.id` (estable entre escaneos): si el usuario
+    /// cambió el slot mientras el hilo trabajaba, el resultado igual llega
+    /// al slot correcto, y si el slot ya no existe se descarta sin ruido.
+    pub fn drain_param_probes(&mut self) {
+        let mut results = Vec::new();
+        while let Ok(result) = self.param_probe_rx.try_recv() {
+            results.push(result);
+        }
+        if results.is_empty() {
+            return;
+        }
+        for result in results {
+            self.param_probing.remove(&result.descriptor_id);
+            let slots = self
+                .tracks_mut()
+                .iter_mut()
+                .flat_map(|track| track.effects.iter_mut())
+                .filter(|slot| {
+                    slot.external
+                        .as_ref()
+                        .is_some_and(|ext| ext.id == result.descriptor_id)
+                });
+            for slot in slots {
+                match &result.error {
+                    Some(message) => {
+                        slot.params_status =
+                            mixer::ExternalParamsStatus::Failed(message.clone());
+                    }
+                    None => {
+                        slot.external_params = result
+                            .params
+                            .iter()
+                            .map(|(info, value)| mixer::ExternalParamState {
+                                info: info.clone(),
+                                value: *value,
+                                dirty: false,
+                            })
+                            .collect();
+                        slot.params_status = mixer::ExternalParamsStatus::Ready;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Aplica el feedback del editor nativo (el usuario movió un knob del
+    /// plugin) a los slots. Corre en el hilo principal desde `sync_frame`.
+    ///
+    /// Respeta el gesto en curso: si el usuario está arrastrando ese mismo
+    /// parámetro en el rack, manda el rack (el feedback se descarta para ese
+    /// id hasta soltar, evitando que el knob pelee bajo el dedo).
+    /// Lo aplicado queda `dirty` para que el motor lo lleve a su instancia
+    /// de audio aunque el cambio naciera en la ventana nativa.
+    pub fn apply_param_feedback(
+        &mut self,
+        events: Vec<external_plugins_settings::ParamFeedbackEvent>,
+    ) {
+        if events.is_empty() {
+            return;
+        }
+        let drag = self.param_drag;
+        for event in events {
+            let slots = self
+                .tracks_mut()
+                .iter_mut()
+                .flat_map(|track| track.effects.iter_mut())
+                .filter(|slot| {
+                    slot.external
+                        .as_ref()
+                        .is_some_and(|ext| ext.id == event.descriptor_id)
+                });
+            for slot in slots {
+                for (id, value) in &event.changes {
+                    if drag.is_some_and(|drag| drag.param_id == *id) {
+                        continue;
+                    }
+                    if slot.set_external_param(*id, *value) {
+                        // Nacido en la ventana: la instancia de audio del
+                        // motor todavía no lo tiene.
+                        if let Some(param) = slot
+                            .external_params
+                            .iter_mut()
+                            .find(|p| p.info.id == *id)
+                        {
+                            param.dirty = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Pad del sampler que está seleccionado en un slot dado.
     ///
     /// El diálogo de carga de WAV se abre desde un handler y necesita el pad
@@ -464,6 +696,8 @@ pub struct HikaruApp {
     _bpm_input_sub: Subscription,
     /// Mantiene viva la suscripción a `InputEvent` de la caja de compás.
     _sig_input_sub: Subscription,
+    /// Mantiene viva la suscripción al buscador del navegador de plugins.
+    _plugin_search_sub: Subscription,
     /// Viewport 3D de la Wavetable. Se guarda como campo además de publicarse
     /// como `Global` para que quede atado al ciclo de vida de la entidad: si
     /// sólo fuera un global, el renderer offscreen sobreviviría a la ventana.
@@ -618,6 +852,14 @@ impl HikaruApp {
             )
         });
 
+        // Buscador del navegador de plugins del DSP rack: arranca vacío y
+        // vuelca cada cambio a `plugin_browser_query` (ver suscripción abajo).
+        let plugin_search_input = cx.new(|cx| InputState::new(window, cx));
+
+        // Sondeo de parámetros externos: el canal lo comparte el estado con
+        // los hilos de sondeo (ver `AppState::request_external_params`).
+        let (param_probe_tx, param_probe_rx) = std::sync::mpsc::channel();
+
         let state = cx.new(|_| AppState {
             mode: AppMode::OpenLive,
             transport,
@@ -651,6 +893,13 @@ impl HikaruApp {
             selected_track_index: 1,
             selected_slot_index: 0,
             add_slot_menu_open: false,
+            plugin_browser_query: String::new(),
+            plugin_browser_filter: dsp_rack::PluginBrowserFilter::default(),
+            plugin_search_input: plugin_search_input.clone(),
+            param_drag: None,
+            param_probe_tx: param_probe_tx,
+            param_probe_rx: param_probe_rx,
+            param_probing: HashSet::new(),
             track_peak_bits,
             smoothed_track_peaks: [0.0; 16],
             smoothed_master_peak: 0.0,
@@ -719,6 +968,18 @@ impl HikaruApp {
             });
         });
 
+        // Buscador del navegador de plugins: vuelca el texto a
+        // `plugin_browser_query` para que el listado filtre en el acto.
+        let plugin_search_sub = cx.subscribe(&plugin_search_input, |_, input, event, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            let text = input.read(cx).value().as_ref().to_string();
+            update_state(cx, |state| {
+                state.plugin_browser_query = text;
+            });
+        });
+
         let wavetable_viewport = WavetableViewportHandle::new();
         // El renderer offscreen se levanta una vez por sesión. La conexión es
         // asíncrona (pedir adapter y device a wgpu lo es) y va en un `spawn`
@@ -735,6 +996,7 @@ impl HikaruApp {
             _audio_stream: audio_stream,
             _bpm_input_sub: bpm_input_sub,
             _sig_input_sub: sig_input_sub,
+            _plugin_search_sub: plugin_search_sub,
             wavetable_viewport,
         }
     }
@@ -791,6 +1053,18 @@ impl HikaruApp {
 
         let mut piano_roll_needs_frame = false;
         self.state.update(cx, |state, cx| {
+            // El escaneo de plugins corre en un hilo aparte y avisa por un
+            // canal `mpsc` ordinario. Sin este drenaje los resultados se
+            // quedarían encolados para siempre y la lista de plugins del rack
+            // nunca se llenaría. `poll_updates` es el único consumidor.
+            state.plugin_settings_state.poll_updates();
+            // Sondeo de parámetros externos (hilos aparte → caché de slots)
+            // y feedback del editor nativo (ventana → knobs del rack). Ambos
+            // llegan por canal y se aplican acá, en el hilo principal.
+            state.drain_param_probes();
+            let param_feedback = state.plugin_settings_state.take_param_feedback();
+            state.apply_param_feedback(param_feedback);
+
             state.transport.sample_count = position_clock.load(Ordering::Relaxed);
             state.playlist_state.ppqn = state.transport.ppqn();
             // Playhead de la Playlist / Timeline: deriva del reloj del motor

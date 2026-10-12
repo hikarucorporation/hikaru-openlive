@@ -34,6 +34,32 @@ pub struct DspSlot {
     pub dms_state: Option<OpenDms>,
     pub menu_open: bool,
     pub options_open: bool,
+    /// Metadata del plugin VST3/CLAP cargado en este slot.
+    ///
+    /// Va aparte de `name` a propósito. `name` es lo que se muestra y se
+    /// guarda en el proyecto, y alcanza para un plugin interno
+    /// ("OpenWavetable"). Para uno externo hace falta saber **qué binario**
+    /// es, porque dos plugins distintos pueden llamarse igual y porque hay que
+    /// recargar la ruta si el usuario movió el plugin. `None` = slot vacío o
+    /// plugin interno.
+    pub external: Option<hikaru_plugin_host::PluginDescriptor>,
+    /// Error de la última carga, para mostrarlo en la tarjeta sin romper nada.
+    ///
+    /// El objetivo es que un plugin roto se vea marcado en el rack y no se
+    /// lleve por delante la app: la carga devuelve `Result`, y este campo es
+    /// dónde aterriza el mensaje.
+    pub load_error: Option<String>,
+    /// Caché de parámetros del plugin externo (knobs del rack).
+    ///
+    /// Se llena en diferido: asignar sólo guarda el descriptor, y un sondeo
+    /// en hilo aparte instancia el plugin, lee `snapshot_params` y lo vuelca
+    /// acá vía `AppState::drain_param_probes`. `value` lo escriben los gestos
+    /// del rack y el feedback del editor nativo; `dirty` marca lo que el
+    /// motor aún no aplicó a su instancia de audio
+    /// (`take_dirty_external_params`).
+    pub external_params: Vec<ExternalParamState>,
+    /// En qué punto está el sondeo de parámetros (ver `AppState`).
+    pub params_status: ExternalParamsStatus,
 }
 
 use crate::views::open_dms::OpenDms;
@@ -50,6 +76,10 @@ impl DspSlot {
             dms_state: None,
             menu_open: false,
             options_open: false,
+            external: None,
+            load_error: None,
+            external_params: Vec::new(),
+            params_status: ExternalParamsStatus::Idle,
         }
     }
 
@@ -59,8 +89,91 @@ impl DspSlot {
     /// acuerdo con el nombre del plugin: un slot vacío no tiene editor, así que
     /// seleccionarlo no puede abrir un panel en blanco.
     pub fn has_editor(&self) -> bool {
+        // Un plugin externo cuenta si declara editor; sin `has_gui` no hay
+        // ventana que abrir y no tiene sentido ofrecer el botón.
+        if self.external.is_some() {
+            return self.external.as_ref().is_some_and(|p| p.has_gui);
+        }
         matches!(self.name.as_str(), "OpenWavetable" | "Hikaru OpenDMS")
     }
+
+    /// ¿Es un slot sin nada cargado?
+    ///
+    /// El nombre por sí solo no alcanza: un proyecto puede traer un slot con
+    /// `name = "FabFilter Pro-Q 3"` y el plugin que falta en disco. Eso se ve
+    /// como slot vacío con un error, no como un plugin cargado.
+    pub fn is_empty_slot(&self) -> bool {
+        self.external.is_none() && self.name == EMPTY_SLOT_NAME
+    }
+
+    /// Cambios de parámetros que el motor aún no aplicó a su instancia de
+    /// audio: `(id, normalizado)`. Los producen los knobs del rack y el
+    /// feedback del editor nativo; el hilo de control los drena y los manda
+    /// con `hikaru_plugin_host::apply_params_to_instance` (o
+    /// `DspPluginNode::sync_params`). Drenar limpia las banderas: llamar dos
+    /// veces seguidas sin gestos en medio devuelve vacío la segunda.
+    pub fn take_dirty_external_params(&mut self) -> Vec<(u32, f32)> {
+        let mut out = Vec::new();
+        for param in self.external_params.iter_mut() {
+            if param.dirty {
+                param.dirty = false;
+                out.push((param.info.id, param.value));
+            }
+        }
+        out
+    }
+
+    /// Fija un parámetro desde la UI: actualiza la caché y lo marca para el
+    /// motor. Devuelve `false` si el id no existe en este slot.
+    pub fn set_external_param(&mut self, id: u32, value: f32) -> bool {
+        let Some(param) = self.external_params.iter_mut().find(|p| p.info.id == id) else {
+            return false;
+        };
+        let snapped = param.info.snap(value);
+        if (param.value - snapped).abs() > f32::EPSILON {
+            param.value = snapped;
+            param.dirty = true;
+        }
+        true
+    }
+}
+
+/// Nombre que el rack usa para un slot sin plugin. Un `const` y no un literal
+/// repetido, porque `is_empty_slot` compara contra él y un typo en cualquiera
+/// de los dos lados rompería la comparación en silencio.
+pub const EMPTY_SLOT_NAME: &str = "Empty Slot";
+
+/// Un parámetro externo cacheado para los knobs del rack.
+///
+/// La `info` (rango, nombre, escalones) viene del sondeo y no cambia; `value`
+/// es la única parte viva. `dirty` es el puente con el motor: lo pone la UI
+/// y lo limpia quien drene (`take_dirty_external_params`).
+#[derive(Clone, Debug)]
+pub struct ExternalParamState {
+    pub info: hikaru_plugin_host::PluginParamInfo,
+    pub value: f32,
+    pub dirty: bool,
+}
+
+impl ExternalParamState {
+    pub fn display(&self) -> String {
+        self.info.display_value(self.value)
+    }
+}
+
+/// Estado del sondeo de parámetros de un slot externo.
+///
+/// `Idle` = asignado pero aún no sondeado (el rack pide el sondeo en el
+/// primer frame); `Probing` = hilo aparte instanciando el plugin;
+/// `Ready` = lista usable (quizá vacía: el plugin no expone nada);
+/// `Failed` = el sondeo falló con mensaje para la tarjeta.
+#[derive(Clone, Debug, Default)]
+pub enum ExternalParamsStatus {
+    #[default]
+    Idle,
+    Probing,
+    Ready,
+    Failed(String),
 }
 
 #[derive(Clone, Debug)]

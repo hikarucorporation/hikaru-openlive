@@ -133,6 +133,21 @@ pub struct DspSlot {
     pub name: String,
     pub active: bool,
     pub wavetable_path: Option<String>,
+    /// Ruta del plugin externo (VST3/CLAP) cargado en el slot, si lo hay.
+    ///
+    /// Se guarda la ruta y no el estado del plugin: el estado de un VST3 es un
+    /// blob opaco cuyo formato depende del plugin, y meterlo en el proyecto
+    /// ataría el archivo a la versión exacta del host. Al reabrir, el DAW
+    /// busca este binario en disco; si no está, el slot se muestra con un
+    /// error en vez de romper la apertura.
+    ///
+    /// `#[serde(default)]` es obligatorio: sin él, un proyecto guardado antes de
+    /// que existiera el campo no se abriría.
+    #[serde(default)]
+    pub plugin_path: Option<String>,
+    /// "VST3" o "CLAP". Determina con qué cargador se instancia.
+    #[serde(default)]
+    pub plugin_format: Option<String>,
 }
 
 // =========================================================================

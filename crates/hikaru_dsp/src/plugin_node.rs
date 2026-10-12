@@ -37,4 +37,15 @@ impl DspPluginNode {
         // Ejecuta el buffer a través de la instancia del VST3 o CLAP
         self.instance.process(buffer);
     }
+
+    /// Lleva los parámetros pendientes del slot a la instancia de audio.
+    ///
+    /// Lo llama el hilo de control con lo que drenó de
+    /// `DspSlot::take_dirty_external_params` (knobs del rack + feedback del
+    /// editor nativo). Cada `set_param_normalized` viaja por el anillo
+    /// lock-free de la instancia: vuelve de inmediato sin tocar el deadline
+    /// del quantum. Devuelve cuántos entraron.
+    pub fn sync_params(&mut self, params: &[(u32, f32)]) -> usize {
+        hikaru_plugin_host::apply_params_to_instance(self.instance.as_mut(), params)
+    }
 }

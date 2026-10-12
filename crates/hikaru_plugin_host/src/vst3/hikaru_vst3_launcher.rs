@@ -3,19 +3,52 @@
 // GNU Lesser General Public License v3
 // crates/hikaru_plugin_host/src/vst3/hikaru_vst3_launcher.rs
 
-use crate::PluginInstance;
+use crate::scratch::{NUM_CHANNELS, PlanarScratch};
+use crate::{PluginInstance, PluginParamInfo};
 use hikaru_core::AudioBuffer;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::path::{Path, PathBuf};
+use vst3_host::audio::AudioBuffers;
+use vst3_host::realtime::{RealtimePluginRunner, RtControl};
 use vst3_host::simple;
 use vst3_host::plugin::WindowHandle;
 
 #[cfg(target_os = "linux")]
 use crate::platform::linux::X11Connection;
 
+/// Capacidad del anillo de comandos de control.
+///
+/// El audio thread drena el anillo al principio de cada bloque, así que la
+/// cola sólo tiene que aguantar el peor rafagón de cambios de parámetro entre
+/// dos bloques. 1024 es de sobra para faders y automation, y si se llena el
+/// `RtControl::set_parameter` devuelve `false` en vez de bloquear.
+const CONTROL_RING_CAPACITY: usize = 1024;
+
+/// Instancia VST3 alojada por Hikaru.
+///
+/// El plugin **no** se guarda directo: vive dentro de un
+/// [`RealtimePluginRunner`], que lo posee en el hilo de audio y aplica los
+/// comandos de control que llegan por un anillo lock-free. Ese es el patrón
+/// que evita el `Arc<Mutex<Plugin>>` clásico, donde un `set_parameter` desde
+/// el hilo de GUI puede competir con el callback por el lock y taquear el
+/// deadline del quantum.
 pub struct Vst3Instance {
-    plugin: vst3_host::plugin::Plugin,
+    runner: RealtimePluginRunner,
+    /// Handle de control, seguro de usar desde el hilo de GUI.
+    control: RtControl,
+    /// Parámetros leídos una vez en `load` (`get_parameters` es consulta al
+    /// controlador, no al DSP: cachearlos evita preguntar por FFI en cada
+    /// frame del rack).
+    params: Vec<vst3_host::parameters::Parameter>,
+    /// Buffers planares pre-asignados, reutilizados bloque a bloque.
+    scratch: PlanarScratch,
     name: String,
+    sample_rate: f32,
+    /// `true` cuando el audio thread todavía no llamó a `start_processing`.
+    started: bool,
+    /// Un fallo del último bloque. Se guarda para reportarlo desde el hilo de
+    /// control; el hilo de audio no puede loguear.
+    last_error: Option<String>,
     window_attached: bool,
     #[cfg(target_os = "linux")]
     _x11_conn: Option<X11Connection>,
@@ -69,35 +102,60 @@ impl Vst3Instance {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        println!("[VST3] Cargando '{}'...", path.display());
-
         let resolved_path = Self::resolve_vst3_path(path);
         let plugin = simple::load_plugin(&resolved_path)
-            .map_err(|e| format!("[VST3] Fallo al cargar: {}", e))?;
+            .map_err(|e| format!("[VST3] Fallo al cargar '{}': {}", resolved_path.display(), e))?;
 
-        let info = plugin.info();
-        let name = info.name.clone();
+        // Hay que leer la info ANTES de mover el plugin al runner, porque
+        // después sólo se puede alcanzar por `&mut` y no queremos tocar el
+        // plugin desde acá.
+        let (name, has_gui) = {
+            let info = plugin.info();
+            (info.name.clone(), info.has_gui)
+        };
 
-        println!(
-            "[VST3] Plugin: '{}' vendor='{}' gui={}",
-            name, info.vendor, info.has_gui
-        );
-
-        if !info.has_gui {
-            eprintln!("[VST3] '{}' no tiene GUI", name);
+        if !has_gui {
+            eprintln!("[VST3] '{}' no declara editor: el slot mostrará sólo el audio", name);
         }
 
+        let (runner, control) = RealtimePluginRunner::new(plugin, CONTROL_RING_CAPACITY);
+
+        // Foto de parámetros en carga: el controlador ya existe y responde
+        // sin audio corriendo. Si falla (plugin a medio inicializar), lista
+        // vacía: el rack muestra "sin parámetros" en vez de romper nada.
+        let params = runner.plugin().get_parameters().unwrap_or_default();
+
         Ok(Self {
-            plugin,
+            runner,
+            control,
+            params,
+            scratch: PlanarScratch::new(crate::scratch::MAX_BLOCK_FRAMES),
             name,
+            // 48 kHz por defecto hasta que el host diga lo contrario. VST3
+            // necesita un valor válido desde el primer bloque.
+            sample_rate: 48_000.0,
+            started: false,
+            last_error: None,
             window_attached: false,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
         })
     }
 
+    /// Último error de procesamiento, para que el hilo de control lo muestre.
+    pub fn take_last_error(&mut self) -> Option<String> {
+        self.last_error.take()
+    }
+
+    /// El handle de control es `Send` y no bloquea: se puede clonar desde el
+    /// hilo de GUI para mandar MIDI y cambios de parámetro sin tocar el lock
+    /// del audio thread.
+    pub fn control(&mut self) -> &mut RtControl {
+        &mut self.control
+    }
+
     fn open_floating_window(&mut self) -> Result<(), String> {
-        if !self.plugin.has_editor() {
+        if !self.runner.plugin().has_editor() {
             return Err(format!("[VST3] '{}' sin editor", self.name));
         }
 
@@ -136,7 +194,8 @@ impl Vst3Instance {
             }
         };
 
-        self.plugin
+        self.runner
+            .plugin_mut()
             .open_editor(wh)
             .map_err(|e| format!("[VST3] open_editor: {}", e))?;
 
@@ -162,15 +221,84 @@ impl Vst3Instance {
 }
 
 impl PluginInstance for Vst3Instance {
-    fn process(&mut self, _buffer: &mut AudioBuffer) {}
-
-    fn show_gui_embedded(&mut self, handle: RawWindowHandle) {
-        if !self.plugin.has_editor() {
-            eprintln!(
-                "[VST3] '{}' no tiene editor — no se puede embebir",
-                self.name
-            );
+    /// Procesa un bloque interleaved estéreo a través del plugin.
+    ///
+    /// Contrato RT (ver `PluginInstance::process`): sin alocaciones, sin locks,
+    /// sin I/O. El camino es:
+    ///
+    /// 1. Arranca el plugin la primera vez (una sola llamada de setup).
+    /// 2. Des-interleava a los canales planares del scratch, ya pre-asignados.
+    /// 3. Llama al runner, que drena el anillo de control y llama a
+    ///    `process_audio`. Ni el runner ni este método tocan un mutex.
+    /// 4. Re-interleava la salida al buffer del host.
+    ///
+    /// Los errores se acumulan en `last_error` en vez de loguearse: el hilo de
+    /// audio no puede tomar el lock de stderr, y un plugin que falla no puede
+    /// derribar el motor.
+    fn process(&mut self, buffer: &mut AudioBuffer) {
+        // `AudioBuffer` no lleva la cantidad de canales ni el sample rate, así
+        // que el layout interleaved estéreo es un contrato del host, no algo
+        // que se pueda leer del buffer.
+        let frames = buffer.samples.len() / NUM_CHANNELS;
+        if frames == 0 {
             return;
+        }
+
+        if !self.scratch.fits(frames) {
+            // Bloque más grande que lo reservado. Saltamos este bloque en vez
+            // de escribir fuera del scratch; `overflowed` queda para que el
+            // hilo de control lo reporte.
+            return;
+        }
+
+        // El setup del plugin se hace acá (una vez) y no en el constructor
+        // porque `start_processing` aloca internamente en algunos hosts: hacerlo
+        // acá garantiza que la primera llamada en el hilo de audio ya tenga el
+        // plugin listo, sin alocaciones posteriores.
+        if !self.started {
+            if let Err(e) = self.runner.start() {
+                self.last_error = Some(format!("[VST3] start_processing: {e}"));
+                return;
+            }
+            self.started = true;
+        }
+
+        self.scratch.deinterleave_stereo(buffer.samples, frames);
+
+        let (scratch_inputs, scratch_outputs) = self.scratch.take_buffers();
+        let mut buffers = AudioBuffers {
+            inputs: scratch_inputs,
+            outputs: scratch_outputs,
+            sample_rate: self.sample_rate as f64,
+            block_size: frames,
+        };
+
+        let result = self.runner.process(&mut buffers);
+
+        // Devolvemos los buffers al scratch para el próximo bloque. Esto no
+        // aloca: los `Vec` pre-asignados sólo cambian de dueño por una movida.
+        self.scratch.restore_buffers(buffers.inputs, buffers.outputs);
+
+        match result {
+            Ok(()) => self.scratch.reinterleave_stereo(buffer.samples, frames),
+            Err(e) => self.last_error = Some(format!("[VST3] process_audio: {e}")),
+        }
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+    }
+
+    fn has_gui(&self) -> bool {
+        self.runner.plugin().info().has_gui
+    }
+
+    fn show_gui_embedded(&mut self, handle: RawWindowHandle) -> Result<(), String> {
+        if !self.runner.plugin_mut().has_editor() {
+            return Err(format!(
+                "'{}' no tiene editor: suena igual, pero no hay ventana que abrir",
+                self.name
+            ));
         }
 
         #[cfg(target_os = "linux")]
@@ -182,7 +310,7 @@ impl PluginInstance for Vst3Instance {
                         self.name, window_id
                     );
                     let wh = WindowHandle::from_x11(window_id);
-                    let result = self.plugin.open_editor(wh);
+                    let result = self.runner.plugin_mut().open_editor(wh);
                     // Store connection to keep window alive
                     self._x11_conn = x11_conn;
                     result
@@ -199,28 +327,23 @@ impl PluginInstance for Vst3Instance {
             let window_id = match handle {
                 RawWindowHandle::Xlib(h) => h.window as u32,
                 _ => {
-                    eprintln!("[VST3] Handle no soportado: {:?}", handle);
-                    return;
+                    return Err(format!("[VST3] Handle no soportado: {:?}", handle));
                 }
             };
             let wh = WindowHandle::from_x11(window_id);
-            self.plugin.open_editor(wh)
+            self.runner.plugin_mut().open_editor(wh)
         };
 
         match embedded_result {
             Ok(()) => {
                 self.window_attached = true;
                 println!("[VST3] GUI '{}' incrustada OK", self.name);
+                Ok(())
             }
-            Err(e) => {
-                eprintln!(
-                    "[VST3] Embebido falló ({}), intentando flotante...",
-                    e
-                );
-                if let Err(e2) = self.open_floating_window() {
-                    eprintln!("[VST3] Flotante también falló: {}", e2);
-                }
-            }
+            Err(e) => Err(format!(
+                "No se pudo abrir el editor de '{}': {}",
+                self.name, e
+            )),
         }
     }
 
@@ -230,7 +353,7 @@ impl PluginInstance for Vst3Instance {
 
     fn hide_gui(&mut self) {
         if self.window_attached {
-            if let Err(e) = self.plugin.close_editor() {
+            if let Err(e) = self.runner.plugin_mut().close_editor() {
                 eprintln!("[VST3] close_editor() failed: {}", e);
             }
             self.window_attached = false;
@@ -245,8 +368,13 @@ impl PluginInstance for Vst3Instance {
         &self.name
     }
 
+    fn is_gui_open(&self) -> bool {
+        self.window_attached
+    }
+
     fn get_gui_size(&self) -> Option<(u32, u32)> {
-        self.plugin
+        self.runner
+            .plugin()
             .get_editor_size()
             .ok()
             .map(|(w, h)| (w as u32, h as u32))
@@ -255,19 +383,78 @@ impl PluginInstance for Vst3Instance {
     fn notify_gui_embedded(&mut self) -> Option<(u32, u32)> {
         // Query the actual editor size now that the view is attached to the parent window.
         // Some plugins only report the correct size after open_editor completes.
-        self.plugin
+        self.runner
+            .plugin_mut()
             .get_editor_size()
             .ok()
             .map(|(w, h)| (w as u32, h as u32))
     }
 
     fn resize_gui(&mut self, _width: u32, _height: u32) {
-        if let Some((w, h)) = self.plugin.take_editor_resize_request() {
+        if let Some((w, h)) = self.runner.plugin_mut().take_editor_resize_request() {
             eprintln!(
                 "[VST3] Plugin solicita resize a {}x{} — no implementado aún",
                 w, h
             );
         }
+    }
+
+    fn params_supported(&self) -> bool {
+        true
+    }
+
+    fn param_count(&self) -> usize {
+        self.params.len()
+    }
+
+    fn param_info(&self, index: usize) -> Option<PluginParamInfo> {
+        let p = self.params.get(index)?;
+        Some(PluginParamInfo {
+            id: p.id,
+            name: p.name.clone(),
+            unit: p.unit.clone(),
+            // VST3 vive en normalizado: el rango plano es privado del
+            // plugin (ver `format_param_value` para texto exacto).
+            min: 0.0,
+            max: 1.0,
+            default_value: p.default.clamp(0.0, 1.0) as f32,
+            step_count: p.step_count,
+            can_automate: p.can_automate && !p.is_read_only,
+        })
+    }
+
+    fn get_param_normalized(&mut self, id: u32) -> Option<f32> {
+        self.runner
+            .plugin_mut()
+            .get_parameter(id)
+            .ok()
+            .map(|v| v.clamp(0.0, 1.0) as f32)
+    }
+
+    /// Manda el cambio por el anillo lock-free del runner: vuelve de
+    /// inmediato (o `false` si la cola está llena) sin tocar el audio.
+    fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
+        self.control
+            .set_parameter(id, value.clamp(0.0, 1.0) as f64)
+    }
+
+    fn format_param_value(&self, id: u32, normalized: f32) -> Option<String> {
+        self.runner
+            .plugin()
+            .format_parameter(id, normalized.clamp(0.0, 1.0) as f64)
+            .ok()
+    }
+
+    /// Lo que el editor nativo movió por su cuenta (el usuario arrastró un
+    /// knob del plugin): el hilo de la ventana lo sondea y la UI mueve los
+    /// knobs del rack para que no mientan.
+    fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {
+        self.runner
+            .plugin()
+            .get_parameter_changes()
+            .into_iter()
+            .map(|(id, v)| (id, v.clamp(0.0, 1.0) as f32))
+            .collect()
     }
 }
 

@@ -3,11 +3,13 @@
 // GNU Lesser General Public License v3
 // crates/hikaru_plugin_host/src/clap/hikaru_clap_launcher.rs
 
+use crate::scratch::{NUM_CHANNELS, PlanarScratch};
 use crate::PluginInstance;
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, HostGuiImpl, PluginGui, Window};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
+use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::prelude::*;
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
@@ -112,12 +114,32 @@ impl HostPosixFdImpl for HikaruMainThread<'_> {
     }
 }
 
+/// Estado que el host guarda del lado del hilo de audio.
+///
+/// CLAP obliga a declarar un tipo concreto como `AudioProcessor`: es el valor
+/// que el host entrega a `activate()` y que CLAP devuelve cuando llama al
+/// callback de audio. Antes era `()`, lo cual está bien mientras no se
+/// procese nada, pero deja sin lugar donde guardar el sample rate que el
+/// plugin necesita.
+///
+/// Almacenarlo acá (y no en `Shared`) importa: `Shared` lo ven todos los
+/// hilos, incluido el de la GUI, así que escribir el sample rate desde el hilo
+/// de audio a través de él sería una carrera de datos.
+pub struct ClapAudioProcessor {
+    /// Sample rate con el que se activó el plugin. Inmutable durante el
+    /// procesamiento: cambiarlo exigiría re-activar el plugin, que es una
+    /// operación de la GUI, no del callback.
+    pub sample_rate: f32,
+}
+
+impl<'a> AudioProcessorHandler<'a> for ClapAudioProcessor {}
+
 struct HikaruClapHost;
 
 impl HostHandlers for HikaruClapHost {
     type Shared<'a> = HikaruShared;
     type MainThread<'a> = HikaruMainThread<'a>;
-    type AudioProcessor<'a> = ();
+    type AudioProcessor<'a> = ClapAudioProcessor;
 
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
         builder
@@ -128,9 +150,24 @@ impl HostHandlers for HikaruClapHost {
     }
 }
 
+/// Instancia CLAP alojada por Hikaru.
+///
+/// A diferencia de VST3, acá el plugin no se puede "poseer" en el hilo de audio
+/// sin más: la API de CLAP separa la instancia principal (que se usa desde el
+/// hilo de la GUI para el editor) del `AudioProcessor` que es lo que corre el
+/// `process`. Por eso el processor vive en su propio campo y se activa de forma
+/// perezosa en el primer bloque, cuando ya conocemos el sample rate real.
 pub struct ClapInstance {
     name: String,
     plugin: clack_host::plugin::PluginInstance<HikaruClapHost>,
+    /// El processor de audio. `None` hasta el primer `process()`, porque
+    /// `activate` necesita el sample rate y en `load()` todavía no lo
+    /// necesitamos.
+    processor: Option<PluginAudioProcessor<HikaruClapHost>>,
+    /// Buffers planares pre-asignados, igual que en el lado VST3.
+    scratch: PlanarScratch,
+    sample_rate: f32,
+    last_error: Option<String>,
     gui: Option<PluginGui>,
     window_attached: bool,
     #[cfg(target_os = "linux")]
@@ -210,16 +247,189 @@ impl ClapInstance {
         Ok(Self {
             name: plugin_name,
             plugin,
+            processor: None,
+            scratch: PlanarScratch::new(crate::scratch::MAX_BLOCK_FRAMES),
+            sample_rate: 48_000.0,
+            last_error: None,
             gui,
             window_attached: false,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
         })
     }
+
+    /// Último error de procesamiento, para que el hilo de control lo muestre.
+    pub fn take_last_error(&mut self) -> Option<String> {
+        self.last_error.take()
+    }
+
+    /// Activa el processor de audio de forma perezosa.
+    ///
+    /// Va acá y no en `load()` porque `activate` exige el sample rate, y en
+    /// `load()` todavía no sabemos el del host de audio (el motor lo fija más
+    /// tarde, cuando abre el stream). También evita activar plugins que el
+    /// usuario nunca llegó a procesar.
+    fn ensure_processor(&mut self, frames: usize) -> bool {
+        if self.processor.is_some() {
+            // Ya activado: sólo falta arrancar el procesamiento.
+            let Some(processor) = self.processor.as_mut() else {
+                return false;
+            };
+            if let Err(e) = processor.start_processing() {
+                // `ProcessingStarted` significa que ya estaba corriendo, que no
+                // es un error: sólo que llegamos por el camino ya iniciado.
+                if !matches!(e, PluginInstanceError::ProcessingStarted) {
+                    self.last_error = Some(format!("[CLAP] start_processing: {e:?}"));
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        let config = PluginAudioConfiguration {
+            sample_rate: self.sample_rate as f64,
+            // Declaramos un mínimo de 1 y un máximo igual a la capacidad del
+            // scratch: el host tiene que poder entregar cualquier tamaño de
+            // bloque que le llegue del stream de audio.
+            min_frames_count: 1,
+            max_frames_count: self.scratch.capacity().min(frames) as u32,
+        };
+
+        let sample_rate = self.sample_rate;
+        match self.plugin.activate(|_, _| ClapAudioProcessor { sample_rate }, config) {
+            Ok(processor) => {
+                self.processor = Some(processor.into());
+                true
+            }
+            Err(e) => {
+                self.last_error = Some(format!("[CLAP] activate: {e:?}"));
+                false
+            }
+        }
+    }
 }
 
 impl PluginInstance for ClapInstance {
-    fn process(&mut self, _buffer: &mut AudioBuffer) {}
+    /// Procesa un bloque interleaved estéreo a través del plugin CLAP.
+    ///
+    /// Mismo contrato RT que el lado VST3: sin alocaciones, sin locks, sin
+    /// logueo. La diferencia es que CLAP no lleva el audio en el `clap_process`
+    /// sino en descriptores `clap_audio_buffer` que el host arma antes de
+    /// llamar a `process`, así que hay que construir esos descriptores en cada
+    /// bloque. Los `AudioPorts` que los envuelven están pre-asignados en el
+    /// scratch, entonces acá no se aloca.
+    fn process(&mut self, buffer: &mut AudioBuffer) {
+        let frames = buffer.samples.len() / NUM_CHANNELS;
+        if frames == 0 {
+            return;
+        }
+        if !self.scratch.fits(frames) {
+            return;
+        }
+        if !self.ensure_processor(frames) {
+            return;
+        }
+
+        self.scratch.deinterleave_stereo(buffer.samples, frames);
+
+        // Todo el borrow de `scratch` y `processor` vive dentro de este bloque
+        // para poder escribir en `self.last_error` y volver a usar `self`
+        // fuera. Los `AudioPorts` son locales, pero no alocan por bloque:
+        // construyen una lista de punteros a los buffers del scratch, y su
+        // `Vec` interno se reserva una vez con capacidad 2×1.
+        let outcome = {
+            let Self {
+                scratch,
+                processor,
+                ..
+            } = self;
+
+            // Un solo puerto estéreo (dos canales). Es lo que espera la
+            // mayoría de los efectos; un plugin con más puertos se
+            // desalinearía en vez de recibir audio incorrecto.
+            let mut input_audio = AudioPorts::with_capacity(2, 1);
+            let mut output_audio = AudioPorts::with_capacity(2, 1);
+
+            let (inputs, outputs) = scratch.channels_mut();
+
+            // `split_at_mut` parte el slice en dos tramos disjuntos y así
+            // obtenemos los dos `&mut` de canal. Indexar dos veces el mismo
+            // slice (`&mut inputs[0]`, `&mut inputs[1]`) no compila porque el
+            // borrow checker no puede probar que los índices difieran.
+            let (in_l, in_r) = inputs.split_at_mut(1);
+            let (out_l, out_r) = outputs.split_at_mut(1);
+
+            let input_audio = input_audio.with_input_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_input_only([
+                    InputChannel {
+                        buffer: &mut in_l[0][..frames],
+                        is_constant: false,
+                    },
+                    InputChannel {
+                        buffer: &mut in_r[0][..frames],
+                        is_constant: false,
+                    },
+                ]),
+            }]);
+
+            let mut output_audio = output_audio.with_output_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_output_only([
+                    &mut out_l[0][..frames],
+                    &mut out_r[0][..frames],
+                ]),
+            }]);
+
+            // Sin eventos todavía: el MIDI entra más adelante, cuando se
+            // conecte el secuenciador. `void()` descarta lo que el plugin
+            // produzca, en vez de obligar al host a reservar un buffer de
+            // eventos que hoy no va a usar nadie.
+            let input_events = InputEvents::empty();
+            let mut output_events = OutputEvents::void();
+
+            match processor.as_mut() {
+                Some(PluginAudioProcessor::Started(started)) => started
+                    .process(
+                        &input_audio,
+                        &mut output_audio,
+                        &input_events,
+                        &mut output_events,
+                        None,
+                        None,
+                    )
+                    .map(|_| ())
+                    .map_err(|e| format!("[CLAP] process: {e:?}")),
+                Some(PluginAudioProcessor::Stopped(_)) => {
+                    Err("[CLAP] process con el processor detenido".to_string())
+                }
+                None => Err("[CLAP] process sin processor".to_string()),
+            }
+        };
+
+        match outcome {
+            Ok(()) => self.scratch.reinterleave_stereo(buffer.samples, frames),
+            Err(e) => self.last_error = Some(e),
+        }
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        // Cambiar el sample rate con el processor ya activado no es posible en
+        // CLAP sin re-activar. Guardamos el valor nuevo para el próximo
+        // activate y avisamos, en vez de fingir que el cambio surtió efecto.
+        if self.processor.is_some() && (sample_rate - self.sample_rate).abs() > f32::EPSILON {
+            eprintln!(
+                "[CLAP] sample rate cambió a {} con el plugin ya activado; \
+                 se aplicará al recargar el plugin",
+                sample_rate
+            );
+        }
+        self.sample_rate = sample_rate;
+    }
+
+    fn has_gui(&self) -> bool {
+        self.gui.is_some()
+    }
 
     fn get_gui_size(&self) -> Option<(u32, u32)> {
         // En CLAP gui.get_size requiere un gui.create previo.
@@ -235,10 +445,12 @@ impl PluginInstance for ClapInstance {
             .map(|size| (size.width, size.height))
     }
 
-    fn show_gui_embedded(&mut self, handle: RawWindowHandle) {
+    fn show_gui_embedded(&mut self, handle: RawWindowHandle) -> Result<(), String> {
         let Some(gui) = &self.gui else {
-            eprintln!("[CLAP] '{}' sin GUI extension", self.name);
-            return;
+            return Err(format!(
+                "'{}' no expone editor gráfico: suena igual, pero no hay ventana que abrir",
+                self.name
+            ));
         };
 
         let mut plugin_handle = self.plugin.plugin_handle();
@@ -247,8 +459,7 @@ impl PluginInstance for ClapInstance {
         let (window_id, x11_conn) = match crate::platform::linux::get_or_create_x11_window(handle, 1024, 700) {
             Ok((wid, conn)) => (wid, conn),
             Err(e) => {
-                eprintln!("[CLAP] Fallo al crear ventana X11: {}", e);
-                return;
+                return Err(format!("No se pudo preparar la ventana para '{}': {}", self.name, e));
             }
         };
 
@@ -256,7 +467,7 @@ impl PluginInstance for ClapInstance {
         let window_id = match handle {
             RawWindowHandle::Xlib(h) => h.window as u32,
             RawWindowHandle::Xcb(h) => h.window.get().into(),
-            _ => return,
+            _ => return Err(format!("[CLAP] Handle no soportado: {:?}", handle)),
         };
 
         // 1. gui.create siempre antes de cualquier otra llamada a la GUI
@@ -266,8 +477,10 @@ impl PluginInstance for ClapInstance {
         };
 
         if let Err(e) = gui.create(&mut plugin_handle, config) {
-            eprintln!("[CLAP] gui.create() falló para '{}': {:?}", self.name, e);
-            return;
+            return Err(format!(
+                "El plugin '{}' rechazó crear su editor: {:?}",
+                self.name, e
+            ));
         }
 
         // 2. Consultar y aplicar el tamaño nativo del plugin
@@ -283,16 +496,20 @@ impl PluginInstance for ClapInstance {
         let parent_window = Window::from_x11_handle(window_id as std::ffi::c_ulong);
 
         if let Err(e) = unsafe { gui.set_parent(&mut plugin_handle, parent_window) } {
-            eprintln!("[CLAP] gui.set_parent() falló: {:?}", e);
             let _ = gui.destroy(&mut plugin_handle);
-            return;
+            return Err(format!(
+                "El plugin '{}' no aceptó la ventana del host: {:?}",
+                self.name, e
+            ));
         }
 
         // 4. Mostrar la GUI
         if let Err(e) = gui.show(&mut plugin_handle) {
-            eprintln!("[CLAP] gui.show() falló: {:?}", e);
             let _ = gui.destroy(&mut plugin_handle);
-            return;
+            return Err(format!(
+                "El plugin '{}' no pudo mostrar su editor: {:?}",
+                self.name, e
+            ));
         }
 
         self.window_attached = true;
@@ -303,6 +520,7 @@ impl PluginInstance for ClapInstance {
         }
 
         println!("[CLAP] GUI de '{}' abierta OK", self.name);
+        Ok(())
     }
 
     fn show_gui_floating(&mut self) -> Result<(), String> {
@@ -344,6 +562,10 @@ impl PluginInstance for ClapInstance {
 
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    fn is_gui_open(&self) -> bool {
+        self.window_attached
     }
 
     fn resize_gui(&mut self, width: u32, height: u32) {

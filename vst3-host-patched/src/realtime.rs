@@ -100,6 +100,18 @@ impl RealtimePluginRunner {
         &self.plugin
     }
 
+    /// Mutably borrow the underlying plugin.
+    ///
+    /// This is the escape hatch for operations that cannot be expressed as a
+    /// queued [`RtCommand`] — opening/closing the editor, state save/load, bus
+    /// queries. Callers must own the runner (so nothing else is touching the
+    /// plugin concurrently), and must not call this from the audio thread while
+    /// a control thread holds a `&mut` to the same plugin: the ring protects the
+    /// *queued* commands, not direct access.
+    pub fn plugin_mut(&mut self) -> &mut Plugin {
+        &mut self.plugin
+    }
+
     /// Recover the owned plugin, consuming the runner.
     pub fn into_plugin(self) -> Plugin {
         self.plugin

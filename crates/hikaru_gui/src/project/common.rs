@@ -89,6 +89,14 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     .path
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
+                plugin_path: e.external.as_ref().map(|p| p.path.display().to_string()),
+                plugin_format: e.external.as_ref().map(|p| {
+                    match p.format {
+                        hikaru_plugin_host::PluginFormat::VST3 => "VST3",
+                        hikaru_plugin_host::PluginFormat::CLAP => "CLAP",
+                    }
+                    .to_string()
+                }),
             })
             .collect(),
         matrix_idx: t.matrix_idx,
@@ -117,6 +125,34 @@ pub fn build_track(t: &Track) -> mixer::Track {
         .map(|e| {
             let mut slot = mixer::DspSlot::new(e.id, e.name.clone());
             slot.active = e.active;
+
+            // Reconstruimos el descriptor del plugin externo a partir de la
+            // ruta guardada, sin cargarlo. `id` se deriva igual que en el
+            // escaneo para que el slot siga reconociendo al plugin, y
+            // `has_gui` queda en `false`: no se puede saber sin instanciarlo, y
+            // asumir `true` haría que el botón de editor apareciera sobre un
+            // plugin que quizá no tenga ninguno.
+            if let Some(path) = e.plugin_path.as_ref().filter(|p| !p.is_empty()) {
+                let path = std::path::PathBuf::from(path);
+                let format = match e.plugin_format.as_deref() {
+                    Some("CLAP") => hikaru_plugin_host::PluginFormat::CLAP,
+                    // VST3 como valor por defecto: es lo que guardan todos los
+                    // proyectos escritos antes de que existiera el campo.
+                    _ => hikaru_plugin_host::PluginFormat::VST3,
+                };
+                let id = hikaru_plugin_host::registry::PluginDescriptor {
+                    id: format!("{format:?}:{}", path.display()).to_lowercase(),
+                    name: e.name.clone(),
+                    vendor: String::new(),
+                    path,
+                    format,
+                    kind: hikaru_plugin_host::PluginKind::Effect,
+                    has_gui: false,
+                    input_channels: None,
+                };
+                slot.external = Some(id);
+            }
+
             slot
         })
         .collect();
