@@ -338,6 +338,25 @@ pub const MAX_ZOOM_X: f32 = 2.0;
 pub const MIN_ROW_H: f32 = 60.0;
 pub const MAX_ROW_H: f32 = 180.0;
 
+/// Multiplicativo de zoom por un "notch" completo de rueda (×1.25 / ÷1.25).
+///
+/// Es el mismo paso que usaban los botones `+` / `-`; el zoom con rueda
+/// ahora es *continuo* y usa este valor como unidad de referencia.
+pub const ZOOM_STEP_FACTOR: f32 = 1.25;
+
+/// Líneas que equivalen a un notch completo de rueda clásica (X11/GTK).
+///
+/// Sirve de normalizador: con 3 líneas el comportamiento es idéntico al del
+/// paso fijo anterior, así que la rueda traditional no cambia de feel.
+pub const LINES_PER_NOTCH: f32 = 3.0;
+
+/// Píxeles que equivalen a un notch completo cuando el delta viene en píxeles
+/// (rueda en modo alto DPI o trackpad).
+///
+/// Un notch de rueda en píxeles ronda los 50-55; los trackpad mandan deltas
+/// mucho menores y así el zoom responde gradual en vez de saltar 25% entero.
+pub const PX_PER_NOTCH: f32 = 53.0;
+
 #[inline]
 fn px_to_ticks(px: f32, zoom_x: f32) -> u64 {
     (px.max(0.0) / zoom_x.max(0.0001)) as u64
@@ -671,9 +690,30 @@ fn sync_clips_to_engine(s: &mut AppState, _cx: &mut App) {
 /// Los offsets de scroll viven en `ScrollHandle` con signo NEGATIVO
 /// (`[-max_offset, 0]`), por eso el clamp de `clamp_scroll_offset` es a la
 /// izquierda, no a 0.
+/// Estado del gesto de navegación con botón central (ruedita).
+///
+/// `last` es la posición del cursor en el paso anterior: el gesto es
+/// **incremental** (delta desde el último evento) y no absoluto, para que no
+/// haya zonas muertas al invertir el sentido en un borde. La geometría del
+/// lienzo se congela al iniciar el gesto (`total_ticks`, `header_width`, etc.
+/// no cambian mientras se arrastra) y se guarda acá para que los `mousemove`
+/// que llegan al catcher global no tengan que arrastrarla por los closures.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaylistPanState {
     pub last: (f32, f32),
+    pub geometry: PlaylistNavGeometry,
+}
+
+/// Instantánea del lienzo necesaria para anclar el zoom del gesto.
+///
+/// La calcula `render` (que es quien conoce `total_ticks`, `header_width`,
+/// `ruler_h` y `row_count`) y se pasa a `start_playlist_pan`.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct PlaylistNavGeometry {
+    pub header_width: f32,
+    pub ruler_h: f32,
+    pub total_ticks: u64,
+    pub row_count: usize,
 }
 
 /// Sensibilidad del pan: 1px de mouse = 1px de viewport.
@@ -682,6 +722,28 @@ pub struct PlaylistPanState {
 /// largos; amplificar volvería el gesto incontrolable y haría que el viewport
 /// salte de un límite al otro con un flick corto.
 pub const PAN_SENSITIVITY: f32 = 1.0;
+
+/// Píxeles de arrastre vertical que equivalen a un notch de zoom.
+///
+/// 120px ≈ un trazo cómodo de mouse para un paso de `×1.25`, así que con un
+/// gesto de 300px se recorre ~2.5 notches (≈1.75×): cambio perceptible sin que
+/// el viewport se vaya de las manos. A diferencia de la rueda (que llega
+/// normalizada en notches), acá el delta viene en píxeles de drag libre.
+pub const MMB_DRAG_PX_PER_NOTCH: f32 = 120.0;
+
+/// Notches de zoom (con signo) para un delta vertical de middle-drag.
+///
+/// Positivo = zoom in. Arrastrar **hacia arriba** acerca el tiempo, igual que
+/// en Bitwig; como en GPUI la rueda que sube resta, el signo se invierte acá.
+/// El mismo `smooth_zoom` de la rueda aplica la magnitud, así que el gesto
+/// queda continuo (sin escalones) y acotado por `MIN_ZOOM_X`/`MAX_ZOOM_X`.
+/// Función pura para testear.
+pub fn mmb_drag_notches(dy: f32) -> f32 {
+    if !dy.is_finite() {
+        return 0.0;
+    }
+    -dy / MMB_DRAG_PX_PER_NOTCH
+}
 
 /// Acota un offset de scroll al rango real del handle: `[-max, 0]`.
 ///
@@ -695,18 +757,31 @@ fn is_playlist_panning(cx: &mut App) -> bool {
     state(cx).read(cx).playlist_pan.is_some()
 }
 
-/// Inicia el pan: sembramos la referencia del gesto.
-fn start_playlist_pan(cx: &mut App, position: Point<Pixels>) {
+/// Inicia el gesto de navegación: sembramos la referencia del gesto y
+/// congelamos la geometría del lienzo (que no cambia durante el arrastre).
+fn start_playlist_pan(cx: &mut App, position: Point<Pixels>, geometry: PlaylistNavGeometry) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         s.playlist_pan = Some(PlaylistPanState {
             last: (position.x.as_f32(), position.y.as_f32()),
+            geometry,
         });
         cx.notify();
     });
 }
 
-/// Aplica un paso del pan: delta incremental del cursor sobre los dos ejes.
+/// Aplica un paso de la navegación combinada, al estilo Bitwig:
+///
+/// - **Eje X** → pan temporal: el viewport sigue al cursor. Arrastrar a la
+///   derecha avanza en el tiempo (con offsets negativos, quedar más negativo).
+/// - **Eje Y** → zoom continuo de la vista temporal, anclado al cursor: el
+///   punto que estaba bajo el puntero queda bajo el puntero. Se calcula con
+///   `smooth_zoom` (mismo factor que la rueda) y se compensa el offset con
+///   `anchor_h_offset`, igual que `apply_playlist_wheel_zoom`.
+///
+/// El zoom se ancla **incrementalmente** en cada `mousemove`, igual que hace la
+/// rueda: es lo que hace que el contenido "se pegue" al cursor durante todo el
+/// trazo sin que el ancla se vaya acumulando error.
 fn update_playlist_pan(cx: &mut App, position: Point<Pixels>) {
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -716,15 +791,43 @@ fn update_playlist_pan(cx: &mut App, position: Point<Pixels>) {
         // El viewport sigue al cursor: arrastrar a la derecha/abajo lo mueve
         // en ese sentido, y con offsets negativos eso es restar el delta.
         let dx = (position.x.as_f32() - pan.last.0) * PAN_SENSITIVITY;
-        let dy = (position.y.as_f32() - pan.last.1) * PAN_SENSITIVITY;
+        let dy = position.y.as_f32() - pan.last.1;
+        let geometry = pan.geometry;
 
         let h = s.playlist_scroll_h.clone();
-        let new_x = clamp_scroll_offset(h.offset().x.as_f32() - dx, h.max_offset().x.as_f32());
-        h.set_offset(point(px(new_x), h.offset().y));
+        let bounds = h.bounds();
 
-        let v = s.playlist_scroll_v.clone();
-        let new_y = clamp_scroll_offset(v.offset().y.as_f32() - dy, v.max_offset().y.as_f32());
-        v.set_offset(point(v.offset().x, px(new_y)));
+        // --- Eje X: pan temporal.
+        let old_zoom = clamped_zoom(s.playlist_state.zoom_x);
+        let new_zoom = smooth_zoom(old_zoom, mmb_drag_notches(dy));
+
+        // --- Eje Y: zoom continuo anclado al cursor.
+        if (new_zoom - old_zoom).abs() > f32::EPSILON {
+            let viewport_w = bounds.size.width.as_f32();
+            let cursor_vx = position.x.as_f32() - bounds.origin.x.as_f32();
+            // Mismo piso de 800px que usa el zoom con rueda, para que con muy
+            // poco contenido el offset no quede pegado a un rango degenerado.
+            let content_w = (geometry.header_width + geometry.total_ticks as f32 * new_zoom).max(800.0);
+            let new_offset_x = anchor_h_offset(
+                cursor_vx,
+                geometry.header_width,
+                old_zoom,
+                new_zoom,
+                h.offset().x.as_f32(),
+                viewport_w,
+                content_w,
+            );
+            h.set_offset(point(px(new_offset_x), h.offset().y));
+            s.playlist_state.zoom_x = new_zoom;
+        }
+
+        // El pan de X se aplica siempre (aunque el Y esté en un límite de zoom):
+        // son ejes independientes, y atar uno al otro haría que el gesto se
+        // "congelara" al llegar al tope del zoom.
+        if dx != 0.0 {
+            let new_x = clamp_scroll_offset(h.offset().x.as_f32() - dx, h.max_offset().x.as_f32());
+            h.set_offset(point(px(new_x), h.offset().y));
+        }
 
         // Avanza la referencia: el próximo evento acumula desde acá. (Si el
         // mismo evento burbujea por los dos contenedores, la segunda pasada ve
@@ -738,7 +841,7 @@ fn update_playlist_pan(cx: &mut App, position: Point<Pixels>) {
     });
 }
 
-/// Cierra el pan y restaura el cursor por defecto.
+/// Cierra el gesto de navegación y restaura el cursor por defecto.
 fn stop_playlist_pan(cx: &mut App) {
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -1182,6 +1285,52 @@ pub fn wheel_zoom_in(delta: &ScrollDelta) -> bool {
     };
     let d = if dy != 0.0 { dy } else { dx };
     d < 0.0
+}
+
+/// Delta de rueda normalizado a **notches con signo**: `1.0` es un notch
+/// completo hacia adentro, `0.5` medio notch, `-1.0` un notch hacia afuera.
+///
+/// A diferencia de [`wheel_zoom_in`] (que devuelve sólo el signo), esto
+/// conserva la *magnitud* del gesto: un nudge de 2px en un trackpad vale
+/// `2/53` de notch, así que el zoom se mueve de forma gradual en vez de saltar
+/// el 25% entero. El signo está invertido respecto al delta crudo porque en
+/// GPUI la rueda que sube resta (`wheel_zoom_in` explota esa convención).
+///
+/// Normaliza con [`LINES_PER_NOTCH`] o [`PX_PER_NOTCH`] según la variante del
+/// delta. Función pura para testear.
+pub fn wheel_notches(delta: &ScrollDelta) -> f32 {
+    let (dx, dy, per_notch) = match *delta {
+        ScrollDelta::Pixels(p) => (p.x.as_f32(), p.y.as_f32(), PX_PER_NOTCH),
+        ScrollDelta::Lines(p) => (p.x, p.y, LINES_PER_NOTCH),
+    };
+    let d = if dy != 0.0 { dy } else { dx };
+    if !d.is_finite() || !per_notch.is_finite() || per_notch <= 0.0 {
+        return 0.0;
+    }
+    -d / per_notch
+}
+
+/// Zoom tras un zoom continuo de `notches` notches, acotado.
+///
+/// `new = zoom * ZOOM_STEP_FACTOR^notches`, así que un notch completo
+/// reproduce exactamente el paso fijo de antes (`×1.25`) y los notches
+/// fraccionarios dan movimiento proporcional. Función pura para testear.
+pub fn smooth_zoom(zoom: f32, notches: f32) -> f32 {
+    if !notches.is_finite() {
+        return clamped_zoom(zoom);
+    }
+    clamped_zoom(zoom * ZOOM_STEP_FACTOR.powf(notches))
+}
+
+/// Altura de fila tras un zoom vertical continuo, acotada.
+///
+/// Misma regla que [`smooth_zoom`] pero sobre `row_h` y con
+/// `[MIN_ROW_H, MAX_ROW_H]`. Función pura para testear.
+pub fn smooth_row_h(h: f32, notches: f32) -> f32 {
+    if !notches.is_finite() {
+        return clamped_row_h(h);
+    }
+    clamped_row_h(h * ZOOM_STEP_FACTOR.powf(notches))
 }
 
 /// Nuevo offset horizontal (`<= 0`) tras un zoom anclado al cursor.
@@ -1821,12 +1970,17 @@ fn update_clip_drag(cx: &mut App, cursor: (f32, f32), zone: [f32; 4]) {
 ///   acotado a `[MIN_ROW_H, MAX_ROW_H]`).
 /// - Sin modificadores: no hace nada (deja el scroll normal) → `false`.
 ///
-/// Rueda arriba acerca/agranda y rueda abajo aleja/achica. El viewport se
-/// compensa con `anchor_*_offset` para que el tick y la fila bajo el cursor
-/// no se muevan (focus point en el cursor). Devuelve `true` si consumió el
-/// evento (el llamador debe frenar la propagación para que no scrollee).
-/// `total_ticks` / `header_width` / `ruler_h` / `row_count` describen el
-/// lienzo actual (los calcula `render`).
+/// Rueda arriba acerca/agranda y rueda abajo aleja/achica. El zoom es
+/// *continuo*: la magnitud del delta se normaliza con [`wheel_notches`] y se
+/// aplica como `ZOOM_STEP_FACTOR^notches`, de modo que un notch completo vale
+/// exactamente `×1.25` (igual que antes) pero un nudge de trackpad mueve el
+/// zoom de forma proporcional en vez de saltar el 25% entero.
+///
+/// El viewport se compensa con `anchor_*_offset` para que el tick y la fila
+/// bajo el cursor no se muevan (focus point en el cursor). Devuelve `true` si
+/// consumió el evento (el llamador debe frenar la propagación para que no
+/// scrollee). `total_ticks` / `header_width` / `ruler_h` / `row_count`
+/// describen el lienzo actual (los calcula `render`).
 fn apply_playlist_wheel_zoom(
     s: &mut AppState,
     delta: &ScrollDelta,
@@ -1844,10 +1998,10 @@ fn apply_playlist_wheel_zoom(
     if !vertical && !horizontal {
         return false;
     }
-    let zoom_in = wheel_zoom_in(delta);
+    let notches = wheel_notches(delta);
     if horizontal {
         let old_zoom = clamped_zoom(s.playlist_state.zoom_x);
-        let new_zoom = step_zoom(old_zoom, zoom_in);
+        let new_zoom = smooth_zoom(old_zoom, notches);
         if (new_zoom - old_zoom).abs() <= f32::EPSILON {
             // Ya en el límite: igual se consume para no scrollear de más.
             return true;
@@ -1870,7 +2024,7 @@ fn apply_playlist_wheel_zoom(
         s.playlist_state.zoom_x = new_zoom;
     } else {
         let old_h = s.playlist_state.track_height();
-        let new_h = step_row_h(old_h, zoom_in);
+        let new_h = smooth_row_h(old_h, notches);
         if (new_h - old_h).abs() <= f32::EPSILON {
             return true;
         }
@@ -2986,15 +3140,26 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                 },
                                             )
                                             // Navegación con botón central
-                                            // (ruedita): MMB + arrastrar mueve
-                                            // el viewport en ambos ejes. El
-                                            // cursor pasa a puño cerrado
+                                            // (ruedita), al estilo Bitwig:
+                                            // `MMB` + arrastrar en X mueve el
+                                            // viewport en el tiempo y en Y hace
+                                            // zoom continuo anclado al cursor.
+                                            // El cursor pasa a puño cerrado
                                             // mientras dura el gesto (el
                                             // `cursor` se lee en el render).
                                             .on_mouse_down(
                                                 gpui_kit::MouseButton::Middle,
                                                 move |event, _, cx| {
-                                                    start_playlist_pan(cx, event.position);
+                                                    start_playlist_pan(
+                                                        cx,
+                                                        event.position,
+                                                        PlaylistNavGeometry {
+                                                            header_width,
+                                                            ruler_h,
+                                                            total_ticks,
+                                                            row_count,
+                                                        },
+                                                    );
                                                 },
                                             )
                                             .on_mouse_up(
