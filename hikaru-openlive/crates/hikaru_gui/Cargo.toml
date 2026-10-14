@@ -1,0 +1,50 @@
+[package]
+name = "hikaru_gui"
+version.workspace = true
+edition = "2021"
+authors = ["Hikaru OpenStudio Developers"]
+license = "AGPL-3.0-later"
+
+[dependencies]
+hikaru_core = { path = "../hikaru_core" }
+hikaru_audio_engine = { path = "../hikaru_audio_engine" }
+hikaru_transport = { path = "../hikaru_transport" }
+hikaru_plugin_host = { path = "../hikaru_plugin_host" }
+# Render GPU offscreen (sprite sheets 2D y malla 3D de la Wavetable).
+# Comparte la misma versión de wgpu que gpui-kit a través del workspace, así
+# que no se compilan dos copias del backend.
+hikaru_render = { path = "../hikaru_render" }
+gpui-kit = "0.6.6"
+# `RenderImage::new` (el tipo que usa el elemento `img` de GPUI Kit) toma un
+# `image::Frame`. GPUI no lo reexporta, así que hay que declarar el crate. La
+# versión tiene que ser la misma que usa `gpui-pre` o el tipo no coincide.
+image = "0.25.1"
+hound = "3.5"
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
+# Formatos de proyecto `.oplf` y `.opsf`. Son crates LGPLv3 aparte: el
+# ESQUEMA del archivo no le importa a esta app, y mantenerlo acá lo ataría al
+# AGPL. Lo que queda en `src/project/` es sólo la conversión entre el estado
+# vivo y esos structs. Ver docs/hikaru-project-files/.
+hikaru_project_file = { path = "../hikaru_project_file" }
+hikaru_openlive_file = { path = "../hikaru_openlive_file" }
+hikaru_openstudio_file = { path = "../hikaru_openstudio_file" }
+# Los tests de round-trip necesitan leer el JSON crudo para verificar la PUREZA
+# formato (que no se colen campos del otro modo).
+serde_json = "1"
+raw-window-handle = "0.6.2"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+rfd = "0.15"
+
+[[bin]]
+name = "hikaru_openlive"
+path = "src/main.rs"
+
+[dev-dependencies]
+# Harness headless de GPUI para tests de interacción (click_at con
+# hit-testing real). Solo afecta a `cargo test`.
+gpui-kit = { version = "0.6.6", features = ["test-support"] }
+# Los tests del formato de proyecto escriben WAVs de prueba en un temp dir.
+hound = "3.5"

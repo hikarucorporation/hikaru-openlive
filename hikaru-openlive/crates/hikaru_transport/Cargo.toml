@@ -1,0 +1,12 @@
+# crates/hikaru_transport/Cargo.toml
+[package]
+name = "hikaru_transport"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# hikaru_transport necesita los tipos base como SampleRate y AudioSample de hikaru_core.
+hikaru_core = { path = "../hikaru_core" }
+
+# Aseguramos que no haya dependencias que puedan causar allocations o bloqueos
+# en el hilo de audio. Este crate es principalmente de lógica de tiempo y estado.

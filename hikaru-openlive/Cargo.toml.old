@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/hikaru_core",
+    "crates/hikaru_transport",
+    "crates/hikaru_audio_engine",
+    "crates/hikaru_dsp",
+    "crates/hikaru_sequencer",
+    "crates/hikaru_plugin_host",
+    "crates/hikaru_gui",
+]
+
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Hikaru OpenStudio Contributors"]
+license = "AGPLv3"

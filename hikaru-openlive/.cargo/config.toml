@@ -1,0 +1,11 @@
+[profile.dev]
+# Reduce debug info from level 2 (full symbols) to level 1 (line tables only)
+# Saves ~40% disk space vs default, still allows backtraces
+debug = 1
+
+# Disable incremental compilation — saves ~2-5GB per build
+incremental = false
+
+[profile.dev.package."*"]
+# Optimize dependencies even in debug — faster runtime, slightly larger binaries
+opt-level = 2
