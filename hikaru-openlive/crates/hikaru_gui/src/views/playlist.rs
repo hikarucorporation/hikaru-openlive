@@ -159,6 +159,13 @@ pub struct PlaylistState {
     /// Clip cuyo borde está bajo el cursor y por cuál lado, para pintar el
     /// cursor `e-resize`/`w-resize` y resaltar el handle.
     pub trim_hover: Option<(usize, TrimEdge)>,
+    /// Playhead fantasma: tick bajo el puntero mientras éste está sobre la
+    /// grilla o la regla. `None` = el puntero no está en la zona temporal (o
+    /// hay un gesto en curso), así que no se dibuja la guía.
+    ///
+    /// Se guarda el TICK y no la x en píxeles a propósito: así la guía se
+    /// reposiciona sola si el zoom o el scroll cambian bajo el puntero.
+    pub hover_tick: Option<u64>,
 }
 
 impl Default for PlaylistState {
@@ -190,6 +197,7 @@ impl Default for PlaylistState {
             marquee: None,
             trim_drag: None,
             trim_hover: None,
+            hover_tick: None,
         }
     }
 }
@@ -761,6 +769,10 @@ fn is_playlist_panning(cx: &mut App) -> bool {
 /// congelamos la geometría del lienzo (que no cambia durante el arrastre).
 fn start_playlist_pan(cx: &mut App, position: Point<Pixels>, geometry: PlaylistNavGeometry) {
     let st = state(cx);
+    // El pan cubre la grilla con un catcher, así que su `on_mouse_move` deja de
+    // correr: si no se borra acá, la guía se queda congelada en el último tick
+    // durante toda la navegación.
+    clear_hover_tick(cx);
     st.update(cx, |s, cx| {
         s.playlist_pan = Some(PlaylistPanState {
             last: (position.x.as_f32(), position.y.as_f32()),
@@ -1864,6 +1876,27 @@ fn set_clip_edge_cursor(cx: &mut App, clip_id: usize, edge: Option<TrimEdge>) {
     });
 }
 
+/// Playhead fantasma: fija (o borra) el tick bajo el puntero.
+///
+/// Sólo notifica cuando el valor **cambia**, igual que `set_clip_edge_cursor`:
+/// el puntero dispara `mousemove` a tasas de frame y sin este chequeo se
+/// re-renderizaría la playlist entera en cada movimiento aunque el tick sea el
+/// mismo (que es lo normal: muchos píxeles caen dentro del mismo tick).
+fn set_hover_tick(cx: &mut App, tick: Option<u64>) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.playlist_state.hover_tick != tick {
+            s.playlist_state.hover_tick = tick;
+            cx.notify();
+        }
+    });
+}
+
+/// Borra el playhead fantasma (puntero fuera de la zona o gesto en curso).
+fn clear_hover_tick(cx: &mut App) {
+    set_hover_tick(cx, None);
+}
+
 /// Finaliza el gesto de arrastre activo, si lo hay.
 ///
 /// Si hubo movimiento y es un clip de audio, sincroniza la nueva posición
@@ -2510,6 +2543,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     }
 
     let playhead_x = ticks_to_px(display_tick, zoom_x);
+    // Playhead fantasma: x del tick bajo el puntero, o `None` si el puntero no
+    // está sobre la zona temporal. Se calcula acá (y no en el paint) para que
+    // el closure del canvas capture un `Option<f32>` plano.
+    let hover_x = pl.hover_tick.map(|t| ticks_to_px(t, zoom_x));
     // Grilla según quantize actual (1/4, 1/8, 1/16): subdivisión de la redonda.
     // Las líneas principales caen cada compás SIG (`ticks_per_bar_val`).
     // Ticks del snap actual, una vez por frame (la usa el drop y el marquee).
@@ -2834,6 +2871,59 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .w(px(grid_w))
     .h(px(canvas_h));
 
+    // Guía del puntero (playhead fantasma). Va en un canvas PROPIO, después
+    // del playhead real, por dos razones: así se apaga con un `Option` sin
+    // tocar el canvas compartido, y queda explícito en el z-order que es la
+    // capa más alta (encima de clips y del playhead).
+    //
+    // Cubre regla + grilla: arranca en `y=0` (arriba de la regla) así se lee
+    // como una línea de tiempo completa y no como un adorno de los clips.
+    let hover_zone = zone_bounds.clone();
+    let hover_canvas = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let Some(x) = hover_x else {
+                return;
+            };
+            // Guarda contra la posición REAL del puntero: el hover se borra
+            // cuando empieza un gesto, pero si el puntero se va de la grilla
+            // (por ejemplo a la columna de headers, que está a la izquierda y
+            // NO dispara `on_mouse_move` de la grilla) no hay evento que lo
+            // limpie. `window.mouse_position()` sí refleja la realidad.
+            let m = window.mouse_position();
+            let zx = hover_zone.get()[0];
+            let zw = hover_zone.get()[2];
+            if m.x.as_f32() < zx || m.x.as_f32() > zx + zw {
+                return;
+            }
+            let x = bounds.origin.x + px(x);
+            let top = bounds.origin.y;
+            let bot = bounds.origin.y + bounds.size.height;
+            // Cuerpo de la guía: tenue, de 1px.
+            let mut body = PathBuilder::stroke(px(1.0));
+            body.move_to(point(x, top));
+            body.line_to(point(x, bot));
+            if let Ok(p) = body.build() {
+                window.paint_path(p, rgb(0xFFFFFF).opacity(0.28));
+            }
+            // Cabeza en la regla: un triángulo sólido para anclar la lectura
+            // al compás sin tener que seguir la línea hasta el pie.
+            let mut head = PathBuilder::fill();
+            head.move_to(point(x - px(4.0), top));
+            head.line_to(point(x + px(4.0), top));
+            head.line_to(point(x, top + px(7.0)));
+            head.close();
+            if let Ok(p) = head.build() {
+                window.paint_path(p, rgb(0xFFFFFF).opacity(0.55));
+            }
+        },
+    )
+    .absolute()
+    .left(px(0.0))
+    .top(px(0.0))
+    .w(px(grid_w))
+    .h(px(canvas_h));
+
     let mut all: Vec<AnyElement> = Vec::new();
     // Ruler / Timebar superior: título + compás SIG + quantize clicable.
     // La numeración de compases (1, 2, 3…) se dibuja en `grid_lines` alineada
@@ -3078,16 +3168,55 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                     // central (GPUI 0.3.x no
                                                     // tiene `Grabbing`: es el
                                                     // equivalente CSS).
+                                                    //
+                                                    // Fuera de la grilla no hay
+                                                    // cursor seteado, así que se
+                                                    // ve la flecha normal del
+                                                    // sistema (lo pedido: la cruz
+                                                    // es SÓLO de la zona
+                                                    // temporal). Los clips y
+                                                    // sus bordes pisan este valor
+                                                    // con el suyo, que es lo
+                                                    // correcto: sobre un borde de
+                                                    // trim tiene que verse la
+                                                    // flecha de redimensionado.
                                                     .cursor(if playlist_panning {
                                                         CursorStyle::ClosedHand
                                                     } else {
-                                                        CursorStyle::Arrow
+                                                        CursorStyle::Crosshair
                                                     })
                                             // Move/Up del drag de clips a nivel de grilla (no
                                             // del clip): el cursor sale del clip al arrastrar
                                             // y los handlers del propio clip dejarían de
                                             // disparar. Acá cubren toda la zona.
                                             .on_mouse_move(move |event, _, cx| {
+                                                // Playhead fantasma: se actualiza
+                                                // PRIMERO y sin `return`, para
+                                                // que todos los gestos de abajo
+                                                // (trim / pan / drag) partan de
+                                                // un hover fresco. Durante un
+                                                // gesto se borra: con el botón
+                                                // apretado la guía no aporta
+                                                // nada y compite con el
+                                                // feedback del gesto.
+                                                {
+                                                    let st = state(cx).read(cx);
+                                                    let ps = &st.playlist_state;
+                                                    let gesturing = ps.trim_drag.is_some()
+                                                        || ps.clip_drag.is_some()
+                                                        || ps.marquee.is_some()
+                                                        || st.playlist_pan.is_some();
+                                                    if gesturing {
+                                                        clear_hover_tick(cx);
+                                                    } else {
+                                                        let zb = zone_grid_move.get();
+                                                        let rel_x = event.position.x.as_f32() - zb[0];
+                                                        set_hover_tick(
+                                                            cx,
+                                                            Some(px_to_ticks(rel_x.max(0.0), zoom_x)),
+                                                        );
+                                                    }
+                                                }
                                                 // Un gesto de recorte tiene
                                                 // prioridad: el borde arrastrado
                                                 // manda sobre el drag de clip.
@@ -3278,6 +3407,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     .when_some(drop_handler, |v, h| v.child(h))
                                     .child(seek_zone.into_any_element())
                                     .child(playhead_canvas.into_any_element())
+                                    .child(hover_canvas.into_any_element())
                                     // El overlay del marquee va AL FINAL: al
                                     // pintarse de atrás hacia adelante, queda
                                     // por encima de clips, grilla y playhead.
