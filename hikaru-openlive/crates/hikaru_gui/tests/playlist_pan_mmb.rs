@@ -7,7 +7,12 @@
 //   muertas al invertir en un borde.
 // - Eje Y → zoom continuo de la vista temporal, anclado al cursor: el punto que
 //   estaba bajo el puntero queda bajo el puntero. NO hace pan vertical.
-// - El cursor pasa a puño cerrado mientras dura el gesto y vuelve al soltarlo.
+// - El puntero se OCULTA durante el gesto (`CursorStyle::Hidden`, que agrega el
+//   parche local de gpui-pre) y vuelve a la cruz de la grilla al soltar. Ni el
+//   estilo ni el hecho de que se emita el `set_cursor` con buffer `None` son
+//   observables desde un test de integración (el backend de test es headless y
+//   `Window::cursor_style` es `pub(crate)`), pero su ciclo de vida sí: lo que
+//   decide el cursor en cada instante es si el catcher está montado.
 // - El gesto continúa aunque el cursor salga del panel.
 
 use std::sync::atomic::{AtomicU32, AtomicU64};
@@ -676,4 +681,82 @@ fn drag_notches_composes_into_the_expected_zoom() {
     // que 4 notches de drag dan exactamente `×1.25⁴`.
     let z = smooth_zoom(0.1, mmb_drag_notches(-4.0 * MMB_DRAG_PX_PER_NOTCH));
     assert!((z - 0.1 * 1.25f32.powi(4)).abs() < 1e-5, "0.1 × 1.25⁴ = {z}");
+}
+// =========================================================================
+// Ciclo de vida del catcher: es lo que decide el cursor durante la navegación
+// =========================================================================
+
+/// El cursor del gesto lo pone `playlist_pan_catcher`: mientras está montado
+/// pisa al de la grilla (GPUI toma el del elemento más arriba del z-order).
+///
+/// El estilo en sí no se puede observar desde un test (`Window::cursor_style`
+/// es `pub(crate)`), pero este ciclo de vida es exactamente lo que garantiza
+/// que no haya saltos: el catcher se monta en el `mousedown`, sigue montado
+/// durante todo el arrastre y se desmonta en el `mouseup`. Si el elemento se
+/// desmontara tarde, la cruz de la grilla y el cursor del catcher alternarían
+/// a midstroke.
+#[gpui_kit::gpui::test]
+fn pan_catcher_is_mounted_only_while_dragging(cx: &mut TestAppContext) {
+    let handle = open_playlist(cx);
+    let (x, y) = drag_origin(handle, cx);
+
+    let catcher = |handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.try_find("playlist_pan_catcher").is_some()
+        })
+        .unwrap()
+    };
+
+    assert!(!catcher(handle, cx), "no debería haber catcher antes de empezar");
+
+    mdown(handle, cx, x, y);
+    assert!(
+        catcher(handle, cx),
+        "el catcher debe montarse al presionar el botón central"
+    );
+
+    mmove(handle, cx, x + 60.0, y, true);
+    assert!(
+        catcher(handle, cx),
+        "el catcher debe seguir montado durante el arrastre"
+    );
+
+    mup(handle, cx, x + 60.0, y);
+    assert!(
+        !catcher(handle, cx),
+        "el catcher debe desmontarse al soltar, para que la grilla retome su cruz"
+    );
+}
+
+/// El botón central NO puede abrir un drag de mixer, cuyo catcher todavía usa
+/// `cursor_grabbing()`. Si pudiera, la manita volvería a aparecer durante la
+/// navegación y el cycle del cursor no sería limpio.
+///
+/// El knob de pan/pan del mixer sólo escucha `MouseButton::Left`
+/// (`matrix.rs`, `on_mouse_down` del knob); este test lo fija para que nadie
+/// amplíe ese handler al botón central sin darse cuenta.
+#[gpui_kit::gpui::test]
+fn middle_drag_never_mounts_the_mix_catcher(cx: &mut TestAppContext) {
+    let handle = open_playlist(cx);
+    let (x, y) = drag_origin(handle, cx);
+
+    let mix_catcher = |handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.try_find("playlist_mix_drag_catcher").is_some()
+        })
+        .unwrap()
+    };
+
+    mdown(handle, cx, x, y);
+    for i in 1..=4 {
+        mmove(handle, cx, x + i as f32 * 40.0, y - i as f32 * 30.0, true);
+        assert!(
+            !mix_catcher(handle, cx),
+            "el arrastre central no debe montar el catcher del mixer"
+        );
+    }
+    mup(handle, cx, x + 160.0, y - 120.0);
+    assert!(!mix_catcher(handle, cx), "ni al soltar");
 }

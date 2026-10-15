@@ -53,3 +53,21 @@ debug = 1             # Mantiene la velocidad del Release pero te da la línea e
 
 [patch.crates-io]
 vst3-host = { path = "vst3-host-patched" }
+
+# Parche local: agrega `CursorStyle::Hidden` para poder ocultar el puntero
+# durante gestos continuos (middle-drag de la Playlist).
+#
+# Por qué está vendorizado en vez de forked: `CursorStyle` es un enum cerrado y
+# TODO `match` exhaustivo sobre él vive en crates externos. Sólo hacen falta los
+# dos crates que compilan en Linux; los backends de macOS/Windows/web se ignoran
+# (no se compilan acá) y NO tienen el brazo `Hidden`.
+#
+# OJO AL ACTUALIZAR gpui-kit: si sube la versión de gpui-pre, hay que volver a
+# aplicar el parche sobre las fuentes nuevas. Diff del parche:
+#   gpui-pre-patched/src/platform.rs               -> nueva variante en el enum
+#   gpui-pre-linux-patched/src/linux/wayland.rs    -> brazo en to_shape()
+#   gpui-pre-linux-patched/src/linux/platform.rs   -> brazo en cursor_style_to_icon_names()
+#   .../linux/wayland/client.rs                    -> 3 puntos: set_cursor_style, Enter, restore_cursor_after_hide
+#   .../linux/x11/client.rs                        -> get_cursor_icon delega al cursor vacío
+gpui-pre = { path = "gpui-pre-patched" }
+gpui-pre-linux = { path = "gpui-pre-linux-patched" }

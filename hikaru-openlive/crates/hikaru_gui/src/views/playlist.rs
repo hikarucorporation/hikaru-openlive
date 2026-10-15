@@ -3180,8 +3180,32 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                     // correcto: sobre un borde de
                                                     // trim tiene que verse la
                                                     // flecha de redimensionado.
+                                                    //
+                                                    // Durante la navegación con
+                                                    // botón central el puntero se
+                                                    // OCULTA por completo.
+                                                    //
+                                                    // `CursorStyle::Hidden` no
+                                                    // existe upstream: lo agrega el
+                                                    // parche local de `gpui-pre`
+                                                    // (`gpui-pre-patched/`), que
+                                                    // lo implementa con
+                                                    // `wl_pointer.set_cursor(serial,
+                                                    // None, ..)` en Wayland y con
+                                                    // un cursor X11 vacío.
+                                                    //
+                                                    // La alternativa "pura" sería
+                                                    // `Platform::hide_cursor_until_mouse_moves`,
+                                                    // pero no sirve: no es
+                                                    // accesible desde la app
+                                                    // (`App::platform` es
+                                                    // `pub(crate)`) y además
+                                                    // RESTAURA el cursor en cada
+                                                    // evento `Motion`, o sea justo
+                                                    // al revés de lo que hace
+                                                    // falta mientras se arrastra.
                                                     .cursor(if playlist_panning {
-                                                        CursorStyle::ClosedHand
+                                                        CursorStyle::Hidden
                                                     } else {
                                                         CursorStyle::Crosshair
                                                     })
@@ -3483,7 +3507,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .test_support()
                 .absolute()
                 .inset_0()
-                .cursor_grabbing()
+                // Cursor de la navegación: OCULTO. Este overlay sólo existe
+                // mientras dura el gesto y tapa la grilla, así que lo que ponga
+                // acá gana al de abajo: tiene que coincidir con lo que la
+                // grilla elige cuando `playlist_panning` es true, o habría un
+                // parpadeo del puntero justo en el `mousedown`.
+                .cursor(CursorStyle::Hidden)
                 .on_mouse_move(move |event, _, cx| {
                     // Botón soltado fuera de la ventana: el `mouse_up` no
                     // llega, así que se cierra el gesto acá.
