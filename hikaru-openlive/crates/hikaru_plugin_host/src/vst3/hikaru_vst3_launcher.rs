@@ -6,7 +6,7 @@
 use crate::scratch::{NUM_CHANNELS, PlanarScratch};
 use crate::{PluginInstance, PluginParamInfo};
 use hikaru_core::AudioBuffer;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use raw_window_handle::RawWindowHandle;
 use std::path::{Path, PathBuf};
 use vst3_host::audio::AudioBuffers;
 use vst3_host::realtime::{RealtimePluginRunner, RtControl};
@@ -50,6 +50,10 @@ pub struct Vst3Instance {
     /// control; el hilo de audio no puede loguear.
     last_error: Option<String>,
     window_attached: bool,
+    /// Handle de la ventana flotante, si está abierta. `None` cuando el editor
+    /// está embebido o nunca se abrió. Al soltar el struct se cierra la
+    /// ventana (ver `Drop` de `FloatingEditor`).
+    floating: Option<crate::floating_window::FloatingEditor>,
     #[cfg(target_os = "linux")]
     _x11_conn: Option<X11Connection>,
 }
@@ -102,6 +106,8 @@ impl Vst3Instance {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
+        let _load_guard = crate::load_lock().lock().unwrap_or_else(|e| e.into_inner());
+
         let resolved_path = Self::resolve_vst3_path(path);
         let plugin = simple::load_plugin(&resolved_path)
             .map_err(|e| format!("[VST3] Fallo al cargar '{}': {}", resolved_path.display(), e))?;
@@ -137,6 +143,7 @@ impl Vst3Instance {
             started: false,
             last_error: None,
             window_attached: false,
+            floating: None,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
         })
@@ -159,20 +166,18 @@ impl Vst3Instance {
             return Err(format!("[VST3] '{}' sin editor", self.name));
         }
 
-        println!("[VST3] Creando ventana flotante para '{}'", self.name);
+        // La ventana vive en el hilo del event loop global de
+        // `floating_window`; acá sólo se pide y se espera el handle nativo.
+        // Antes esto llamaba `event_loop.run()` en línea, lo que bloqueaba el
+        // hilo de control (y con él, la DAW) hasta que el usuario cerrara la
+        // ventana.
+        let editor = crate::floating_window::FloatingEditor::open(
+            &format!("VST3: {}", self.name),
+            1024,
+            700,
+        )?;
 
-        let event_loop = winit::event_loop::EventLoop::new()
-            .map_err(|e| format!("[VST3] EventLoop: {}", e))?;
-        let window = winit::window::WindowBuilder::new()
-            .with_title(format!("VST3: {}", self.name))
-            .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 700.0))
-            .build(&event_loop)
-            .map_err(|e| format!("[VST3] WindowBuilder: {}", e))?;
-
-        let raw_handle = window
-            .window_handle()
-            .map(|h| h.as_raw())
-            .map_err(|e| format!("[VST3] window_handle: {}", e))?;
+        let raw_handle = editor.wait_native_window(std::time::Duration::from_millis(500))?;
 
         let wh = match raw_handle {
             #[cfg(target_os = "linux")]
@@ -200,22 +205,9 @@ impl Vst3Instance {
             .map_err(|e| format!("[VST3] open_editor: {}", e))?;
 
         self.window_attached = true;
+        self.floating = Some(editor);
 
-        event_loop
-            .run(move |event, elwt| {
-                if let winit::event::Event::WindowEvent {
-                    window_id: _,
-                    event: winit::event::WindowEvent::CloseRequested,
-                } = event
-                {
-                    elwt.exit();
-                }
-                if let winit::event::Event::AboutToWait = event {
-                    window.request_redraw();
-                }
-            })
-            .map_err(|e| format!("[VST3] EventLoop: {}", e))?;
-
+        println!("[VST3] GUI flotante de '{}' abierta", self.name);
         Ok(())
     }
 }
@@ -357,6 +349,8 @@ impl PluginInstance for Vst3Instance {
                 eprintln!("[VST3] close_editor() failed: {}", e);
             }
             self.window_attached = false;
+            // Soltar el handle cierra la ventana flotante.
+            self.floating = None;
             #[cfg(target_os = "linux")]
             {
                 self._x11_conn = None;
@@ -390,12 +384,21 @@ impl PluginInstance for Vst3Instance {
             .map(|(w, h)| (w as u32, h as u32))
     }
 
-    fn resize_gui(&mut self, _width: u32, _height: u32) {
-        if let Some((w, h)) = self.runner.plugin_mut().take_editor_resize_request() {
-            eprintln!(
-                "[VST3] Plugin solicita resize a {}x{} — no implementado aún",
-                w, h
-            );
+    fn resize_gui(&mut self, width: u32, height: u32) {
+        // Redimensionar la vista viva del plugin. Antes esto sólo leía la
+        // petición y logueaba "no implementado", así que un plugin con editor
+        // redimensionable (los sintetizadores grandes lo son) se quedaba con
+        // el layout inicial para siempre.
+        let (w, h) = match (i32::try_from(width), i32::try_from(height)) {
+            (Ok(w), Ok(h)) => (w, h),
+            _ => return, // desbordaría el i32 de la API de VST3
+        };
+
+        if let Err(e) = self.runner.plugin_mut().resize_editor(w, h) {
+            // No es fatal: muchos plugins no admiten resize y el editor sigue
+            // funcionando con el tamaño que pidieron. Se avisa una sola vez por
+            // error, sin ruido en cada frame.
+            eprintln!("[VST3] resize_editor({w}x{h}) rechazado por '{}': {e}", self.name);
         }
     }
 
@@ -436,6 +439,26 @@ impl PluginInstance for Vst3Instance {
     fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
         self.control
             .set_parameter(id, value.clamp(0.0, 1.0) as f64)
+    }
+
+    /// Drena lo que el editor pidió por su cuenta y lo aplica a la ventana.
+    ///
+    /// Los plugins con editor redimensionable llaman a `IPlugFrame::resizeView`
+    /// cuando cambian de layout (abrir un filtro, cambiar de preset). El host
+    /// guarda ese pedido y el hilo de la ventana lo consulta; esta es la vía
+    /// que usa el GUI para no tener que invocar `resize_gui` a mano.
+    fn poll_editor_resize(&mut self) -> Option<(u32, u32)> {
+        let (w, h) = self.runner.plugin_mut().take_editor_resize_request()?;
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        let (w, h) = (w as u32, h as u32);
+        // La ventana flotante sigue al plugin; la embebida la redimensiona el
+        // contenedor del GUI, no nosotros.
+        if let Some(editor) = &self.floating {
+            let _ = editor.resize(w, h);
+        }
+        Some((w, h))
     }
 
     fn format_param_value(&self, id: u32, normalized: f32) -> Option<String> {

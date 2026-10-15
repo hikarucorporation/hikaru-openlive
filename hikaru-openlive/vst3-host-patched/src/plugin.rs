@@ -108,6 +108,13 @@ pub(crate) trait PluginInternal: Send {
     fn take_editor_resize_request(&self) -> Option<(i32, i32)> {
         None
     }
+    /// Resize the open editor to `width` x `height` pixels.
+    ///
+    /// The host calls this when the user resizes the container window, so a
+    /// plugin that supports resizable editors can lay itself out again.
+    fn resize_editor(&self, _width: i32, _height: i32) -> Result<()> {
+        Err(Error::Other("editor resize is not supported".to_string()))
+    }
     /// Total output audio channels across the plugin's output buses. Defaults to 2.
     fn output_channel_count(&self) -> usize {
         2
@@ -502,6 +509,18 @@ impl Plugin {
         self.internal
             .as_ref()
             .and_then(|i| i.take_editor_resize_request())
+    }
+
+    /// Resize the currently open editor to `width` x `height` pixels.
+    ///
+    /// Requires an editor to be open. Returns an error if the plugin has no
+    /// editor, refuses the size, or the wrapper does not implement it (process
+    /// isolation), so callers can distinguish "cannot resize" from "resized".
+    pub fn resize_editor(&self, width: i32, height: i32) -> Result<()> {
+        self.internal
+            .as_ref()
+            .ok_or_else(|| Error::Other("Plugin not initialized".to_string()))?
+            .resize_editor(width, height)
     }
 
     /// Recover a process-isolated plugin whose helper has crashed.

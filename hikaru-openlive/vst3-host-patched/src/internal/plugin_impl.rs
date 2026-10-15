@@ -14,6 +14,7 @@ use vst3::Steinberg::Vst::Event_::EventTypes_::*;
 use vst3::Steinberg::Vst::MediaTypes_::*;
 use vst3::Steinberg::{IPlugView, IPlugViewTrait};
 use vst3::{ComPtr, ComWrapper, Interface, Steinberg::Vst::*, Steinberg::*};
+use vst3::com_scrape_types::SmartPtr;
 
 use super::{
     com_implementations::{
@@ -1136,6 +1137,56 @@ impl PluginInternal for PluginImpl {
 
     fn take_editor_resize_request(&self) -> Option<(i32, i32)> {
         self.editor_resize.lock().ok().and_then(|mut s| s.take())
+    }
+
+    /// Resize del editor abierto por el host.
+    ///
+    /// Va contra el `IPlugView` que quedó guardado cuando se abrió el editor,
+    /// no contra una vista temporal como hace `get_editor_size`: para que el
+    /// plugin reorganice su UI hay que redimensionar *la vista viva*.
+    fn resize_editor(&self, width: i32, height: i32) -> Result<()> {
+        let Some(view) = self.plugin_view.as_ref() else {
+            return Err(Error::Other(
+                "no hay editor abierto para redimensionar".to_string(),
+            ));
+        };
+
+        if width <= 0 || height <= 0 {
+            return Err(Error::Other(format!(
+                "tamaño inválido para el editor: {width}x{height}"
+            )));
+        }
+
+        unsafe {
+            // En VST3 el redimensionado de la vista se pide por
+            // `IPlugView::onSize`; `checkSizeConstraint` deja que el plugin
+            // imponga su mínimo y su razón de aspecto antes de aceptar.
+            //
+            // Los tres métodos devuelven `tresult` (un `i32` de HRESULT), no
+            // `bool`: se comparan contra `kResultOk`. Ojo con `canResize`: en
+            // el SDK devuelve `tresult` y el valor booleano real se consulta
+            // con `IPlugView::getSize`, así que sólo se usa como "el plugin
+            // répondió a la consulta".
+            let _ = view.canResize();
+
+            let mut rect = ViewRect {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            };
+            if view.checkSizeConstraint(&mut rect) != kResultOk {
+                return Err(Error::Other(
+                    "el plugin rechazó el tamaño solicitado".to_string(),
+                ));
+            }
+
+            let result = view.onSize(&mut rect);
+            if result != kResultOk {
+                return Err(Error::Other(format!("IPlugView::onSize: {result}")));
+            }
+            Ok(())
+        }
     }
 
     fn output_channel_count(&self) -> usize {

@@ -437,15 +437,22 @@ pub struct ParamProbeResult {
 fn probe_external_params(
     descriptor: &hikaru_plugin_host::PluginDescriptor,
 ) -> ParamProbeResult {
-    use hikaru_plugin_host::{PluginInstance, Vst3Instance};
-    if descriptor.format == hikaru_plugin_host::PluginFormat::CLAP {
-        return ParamProbeResult {
-            descriptor_id: descriptor.id.clone(),
-            params: Vec::new(),
-            error: None,
-        };
-    }
-    let mut instance = match Vst3Instance::load(&descriptor.path) {
+    use hikaru_plugin_host::{ClapInstance, PluginInstance, Vst3Instance};
+
+    // Ambos formatos se instancian y se leen. Antes el CLAP devolvía
+    // `Ok(vec![])` sin instanciar nada, así que el rack caía en "CLAP:
+    // parámetros no vinculados por el host" aunque el plugin los expusiera
+    // (Dragonfly tiene 18, LSP varios cientos).
+    let load_result = match descriptor.format {
+        hikaru_plugin_host::PluginFormat::VST3 => {
+            Vst3Instance::load(&descriptor.path).map(|i| Box::new(i) as Box<dyn PluginInstance>)
+        }
+        hikaru_plugin_host::PluginFormat::CLAP => {
+            ClapInstance::load(&descriptor.path).map(|i| Box::new(i) as Box<dyn PluginInstance>)
+        }
+    };
+
+    let mut instance = match load_result {
         Ok(instance) => instance,
         Err(message) => {
             return ParamProbeResult {
@@ -455,6 +462,7 @@ fn probe_external_params(
             };
         }
     };
+
     if !instance.params_supported() {
         return ParamProbeResult {
             descriptor_id: descriptor.id.clone(),
@@ -462,6 +470,7 @@ fn probe_external_params(
             error: Some("El plugin no expone parámetros.".to_string()),
         };
     }
+
     let params = instance.snapshot_params();
     ParamProbeResult {
         descriptor_id: descriptor.id.clone(),
@@ -1064,6 +1073,14 @@ impl HikaruApp {
             state.drain_param_probes();
             let param_feedback = state.plugin_settings_state.take_param_feedback();
             state.apply_param_feedback(param_feedback);
+
+            // Resizes que pidió el editor nativo por su cuenta (un synth que
+            // reorganiza su layout al abrir un filtro). El launcher VST3
+            // redimensiona su ventana flotante; el resto no tiene a quién
+            // avisarle.
+            for plugin in state.active_external_plugins.iter_mut() {
+                plugin.poll_editor_resize();
+            }
 
             state.transport.sample_count = position_clock.load(Ordering::Relaxed);
             state.playlist_state.ppqn = state.transport.ppqn();

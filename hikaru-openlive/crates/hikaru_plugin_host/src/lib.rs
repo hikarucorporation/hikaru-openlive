@@ -7,6 +7,28 @@ pub mod clap;
 pub mod platform;
 pub mod registry;
 pub mod scratch;
+pub mod floating_window;
+
+/// Serializa la instanciación de plugins en todo el proceso.
+///
+/// Hikaru carga el mismo plugin desde dos hilos a la vez: el motor de audio
+/// (cuando entra en la cadena) y el hilo de sondeo de la GUI (que crea una
+/// instancia desechable sólo para leer los parámetros de la tarjeta).
+///
+/// Vital —y varios synths comerciales— no son reentrantes durante
+/// `init`/`create_plugin`. La segunda carga solapada con la primera lanza una
+/// excepción C++ que cruza el FFI de Rust, y el runtime aborta el proceso
+/// entero con *"Rust cannot catch foreign exceptions"*. Una excepción C++ no
+/// se puede atrapar con `catch_unwind`: hace falta que nadie las deje pasar.
+///
+/// Serializar la carga completa cierra la ventana. Es un lock de proceso y no
+/// por plugin a propósito: cargar un plugin tarda decenas de milisegundos, así
+/// que la contención es despreciable y un lock por ruta agregaría bookkeeping
+/// sin ganar nada.
+pub(crate) fn load_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
 
 use hikaru_core::AudioBuffer;
 pub use raw_window_handle::RawWindowHandle;
@@ -189,6 +211,18 @@ pub trait PluginInstance: Send {
     }
 
     fn resize_gui(&mut self, _width: u32, _height: u32) {}
+
+    /// Drena un pedido de resize que el editor del plugin hizo por su cuenta.
+    ///
+    /// Un sintetizador con editor redimensionable reorganiza su layout al
+    /// abrir un filtro o cambiar de preset, y avisa al host. El hilo de la
+    /// GUI lo consulta desde `sync_frame` y agranda la ventana; si la ventana
+    /// flotante está abierta, el launcher la redimensiona él mismo.
+    ///
+    /// Devuelve el tamaño pedido, o `None` si no hubo pedido.
+    fn poll_editor_resize(&mut self) -> Option<(u32, u32)> {
+        None
+    }
 
     /// Si el formato expone parámetros legibles por el host en esta versión.
     ///

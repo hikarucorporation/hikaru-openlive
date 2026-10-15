@@ -181,6 +181,8 @@ unsafe impl Send for ClapInstance {}
 
 impl ClapInstance {
     pub fn load(path: &Path) -> Result<Self, String> {
+        let _load_guard = crate::load_lock().lock().unwrap_or_else(|e| e.into_inner());
+
         println!("[CLAP] Cargando '{}'...", path.display());
 
         let entry = unsafe { PluginEntry::load(path) }
@@ -308,6 +310,28 @@ impl ClapInstance {
         match self.plugin.activate(|_, _| ClapAudioProcessor { sample_rate }, config) {
             Ok(processor) => {
                 self.processor = Some(processor.into());
+
+                // `activate()` entrega el processor en estado `Stopped`. El
+                // primer `start_processing()` es lo que lo pone en
+                // `ProcessingStarted`, y sin él el `match` de `process()`
+                // cae en la rama `Stopped` y devuelve "process con el
+                // processor detenido" en el primer bloque. Antes esto sólo
+                // pasaba en las llamadas siguientes, porque el camino
+                // "ya activado" de arriba sí arrancaba el procesamiento.
+                let start_result = self
+                    .processor
+                    .as_mut()
+                    .expect("processor recién asignado")
+                    .start_processing();
+
+                if let Err(e) = start_result {
+                    // `ProcessingStarted` sólo puede aparecer si el plugin se
+                    // auto-arrancó en `activate()`, que es legal.
+                    if !matches!(e, PluginInstanceError::ProcessingStarted) {
+                        self.last_error = Some(format!("[CLAP] start_processing: {e:?}"));
+                        return false;
+                    }
+                }
                 true
             }
             Err(e) => {
