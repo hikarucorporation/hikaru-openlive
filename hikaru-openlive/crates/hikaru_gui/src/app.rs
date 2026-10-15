@@ -425,6 +425,16 @@ pub struct ParamProbeResult {
     pub descriptor_id: String,
     pub params: Vec<(hikaru_plugin_host::PluginParamInfo, f32)>,
     pub error: Option<String>,
+    /// Si el plugin declara editor gráfico.
+    ///
+    /// El escaneo de disco no puede saberlo: `registry::inspect_candidate`
+    /// instancia **nada** a propósito, así que deja `descriptor.has_gui` en
+    /// `false` siempre. Sin este campo el botón "Abrir editor" no se dibuja
+    /// nunca, porque `can_open_editor` mira el descriptor.
+    ///
+    /// El sondeo sí crea una instancia real, así que es el primer momento en
+    /// que la respuesta es honesta.
+    pub has_gui: bool,
 }
 
 /// Sondea los parámetros de un plugin externo en un hilo aparte (ver
@@ -459,6 +469,7 @@ fn probe_external_params(
                 descriptor_id: descriptor.id.clone(),
                 params: Vec::new(),
                 error: Some(format!("No se pudo instanciar: {message}")),
+                has_gui: false,
             };
         }
     };
@@ -468,6 +479,7 @@ fn probe_external_params(
             descriptor_id: descriptor.id.clone(),
             params: Vec::new(),
             error: Some("El plugin no expone parámetros.".to_string()),
+            has_gui: instance.has_gui(),
         };
     }
 
@@ -476,6 +488,9 @@ fn probe_external_params(
         descriptor_id: descriptor.id.clone(),
         params,
         error: None,
+        // Antes de leer los parámetros: si `snapshot_params` falla igual
+        // sabemos si hay editor que abrir.
+        has_gui: instance.has_gui(),
     }
 }
 
@@ -603,6 +618,10 @@ impl AppState {
                         .is_some_and(|ext| ext.id == result.descriptor_id)
                 });
             for slot in slots {
+                // El sondeo creó una instancia real: es el primer momento en el
+                // que sabemos si hay editor que abrir. Va antes del `match` para
+                // que quede puesto incluso si el plugin no expone parámetros.
+                slot.has_gui = Some(result.has_gui);
                 match &result.error {
                     Some(message) => {
                         slot.params_status =

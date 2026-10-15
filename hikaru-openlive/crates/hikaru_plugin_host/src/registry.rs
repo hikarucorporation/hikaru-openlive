@@ -222,12 +222,26 @@ fn collect_candidates(
     out: &mut Vec<Candidate>,
     errors: &mut Vec<PluginScanError>,
 ) {
-    walk(dir, 0, out, errors);
+    walk(dir, 0, false, out, errors);
 }
 
+/// `in_vst3_bundle` dice si estamos descendiendo **dentro** de un `*.vst3`.
+///
+/// Es lo que evita el bug que hacía que un VST3 se presentara como un CLAP
+/// roto: el `.so` de `Foo.vst3/Contents/x86_64-linux/Foo.so` no exporta
+/// `clap_entry` (exporta `GetPluginFactory`), así que indexarlo como CLAP
+/// producía exactamente esto:
+///
+/// ```text
+/// [CLAP] Fallo al cargar entry: ... undefined symbol: clap_entry
+/// ```
+///
+/// El plugin es el **directorio** del bundle, no su binario. El `.so` interno
+/// lo resuelve `Vst3Instance::load` por su cuenta (ver `resolve_vst3_path`).
 fn walk(
     dir: &Path,
     depth: usize,
+    in_vst3_bundle: bool,
     out: &mut Vec<Candidate>,
     errors: &mut Vec<PluginScanError>,
 ) {
@@ -263,9 +277,23 @@ fn walk(
         // Tope de profundidad: sin esto, un bundle VST3 mal formado o un
         // symlink a `/` nos recorería el sistema de archivos entero.
         if path.is_dir() {
-            // Bundle VST3 (`Foo.vst3`) o directorio intermedio dentro de él
-            // (`Contents/x86_64-linux`). Ambos se recorren igual.
-            //
+            // Bundle VST3 (`Foo.vst3`): el plugin ES el directorio, así que se
+            // indexa acá y con formato VST3. Antes no se indexaba nunca y sólo
+            // aparecía su `.so` interno, etiquetado como CLAP.
+            let is_vst3_bundle = file_name.ends_with(".vst3");
+            if is_vst3_bundle {
+                match bundle_binary(&path) {
+                    Some(_) => out.push(Candidate {
+                        path: path.clone(),
+                        format: PluginFormat::VST3,
+                    }),
+                    None => errors.push(PluginScanError {
+                        path: path.clone(),
+                        reason: "bundle .vst3 sin binario dentro".to_string(),
+                    }),
+                }
+            }
+
             // El corte de profundidad va sólo sobre la recursión, no sobre la
             // lectura de archivos de ese nivel. Un bundle real es
             // root/<Foo>.vst3/Contents/<arch>/<x>.so: tres descensos hasta el
@@ -273,31 +301,59 @@ fn walk(
             // corte alcanzara también a los archivos de ese nivel interno,
             // ningún bundle se indexaría nunca.
             if depth < MAX_SCAN_DEPTH {
-                walk(&path, depth + 1, out, errors);
+                walk(
+                    &path,
+                    depth + 1,
+                    in_vst3_bundle || is_vst3_bundle,
+                    out,
+                    errors,
+                );
             }
             continue;
         }
 
-        // Archivos sueltos. Un `.so` suelto en un directorio de plugins es la
-        // convención de CLAP en la práctica.
-        let ext = path.extension().map(|e| e.to_str().unwrap_or("")).unwrap_or("");
-        let format = match ext {
-            "so" | "clap" => PluginFormat::CLAP,
-            "vst3" => PluginFormat::VST3,
-            _ => continue,
-        };
-
-        // Ignoramos el bundle vacío: `Foo.vst3/` sin `Contents` no es un plugin.
-        if file_name.ends_with(".vst3") {
-            errors.push(PluginScanError {
-                path: path.clone(),
-                reason: "bundle .vst3 sin binario dentro".to_string(),
-            });
+        // Dentro de un bundle VST3, este `.so` es su binario, no un plugin
+        // suelto: ya se indexó el bundle en el nivel de arriba.
+        if in_vst3_bundle {
             continue;
         }
 
+        // Archivo suelto en un directorio de plugins. Fuera de cualquier bundle
+        // VST3, un `.so` sí es la convención de CLAP en la práctica.
+        let ext = path.extension().map(|e| e.to_str().unwrap_or("")).unwrap_or("");
+        let format = match ext {
+            "so" | "clap" => PluginFormat::CLAP,
+            _ => continue,
+        };
+
         out.push(Candidate { path, format });
     }
+}
+
+/// Busca el binario dentro de un bundle VST3: `Contents/<arquitectura>/*.so`.
+///
+/// Devolver `None` significa "bundle vacío": un directorio `Foo.vst3` sin
+/// `Contents`, o con `Contents` pero sin `.so` adentro, no es un plugin
+/// instalable.
+fn bundle_binary(bundle: &Path) -> Option<PathBuf> {
+    let arch = std::fs::read_dir(bundle.join("Contents")).ok()?;
+    for dir in arch.flatten() {
+        let dir_path = dir.path();
+        if !dir_path.is_dir() {
+            continue;
+        }
+        let inner = match std::fs::read_dir(&dir_path) {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+        for file in inner.flatten() {
+            let p = file.path();
+            if p.extension().map(|e| e == "so").unwrap_or(false) {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 /// Rutea un candidato a un [`PluginDescriptor`] o a un error.
@@ -348,6 +404,9 @@ fn inspect_candidate(candidate: Candidate) -> Result<PluginDescriptor, PluginSca
 ///
 /// Un bundle típico es `FabFilter.vst3/Contents/x86_64-linux/FabFilter Pro-Q 3.so`,
 /// así que el `.so` interno es el mejor nombre disponible sin cargar nada.
+///
+/// Sólo tiene sentido para VST3: en CLAP el plugin es el archivo suelto y su
+/// nombre ya es el del archivo.
 fn bundle_display_name(path: &Path, format: PluginFormat) -> Option<String> {
     match format {
         PluginFormat::CLAP => None,
@@ -355,29 +414,15 @@ fn bundle_display_name(path: &Path, format: PluginFormat) -> Option<String> {
             if !path.is_dir() {
                 return None;
             }
-            let contents = path.join("Contents");
-            let arch = std::fs::read_dir(&contents).ok()?;
-            for dir in arch.flatten() {
-                let dir_path = dir.path();
-                if !dir_path.is_dir() {
-                    continue;
-                }
-                let inner = std::fs::read_dir(&dir_path).ok()?;
-                for file in inner.flatten() {
-                    let p = file.path();
-                    if p.extension().map(|e| e == "so").unwrap_or(false) {
-                        if let Some(stem) = p.file_stem() {
-                            let name = stem.to_string_lossy().to_string();
-                            // Un `.so` genérico tipo "Plugin.so" no le gana al
-                            // nombre del bundle.
-                            if name != "Plugin" && !name.is_empty() {
-                                return Some(name);
-                            }
-                        }
-                    }
-                }
+            let binary = bundle_binary(path)?;
+            let stem = binary.file_stem()?.to_string_lossy().to_string();
+            // Un `.so` genérico tipo "Plugin.so" no le gana al nombre del
+            // bundle, que ya es mejor.
+            if stem.is_empty() || stem == "Plugin" {
+                None
+            } else {
+                Some(stem)
             }
-            None
         }
     }
 }

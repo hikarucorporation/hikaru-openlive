@@ -60,6 +60,16 @@ pub struct DspSlot {
     pub external_params: Vec<ExternalParamState>,
     /// En qué punto está el sondeo de parámetros (ver `AppState`).
     pub params_status: ExternalParamsStatus,
+    /// Si el plugin externo de este slot declara editor gráfico.
+    ///
+    /// Vive acá y no en `descriptor.has_gui` porque el escaneo de disco no
+    /// instancia nada (a propósito: ejecutar el `libmain` de un binario
+    /// desconocido durante un escaneo cuelga) y por lo tanto deja ese campo en
+    /// `false` siempre. El sondeo en diferido sí crea una instancia real y
+    /// deja la respuesta honesta acá.
+    ///
+    /// `None` = todavía no seINSTANCEó (o es un plugin interno).
+    pub has_gui: Option<bool>,
 }
 
 use crate::views::open_dms::OpenDms;
@@ -80,6 +90,7 @@ impl DspSlot {
             load_error: None,
             external_params: Vec::new(),
             params_status: ExternalParamsStatus::Idle,
+            has_gui: None,
         }
     }
 

@@ -14,7 +14,6 @@ use vst3::Steinberg::Vst::Event_::EventTypes_::*;
 use vst3::Steinberg::Vst::MediaTypes_::*;
 use vst3::Steinberg::{IPlugView, IPlugViewTrait};
 use vst3::{ComPtr, ComWrapper, Interface, Steinberg::Vst::*, Steinberg::*};
-use vst3::com_scrape_types::SmartPtr;
 
 use super::{
     com_implementations::{

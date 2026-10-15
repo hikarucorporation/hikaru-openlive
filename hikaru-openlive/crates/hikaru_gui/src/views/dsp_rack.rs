@@ -194,6 +194,18 @@ fn open_external_editor(
     });
 }
 
+/// Cierra la ventana nativa del editor de un plugin por nombre.
+///
+/// El cierre va por nombre y no por slot porque `PluginSettingsState` indexa
+/// las ventanas abiertas por nombre de plugin: es lo que permite que dos slots
+/// con el mismo plugin compartan una sola ventana en vez de abrir dos.
+fn close_external_editor(cx: &mut gpui_kit::App, plugin_name: &str) {
+    let st = state(cx);
+    st.update(cx, |state, _| {
+        state.plugin_settings_state.close_plugin(plugin_name);
+    });
+}
+
 /// Fija un parámetro externo desde un knob del rack.
 ///
 /// Escribe la caché del slot (lo que pintan los knobs), la marca `dirty`
@@ -1213,11 +1225,10 @@ fn render_external_card(
     // Un slot con error de carga muestra el mensaje y no ofrece abrir el
     // editor: insistir produciría el mismo fallo y, si el plugin llegó a
     // cargarse a medias, dejaría una ventana zombie.
-    let can_open_editor = descriptor.has_gui && load_error.is_none();
     // Error de GUI nativa (hilo de la ventana → `gui_errors` vía
     // `poll_updates`): el plugin cargó pero su editor no abrió. Se pinta en
     // la tarjeta en vez de cerrar el DAW o dejar una ventana vacía.
-    let (gui_error, editor_open, editor_opening, params, params_status) = {
+    let (gui_error, editor_open, editor_opening, params, params_status, slot_has_gui) = {
         let app = state(cx).read(cx);
         let slot_params = app
             .slot(track_idx, idx)
@@ -1225,6 +1236,7 @@ fn render_external_card(
                 (
                     slot.external_params.clone(),
                     slot.params_status.clone(),
+                    slot.has_gui,
                 )
             })
             .unwrap_or_default();
@@ -1234,9 +1246,17 @@ fn render_external_card(
             app.plugin_settings_state.is_plugin_opening(&descriptor.name),
             slot_params.0,
             slot_params.1,
+            slot_params.2,
         )
     };
     let blocked_by_gui_error = gui_error.is_some();
+
+    // `descriptor.has_gui` viene del escaneo de disco, que no instancia nada
+    // y por lo tanto lo deja siempre en `false`: usarlo haría que este botón
+    // no se dibujara jamás. El sondeo diferido sí crea una instancia real, así
+    // que su respuesta es la que manda. `descriptor.has_gui` queda como
+    // respaldo para el frame previo a que termine el sondeo.
+    let can_open_editor = slot_has_gui.unwrap_or(descriptor.has_gui) && load_error.is_none();
 
     // Primer frame con externo asignado: pedir el sondeo de parámetros. Corre
     // una sola vez (la petición marca `Probing` en el acto) en un hilo
@@ -1306,21 +1326,35 @@ fn render_external_card(
                     .truncate(),
             )
         })
+        // Toggle de editor nativo. Es un botón porque abrir la GUI del plugin es
+        // costoso (dlopen + creación de ventana nativa en un hilo aparte) y no
+        // tiene sentido mantenerlo cargado si el usuario no lo está mirando.
+        //
+        // `editor_open` refleja el estado real que devuelve
+        // `plugin_settings_state`, no un bool local: la ventana se puede cerrar
+        // desde el WM y el toggle tiene que enterarse.
         .when(can_open_editor && !blocked_by_gui_error, |this| {
-            let label = if editor_open {
-                "Editor abierto ✓"
+            let (label, active) = if editor_open {
+                ("■  Editor", true)
             } else if editor_opening {
-                "Abriendo…"
+                ("…  Abriendo", false)
             } else {
-                "Abrir editor"
+                ("▸  Editor", false)
             };
+            // El nombre se clona para que el closure lo tenga por valor: el
+            // toggle necesita poder cerrar por nombre, no reabrir por slot.
+            let plugin_name = descriptor.name.clone();
             this.child(
                 rack_button(format!("dsp_editor_{track_idx}_{idx}"))
                     .rounded(ButtonRounded::None)
                     .label(label)
                     .compact()
                     .on_click(move |_, window, cx| {
-                        open_external_editor(window, cx, track_idx, idx);
+                        if active {
+                            close_external_editor(cx, &plugin_name);
+                        } else {
+                            open_external_editor(window, cx, track_idx, idx);
+                        }
                     }),
             )
         })
