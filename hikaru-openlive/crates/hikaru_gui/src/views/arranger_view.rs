@@ -849,15 +849,47 @@ fn toggle_arm_target(cx: &mut App, target: StripTarget) {
     });
 }
 
+/// Índice en `tracks()` (`live_tracks` en OpenLive, `studio_tracks` en OpenStudio)
+/// al que apunta una columna del Arranger.
+///
+/// Es el único lugar donde se traduce `StripTarget` → `selected_track_index`.
+/// El `+1` de `Live` vive en `matrix::mixer_index_of_matrix_track` para que no
+/// se desincronice del que usa la Session Matrix.
+fn mixer_index_for_target(target: StripTarget) -> usize {
+    match target {
+        StripTarget::Master => 0,
+        StripTarget::Live(idx) => matrix::mixer_index_of_matrix_track(idx),
+        StripTarget::Studio(idx) => idx,
+    }
+}
+
+/// Id estable de una columna, para el harness de tests y para el hit-testing.
+fn column_id(target: StripTarget) -> String {
+    match target {
+        // La columna de SCENES comparte sitio con el strip del master.
+        StripTarget::Master => "arr_col_scenes".to_string(),
+        StripTarget::Live(idx) => format!("arr_col_live_{idx}"),
+        StripTarget::Studio(idx) => format!("arr_col_studio_{idx}"),
+    }
+}
+
+/// Clic en el fondo de una columna: selecciona la PISTA.
+///
+/// Deliberadamente NO toca `selected_slot_index` (a diferencia de
+/// [`select_device_slot`], que elige pista + slot al pulsar una fila del rack):
+/// cambiar de pista no debería arrastrar también el slot del rack.
+fn select_track_column(cx: &mut App, target: StripTarget) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        s.selected_track_index = mixer_index_for_target(target);
+        cx.notify();
+    });
+}
+
 fn select_device_slot(cx: &mut App, target: StripTarget, slot: usize) {
     let st = state(cx);
     st.update(cx, |s, cx| {
-        let vec_idx = match target {
-            StripTarget::Master => 0,
-            StripTarget::Live(idx) => idx + 1,
-            StripTarget::Studio(idx) => idx,
-        };
-        s.selected_track_index = vec_idx;
+        s.selected_track_index = mixer_index_for_target(target);
         s.selected_slot_index = slot;
         cx.notify();
     });
@@ -1466,6 +1498,7 @@ fn render_pad(
                         || crate::views::explorer::is_midi_file(&path)
                     {
                         s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                        matrix::select_matrix_track(s, track_idx);
                         let bpm = s.transport.bpm;
                         let proxy = s.audio_proxy.clone();
                         load_clip_into_slot(
@@ -1479,6 +1512,7 @@ fn render_pad(
                     }
                 } else {
                     s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                    matrix::select_matrix_track(s, track_idx);
                 }
                 cx.notify();
             });
@@ -1905,12 +1939,26 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
 // COLUMNAS
 // =========================================================================
 
-fn track_header_cell(width: f32, header: &str, name: &str, accent: Rgba) -> AnyElement {
+fn track_header_cell(
+    width: f32,
+    header: &str,
+    name: &str,
+    accent: Rgba,
+    selected: bool,
+) -> AnyElement {
     div()
         .w(px(width))
         .h(px(HEADER_HEIGHT))
         .flex_shrink_0()
-        .bg(theme::PANEL_BG)
+        .bg(if selected {
+            // Mismo azul de selección que la Session Matrix y la Playlist. El
+            // `.into()` sólo convierte de Rgba a Hsla: los colores de `theme`
+            // son Hsla y los hex de las otras vistas son Rgba, y el `if` exige
+            // que las dos ramas sean del mismo tipo.
+            rgb(0x1E2A38).into()
+        } else {
+            theme::PANEL_BG
+        })
         .border_1()
         .border_color(theme::BORDER_COLOR)
         .rounded(px(2.0))
@@ -1927,7 +1975,14 @@ fn track_header_cell(width: f32, header: &str, name: &str, accent: Rgba) -> AnyE
         .child(
             Label::new(name.to_string())
                 .text_size(px(9.0))
-                .text_color(theme::TEXT_MUTED),
+                // El nombre se enciende cuando la pista está seleccionada: el
+                // marco de la columna es la señal primaria, ésta la refuerza
+                // para que no dependa de ver un píxel de borde.
+                .text_color(if selected {
+                    theme::TEXT_PRIMARY
+                } else {
+                    theme::TEXT_MUTED
+                }),
         )
         .into_any_element()
 }
@@ -1963,16 +2018,46 @@ fn scene_launcher_cell(scene_idx: usize, name: &str) -> AnyElement {
 }
 
 /// Columna unificada: cabecera + contenido superior + channel strip.
-fn track_column(width: f32, header: AnyElement, top: AnyElement, strip: AnyElement) -> AnyElement {
+///
+/// `target` + `selected` son lo que convierte la columna en "seleccionable": el
+/// fondo y el marco son el indicador, y el `.on_mouse_down` elige la pista.
+/// Antes no había ninguno de los dos, así que clicar una columna del Arranger
+/// no escribía nada (lo único que seleccionaba era una fila de 14px del rack de
+/// devices, imposible de acertar) y no había forma de ver qué pista estaba
+/// activa.
+///
+/// Los hijos con hitbox propia (faders, pads, botones S/M/R, filas de device)
+/// resuelven el clic antes que este padre, así que siguen haciendo lo suyo.
+fn track_column(
+    width: f32,
+    header: AnyElement,
+    top: AnyElement,
+    strip: AnyElement,
+    target: StripTarget,
+    selected: bool,
+) -> AnyElement {
     v_flex()
+        .id(SharedString::from(column_id(target)))
+        .test_support()
         .w(px(width))
         .flex_shrink_0()
-        .bg(theme::PANEL_BG)
+        .bg(if selected {
+            rgb(0x1E2A38).into()
+        } else {
+            theme::PANEL_BG
+        })
         .border_1()
-        .border_color(theme::BORDER_COLOR)
+        .border_color(if selected {
+            rgb(0x5AB4FF).into()
+        } else {
+            theme::BORDER_COLOR
+        })
         .rounded(px(4.0))
         .p(px(3.0))
         .gap(px(2.0))
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            select_track_column(cx, target)
+        })
         .child(header)
         .child(top)
         .child(strip)
@@ -2313,9 +2398,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 "SCENES",
                 "Master Launch",
                 rgb(0x5AB4FF),
+                master_snap.is_selected_track,
             ),
             v_flex().w_full().gap(px(PAD_GAP)).children(scene_cells).into_any_element(),
             channel_strip(&master_snap, "arr_master"),
+            StripTarget::Master,
+            master_snap.is_selected_track,
         ));
         // Una columna por pista: launchers arriba + mismo strip abajo.
         let tracks_len = track_names.len();
@@ -2367,9 +2455,17 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             let _ = tracks_len;
             cols.push(track_column(
                 TRACK_WIDTH,
-                track_header_cell(TRACK_WIDTH, &format!("TRK {:02}", idx + 1), name, rgb(0xE0E0E0)),
+                track_header_cell(
+                    TRACK_WIDTH,
+                    &format!("TRK {:02}", idx + 1),
+                    name,
+                    rgb(0xE0E0E0),
+                    snap.is_selected_track,
+                ),
                 v_flex().w_full().gap(px(PAD_GAP)).children(pads).into_any_element(),
                 channel_strip(&snap, &format!("arr_track_{}", idx)),
+                StripTarget::Live(idx),
+                snap.is_selected_track,
             ));
         }
         cols
@@ -2393,12 +2489,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     } else {
                         rgb(0xE0E0E0)
                     },
+                    snap.is_selected_track,
                 );
                 track_column(
                     TRACK_WIDTH,
                     header,
                     waveform_container(&wave),
                     channel_strip(snap, &format!("arr_studio_{}", idx)),
+                    snap.target,
+                    snap.is_selected_track,
                 )
             })
             .collect()

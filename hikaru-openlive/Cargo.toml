@@ -17,11 +17,13 @@ members = [
     "crates/hikaru_project_file",
     "crates/hikaru_openlive_file",
     "crates/hikaru_openstudio_file",
-    # Host VST3 parcheado (vendored). Es miembro del workspace, no un path dep
-    # suelto: sus tests cubren el puente de buffers de audio, que es donde viven
-    # los bugs de truncamiento de bloque.
-    "vst3-host-patched",
 ]
+# `vst3-host-patched` NO es miembro a propósito: es un path dependency, y
+# promoverlo a miembro hace que cargo resuelva sus dev-dependencies (`eframe`
+# 0.31, `rfd`, `env_logger`), que arrastran un egui+wgpu duplicado del que ya
+# usa gpui-pre. Sus tests de audio viven entonces en
+# `crates/hikaru_plugin_host/tests/`, que sí es miembro y puede alcanzar la API
+# pública del host.
 
 [workspace.package]
 # Versión del producto. Es la ÚNICA fuente de verdad: la cabecera de
