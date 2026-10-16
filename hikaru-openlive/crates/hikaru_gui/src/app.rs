@@ -519,6 +519,30 @@ impl AppState {
         self.selected_track_index.min(self.tracks().len().saturating_sub(1))
     }
 
+    /// Índice de la pista seleccionada en el **motor de audio**.
+    ///
+    /// Hay dos espacios de índices distintos y confundirlos rompe el audio:
+    ///
+    /// - El mixer (`tracks()`, y por lo tanto `selected_track_index`) mete un
+    ///   MASTER en la posición 0. La pista visible N vive en `tracks()[N + 1]`.
+    /// - El motor no tiene noción de master: sus 16 pistas son 0..=15 y la
+    ///   primera es una pista normal. El clip de la pista visible N se mezcla
+    ///   en `track_output_bufs[N]`.
+    ///
+    /// Todo comando con `track_idx` que cruce al motor tiene que pasar por acá.
+    /// El que no lo hacía era el rack de DSP: mandaba `selected_track_index`
+    /// crudo, así que un plugin asignado a la pista visible N se insertaba en
+    /// `track_effects[N + 1]` mientras el clip de esa pista se mezclaba en
+    /// `track_output_bufs[N]`. La cadena de efectos quedaba una pista más
+    /// abajo, recibiendo siempre un buffer mudo: el plugin se cargaba, corría y
+    /// sonaba el audio seco, indistinguible de un track muteado.
+    ///
+    /// Devuelve `None` para el master, que no tiene pista equivalente en el
+    /// motor: una cadena de insert no tiene dónde insertarse.
+    pub fn engine_track_index(&self) -> Option<usize> {
+        self.safe_track_index().checked_sub(1)
+    }
+
     /// El slot de DSP que está seleccionado, si existe.
     ///
     /// Es el acceso canónico al slot desde cualquier vista: todas pasan por acá

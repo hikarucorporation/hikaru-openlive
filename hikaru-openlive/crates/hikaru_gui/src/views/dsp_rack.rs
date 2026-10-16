@@ -136,6 +136,13 @@ fn assign_external_plugin(
 ) {
     let st = state(cx);
     let audio_proxy = st.read(cx).audio_proxy.clone();
+    // El motor indexa sus pistas 0..=15 SIN master, mientras que `track_idx`
+    // viene del mixer, que mete el MASTER en 0. Sin esta conversión la cadena
+    // se inserta una pista más abajo de la que mezcla el clip, y el plugin
+    // procesa siempre un buffer mudo. Se resuelve acá, antes del `defer`, para
+    // capturar la pista que estaba seleccionada al hacer clic (y no la que
+    // quede seleccionada cuando corra el deferred).
+    let engine_idx = st.read(cx).engine_track_index();
     cx.defer(move |cx| {
         st.update(cx, |state, cx| {
             if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
@@ -152,12 +159,23 @@ fn assign_external_plugin(
             state.request_external_params(&descriptor);
             state.selected_slot_index = slot_idx;
             state.add_slot_menu_open = false;
+            // El master no tiene pista equivalente en el motor: una cadena de
+            // insert no tiene dónde insertarse, así que se dice en el slot en
+            // vez de mandar un comando que el motor no puede satisfacer.
+            if engine_idx.is_none() {
+                if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+                    slot.load_error = Some("El master no tiene cadena de efectos".to_string());
+                }
+            }
             cx.notify();
         });
         // Cargar el plugin en el motor de audio (hilo de control del engine).
         // El `dlopen` + init corre en el engine, nunca en el hilo de la GUI.
+        let Some(engine_idx) = engine_idx else {
+            return;
+        };
         audio_proxy.send(crate::audio_proxy::GuiCommand::LoadExternalPlugin {
-            track_idx,
+            track_idx: engine_idx,
             slot_idx,
             descriptor,
         });
@@ -221,6 +239,10 @@ fn commit_external_param(
 ) {
     let st = state(cx);
     let audio_proxy = st.read(cx).audio_proxy.clone();
+    // Misma conversión que al cargar el plugin: índice de mixer → índice de
+    // motor. Sin esto el knob mueve el parámetro de OTRA pista (la de arriba), y
+    // el efecto que el usuario está girando no suena.
+    let engine_idx = st.read(cx).engine_track_index();
     st.update(cx, |state, cx| {
         let live: Option<(String, f32)> =
             if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
@@ -248,8 +270,11 @@ fn commit_external_param(
         cx.notify();
     });
     // Enviar el cambio al motor de audio (lock-free hacia el hilo de audio).
+    let Some(engine_idx) = engine_idx else {
+        return;
+    };
     audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
-        track_idx,
+        track_idx: engine_idx,
         slot_idx,
         param_id: id,
         value,
