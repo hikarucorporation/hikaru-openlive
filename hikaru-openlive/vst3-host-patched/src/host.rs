@@ -223,6 +223,15 @@ impl Vst3Host {
             internal: Some(Box::new(plugin_impl)),
         };
 
+        // `PluginImpl::load` has no audio configuration to work from, so it comes up on
+        // its built-in defaults (44100 Hz / 512 frames). The host's configuration is the
+        // authoritative one and has to be pushed down before the first block: a plugin
+        // driven at a rate it never negotiated renders at the wrong pitch, with the wrong
+        // filter coefficients and delay times, and silently drops any block longer than
+        // the 512 frames it was set up for.
+        let mut plugin = plugin;
+        plugin.set_audio_config(self.config.sample_rate, self.config.block_size)?;
+
         // Note: We can't track plugins in a Vec since they're not cloneable
         // This would require a different design (e.g., using handles/IDs)
 

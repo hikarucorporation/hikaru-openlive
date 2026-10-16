@@ -17,6 +17,10 @@ members = [
     "crates/hikaru_project_file",
     "crates/hikaru_openlive_file",
     "crates/hikaru_openstudio_file",
+    # Host VST3 parcheado (vendored). Es miembro del workspace, no un path dep
+    # suelto: sus tests cubren el puente de buffers de audio, que es donde viven
+    # los bugs de truncamiento de bloque.
+    "vst3-host-patched",
 ]
 
 [workspace.package]

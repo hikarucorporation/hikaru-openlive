@@ -7,10 +7,11 @@ use crate::scratch::{NUM_CHANNELS, PlanarScratch};
 use crate::{PluginInstance, PluginParamInfo};
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, HostGuiImpl, PluginGui, Window};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
-use clack_extensions::params::{HostParams, ParamInfo, PluginParams};
+use clack_extensions::params::PluginParams;
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
-use clack_host::events::io::{InputEvents, OutputEvents};
+use clack_host::events::event_types::ParamValueEvent;
+use clack_host::events::io::{EventBuffer, OutputEvents};
 use clack_host::prelude::*;
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
@@ -172,9 +173,65 @@ pub struct ClapInstance {
     gui: Option<PluginGui>,
     /// Extensión de parámetros CLAP. `None` si el plugin no la expone.
     params: Option<PluginParams>,
+    /// Cambios de parámetro que llegan del hilo de control y se entregan al
+    /// plugin como eventos en el próximo bloque de audio.
+    ///
+    /// CLAP no tiene una vía para cambiar un parámetro mientras el plugin
+    /// está sonando: `params.flush` exige el handle de hilo principal
+    /// *inactivo*, y un plugin que ya está sonando no lo tiene. La única vía
+    /// legítima es meter un `ParamValueEvent` en la cola de entrada que se le
+    /// pasa a `process()`. `set_param_normalized` publica acá y `process`
+    /// drena; el anillo no bloquea, así que el hilo de audio no se frena
+    /// esperando a que la GUI mueva un knob.
+    param_queue: ParamQueue,
+    /// `EventBuffer` reusado para construir la cola de entrada de cada bloque.
+    /// Vive en el hilo de audio y no se aloca por bloque.
+    event_buffer: EventBuffer,
     window_attached: bool,
     #[cfg(target_os = "linux")]
     _x11_conn: Option<X11Connection>,
+}
+
+/// Capacidad del anillo de cambios de parámetro.
+///
+/// Un knob genera un cambio por evento de puntero; 1024 holgadamente cubre
+/// un barrido de automation entre dos bloques. Si se llena, el cambio se
+/// descarta y `set_param_normalized` devuelve `false` en vez de bloquear al
+/// hilo de GUI.
+const PARAM_QUEUE_CAPACITY: usize = 1024;
+
+/// Anillo SPSC para cambios de parámetro hacia el hilo de audio.
+///
+/// Productor: hilo de control (`set_param_normalized`).
+/// Consumidor: hilo de audio (`process`).
+pub struct ParamQueue {
+    tx: rtrb::Producer<PendingParam>,
+    rx: rtrb::Consumer<PendingParam>,
+}
+
+/// Un cambio de parámetro pendiente, en el formato que el host lo maneja:
+/// id crudo y valor normalizado 0..=1.
+#[derive(Clone, Copy)]
+struct PendingParam {
+    id: u32,
+    value: f32,
+}
+
+impl ParamQueue {
+    fn new(capacity: usize) -> Self {
+        let (tx, rx) = rtrb::RingBuffer::new(capacity.max(1));
+        Self { tx, rx }
+    }
+
+    /// Publica un cambio. `false` si la cola está llena (se lo descarta, no bloquea).
+    fn push(&mut self, param: PendingParam) -> bool {
+        self.tx.push(param).is_ok()
+    }
+
+    /// Vacía la cola en el lado del audio. El iterator no aloca.
+    fn drain(&mut self) -> impl Iterator<Item = PendingParam> + '_ {
+        std::iter::from_fn(move || self.rx.pop().ok())
+    }
 }
 
 unsafe impl Send for ClapInstance {}
@@ -263,6 +320,8 @@ impl ClapInstance {
             last_error: None,
             gui,
             params,
+            param_queue: ParamQueue::new(PARAM_QUEUE_CAPACITY),
+            event_buffer: EventBuffer::with_capacity(PARAM_QUEUE_CAPACITY),
             window_attached: false,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
@@ -374,6 +433,8 @@ impl PluginInstance for ClapInstance {
             let Self {
                 scratch,
                 processor,
+                param_queue,
+                event_buffer,
                 ..
             } = self;
 
@@ -414,11 +475,27 @@ impl PluginInstance for ClapInstance {
                 ]),
             }]);
 
-            // Sin eventos todavía: el MIDI entra más adelante, cuando se
-            // conecte el secuenciador. `void()` descarta lo que el plugin
-            // produzca, en vez de obligar al host a reservar un buffer de
-            // eventos que hoy no va a usar nadie.
-            let input_events = InputEvents::empty();
+            // Eventos de entrada: los cambios de parámetro que publicó el hilo
+            // de control, más lo que se enchufe más adelante (el MIDI del
+            // secuenciador todavía no entra). El `EventBuffer` es reutilizado y
+            // tiene capacidad de sobra, así que armarlo no aloca por bloque.
+            event_buffer.clear();
+            for pending in param_queue.drain() {
+                let Some(clap_id) = ClapId::from_raw(pending.id) else {
+                    continue;
+                };
+                let event = ParamValueEvent::new(
+                    0, // time
+                    clap_id,
+                    Pckn::match_all(),
+                    pending.value as f64,
+                );
+                event_buffer.push(&event);
+            }
+            let input_events = event_buffer.as_input();
+
+            // `void()` descarta lo que el plugin produzca, en vez de obligar al
+            // host a reservar un buffer de eventos que hoy no va a usar nadie.
             let mut output_events = OutputEvents::void();
 
             match processor.as_mut() {
@@ -652,41 +729,51 @@ impl PluginInstance for ClapInstance {
         Some(value.clamp(0.0, 1.0) as f32)
     }
 
+    /// Publica un cambio de parámetro para el próximo bloque de audio.
+    ///
+    /// Dos caminos, según el estado del plugin:
+    ///
+    /// - **Inactivo** (aún no sonó): `params.flush` con el handle de hilo
+    ///   principal es la vía directa y el valor aplica al instante.
+    /// - **Activo** (sonando): CLAP no permite tocar la extensión de
+    ///   parámetros desde el hilo principal mientras el plugin corre; el
+    ///   handle inactivo no existe. El evento se encola y `process` lo
+    ///   entrega como `ParamValueEvent` en la cola de entrada del bloque.
+    ///
+    /// Antes este camino devolvía `true` sin hacer nada — el caller creía
+    /// que el knob se había movido y el DSP nunca se enteraba.
     fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
-        if let Some(params) = self.params.as_ref() {
-            let clap_id = clack_host::prelude::ClapId::from_raw(id).unwrap();
-            
-            // En CLAP 0.2, ParamValueEvent::new toma: time, param_id, pckn, value
-            let event = clack_host::events::event_types::ParamValueEvent::new(
-                0, // time
-                clap_id,
-                clack_host::prelude::Pckn::match_all(), 
-                value as f64,
-            );
-
-            let mut buffer = clack_host::events::io::EventBuffer::new();
-            buffer.push(&event);
-
-            // En CLAP 0.2, flush requiere un InactivePluginMainThreadHandle.
-            // Si el plugin está activo (procesando audio), no podemos flushear
-            // directamente desde el hilo de UI. En ese caso, el cambio se marca
-            // como dirty y el motor lo aplica en el próximo ciclo de audio.
-            if let Some(mut inactive_handle) = self.plugin.inactive_plugin_handle() {
-                let mut output_buffer = clack_host::events::io::EventBuffer::new();
-                let mut output_events = clack_host::events::io::OutputEvents::from_buffer(&mut output_buffer);
-                params.flush(
-                    &mut inactive_handle,
-                    &buffer.as_input(),
-                    &mut output_events,
-                );
-                return true;
-            } else {
-                // El plugin está activo. Los cambios de la GUI se aplican
-                // a través del hilo de audio en el motor.
-                return true;
-            }
+        if self.params.is_none() {
+            return false;
         }
-        false
+        let pending = PendingParam {
+            id,
+            value: value.clamp(0.0, 1.0),
+        };
+
+        // Camino directo para un plugin que todavía no está sonando.
+        if let Some(mut inactive_handle) = self.plugin.inactive_plugin_handle() {
+            let Some(clap_id) = ClapId::from_raw(id) else {
+                return false;
+            };
+            let event = ParamValueEvent::new(0, clap_id, Pckn::match_all(), pending.value as f64);
+            let mut buffer = EventBuffer::with_capacity(1);
+            buffer.push(&event);
+            let mut output_buffer = EventBuffer::with_capacity(1);
+            let mut output_events = OutputEvents::from_buffer(&mut output_buffer);
+            let Some(params) = self.params.as_mut() else {
+                return false;
+            };
+            params.flush(
+                &mut inactive_handle,
+                &buffer.as_input(),
+                &mut output_events,
+            );
+            return true;
+        }
+
+        // Plugin sonando: que lo aplique el hilo de audio.
+        self.param_queue.push(pending)
     }
 
     fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {

@@ -874,7 +874,10 @@ use gpui_kit::*;
 use crate::app::{state, AppState, HikaruApp};
 
 fn slot_colors(slot_state: &SlotState, has_clip: bool, is_selected: bool) -> (Hsla, Hsla) {
-    if is_selected {
+    // Con el pad en reproducción el fondo NO se re-tiñe de azul: el verde es el
+    // único indicio de "sonando" que sobrevive, y la selección ya se marca con
+    // el marco (ver el orden de los `.when()` en `render_pad`).
+    if is_selected && !matches!(slot_state, SlotState::Playing) {
         // Focus/selección: resaltado azul profesional.
         return (rgb(0x2D3A4A).into(), rgb(0x5AB4FF).into());
     }
@@ -962,13 +965,19 @@ fn render_pad(
         .cursor_pointer()
         // Hover: borde azul sutilmente encendido + leve variación de fondo.
         .hover(move |this| this.border_color(hover_border).bg(rgb(0x2E3A4A)))
-        .when(is_selected, |d| d.border_2().border_color(rgb(0x5AB4FF)))
-        .when(drop_sample_ready && is_empty, |d| {
-            d.border_color(rgb(0x0096BE)).border_2()
-        })
+        // Orden de prioridad del marco: transporte → drop → selección.
+        // `is_selected` va POR ÚLTIMO a propósito: el clic en un pad dispara el
+        // clip en el mismo gesto (`trigger_pad`), así que en el frame siguiente
+        // el pad ya está `Playing` y el verde tapaba el azul de selección. Con
+        // este orden el pad seleccionado queda azul pase lo que pase, y el
+        // estado "sonando" sigue visible por el fondo y por el glyph del botón.
         .when(is_playing, |d| {
             d.border_2().border_color(rgb(0x4CFF8A))
         })
+        .when(drop_sample_ready && is_empty, |d| {
+            d.border_color(rgb(0x0096BE)).border_2()
+        })
+        .when(is_selected, |d| d.border_2().border_color(rgb(0x5AB4FF)))
         // Capas 2 y 3 (contenedor oscuro + picos) en un solo canvas absoluto:
         // el contenedor se pinta primero como lienzo de la waveform y los picos
         // encima, ambos por debajo del playhead (capa 4) y de la cabecera con
@@ -1056,6 +1065,7 @@ fn render_pad(
                 // para apagar el resaltado y el fantasma flotante.
                 s.dragged_sample = None;
                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                select_matrix_track(s, track_idx);
                 let bpm = s.transport.bpm;
                 let proxy = s.audio_proxy.clone();
                 load_clip_into_slot(
@@ -1079,6 +1089,7 @@ fn render_pad(
                         || crate::views::explorer::is_midi_file(&path)
                     {
                         s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                        select_matrix_track(s, track_idx);
                         let bpm = s.transport.bpm;
                         let proxy = s.audio_proxy.clone();
                         load_clip_into_slot(
@@ -1097,6 +1108,7 @@ fn render_pad(
                     }
                 }
                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                select_matrix_track(s, track_idx);
                 // El Clip Editor sigue a la selección de la matriz: seleccionar
                 // un pad lo carga acá (es el binding bidireccional pedido).
                 crate::views::clip_editor::select_target(
@@ -1227,6 +1239,7 @@ fn render_pad(
                             let st = state(cx);
                             st.update(cx, |s, cx| {
                                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
+                                select_matrix_track(s, track_idx);
                                 crate::views::clip_editor::select_target(
                                     s,
                                     Some(crate::views::clip_editor::ClipEditorTarget::Matrix {
@@ -1483,6 +1496,32 @@ const MIX_SLIDER_PAD_Y: f32 = 2.0;
 /// 0.0dB en la curva de `db_text` (lineal 0..=1 con el 0.75 como 0 dB).
 /// Valor del doble-clic en los sliders de volumen (matriz y playlist).
 pub const VOLUME_RESET: f32 = 0.75;
+
+/// Índice del mixer que corresponde a una pista de la Session Matrix.
+///
+/// `live_tracks[0]` es MASTER y no tiene contraparte en la matriz
+/// (`sync_matrix_to_mixer` en `app.rs` lo inserta y luego espeja
+/// `matrix_state.tracks[i]` ↔ `live_tracks[i + 1]`), así que la pista `i` de la
+/// matriz vive un índice más abajo en el mixer.
+///
+/// La Session Matrix sólo se renderiza en modo OpenLive (`app.rs:1531`), que es
+/// exactamente el `tracks()` que devuelve `live_tracks`. El mismo `+1` está
+/// escrito a mano en `arranger_view::select_device_slot`; si se cambia uno hay
+/// que cambiar el otro.
+pub fn mixer_index_of_matrix_track(matrix_idx: usize) -> usize {
+    matrix_idx + 1
+}
+
+/// Deja la selección GLOBAL apuntando a una pista de la Session Matrix.
+///
+/// Todo clic que elige un pad tiene que mover también
+/// `AppState::selected_track_index`, no sólo `matrix_state.selected_slot`: el
+/// rack de DSP, el piano roll y el mixer leen el primero. Antes los clics de la
+/// matriz escribían sólo el segundo, así que operar el rack después de elegir
+/// un pad afectaba a otra pista sin ningún aviso en pantalla.
+pub fn select_matrix_track(s: &mut AppState, track_idx: usize) {
+    s.selected_track_index = mixer_index_of_matrix_track(track_idx);
+}
 
 /// Destino del drag de mezcla en curso en los headers.
 ///
@@ -1991,15 +2030,40 @@ fn track_header(
     volume: f32,
     pan: f32,
     mix_drag: Option<MatrixMixTarget>,
+    selected_row: bool,
 ) -> AnyElement {
     v_flex()
+        .id(SharedString::from(format!("matrix_track_hdr_{track_idx}")))
+        .test_support()
         .w(px(HEADER_WIDTH))
-        .bg(rgb(0x1C1C20))
+        .bg(if selected_row {
+            rgb(0x1E2A38)
+        } else {
+            rgb(0x1C1C20)
+        })
         .border_1()
-        .border_color(rgb(0x2D2D37))
+        // El borde es el indicador de "pista seleccionada", igual que en el
+        // header de la Playlist (`playlist_track_header_with_selected`).
+        .border_color(if selected_row {
+            rgb(0x5AB4FF)
+        } else {
+            rgb(0x2D2D37)
+        })
         .rounded(px(4.0))
         .p(px(1.0))
         .gap(px(1.0))
+        // Clic en el fondo del header selecciona la pista. Sin esto el clic en
+        // la Session Matrix no escribía NADA: la pista quedaba del color de las
+        // demás y el rack/piano roll seguían apuntando a la anterior. Los hijos
+        // con handler propio (M, S, knob, fader) conservan su hit-testing
+        // porque GPUi resuelve el elemento más profundo bajo el cursor.
+        .on_click(move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                state.selected_track_index = mixer_index_of_matrix_track(track_idx);
+                cx.notify();
+            });
+        })
         .child(
             h_flex()
                 .items_center()
@@ -2126,6 +2190,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         })
         .collect();
     let selected = app.matrix_state.selected_slot;
+    // La selección de PISTA vive en `AppState::selected_track_index` (índice de
+    // mixer, con el +1 del MASTER), que es lo que leen el rack de DSP, el piano
+    // roll y el mixer. Leerlo acá es lo que hace que el header pueda encenderse
+    // con la MISMA pista que está seleccionada en la Playlist.
+    let selected_track = app.selected_track_index;
     // Gesto de mezcla en curso (para cursores y el overlay de captura).
     let mix_drag = app.matrix_mix_drag;
     let clipboard_ready = app.matrix_clipboard.has_content();
@@ -2177,6 +2246,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     track_volume,
                     track_pan,
                     mix_drag,
+                    selected_track == mixer_index_of_matrix_track(track_idx),
                 ))
                 .children(scene_cells)
                 .into_any_element(),

@@ -172,3 +172,72 @@ fn grabbing_pan_knob_does_not_jump(cx: &mut TestAppContext) {
         "el mouse_up debería haber cerrado el gesto de mezcla"
     );
 }
+
+fn selected_track_index(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext) -> usize {
+    cx.update_window(handle.into(), |view, _, cx| {
+        let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
+        app.read(cx).state.read(cx).selected_track_index
+    })
+    .unwrap()
+}
+
+fn click_header(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext, idx: usize) {
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        // Punto en la banda izquierda del header: fuera del knob, del fader y
+        // de los botones M/S, que tienen hitbox propia y se comen el clic.
+        window.click_at(
+            &format!("matrix_track_hdr_{idx}"),
+            point(px(150.0), px(6.0)),
+            cx,
+        );
+    })
+    .unwrap();
+}
+
+/// Clic en el fondo del header de pista selecciona esa pista.
+///
+/// Antes el header de la Session Matrix no tenía handler de clic ni rama de
+/// selección en el render: el clic no escribía nada y el marco quedaba siempre
+/// en `rgb(0x2D2D37)`. El `+1` es por MASTER (`live_tracks[0]`), que no tiene
+/// contraparte en la matriz.
+#[gpui_kit::gpui::test]
+fn clicking_track_header_selects_the_track(cx: &mut TestAppContext) {
+    let handle = open_matrix(cx);
+    // Arranca en la pista 0 de la matriz (índice de mixer 1).
+    assert_eq!(selected_track_index(handle, cx), 1);
+
+    click_header(handle, cx, 3);
+    assert_eq!(
+        selected_track_index(handle, cx),
+        4,
+        "clicar el header de la pista 3 de la matriz debería seleccionar el índice 4 del mixer"
+    );
+
+    click_header(handle, cx, 1);
+    assert_eq!(selected_track_index(handle, cx), 2);
+}
+
+/// Seleccionar por el header no debe alterar la mezcla de esa pista.
+///
+/// El `.on_click` del header comparte el elemento con el knob de pan y el
+/// fader de volumen; si el hit-testing se resolviera mal, el clic "seleccionar"
+/// movería el volumen o el pan.
+#[gpui_kit::gpui::test]
+fn track_header_click_leaves_mix_untouched(cx: &mut TestAppContext) {
+    let handle = open_matrix(cx);
+    let (vol_before, pan_before, mute_before) = track_mix(handle, cx);
+
+    click_header(handle, cx, 2);
+
+    let (vol_after, pan_after, mute_after) = track_mix(handle, cx);
+    assert!(
+        (vol_after - vol_before).abs() < f32::EPSILON
+            && (pan_after - pan_before).abs() < f32::EPSILON
+            && mute_after == mute_before,
+        "seleccionar el header no debería tocar la mezcla \
+         (vol {vol_before}->{vol_after}, pan {pan_before}->{pan_after}, mute {mute_before}->{mute_after})"
+    );
+    // Y sí seleccionó.
+    assert_eq!(selected_track_index(handle, cx), 3);
+}

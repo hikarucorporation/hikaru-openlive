@@ -764,14 +764,19 @@ impl PluginInternal for PluginImpl {
                 // (BufferSize::Default gives variable sizes), so process exactly the
                 // number of frames the caller provided, clamped to our preallocated
                 // buffers. VST3 allows numSamples to vary up to the setup maximum.
-                let frames = buffers
-                    .outputs
-                    .iter()
-                    .chain(buffers.inputs.iter())
-                    .map(|c| c.len())
-                    .next()
-                    .unwrap_or(self.block_size)
-                    .min(self.block_size);
+                //
+                // `AudioBuffers::block_size` is what the caller actually wants — NOT
+                // the length of the channel vectors, which a host is free to make
+                // longer than the block (Hikaru's `PlanarScratch` passes its
+                // full-capacity channels every block). Reading the vector length here
+                // and min-ing against `self.block_size` silently truncated every
+                // block down to the smaller of the two, so the frames past that point
+                // were never sent to the plugin and were copied back as untouched
+                // zeros: half of every block reached the output as digital silence.
+                let frames = crate::audio::resolve_block_frames(buffers, self.block_size);
+                if frames == 0 {
+                    return Ok(());
+                }
                 data.process_data.numSamples = frames as i32;
 
                 // Feed queued parameter changes into the processor's input queue, clamping
@@ -782,11 +787,16 @@ impl PluginInternal for PluginImpl {
                 }
 
                 // Copy input audio to plugin buffers (length-clamped — never assume the
-                // caller's block equals the configured block size).
+                // caller's block equals the configured block size). The tail beyond
+                // `frames` is zeroed rather than left holding the previous block: the
+                // plugin may still read up to `block_size` samples, and stale audio
+                // there would click at every block boundary.
                 for (ch_idx, channel) in buffers.inputs.iter().enumerate() {
                     if ch_idx < data.input_buffers.len() {
-                        let n = channel.len().min(data.input_buffers[ch_idx].len());
-                        data.input_buffers[ch_idx][..n].copy_from_slice(&channel[..n]);
+                        let buf = &mut data.input_buffers[ch_idx];
+                        let n = channel.len().min(buf.len()).min(frames);
+                        buf[..n].copy_from_slice(&channel[..n]);
+                        buf[n..].fill(0.0);
                     }
                 }
 
@@ -828,7 +838,7 @@ impl PluginInternal for PluginImpl {
                 // Copy output to provided buffers (length-clamped to the actual frames).
                 for (ch_idx, channel) in buffers.outputs.iter_mut().enumerate() {
                     if ch_idx < data.output_buffers.len() {
-                        let n = channel.len().min(data.output_buffers[ch_idx].len());
+                        let n = channel.len().min(data.output_buffers[ch_idx].len()).min(frames);
                         channel[..n].copy_from_slice(&data.output_buffers[ch_idx][..n]);
                     }
                 }
@@ -838,6 +848,39 @@ impl PluginInternal for PluginImpl {
         } else {
             Err(Error::Other("Process data not initialized".to_string()))
         }
+    }
+
+    fn set_audio_config(&mut self, sample_rate: f64, block_size: usize) -> Result<()> {
+        if sample_rate <= 0.0 {
+            return Err(Error::InvalidParameter(format!(
+                "Sample rate must be positive, got {sample_rate}"
+            )));
+        }
+        if block_size == 0 {
+            return Err(Error::InvalidParameter(
+                "Block size must be at least 1 sample".to_string(),
+            ));
+        }
+
+        // A VST3 processor is configured once, at `setupProcessing`. Nothing short of
+        // calling it again makes a new rate or a larger maximum block take effect, so
+        // there is no partial update here: both go in together.
+        if (sample_rate - self.sample_rate).abs() < f64::EPSILON && block_size == self.block_size {
+            return Ok(());
+        }
+
+        self.sample_rate = sample_rate;
+        self.block_size = block_size;
+
+        // The host buffers are sized from `block_size`, and `setupProcessing` rebuilds
+        // them from the new value, so a smaller block must not leave stale allocation
+        // around for `process` to overrun.
+        self.process_data = None;
+
+        if self.is_processing {
+            self.setup_processing()?;
+        }
+        Ok(())
     }
 
     fn send_midi_event(&mut self, event: MidiEvent) -> Result<()> {

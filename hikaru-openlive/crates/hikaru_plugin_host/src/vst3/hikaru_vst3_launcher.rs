@@ -24,6 +24,13 @@ use crate::platform::linux::X11Connection;
 /// `RtControl::set_parameter` devuelve `false` en vez de bloquear.
 const CONTROL_RING_CAPACITY: usize = 1024;
 
+/// Tasa con la que se configura un VST3 hasta que el motor diga la del dispositivo.
+///
+/// VST3 sella la tasa en `setupProcessing`, así que hace falta un valor válido
+/// desde antes del primer bloque. 48 kHz es lo que devuelve casi cualquier
+/// dispositivo; [`Vst3Instance::set_sample_rate`] lo corrige si no.
+const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
+
 /// Instancia VST3 alojada por Hikaru.
 ///
 /// El plugin **no** se guarda directo: vive dentro de un
@@ -124,7 +131,24 @@ impl Vst3Instance {
             eprintln!("[VST3] '{}' no declara editor: el slot mostrará sólo el audio", name);
         }
 
-        let (runner, control) = RealtimePluginRunner::new(plugin, CONTROL_RING_CAPACITY);
+        let (mut runner, control) = RealtimePluginRunner::new(plugin, CONTROL_RING_CAPACITY);
+
+        // `simple::load_plugin` deja el processor VST3 configurado a 44100 Hz / 512
+        // frames. Hikaru corre a la tasa del dispositivo (48000 Hz en la mayoría de las
+        // tarjetas) con bloques de 1024, así que hay que re-negociar antes del primer
+        // bloque: si no, el plugin suena a 0.919× de velocidad y se come la mitad de
+        // cada bloque. El motor igual llama a `set_sample_rate` al cargar, pero dejar
+        // el default aquí significaría que un plugin cargado sin él arranca desafinado.
+        runner
+            .plugin_mut()
+            .set_audio_config(DEFAULT_SAMPLE_RATE as f64, crate::scratch::MAX_BLOCK_FRAMES)
+            .map_err(|e| {
+                format!(
+                    "[VST3] '{name}' rechazó la configuración de audio \
+                     (sr={DEFAULT_SAMPLE_RATE}, block={}): {e}",
+                    crate::scratch::MAX_BLOCK_FRAMES
+                )
+            })?;
 
         // Foto de parámetros en carga: el controlador ya existe y responde
         // sin audio corriendo. Si falla (plugin a medio inicializar), lista
@@ -139,7 +163,7 @@ impl Vst3Instance {
             name,
             // 48 kHz por defecto hasta que el host diga lo contrario. VST3
             // necesita un valor válido desde el primer bloque.
-            sample_rate: 48_000.0,
+            sample_rate: DEFAULT_SAMPLE_RATE,
             started: false,
             last_error: None,
             window_attached: false,
@@ -152,6 +176,30 @@ impl Vst3Instance {
     /// Último error de procesamiento, para que el hilo de control lo muestre.
     pub fn take_last_error(&mut self) -> Option<String> {
         self.last_error.take()
+    }
+
+    /// Le pasa al plugin la tasa y el bloque máximo con los que va a procesar.
+    ///
+    /// VST3 sella ambos en `setupProcessing`: hasta que se llame, el processor no sabe
+    /// ni con qué frecuencia corre ni cuánto audio caben en un bloque, y el host no
+    /// puede corregirlo después. Se configura con [`MAX_BLOCK_FRAMES`] y no con el
+    /// bloque del dispositivo para que un cambio de quantum no requiera reconfigurar:
+    /// VST3 acepta `numSamples` variable por debajo del máximo.
+    ///
+    /// `load` ya deja el plugin en un valor por defecto válido; esto corre en cada
+    /// cambio de sample rate (incluido el que hace el motor al cargar el plugin).
+    fn apply_audio_config(&mut self) {
+        let sample_rate = self.sample_rate as f64;
+        let block_size = crate::scratch::MAX_BLOCK_FRAMES;
+        if let Err(e) = self
+            .runner
+            .plugin_mut()
+            .set_audio_config(sample_rate, block_size)
+        {
+            self.last_error = Some(format!(
+                "[VST3] setup_processing(sr={sample_rate}, block={block_size}): {e}"
+            ));
+        }
     }
 
     /// El handle de control es `Send` y no bloquea: se puede clonar desde el
@@ -279,6 +327,7 @@ impl PluginInstance for Vst3Instance {
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.apply_audio_config();
     }
 
     fn has_gui(&self) -> bool {

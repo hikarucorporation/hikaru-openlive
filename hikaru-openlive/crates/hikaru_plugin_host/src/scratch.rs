@@ -208,4 +208,27 @@ mod tests {
         scratch.deinterleave_stereo(&[0.0, 0.0, 0.0, 0.0], 0);
         assert_eq!(scratch.inputs()[0][3], 0.0);
     }
+
+    #[test]
+    fn buffers_stay_at_full_capacity_after_handing_them_off() {
+        // Éste es el contrato que hace PELIGROSO derivar el largo del bloque del
+        // largo de los `Vec`: el scratch se entrega a capacidad completa (aquí
+        // 4096) aunque el bloque real sea mucho más corto. El host VST3 resuelve el
+        // bloque con `AudioBuffers::block_size`, no con `channel.len()`; este test
+        // falla si alguna vez alguien empieza a recortar los `Vec` por bloque
+        // esperando que eso arregle el truncamiento.
+        let mut scratch = PlanarScratch::new(4096);
+        let samples = vec![0.25f32; 2048]; // 1024 frames, muy por debajo de 4096.
+
+        scratch.deinterleave_stereo(&samples, 1024);
+        let (inputs, _) = scratch.take_buffers();
+
+        assert_eq!(
+            inputs[0].len(),
+            4096,
+            "el scratch se entrega a capacidad completa, no a largo de bloque"
+        );
+        // Y los frames reales están escritos igual.
+        assert!(inputs[0][..1024].iter().all(|&s| s == 0.25));
+    }
 }

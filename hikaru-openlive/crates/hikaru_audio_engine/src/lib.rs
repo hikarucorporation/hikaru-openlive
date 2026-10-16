@@ -892,7 +892,7 @@ impl<'a> AudioEngine<'a> {
             chain.remove(slot_idx);
         }
 
-        let instance: Box<dyn PluginInstance> = match descriptor.format {
+        let mut instance: Box<dyn PluginInstance> = match descriptor.format {
             PluginFormat::VST3 => {
                 match hikaru_plugin_host::Vst3Instance::load(&descriptor.path) {
                     Ok(inst) => Box::new(inst),
@@ -906,6 +906,13 @@ impl<'a> AudioEngine<'a> {
                 }
             }
         };
+
+        // El plugin se acaba de instanciar, así que el `set_sample_rate` que hizo el
+        // motor al arrancar (main.rs, antes de que existiera este plugin) no lo alcanza.
+        // Sin esto cada uno arranca con el default de su cargador y VST3, que sella la
+        // tasa en `setupProcessing`, queda corriendo a 44100 Hz mientras el motor
+        // reproduce a la del dispositivo.
+        instance.set_sample_rate(self.sample_rate);
 
         let category = match descriptor.format {
             PluginFormat::VST3 => hikaru_dsp::PluginCategory::Vst3Fx,

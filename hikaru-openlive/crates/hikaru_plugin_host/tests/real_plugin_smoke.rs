@@ -162,3 +162,82 @@ fn registry_scan_finds_real_plugins() {
         "[smoke] registry no vio plugins pero hay bundles en disco"
     );
 }
+
+/// Frames por bloque que usa el stream real de Hikaru (`main.rs`,
+/// `BufferSize::Fixed(1024)`). Los tests de humo de arriba usan 512, que es
+/// justo el valor que el host VST3 tenía hardcodeado y que truncaba en
+/// silencio — por eso este test baja a un tamaño que reproduce la condición.
+const HIKARU_BLOCK_FRAMES: usize = 1024;
+
+fn sine(frames: usize, amp: f32) -> Vec<f32> {
+    (0..(frames * NUM_CHANNELS))
+        .map(|i| amp * ((i as f32) * 0.05).sin())
+        .collect()
+}
+
+fn energy(samples: &[f32]) -> f32 {
+    samples.iter().map(|s| s * s).sum()
+}
+
+/// Regresión del truncamiento a la mitad del bloque.
+///
+/// El host VST3 estaba configurado con `block_size(512)` mientras Hikaru le
+/// entregaba bloques de 1024 frames. El cálculo de `numSamples` derivaba el
+/// bloque del largo de los `Vec` del scratch (4096 de capacidad) recortado por
+/// ese 512, así que sólo los primeros 512 frames llegaban al plugin, y la
+/// vuelta copiaba sólo 512: los frames 512..1024 del `AudioBuffer` del host
+/// conservaban el cero con el que nació el scratch. Es decir, la mitad
+/// exacto de cada bloque salía como silencio digital.
+///
+/// Aquí se procesa un bloque del tamaño real de Hikaru y se comprueba que la
+/// segunda mitad no es un bloque de ceros cuando la primera sí tiene señal.
+#[test]
+fn vst3_processes_the_whole_hikaru_block() {
+    let Some(path) = find_vst3() else {
+        eprintln!("[smoke] sin VST3 instalados; skip");
+        return;
+    };
+
+    let mut inst = Vst3Instance::load(&path).expect("[smoke] VST3 load");
+    inst.set_sample_rate(48_000.0);
+
+    // Varios bloques: un efecto con delay, filtro o reverb necesita audio
+    // previo para tener algo que devolver.
+    let mut last = Vec::new();
+    for _ in 0..8 {
+        let mut samples = sine(HIKARU_BLOCK_FRAMES, 0.8);
+        {
+            let mut buf = AudioBuffer::new(&mut samples);
+            inst.process(&mut buf);
+        }
+        if let Some(err) = inst.take_last_error() {
+            panic!("[smoke] VST3 reportó error: {err}");
+        }
+        last = samples;
+    }
+
+    let half = HIKARU_BLOCK_FRAMES; // samples por canal = frames
+    let first_half = &last[..half];
+    let second_half = &last[half..half * NUM_CHANNELS];
+
+    assert!(
+        last.iter().all(|s| s.is_finite()),
+        "[smoke] VST3 produjo NaN/Inf"
+    );
+
+    // Si el plugin no genera nada (sintetizador sin entrada, efecto en bypass
+    // total), no hay nada que afirmar sobre la mitad de abajo.
+    if energy(first_half) < 1e-6 {
+        eprintln!("[smoke] plugin sin salida de audio; nada que verificar");
+        return;
+    }
+
+    assert!(
+        energy(second_half) > 1e-6,
+        "[smoke] la primera mitad del bloque tiene señal ({:.3e}) pero la \
+         segunda mitad es silencio digital ({:.3e}): el bloque se está \
+         truncando",
+        energy(first_half),
+        energy(second_half)
+    );
+}

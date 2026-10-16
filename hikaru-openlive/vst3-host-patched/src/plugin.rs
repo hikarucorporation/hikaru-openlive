@@ -68,6 +68,14 @@ pub(crate) trait PluginInternal: Send {
     fn get_all_parameters(&self) -> Result<Vec<Parameter>>;
     fn format_parameter(&self, id: u32, normalized: f64) -> Result<String>;
     fn process(&mut self, buffers: &mut AudioBuffers) -> Result<()>;
+    /// Re-configure the sample rate and maximum block size the plugin processes at.
+    ///
+    /// Both are negotiated with the plugin through `setupProcessing`, so changing them
+    /// re-runs it and re-allocates the host buffers to match. Defaults to a no-op for
+    /// implementations that cannot be reconfigured while loaded (process isolation).
+    fn set_audio_config(&mut self, _sample_rate: f64, _block_size: usize) -> Result<()> {
+        Ok(())
+    }
     fn send_midi_event(&mut self, event: MidiEvent) -> Result<()>;
     fn start_processing(&mut self) -> Result<()>;
     fn stop_processing(&mut self) -> Result<()>;
@@ -310,6 +318,40 @@ impl Plugin {
             .stop_processing()?;
 
         self.is_processing = false;
+        Ok(())
+    }
+
+    /// Re-configure the sample rate and maximum block size the plugin processes at.
+    ///
+    /// Call this before the first [`Self::process_audio`] (or any time the device's rate /
+    /// quantum changes). A host that drives the plugin at a rate it never negotiated gets
+    /// wrong pitch, wrong filter coefficients and wrong delay times — the plugin has no
+    /// way to correct for it, because `ProcessContext::sampleRate` is fixed at
+    /// `setupProcessing` time.
+    ///
+    /// `block_size` must be the **largest** block the host will ever hand to
+    /// [`Self::process_audio`]; larger blocks are truncated to it (see
+    /// [`AudioBuffers::block_size`]).
+    pub fn set_audio_config(&mut self, sample_rate: f64, block_size: usize) -> Result<()> {
+        if sample_rate <= 0.0 {
+            return Err(Error::InvalidParameter(format!(
+                "Sample rate must be positive, got {sample_rate}"
+            )));
+        }
+        if block_size == 0 {
+            return Err(Error::InvalidParameter(
+                "Block size must be at least 1 sample".to_string(),
+            ));
+        }
+
+        self.internal
+            .as_mut()
+            .ok_or_else(|| Error::Other("Plugin not initialized".to_string()))?
+            .set_audio_config(sample_rate, block_size)?;
+
+        // Keep the diagnostic fields in step with what the plugin was actually told.
+        self.sample_rate = sample_rate;
+        self.block_size = block_size;
         Ok(())
     }
 
