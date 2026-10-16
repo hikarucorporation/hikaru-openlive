@@ -699,7 +699,7 @@ impl AppState {
                     if drag.is_some_and(|drag| drag.param_id == *id) {
                         continue;
                     }
-                    if slot.set_external_param(*id, *value) {
+                    if slot.set_external_param(*id, *value).is_some() {
                         // Nacido en la ventana: la instancia de audio del
                         // motor todavía no lo tiene.
                         if let Some(param) = slot

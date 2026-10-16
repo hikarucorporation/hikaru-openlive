@@ -135,17 +135,28 @@ impl DspSlot {
     }
 
     /// Fija un parámetro desde la UI: actualiza la caché y lo marca para el
-    /// motor. Devuelve `false` si el id no existe en este slot.
-    pub fn set_external_param(&mut self, id: u32, value: f32) -> bool {
-        let Some(param) = self.external_params.iter_mut().find(|p| p.info.id == id) else {
-            return false;
-        };
+    /// motor.
+    ///
+    /// Devuelve el valor **efectivamente aplicado** (ya redondeado por `snap`),
+    /// o `None` si el id no existe en este slot **o si el valor ya era ese**.
+    ///
+    /// Lo segundo importa tanto como lo primero. El drag de un parámetro llega
+    /// en un evento por píxel, y al pasar por `snap` la mayoría de los píxeles no
+    /// mueven nada: en un parámetro discreto de 8 escalones, ~7 de cada 8
+    /// eventos calculan el mismo valor. Si eso contara como "cambió", cada uno de
+    /// esos eventos pagaría un `cx.notify()` —que reconstruye la ventana entera,
+    /// con el clonado de `track.effects` incluido— y el fader se sentiría
+    /// pegajoso. Por eso el llamador puede distinguir "no encontré el id" de
+    /// "no pasó nada" y saltarse el trabajo.
+    pub fn set_external_param(&mut self, id: u32, value: f32) -> Option<f32> {
+        let param = self.external_params.iter_mut().find(|p| p.info.id == id)?;
         let snapped = param.info.snap(value);
-        if (param.value - snapped).abs() > f32::EPSILON {
-            param.value = snapped;
-            param.dirty = true;
+        if (param.value - snapped).abs() <= f32::EPSILON {
+            return None;
         }
-        true
+        param.value = snapped;
+        param.dirty = true;
+        Some(snapped)
     }
 }
 

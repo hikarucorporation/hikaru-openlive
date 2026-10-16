@@ -230,58 +230,74 @@ fn close_external_editor(cx: &mut gpui_kit::App, plugin_name: &str) {
 /// para el motor (`take_dirty_external_params`) y la manda en vivo a la
 /// ventana abierta si la hay (el editor nativo la refleja al instante).
 /// Todo no bloqueante: si la ventana cayó, el gesto igual queda guardado.
+///
+/// Devuelve `false` cuando el gesto no cambió nada —id inexistente, o valor que
+/// tras el snapping ya era el mismo— y en ese caso no se notifica ni se envía
+/// nada. Eso es lo que evita el "arrastre lento": un `cx.notify()` reconstruye
+/// la ventana entera, y hacerlo por cada píxel de un drag que en su mayoría no
+/// mueve el valor convertía cada clic en dos reconstrucciones completas
+/// (armar y desarmar el gesto) más una por evento.
 fn commit_external_param(
     cx: &mut gpui_kit::App,
     track_idx: usize,
     slot_idx: usize,
     id: u32,
     value: f32,
-) {
+) -> bool {
     let st = state(cx);
     let audio_proxy = st.read(cx).audio_proxy.clone();
     // Misma conversión que al cargar el plugin: índice de mixer → índice de
     // motor. Sin esto el knob mueve el parámetro de OTRA pista (la de arriba), y
     // el efecto que el usuario está girando no suena.
     let engine_idx = st.read(cx).engine_track_index();
-    st.update(cx, |state, cx| {
-        let live: Option<(String, f32)> =
-            if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-                if !slot.set_external_param(id, value) {
-                    None
-                } else {
-                    let current = slot
-                        .external_params
-                        .iter()
-                        .find(|p| p.info.id == id)
-                        .map(|p| p.value)
-                        .unwrap_or(value);
-                    slot.external
-                        .as_ref()
-                        .map(|ext| (ext.name.clone(), current))
-                }
-            } else {
-                None
-            };
-        if let Some((plugin_name, current)) = live {
+
+    // `applied` es el valor ya redondeado: es el que se muestra, el que va al
+    // editor nativo y el que tiene que ir al motor. Mandar el `value` crudo
+    // hacía que un parámetro discreto sonara en un valor y se viera en otro.
+    let mut applied: Option<f32> = None;
+    st.update(cx, |state, _| {
+        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
+            applied = slot.set_external_param(id, value);
+        }
+    });
+    let Some(applied) = applied else {
+        return false;
+    };
+
+    // Avisarle al editor nativo abierto, si lo hay.
+    let live: Option<(String, f32)> = st
+        .read(cx)
+        .slot(track_idx, slot_idx)
+        .and_then(|slot| slot.external.as_ref().map(|ext| (ext.name.clone(), applied)));
+    if let Some((plugin_name, value)) = live {
+        st.update(cx, |state, _| {
             state
                 .plugin_settings_state
-                .send_param_to_open_plugin(&plugin_name, id, current);
-        }
-        cx.notify();
-    });
+                .send_param_to_open_plugin(&plugin_name, id, value);
+        });
+    }
+
+    // Sólo ahora se repinta: el valor de la caché ya es el nuevo.
+    st.update(cx, |_, cx| cx.notify());
+
     // Enviar el cambio al motor de audio (lock-free hacia el hilo de audio).
-    let Some(engine_idx) = engine_idx else {
-        return;
-    };
-    audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
-        track_idx: engine_idx,
-        slot_idx,
-        param_id: id,
-        value,
-    });
+    if let Some(engine_idx) = engine_idx {
+        audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
+            track_idx: engine_idx,
+            slot_idx,
+            param_id: id,
+            value: applied,
+        });
+    }
+    true
 }
 
 /// Empieza un drag vertical de knob: agarre en `start_y` (px de ventana).
+///
+/// Sin `cx.notify()`: `param_drag` no lo pinta nadie (lo leen `param_drag_move`
+/// y `apply_param_feedback`), así que notificar acá reconstruía la ventana
+/// entera sin que cambiara un solo píxel. Con eso, armar y desarmar el gesto
+/// costaban 0 renders y el fader respondía al instante.
 fn param_drag_begin(
     cx: &mut gpui_kit::App,
     track_idx: usize,
@@ -299,7 +315,7 @@ fn param_drag_begin(
                 .map(|p| p.value)
         })
         .unwrap_or(0.0);
-    state(cx).update(cx, |state, cx| {
+    state(cx).update(cx, |state, _| {
         state.param_drag = Some(ParamDragState {
             track: track_idx,
             slot: slot_idx,
@@ -307,7 +323,6 @@ fn param_drag_begin(
             start_y,
             start_value: value,
         });
-        cx.notify();
     });
 }
 
@@ -321,10 +336,12 @@ fn param_drag_move(cx: &mut gpui_kit::App, y: f32) {
     commit_external_param(cx, drag.track, drag.slot, drag.param_id, value);
 }
 
+/// Cierra el drag. Sin `notify()` por el mismo motivo que en
+/// [`param_drag_begin`]: el último `commit_external_param` que movió algo ya
+/// notificó, y si el gesto no llegó a mover nada no hay nada que repintar.
 fn param_drag_end(cx: &mut gpui_kit::App) {
-    state(cx).update(cx, |state, cx| {
+    state(cx).update(cx, |state, _| {
         state.param_drag = None;
-        cx.notify();
     });
 }
 
@@ -1253,13 +1270,26 @@ fn render_external_card(
     // Error de GUI nativa (hilo de la ventana → `gui_errors` vía
     // `poll_updates`): el plugin cargó pero su editor no abrió. Se pinta en
     // la tarjeta en vez de cerrar el DAW o dejar una ventana vacía.
-    let (gui_error, editor_open, editor_opening, params, params_status, slot_has_gui) = {
+    let (gui_error, editor_open, editor_opening, params, params_total, params_status, slot_has_gui) = {
         let app = state(cx).read(cx);
         let slot_params = app
             .slot(track_idx, idx)
             .map(|slot| {
                 (
-                    slot.external_params.clone(),
+                    // Sólo las filas que se dibujan. La lista completa se
+                    // descartaba después (`.take(MAX_PARAM_ROWS)` más abajo), y
+                    // clonar N `ExternalParamState` son 2 `String` por entrada:
+                    // en un plugin con 300 parámetros eso eran 600 alocs por
+                    // frame para pintar 8 filas, y se pagaba en cada `notify`
+                    // del drag del fader.
+                    (
+                        slot.external_params
+                            .iter()
+                            .take(MAX_PARAM_ROWS)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        slot.external_params.len(),
+                    ),
                     slot.params_status.clone(),
                     slot.has_gui,
                 )
@@ -1269,7 +1299,8 @@ fn render_external_card(
             app.plugin_settings_state.gui_error_for(&descriptor.name),
             app.plugin_settings_state.is_plugin_open(&descriptor.name),
             app.plugin_settings_state.is_plugin_opening(&descriptor.name),
-            slot_params.0,
+            slot_params.0 .0,
+            slot_params.0 .1,
             slot_params.1,
             slot_params.2,
         )
@@ -1389,6 +1420,7 @@ fn render_external_card(
             idx,
             descriptor,
             &params,
+            params_total,
             &params_status,
         ))
         .into_any_element()
@@ -1403,12 +1435,17 @@ fn render_external_card(
 /// (`commit_external_param`). Lo que el editor nativo mueve por su cuenta
 /// vuelve por `apply_param_feedback` y los knobs lo reflejan sin pelear con
 /// el drag en curso (el feedback cede ante el dedo).
+/// `params` trae sólo las [`MAX_PARAM_ROWS`] filas que caben en la tarjeta, para
+/// no clonar la lista entera a cada frame. `params_total` es el conteo real
+/// del plugin, que es lo que necesita el rótulo: no se puede deducir de
+/// `params.len()` justamente porque esa lista viene truncada.
 fn render_external_params(
     _cx: &mut Context<HikaruApp>,
     track_idx: usize,
     idx: usize,
     descriptor: &hikaru_plugin_host::PluginDescriptor,
     params: &[crate::views::mixer::ExternalParamState],
+    params_total: usize,
     status: &ExternalParamsStatus,
 ) -> AnyElement {
     let is_clap = descriptor.format == hikaru_plugin_host::PluginFormat::CLAP;
@@ -1454,11 +1491,13 @@ fn render_external_params(
         .text_color(rgb(0x555555))
         .into_any_element(),
         ExternalParamsStatus::Ready => {
-            let extra = params.len().saturating_sub(MAX_PARAM_ROWS);
+            // `params` trae sólo las filas visibles; `params_total` es el
+            // conteo real del plugin, que es lo que va en el rótulo.
+            let extra = params_total.saturating_sub(MAX_PARAM_ROWS);
             Label::new(if extra > 0 {
-                format!("PARÁMETROS ({}) · +{extra} en el editor", params.len())
+                format!("PARÁMETROS ({params_total}) · +{extra} en el editor")
             } else {
-                format!("PARÁMETROS ({})", params.len())
+                format!("PARÁMETROS ({params_total})")
             })
             .text_xs()
             .font_weight(FontWeight::BOLD)

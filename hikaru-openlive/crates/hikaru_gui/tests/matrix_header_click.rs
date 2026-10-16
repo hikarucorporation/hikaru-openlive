@@ -186,8 +186,12 @@ fn click_header(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppConte
         window.draw(cx).clear(cx);
         // Punto en la banda izquierda del header: fuera del knob, del fader y
         // de los botones M/S, que tienen hitbox propia y se comen el clic.
+        //
+        // `click_at` toma el punto RELATIVO al elemento, y el id hay que pasarlo
+        // como `String` (hay `impl From<String> for ElementId`, no una para
+        // `&String`).
         window.click_at(
-            &format!("matrix_track_hdr_{idx}"),
+            format!("matrix_track_hdr_{idx}"),
             point(px(150.0), px(6.0)),
             cx,
         );
