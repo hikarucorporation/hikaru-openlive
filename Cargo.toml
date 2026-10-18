@@ -1,0 +1,79 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hikaru_core",
+    "crates/hikaru_transport",
+    "crates/hikaru_audio_engine",
+    "crates/hikaru_sequencer",
+    "crates/hikaru_dsp",
+    "crates/hikaru_plugin_host",
+    "crates/hikaru_midi",
+    "crates/hikaru_gui",
+    "crates/hikaru_audio_drivers",
+    "crates/hikaru_render",
+    # Formatos de archivo. LGPLv3, y NO dependen de la app: son la frontera que
+    # permite a un DAW de código cerrado leer/escribir proyectos de Hikaru sin
+    # abrir el motor AGPL. Ver docs/hikaru-project-files/.
+    "crates/hikaru_project_file",
+    "crates/hikaru_openlive_file",
+    "crates/hikaru_openstudio_file",
+]
+# `vst3-host-patched` NO es miembro a propósito: es un path dependency, y
+# promoverlo a miembro hace que cargo resuelva sus dev-dependencies (`eframe`
+# 0.31, `rfd`, `env_logger`), que arrastran un egui+wgpu duplicado del que ya
+# usa gpui-pre. Sus tests de audio viven entonces en
+# `crates/hikaru_plugin_host/tests/`, que sí es miembro y puede alcanzar la API
+# pública del host.
+
+[workspace.package]
+# Versión del producto. Es la ÚNICA fuente de verdad: la cabecera de
+# `created_by` de los formatos `.oplf`/`.opsf` y la pantalla About la toman de
+# acá vía `env!("CARGO_PKG_VERSION")`. No hardcodear `2.22.2` en el código.
+version = "2.22.2"
+
+[workspace.dependencies]
+clack-host = "0.2"
+clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log", "params"] }
+vst3-host = "0.1"
+# La versión DEBE coincidir exactamente con la que usa `gpui-pre-wgpu`
+# (transitiva de gpui-kit). Si se desvía, cargo compila dos copias de wgpu en
+# el mismo binario y los tipos no son intercambiables entre crates.
+wgpu = "29.0.4"
+# Ya viene en el grafo por wgpu/wgpu-core; declararlo explícito sólo para
+# derivar `Pod`/`Zeroable` y empaquetar buffers sin `unsafe` a mano.
+bytemuck = { version = "1.25", features = ["derive"] }
+# Sólo para los tests: valida los shaders WGSL sin necesitar una GPU.
+naga = { version = "29.0", features = ["wgsl-in"] }
+
+# [profile.dev]
+# debug = 1
+
+# [profile.release]
+# opt-level = 3
+# lto = true
+# codegen-units = 1
+
+[profile.release-debug]
+inherits = "release"
+debug = 1             # Mantiene la velocidad del Release pero te da la línea exacta donde explota si tira panic.
+
+[patch.crates-io]
+vst3-host = { path = "vst3-host-patched" }
+
+# Parche local: agrega `CursorStyle::Hidden` para poder ocultar el puntero
+# durante gestos continuos (middle-drag de la Playlist).
+#
+# Por qué está vendorizado en vez de forked: `CursorStyle` es un enum cerrado y
+# TODO `match` exhaustivo sobre él vive en crates externos. Sólo hacen falta los
+# dos crates que compilan en Linux; los backends de macOS/Windows/web se ignoran
+# (no se compilan acá) y NO tienen el brazo `Hidden`.
+#
+# OJO AL ACTUALIZAR gpui-kit: si sube la versión de gpui-pre, hay que volver a
+# aplicar el parche sobre las fuentes nuevas. Diff del parche:
+#   gpui-pre-patched/src/platform.rs               -> nueva variante en el enum
+#   gpui-pre-linux-patched/src/linux/wayland.rs    -> brazo en to_shape()
+#   gpui-pre-linux-patched/src/linux/platform.rs   -> brazo en cursor_style_to_icon_names()
+#   .../linux/wayland/client.rs                    -> 3 puntos: set_cursor_style, Enter, restore_cursor_after_hide
+#   .../linux/x11/client.rs                        -> get_cursor_icon delega al cursor vacío
+gpui-pre = { path = "gpui-pre-patched" }
+gpui-pre-linux = { path = "gpui-pre-linux-patched" }

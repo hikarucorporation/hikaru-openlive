@@ -1,0 +1,13 @@
+[package]
+name = "hikaru_sequencer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Dependencias internas del workspace
+hikaru_core = { path = "../hikaru_core" }
+hikaru_transport = { path = "../hikaru_transport" }
+
+# Para los estados atómicos y el manejo de sincronía (si hiciera falta algo más)
+# Por ahora con std estamos bien, pero si querés lock-free puro:
+# crossbeam = "0.8" 

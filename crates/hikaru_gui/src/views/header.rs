@@ -1,0 +1,534 @@
+use gpui_kit::component::*;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::Size;
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::*;
+use gpui_kit::base::{Button as BaseButton, NumberInput as BaseNumberInput};
+
+use crate::app::{format_bpm, format_sig, state, step_sig, AppMode, HikaruApp, OpenLiveView};
+use crate::audio_proxy::{AudioClipData, GuiCommand};
+use crate::ui::text_style_scope::TextStyleScope;
+use crate::views::branding::energy_core_logo_img;
+use crate::views::playlist::ClipType;
+use hikaru_transport::transport_state::TransportPlaybackState;
+
+/// Ancho uniforme de los 3 botones principales de transporte
+/// (Play/Pause, Stop, REC): mismo tamaño, spacing compacto.
+const TRANSPORT_BTN_W: f32 = 40.0;
+
+/// Alto de los controles de la botonera de transporte.
+///
+/// Los `Button` no fijan alto: lo sacan de su `Size` (`Size::Medium` -> 32px)
+/// más el padding del tema. Medido contra el botón de Play, el alto real de la
+/// botonera es 32px, y el logo usa el mismo número. Si un día el tema cambia el
+/// alto de los botones, el test `transport_logo_height_matches_neighbours`
+/// avisa en vez de dejar el logo desalineado.
+const TRANSPORT_BTN_H: f32 = 32.0;
+
+/// Lado del logo dentro de su control.
+///
+/// Menos que el alto del control para que quede aire arriba y abajo y se lea
+/// como un botón con icono, no como un cuadro con un logo pegado al borde.
+const TRANSPORT_LOGO_SIZE: f32 = 20.0;
+
+/// Radio de esquina del control del logo.
+const TRANSPORT_LOGO_RADIUS: f32 = 2.0;
+
+/// El logo "Energy Core" como botón de la barra de transporte.
+///
+/// Va como primer control, a la izquierda del Play, que es donde un DAW
+/// pondría el botón de estudio/dashboard: es el acceso a la marca y al panel
+/// del motor, no un control de transporte.
+///
+/// El `div` a mano (y no un `Button`) es a propósito: `Button` no admite un
+/// hijo `img` arbitrario, y el logo tiene que pintarse a un tamaño exacto para
+/// empatar la altura de los vecinos.
+///
+/// **El `.flex()` explícito no es opcional.** En `gpui-pre` el `div()` no
+/// arranca con `display: flex` (a diferencia del `gpui` upstream, donde
+/// `Div::new()` sí lo hace), así que sin esta línea `align_items` y
+/// `justify_content` se ignoran por completo: el logo se dibujaba pegado a la
+/// esquina superior izquierda del control en vez de centrado. Con `.flex()` el
+/// centro del `img` cae exacto sobre el centro del control, que es lo que
+/// verifica `logo_is_centered_in_its_control` en `tests/transport_logo.rs`.
+/// Lo mismo aplica a cualquier `div` con `items_center` en este repo: usar
+/// `h_flex()`/`v_flex()`, que ya fijan `display: flex`, es más seguro.
+fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let show_dsp_rack = state(cx).read(cx).show_dsp_rack;
+
+    div()
+        .id("transport_energy_core_logo")
+        .flex()
+        .flex_none()
+        .w(px(TRANSPORT_BTN_W))
+        .h(px(TRANSPORT_BTN_H))
+        .rounded(px(TRANSPORT_LOGO_RADIUS))
+        // Mismo fondo que los botones vecinos (`rgb(0x3D3D3D)`), y se ilumina
+        // con el acento cuando el panel del motor ya está abierto, para que el
+        // estado del logo y el del panel no puedan contradecirse.
+        .bg(if show_dsp_rack {
+            rgb(0x4A4A4A)
+        } else {
+            rgb(0x3D3D3D)
+        })
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(0x4A4A4A)))
+        .on_click(move |_, _, cx| {
+            // Mismo comportamiento que el botón "DSP RACK (F10)" de la barra:
+            // abre/cierra el panel del motor, sin duplicar la lógica.
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                state.show_dsp_rack = !state.show_dsp_rack;
+                cx.notify();
+            });
+        })
+        .child(energy_core_logo_img(
+            "transport_energy_core_img",
+            TRANSPORT_LOGO_SIZE,
+        ))
+        // Sin esto el test no lo encuentra: `try_find` sólo ve elementos
+        // registrados (mismo criterio que el punto de "sucio" del menú File).
+        .test_support()
+}
+
+fn format_timecode(bars: f32, bpm: f64) -> String {
+    let beats = (bars - 1.0).max(0.0) * 4.0;
+    let total_seconds = (beats / bpm as f32) * 60.0;
+
+    let hours = (total_seconds / 3600.0) as u32;
+    let minutes = ((total_seconds % 3600.0) / 60.0) as u32;
+    let seconds = (total_seconds % 60.0) as u32;
+    let millis = (total_seconds.fract() * 1000.0) as u32;
+
+    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+}
+
+/// Botón de paso (− / +) de la caja de BPM.
+///
+/// Se arma a mano en vez de usar el `NumberInput` de gpui-component porque
+/// éste mete íconos SVG de Lucide, y el renderer de GPUI los rasteriza como
+/// bloques opacos: los botones salían blancos y mudos, igual que el texto.
+fn bpm_step_button(button: BaseButton, glyph: &'static str) -> BaseButton {
+    button
+        .flex()
+        .flex_none()
+        .h_full()
+        .w(px(22.0))
+        .items_center()
+        .justify_center()
+        .text_color(rgb(0xE0E0E0))
+        .hover(|this| this.bg(rgb(0x4D4D4D)))
+        .active(|this| this.bg(rgb(0x5A5A5A)))
+        .child(glyph)
+}
+
+/// Botón de paso (`-` / `+`) del stepper de compás (SIG).
+///
+/// Réplica exacta del estilo de `bpm_step_button`: mismo ancho, mismos hover
+/// y active, mismo color de texto. Recorre `STANDARD_SIGS` en vez de sumar un
+/// número, así que no puede reutilizar los botones del `NumberInput`.
+fn sig_step_button(id: &'static str, glyph: &'static str, delta: i32) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .h_full()
+        .w(px(22.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(rgb(0xE0E0E0))
+        .hover(|this| this.bg(rgb(0x4D4D4D)))
+        .active(|this| this.bg(rgb(0x5A5A5A)))
+        .child(glyph)
+        .on_click(move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                let (num, den) = step_sig(
+                    state.transport.beats_per_bar,
+                    state.transport.beat_division,
+                    delta,
+                );
+                state.transport.beats_per_bar = num;
+                state.transport.beat_division = den;
+                // La caja se reescribe sola en el próximo render (sync de
+                // `sig_text` cuando no está editando).
+                cx.notify();
+            });
+        })
+}
+
+/// Stepper de compás `SIG [ - ] [ 4/4 ] [ + ]`: misma caja, bordes, fondo,
+/// alto y tipografía que `render_bpm_spinbox`. El valor central es editable
+/// (`N/D`, o `N` suelto que asume `/4`); `-` / `+` ciclan 2/4, 3/4, 4/4, 5/4,
+/// 6/8, 7/8, 12/8.
+fn render_sig_stepper(sig_input: &Entity<InputState>) -> impl IntoElement {
+    TextStyleScope::text_color(
+        rgb(0xE0E0E0),
+        div()
+            .flex()
+            .h(px(24.0))
+            .w(px(96.0))
+            .rounded(px(3.0))
+            .border_1()
+            .border_color(rgb(0x4D4D4D))
+            .bg(rgb(0x2E2E2E))
+            .overflow_hidden()
+            .child(sig_step_button("sig_step_dec", "−", -1))
+            .child(
+                Input::new(sig_input)
+                    .appearance(false)
+                    .bordered(false)
+                    .h_full()
+                    .w_full()
+                    .gap_0()
+                    .rounded_none()
+                    .text_align(TextAlign::Center)
+                    .with_size(Size::XSmall),
+            )
+            .child(sig_step_button("sig_step_inc", "+", 1)),
+    )
+}
+
+fn render_bpm_spinbox(bpm_input: &Entity<InputState>) -> impl IntoElement {
+    TextStyleScope::text_color(
+        rgb(0xE0E0E0),
+        div()
+            .flex()
+            .h(px(24.0))
+            .w(px(96.0))
+            .rounded(px(3.0))
+            .border_1()
+            .border_color(rgb(0x4D4D4D))
+            .bg(rgb(0x2E2E2E))
+            .overflow_hidden()
+            .child(
+                BaseNumberInput::new(bpm_input)
+                    .size_full()
+                    .decrement_button(|button| bpm_step_button(button, "−"))
+                    .increment_button(|button| bpm_step_button(button, "+"))
+                    .input(
+                        Input::new(bpm_input)
+                            .appearance(false)
+                            .bordered(false)
+                            .h_full()
+                            .w_full()
+                            .gap_0()
+                            .rounded_none()
+                            .text_align(TextAlign::Center)
+                            .with_size(Size::XSmall),
+                    ),
+            ),
+    )
+}
+
+pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElement {
+    let app = state(cx).read(cx);
+    let transport = &app.transport;
+    let is_playing = transport.playback_state == TransportPlaybackState::Playing;
+    let is_recording = app.is_recording;
+    let is_live = app.mode == AppMode::OpenLive;
+    let is_studio = app.mode == AppMode::OpenStudio;
+    // `ARRANGER (F9)` es contextual como `Tab`/`F9`: en OpenLive indica el
+    // Arranger y en OpenStudio el Arranger/Mixer (ver `toggle_central_view`).
+    let show_arranger = (is_live && app.openlive_view == OpenLiveView::ArrangerView)
+        || (is_studio && app.openstudio_view == crate::app::OpenStudioView::ArrangerMixer);
+    let show_dsp_rack = app.show_dsp_rack;
+    let show_explorer = app.show_explorer;
+    let bpm = transport.bpm;
+    let beats_per_bar = transport.beats_per_bar;
+    let beat_division = transport.beat_division;
+    let bpm_input = app.bpm_input.clone();
+    let sig_input = app.sig_input.clone();
+    let samples_per_beat = (transport.sample_rate.get() as f64 * 60.0) / transport.bpm;
+    let samples_per_bar = samples_per_beat * transport.beats_per_bar as f64;
+    let current_bar = 1.0 + (transport.sample_count as f64 / samples_per_bar) as f32;
+    let audio_proxy = app.audio_proxy.clone();
+    drop(app);
+
+    // La caja manda mientras el usuario escribe; el resto del tiempo refleja
+    // `transport.bpm`, que es lo que consume el resto de la app.
+    let bpm_text = format_bpm(bpm);
+    let bpm_editing = bpm_input
+        .read(cx)
+        .focus_handle(cx)
+        .is_focused(window);
+    if !bpm_editing {
+        let shown = bpm_input.read(cx).value();
+        if shown.as_ref() != bpm_text {
+            let text = bpm_text.clone();
+            bpm_input.update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+    }
+
+    // La caja de compás refleja `beats_per_bar`/`beat_division` salvo que el
+    // usuario la esté editando. Esto también revierte texto inválido al perder
+    // el foco y confirma los pasos de `-` / `+` en el frame siguiente.
+    let sig_text = format_sig(beats_per_bar, beat_division);
+    let sig_editing = sig_input
+        .read(cx)
+        .focus_handle(cx)
+        .is_focused(window);
+    if !sig_editing {
+        let shown = sig_input.read(cx).value();
+        if shown.as_ref() != sig_text {
+            let text = sig_text.clone();
+            sig_input.update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+    }
+
+    // Botonera principal de transporte: el logo de marca y luego
+    // exclusivamente Play/Pause (toggle), Stop y REC, con tamaño uniforme y
+    // spacing compacto:
+    //   [logo] [▶/⏸] [■ STOP] [● REC] | timecode | modos | BPM | compás | vistas
+    h_flex()
+        .id("header_bar")
+        .test_support()
+        .h(px(40.0))
+        .bg(rgb(0x2A2A2A))
+        .border_b_1()
+        .border_color(rgb(0x3D3D3D))
+        .items_center()
+        .px(px(8.0))
+        .gap(px(6.0))
+        .child(energy_core_transport_button(cx))
+        .child(
+            // Toggle Play/Pause: el MISMO Button en ambos estados (mismo
+            // ancho, padding y centrado `items_center`/`justify_center` del
+            // contenido), sólo cambia el glifo. La pausa usa "▮▮" (U+25AE,
+            // rectángulos verticales del bloque Geometric Shapes) en vez de
+            // "⏸" (U+23F8): ese codepoint se rasteriza como glifo estilo
+            // emoji, visualmente más pequeño y con bearings distintos que
+            // "▶"/"■"/"●". Con "▮▮" las tres insignias comparten bloque,
+            // altura de capital y peso a idéntico `text_size`, y el bounding
+            // box del botón queda invariable en el toggle.
+            // (El `text_size` del label lo fija el tema del Button y los
+            // iconos SVG Lucide salen como bloques opacos en este renderer,
+            // así que el glifo geométrico es la vía de escalado disponible.)
+            Button::new("transport_play_pause").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label(if is_playing { "▮▮" } else { "▶" })
+                .compact()
+                .w(px(TRANSPORT_BTN_W))
+                .bg(rgb(0x3D3D3D))
+                .text_color(if is_playing {
+                    rgb(0x4CAF50)
+                } else {
+                    rgb(0xE0E0E0)
+                })
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, _| {
+                        if state.transport.playback_state == TransportPlaybackState::Playing {
+                            // Pausa en la posición actual del playhead.
+                            state.transport.playback_state = TransportPlaybackState::Paused;
+                            state.audio_proxy.send(GuiCommand::Pause);
+                            return;
+                        }
+                        state.transport.playback_state = TransportPlaybackState::Playing;
+                        state.audio_proxy.send(GuiCommand::StopPreview);
+                        state.audio_proxy.send(GuiCommand::SetBpm(state.transport.bpm as f32));
+
+                        if state.mode == AppMode::OpenStudio {
+                            let sr = state.transport.sample_rate.get().max(1.0);
+                            let clips_to_sync: Vec<AudioClipData> = state
+                                .playlist_state
+                                .clips
+                                .iter()
+                                .filter_map(|(track_id, clip)| {
+                                    if let ClipType::Audio {
+                                        sample_path,
+                                        sample_offset_ticks,
+                                        ..
+                                    } = &clip.clip_type
+                                    {
+                                        let clip_length_frames =
+                                            state.transport.clip_length_frames(clip.duration_ticks);
+                                        let duration_secs = clip_length_frames as f32 / sr;
+                                        Some(AudioClipData {
+                                            clip_id: clip.id,
+                                            path: sample_path.clone(),
+                                            start_secs: state.transport.ticks_to_samples(clip.start_tick)
+                                                as f32
+                                                / sr,
+                                            duration_secs,
+                                            offset_secs: state
+                                                .transport
+                                                .ticks_to_samples(*sample_offset_ticks)
+                                                as f32
+                                                / sr,
+                                            track_index: *track_id,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            state.audio_proxy.send(GuiCommand::SyncPlaylistClips { clips: clips_to_sync });
+                        } else {
+                            state.audio_proxy.send(GuiCommand::SetAppMode(false));
+                        }
+
+                        state.audio_proxy.send(GuiCommand::Seek {
+                            sample_count: state.transport.sample_count,
+                        });
+                        state.audio_proxy.send(GuiCommand::Play);
+                    });
+                }),
+        )
+        .child(
+            Button::new("transport_stop").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("■")
+                .compact()
+                .w(px(TRANSPORT_BTN_W))
+                .bg(rgb(0x3D3D3D))
+                .text_color(rgb(0xE0E0E0))
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, _| {
+                        state.transport.playback_state = TransportPlaybackState::Stopped;
+                        state.transport.sample_count = 0;
+                        state.audio_proxy.send(GuiCommand::Stop);
+                    });
+                }),
+        )
+        .child(
+            Button::new("transport_record").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("●")
+                .compact()
+                .w(px(TRANSPORT_BTN_W))
+                .bg(if is_recording {
+                    rgb(0x5A1A1A)
+                } else {
+                    rgb(0x3D3D3D)
+                })
+                .text_color(if is_recording {
+                    rgb(0xFF5252)
+                } else {
+                    rgb(0xE0E0E0)
+                })
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, cx| {
+                        state.is_recording = !state.is_recording;
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            div()
+                .bg(rgb(0x0F1216))
+                .border_1()
+                .border_color(rgb(0x2D3741))
+                .rounded(px(4.0))
+                .px(px(8.0))
+                .py(px(5.0))
+                .child(
+                    Label::new(format_timecode(current_bar, bpm))
+                        .text_sm()
+                        .text_color(rgb(0x00DCFF)),
+                ),
+        )
+        .child(
+            Button::new("mode_openlive").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("OPENLIVE")
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .text_color(if is_live {
+                    rgb(0x00BCD4)
+                } else {
+                    rgb(0xE0E0E0)
+                })
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, _| {
+                        if state.mode != AppMode::OpenLive {
+                            state.mode = AppMode::OpenLive;
+                            state.transport.playback_state = TransportPlaybackState::Stopped;
+                            state.transport.sample_count = 0;
+                            state.audio_proxy.send(GuiCommand::Stop);
+                            state.audio_proxy.send(GuiCommand::SetAppMode(false));
+                        }
+                    });
+                }),
+        )
+        .child(
+            Button::new("mode_openstudio").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("OPENSTUDIO")
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .text_color(if is_studio {
+                    rgb(0xFF9100)
+                } else {
+                    rgb(0xE0E0E0)
+                })
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, _| {
+                        if state.mode != AppMode::OpenStudio {
+                            state.mode = AppMode::OpenStudio;
+                            state.transport.playback_state = TransportPlaybackState::Stopped;
+                            state.transport.sample_count = 0;
+                            state.audio_proxy.send(GuiCommand::Stop);
+                            state.audio_proxy.send(GuiCommand::SetAppMode(true));
+                        }
+                    });
+                }),
+        )
+        .child(Label::new("BPM").text_xs().text_color(rgb(0xE0E0E0)))
+        .child(render_bpm_spinbox(&bpm_input))
+        .child(Label::new("SIG").text_xs().text_color(rgb(0xE0E0E0)))
+        .child(render_sig_stepper(&sig_input))
+        .child(div().flex_1())
+        .child(
+            Button::new("toggle_arranger").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("ARRANGER (F9)")
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .when(show_arranger, |this| this.text_color(rgb(0x00BCD4)))
+                .when(!show_arranger, |this| this.text_color(rgb(0xE0E0E0)))
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, cx| {
+                        crate::app::toggle_central_view(state);
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            Button::new("toggle_dsp_rack").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("DSP RACK (F10)")
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .when(show_dsp_rack, |this| this.text_color(rgb(0x00BCD4)))
+                .when(!show_dsp_rack, |this| this.text_color(rgb(0xE0E0E0)))
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, cx| {
+                        state.show_dsp_rack = !state.show_dsp_rack;
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            Button::new("toggle_explorer").rounded(gpui_kit::component::button::ButtonRounded::None)
+                .label("EXPLORER (F11)")
+                .compact()
+                .bg(rgb(0x3D3D3D))
+                .when(show_explorer, |this| this.text_color(rgb(0x00BCD4)))
+                .when(!show_explorer, |this| this.text_color(rgb(0xE0E0E0)))
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |state, cx| {
+                        state.show_explorer = !state.show_explorer;
+                        cx.notify();
+                    });
+                }),
+        )
+}

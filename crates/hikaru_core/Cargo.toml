@@ -1,0 +1,13 @@
+# Cargo.toml del crate hikaru_core
+[package]
+name = "hikaru_core"
+version = "0.1.0"
+edition = "2021"
+
+# Verificamos que no haya dependencias innecesarias que puedan causar allocations
+# en tiempo real o bloqueos. Para hikaru_core, la mayoría de las dependencias
+# serán utilidades sin-std o basadas en arrays estáticos.
+[dependencies]
+# Aquí podríamos añadir dependencias utilitarias si fueran estrictamente necesarias,
+# por ejemplo, para manejo de floats o math sin-std.
+# Ejemplo: num-traits = { version = "0.2", default-features = false }

@@ -1,0 +1,21 @@
+[profile.dev]
+# Reduce debug info from level 2 (full symbols) to level 1 (line tables only)
+# Saves ~40% disk space vs default, still allows backtraces
+debug = 1
+
+# Disable incremental compilation — saves ~2-5GB per build
+incremental = false
+
+[profile.dev.package."*"]
+# ANTES: opt-level = 2 sobre TODAS las dependencias. Cambiado a 0 el 2026-10-15.
+#
+# Con opt-level=2 un `cargo run` de debug paga la optimizacion completa de las
+# ~870 dependencias (wgpu, naga, gpui, ...), que es la parte mas cara del build:
+# el build de desarrollo quedaba casi tan lento como uno release, con la
+# sensacion de "solo tardo dos minutos".
+#
+# Para auditar el hilo de audio con dependencias optimizadas (medir xruns con
+# cpumeter, comparar otro kernel, etc.), comentá la linea de abajo y poné
+# `opt-level = 2`; o compilá con `--profile release-debug`, que ya optimiza todo
+# sin tocar esto.
+opt-level = 0
