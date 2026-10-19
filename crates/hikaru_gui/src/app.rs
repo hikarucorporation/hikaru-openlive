@@ -775,6 +775,23 @@ impl AppState {
     /// id hasta soltar, evitando que el knob pelee bajo el dedo).
     /// Lo aplicado queda `dirty` para que el motor lo lleve a su instancia
     /// de audio aunque el cambio naciera en la ventana nativa.
+    ///
+    /// # Por qué `origin` no cambia casi nada acá
+    ///
+    /// La ventana manda dos cosas y este código las trata igual a propósito:
+    ///
+    /// - `FeedbackOrigin::Editor`: el plugin cambió el valor por su cuenta.
+    ///   El motor no lo tiene, así que sí tiene que marcarse `dirty`.
+    /// - `FeedbackOrigin::Host`: el editor confirmó un valor que el rack le
+    ///   mandó. Casi siempre `set_external_param` devuelve `None` (el valor
+    ///   ya era ese) y no hay nada que hacer. Cuando sí converge —porque el
+    ///   plugin recorta o cuantiza a un escalón distinto al del host— marcar
+    ///   `dirty` es lo correcto: el motor tiene que recibir el valor que el
+    ///   plugin realmente terminó usando.
+    ///
+    /// Lo que `origin` sí protege está aguas arriba, en el envío: evita que
+    /// el bucle reenvíe como `Editor` el eco de su propio `SetParam`, que
+    /// provocaría un ciclo rack → editor → rack en cada knob.
     pub fn apply_param_feedback(
         &mut self,
         events: Vec<external_plugins_settings::ParamFeedbackEvent>,
@@ -849,6 +866,11 @@ pub struct HikaruApp {
     _sig_input_sub: Subscription,
     /// Mantiene viva la suscripción al buscador del navegador de plugins.
     _plugin_search_sub: Subscription,
+    /// Mantiene viva la suscripción a la activación/desactivación de la ventana.
+    ///
+    /// Es lo que re-eleva los editores nativos de plugin cuando el DAW vuelve
+    /// al frente: ver `views::dsp_rack::keep_plugin_editors_above`.
+    _window_activation_sub: Subscription,
     /// Viewport 3D de la Wavetable. Se guarda como campo además de publicarse
     /// como `Global` para que quede atado al ciclo de vida de la entidad: si
     /// sólo fuera un global, el renderer offscreen sobreviviría a la ventana.
@@ -1131,6 +1153,22 @@ impl HikaruApp {
             });
         });
 
+        // Re-elevación de los editores nativos cuando el DAW vuelve al frente.
+        //
+        // GPUI no baja la ventana de un plugin: lo hace el gestor de ventanas
+        // del sistema, reacting al click sobre el DAW. Lo único que se puede
+        // hacer desde acá es re-apilar el editor después del click, y sólo si
+        // el DAW recuperó la activación.
+        //
+        // Se dispara también al perderla, y a propósito:
+        // `keep_plugin_editors_above` no enfoca el editor, así que el gesto de
+        // "clickear el plugin" produce un no-op inocuo en vez de pelear con el
+        // WM. Filtrar por "recién activada" exigiría leer el estado de
+        // activación desde acá, y la API de GPUI no lo expone en `Window`.
+        let window_activation_sub = cx.observe_window_activation(window, |_, _, cx| {
+            crate::views::dsp_rack::keep_plugin_editors_above(cx);
+        });
+
         let wavetable_viewport = WavetableViewportHandle::new();
         // El renderer offscreen se levanta una vez por sesión. La conexión es
         // asíncrona (pedir adapter y device a wgpu lo es) y va en un `spawn`
@@ -1148,6 +1186,7 @@ impl HikaruApp {
             _bpm_input_sub: bpm_input_sub,
             _sig_input_sub: sig_input_sub,
             _plugin_search_sub: plugin_search_sub,
+            _window_activation_sub: window_activation_sub,
             wavetable_viewport,
         }
     }

@@ -244,6 +244,39 @@ fn close_external_editor(cx: &mut gpui_kit::App, plugin_name: &str) {
     });
 }
 
+/// Re-eleva los editores nativos abiertos sin robarles el foco al DAW.
+///
+/// Esto es la mitad "GPUI" del envoltorio tipo Fruity Wrapper. La otra mitad
+/// son los hints de `WM_TRANSIENT_FOR` / `_NET_WM_STATE_ABOVE` que se aplican
+/// al abrir la ventana (ver `external_plugins_settings`).
+///
+/// # Por qué hace falta si ya hay `_NET_WM_STATE_ABOVE`
+///
+/// El hint se aplica una vez, antes del `map`, y después manda el gestor de
+/// ventanas. Cada vez que el usuario clickea cualquier parte del DAW —una
+/// pista, un clip, un knob del rack— el WM sube su propia ventana y deja el
+/// editor del plugin detrás: exactamente el síntoma que se quiere eliminar.
+///
+/// Cuando el DAW recupera la activación, se avisa a cada ventana abierta para
+/// que se re-eleve. El re-elevado usa `ConfigureWindow(stack=Above)`, que
+/// Re-elevar **sin** activar. Si focused el editor, el usuario perdería el foco
+/// del knob que estaba por tocar.
+///
+/// No hay forma de "no enviar un Unfocus": GPUI no emite `LowerWindow`, lo que
+/// baja la ventana del plugin es el propio WM reacting al click. La única
+/// manera de que el editor vuelva a quedar arriba sin quitarle el foco al DAW
+/// es pedir el re-apilado después del click, que es lo que hace esto.
+pub fn keep_plugin_editors_above(cx: &mut gpui_kit::App) {
+    let st = state(cx);
+    let any_open = st.read(cx).plugin_settings_state.any_plugin_open();
+    if !any_open {
+        return;
+    }
+    st.update(cx, |state, _| {
+        state.plugin_settings_state.raise_open_plugins();
+    });
+}
+
 /// Fija un parámetro externo desde un knob del rack.
 ///
 /// Escribe la caché del slot (lo que pintan los knobs), la marca `dirty`

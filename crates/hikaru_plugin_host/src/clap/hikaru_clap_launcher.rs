@@ -9,20 +9,65 @@ use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, Host
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::PluginParams;
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
-use clack_extensions::timer::{HostTimer, HostTimerImpl, TimerId};
+use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::events::io::{EventBuffer, OutputEvents};
 use clack_host::prelude::*;
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 use crate::platform::linux::X11Connection;
 
+/// Lo que el plugin pidió al host desde otro hilo y hay que atender en el
+/// hilo principal.
+///
+/// CLAP no deja llamar a la GUI desde el hilo de audio: el plugin deja una
+/// bandera con `request_*` y el host tiene que decidir, desde su hilo
+/// principal, si lo hace. Si nadie lee la bandera, el plugin queda esperando
+/// para siempre.
+#[derive(Debug, Default)]
+struct GuiRequests {
+    show: bool,
+    hide: bool,
+    resize: Option<GuiSize>,
+}
+
 struct HikaruShared {
     log_to_stdout: bool,
+    /// El plugin pidió que le llamen al callback de hilo principal.
+    ///
+    /// Es lo que dispara `PluginInstance::call_on_main_thread_callback`, y es
+    /// el mecanismo que usa un plugin CLAP para "despertar" su GUI cuando
+    /// otro de sus hilos terminó un trabajo. Antes esto era un no-op: un
+    /// plugin que pedía callback y no lo recibía se quedaba con el editor
+    /// congelado esperando un mensaje que nunca llegaba.
+    main_thread_callback: AtomicBool,
+    /// Peticiones de GUI pendientes de atender en el tick.
+    gui: Mutex<GuiRequests>,
+}
+
+impl HikaruShared {
+    fn new() -> Self {
+        Self {
+            log_to_stdout: true,
+            main_thread_callback: AtomicBool::new(false),
+            gui: Mutex::new(GuiRequests::default()),
+        }
+    }
+
+    /// Si el plugin pidió callback y limpia la bandera.
+    ///
+    /// Limpiar en el mismo paso que leer es lo que evita que se sirva dos
+    /// veces por un solo pedido: la bandera es un "pendiente", no un
+    /// contador, y perder uno es preferible a darle un callback con el
+    /// plugin en un estado que ya cambió.
+    fn take_callback_request(&self) -> bool {
+        self.main_thread_callback.swap(false, Ordering::AcqRel)
+    }
 }
 
 impl<'a> SharedHandler<'a> for HikaruShared {
@@ -30,7 +75,12 @@ impl<'a> SharedHandler<'a> for HikaruShared {
         eprintln!("[CLAP Host] Plugin request_restart");
     }
     fn request_process(&self) {}
-    fn request_callback(&self) {}
+    fn request_callback(&self) {
+        // No se sirve acá: `Shared` también lo ve el hilo de audio, y la
+        // llamada al callback tiene que salir del hilo principal. Se marca y
+        // lo atiende `ClapInstance::gui_tick`.
+        self.main_thread_callback.store(true, Ordering::Release);
+    }
 }
 
 impl HostLogImpl for HikaruShared {
@@ -49,21 +99,33 @@ impl HostLogImpl for HikaruShared {
 
 impl HostGuiImpl for HikaruShared {
     fn resize_hints_changed(&self) {}
+
+    /// El plugin quiere otro tamaño.
+    ///
+    /// No se redimensiona desde acá: CLAP exige que la GUI sólo se toque desde
+    /// el hilo principal, y `request_resize` puede llegar desde el hilo de
+    /// audio. Se anota el tamaño y `gui_tick` lo aplica.
     fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
-        println!(
-            "[CLAP Host] Plugin requests resize to {}x{}",
-            new_size.width, new_size.height
-        );
+        if let Ok(mut gui) = self.gui.lock() {
+            gui.resize = Some(new_size);
+        }
         Ok(())
     }
+
     fn request_show(&self) -> Result<(), HostError> {
-        println!("[CLAP Host] Plugin requests show");
+        if let Ok(mut gui) = self.gui.lock() {
+            gui.show = true;
+        }
         Ok(())
     }
+
     fn request_hide(&self) -> Result<(), HostError> {
-        println!("[CLAP Host] Plugin requests hide");
+        if let Ok(mut gui) = self.gui.lock() {
+            gui.hide = true;
+        }
         Ok(())
     }
+
     fn closed(&self, was_destroyed: bool) {
         println!(
             "[CLAP Host] GUI closed (was_destroyed={})",
@@ -72,29 +134,116 @@ impl HostGuiImpl for HikaruShared {
     }
 }
 
+/// Temporizadores que el plugin registró, con su próxima hora de disparo.
+///
+/// Antes el host guardaba `Vec<TimerId>` y `TimerId` se construía con el
+/// **período** como valor. Eso rompía dos cosas a la vez:
+///
+/// - Dos temporizadores con el mismo período recibían el mismo id, así que
+///   desregistrar uno desataba también al otro.
+/// - No había ninguna hora de disparo, con lo cual `gui_tick` no tenía forma
+///   de saber a quién tocarle el timbre: el vector era una lista de
+///   suspendingers.
+///
+/// CLAP garantiza que los ids son únicos *por instancia de plugin*, así que
+/// acá van con un contador propio.
+struct TimerRegistry {
+    /// `(id, período en ms, próximo disparo en ms)`.
+    entries: Vec<(TimerId, u32, u64)>,
+    next_id: u32,
+}
+
+impl TimerRegistry {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            // 0 está reservado como "sin temporizador" en varias implementaciones.
+            next_id: 1,
+        }
+    }
+
+    fn register(&mut self, period_ms: u32, now_ms: u64) -> TimerId {
+        let id = TimerId(self.next_id);
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        self.entries.push((id, period_ms, now_ms.saturating_add(period_ms as u64)));
+        id
+    }
+
+    fn unregister(&mut self, id: TimerId) {
+        self.entries.retain(|(entry, _, _)| *entry != id);
+    }
+
+    /// Devuelve los ids que vencen en este instante y reprograma el siguiente.
+    ///
+    /// Se agrupan para que `gui_tick` pueda disparar un solo `on_timer` por
+    /// id vencido, en vez de recalcular el vencimiento en el bucle del host.
+    fn take_due(&mut self, now_ms: u64) -> Vec<TimerId> {
+        let mut due = Vec::new();
+        for (id, period, next) in &mut self.entries {
+            if now_ms >= *next {
+                due.push(*id);
+                *next = now_ms.saturating_add(*period as u64);
+            }
+        }
+        due
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 struct HikaruMainThread<'a> {
     #[allow(dead_code)]
     shared: &'a HikaruShared,
-    timers: Mutex<Vec<TimerId>>,
+    timers: Mutex<TimerRegistry>,
+    /// Reloj del hilo. Sólo para los temporizadores: se usa
+    /// `Instant` y no el reloj de pared para que un ajuste de hora no los
+    /// dispare en bucle.
+    started: std::time::Instant,
 }
 
 impl<'a> MainThreadHandler<'a> for HikaruMainThread<'a> {}
 
+impl HikaruMainThread<'_> {
+    fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// Temporizadores a los que hay que tocarle el timbre ahora.
+    ///
+    /// Vive en el handler de hilo principal a propósito: es el único sitio
+    /// donde CLAP garantiza que se está en el hilo correcto para llamar al
+    /// callback del plugin.
+    fn take_due_timers(&self) -> Vec<TimerId> {
+        match self.timers.lock() {
+            Ok(mut timers) => timers.take_due(self.elapsed_ms()),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
 impl HostTimerImpl for HikaruMainThread<'_> {
     fn register_timer(&self, period_ms: u32) -> Result<TimerId, HostError> {
-        let id = TimerId(period_ms);
-        if let Ok(mut timers) = self.timers.lock() {
-            timers.push(id);
-        }
-        println!("[CLAP Host] Timer registered: {}ms", period_ms);
+        let mut timers = self
+            .timers
+            .lock()
+            .map_err(|_| HostError::Message("el registro de temporizadores está envenenado"))?;
+        let id = timers.register(period_ms, self.elapsed_ms());
+        println!(
+            "[CLAP Host] Timer registrado: {}ms (id={}, {} activos)",
+            period_ms,
+            id.0,
+            timers.len()
+        );
         Ok(id)
     }
 
     fn unregister_timer(&self, timer_id: TimerId) -> Result<(), HostError> {
         if let Ok(mut timers) = self.timers.lock() {
-            timers.retain(|t| *t != timer_id);
+            timers.unregister(timer_id);
         }
-        println!("[CLAP Host] Timer unregistered: {:?}", timer_id);
+        println!("[CLAP Host] Timer desregistrado: {}", timer_id);
         Ok(())
     }
 }
@@ -234,6 +383,7 @@ impl ParamQueue {
     }
 }
 
+
 unsafe impl Send for ClapInstance {}
 
 impl ClapInstance {
@@ -280,10 +430,11 @@ impl ClapInstance {
             .map_err(|e| format!("[CLAP] HostInfo: {}", e))?;
 
         let plugin = clack_host::plugin::PluginInstance::<HikaruClapHost>::new(
-            |_| HikaruShared { log_to_stdout: true },
+            |_| HikaruShared::new(),
             |shared| HikaruMainThread {
                 shared,
-                timers: Mutex::new(Vec::new()),
+                timers: Mutex::new(TimerRegistry::new()),
+                started: std::time::Instant::now(),
             },
             &entry,
             plugin_id,
@@ -399,8 +550,58 @@ impl ClapInstance {
             }
         }
     }
-}
 
+    /// Aplica lo que el plugin pidió en su extensión de GUI.
+    ///
+    /// Se separa de [`Self::gui_tick`] porque tiene su propio camino de
+    /// salida (si el plugin pidió `hide`, la ventana se oculta) y porque
+    /// tomar los `Mutex` compartidos fuera del resto del tick deja claro que
+    /// no se mantienen bloqueados mientras se habla con el plugin.
+    fn service_gui_requests(&mut self) {
+        let Some(requests) = self.plugin.access_shared_handler(|shared| {
+            let Ok(mut gui) = shared.gui.lock() else {
+                return None;
+            };
+            let requests = GuiRequests {
+                show: std::mem::take(&mut gui.show),
+                hide: std::mem::take(&mut gui.hide),
+                resize: gui.resize.take(),
+            };
+            if requests.show || requests.hide || requests.resize.is_some() {
+                Some(requests)
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+
+        let Some(gui) = &self.gui else {
+            return;
+        };
+        let handle = self.plugin.plugin_handle();
+
+        if let Some(size) = requests.resize {
+            if gui.can_resize(&handle) {
+                let _ = gui.set_size(&handle, size);
+            } else {
+                eprintln!(
+                    "[CLAP] '{}' pidió un resize a {}x{} pero declara que no se redimensiona",
+                    self.name, size.width, size.height
+                );
+            }
+        }
+        // `hide` va después de `show`: si el plugin pidió las dos en el mismo
+        // tick, la última intención gana y una ventana oculta es más segura
+        // que una que quedó visible detrás de todo.
+        if requests.show {
+            let _ = gui.show(&handle);
+        }
+        if requests.hide {
+            let _ = gui.hide(&handle);
+        }
+    }
+}
 impl PluginInstance for ClapInstance {
     /// Procesa un bloque interleaved estéreo a través del plugin CLAP.
     ///
@@ -778,6 +979,57 @@ impl PluginInstance for ClapInstance {
 
     fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {
         Vec::new()
+    }
+
+    /// Bompea el editor del plugin desde el hilo principal.
+    ///
+    /// Hace las tres cosas que CLAP deja explícitamente en manos del host y
+    /// que antes nadie hacía. Son la razón por la que el display de un plugin
+    /// CLAP puede quedarse plano aunque el audio suene perfecto:
+    ///
+    /// 1. **Dispara los temporizadores** que el plugin registró a través de la
+    ///    extensión `timer`. Un editor que invalida su display desde
+    ///    `on_timer` no vuelve a pintar nunca si el host no llama. Antes el
+    ///    host guardaba el registro y no disparaba nada: la extensión estaba
+    ///    declarada pero muerta.
+    /// 2. **Atiende el callback de hilo principal** que el plugin pidió con
+    ///    `request_callback`. Es como un plugin "despierta" su GUI cuando otro
+    ///    de sus hilos terminó algo.
+    /// 3. **Aplica las peticiones de GUI** (`request_resize`, `request_show`,
+    ///    `request_hide`), que por contrato de CLAP pueden llegar desde el
+    ///    hilo de audio y sólo se tocan desde el principal.
+    ///
+    /// Si el plugin no declaró ninguna de las tres, el tick no hace nada: son
+    /// unos `if` sobre banderas, no un coste fijo.
+    fn gui_tick(&mut self) {
+        // 1. Temporizadores. Se leen del handler de hilo principal porque es
+        //    el único lugar donde se garantiza que estamos en el hilo que
+        //    CLAP permite usar para llamar al plugin.
+        let due = self.plugin.access_handler(|handler| handler.take_due_timers());
+        if !due.is_empty() {
+            let handle = self.plugin.plugin_handle();
+            if let Some(timer) = handle.get_extension::<PluginTimer>() {
+                for id in due {
+                    timer.on_timer(&handle, id);
+                }
+            } else {
+                eprintln!(
+                    "[CLAP] '{}' registró temporizadores pero no expone la extensión timer",
+                    self.name
+                );
+            }
+        }
+
+        // 2. Callback de hilo principal.
+        let wants_callback = self
+            .plugin
+            .access_shared_handler(|shared| shared.take_callback_request());
+        if wants_callback {
+            self.plugin.call_on_main_thread_callback();
+        }
+
+        // 3. Peticiones de GUI.
+        self.service_gui_requests();
     }
 }
 

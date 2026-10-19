@@ -14,20 +14,17 @@ use crate::app::{state, HikaruApp};
 
 pub use hikaru_plugin_host::PluginDescriptor as DiscoveredPlugin;
 pub use hikaru_plugin_host::{HostParentKind, PluginFormat};
-use hikaru_plugin_host::PluginInstance as _;
+use hikaru_plugin_host::hikaru_wrapper::{
+    FeedbackOrigin, HikaruWrapper, LoopExit, ParamFeedback, WrapperConfig, WrapperRuntime,
+};
 
 /// Comando del rack hacia el hilo de la ventana de un plugin abierto.
 ///
-/// Viaja por `mpsc` sin cota: `send` no bloquea y el hilo lo drena con
-/// `try_recv` en cada tick, así el gesto del usuario no espera al servidor
-/// X11 ni viceversa.
-#[derive(Debug, Clone)]
-pub enum PluginWindowCommand {
-    /// Un knob del rack movió un parámetro (id, normalizado 0..1).
-    SetParam { id: u32, value: f32 },
-    /// Cerrar la ventana (el usuario la cerró desde el DAW).
-    Close,
-}
+/// Re-export del tipo del envoltorio: el hilo de la ventana y el hilo del DAW
+/// tienen que hablar **exactamente** el mismo idioma, y duplicar el enum
+/// obligaría a mantener una tabla de conversión que nadie va a leer cuando
+/// se agregue un variante.
+pub use hikaru_plugin_host::hikaru_wrapper::WrapperCommand as PluginWindowCommand;
 
 /// Reduce el handle nativo de la ventana de GPUI al enum `Send` que el hilo
 /// de la ventana entiende.
@@ -49,14 +46,18 @@ pub fn capture_host_parent(window: &mut gpui_kit::Window) -> HostParentKind {
 
 /// Lo que el editor nativo movió por su cuenta, hacia la UI.
 ///
-/// Lo produce el hilo de la ventana sondeando `poll_param_changes` y lo
-/// consume `AppState::apply_param_feedback` en el hilo principal, que mueve
-/// los knobs del rack para que no mientan. `descriptor_id` (estable entre
-/// escaneos) empareja con el slot aunque haya renombres de por medio.
+/// Lo produce el hilo de la ventana al bombear el editor y lo consume
+/// `AppState::apply_param_feedback` en el hilo principal, que mueve los knobs
+/// del rack para que no mientan. `descriptor_id` (estable entre escaneos)
+/// empareja con el slot aunque haya renombrados de por medio.
+///
+/// `origin` distingue el eco del host de un cambio real del editor: ver
+/// [`FeedbackOrigin`].
 #[derive(Debug, Clone)]
 pub struct ParamFeedbackEvent {
     pub descriptor_id: String,
     pub changes: Vec<(u32, f32)>,
+    pub origin: FeedbackOrigin,
 }
 
 enum ScanMessage {
@@ -296,10 +297,13 @@ impl PluginSettingsState {
     /// Vuelve de inmediato: el `dlopen`, la creación X11 y el embebido corren
     /// en el hilo hijo, así el hilo principal nunca se cuelga aunque el
     /// plugin tarde (o muera) al abrir. `parent` es el handle nativo de la
-    /// ventana de GPUI capturado en el click: en X11 la ventana del plugin
-    /// nace hija de la del DAW (transient, centrada); en Wayland cae al
-    /// flotante de XWayland porque una superficie Wayland no puede
-    /// emparentar ventanas X11.
+    /// ventana de GPUI capturado en el click.
+    ///
+    /// La envoltura de ventana ([`WrapperConfig`], con los defaults tipo
+    /// Fruity Wrapper) se arma acá y viaja al hilo hijo: `always_on_top` y
+    /// `keep_focused_with_parent` son lo que hace que la ventana del plugin no
+    /// desaparezca detrás del DAW cuando el usuario clickea cualquier parte de
+    /// la interfaz.
     pub fn open_plugin(
         &mut self,
         plugin: &DiscoveredPlugin,
@@ -325,6 +329,7 @@ impl PluginSettingsState {
         let close_tx = self.close_tx.clone();
         let param_tx = self.param_tx.clone();
         let (cmd_tx, cmd_rx) = channel();
+        let wrapper_config = WrapperConfig::with_parent(parent);
 
         self.opening.insert(plugin.name.clone());
         self.cmd_tx.insert(plugin.name.clone(), cmd_tx);
@@ -335,7 +340,7 @@ impl PluginSettingsState {
                 plugin_name,
                 descriptor_id,
                 format,
-                parent,
+                wrapper_config,
                 cmd_rx,
                 param_tx,
                 close_tx,
@@ -344,6 +349,28 @@ impl PluginSettingsState {
         });
 
         self.open_plugins.insert(plugin.name.clone(), handle);
+    }
+
+    /// Re-eleva todas las ventanas de plugin abiertas, sin robarles el foco.
+    ///
+    /// La llama el DAW cuando recupera la activación (ver
+    /// `dsp_rack::keep_plugin_editors_above`). Cada hilo de ventana ejecuta
+    /// `ConfigureWindow(stack=Above)`, que devuelve el editor a su sitio sin
+    /// activarlo: el usuario acaba de clickear un knob del DAW y no puede
+    /// perder el foco a mitad del gesto.
+    ///
+    /// Cuesta un `send` por ventana abierta sobre un canal sin cota, así que
+    /// es barato de llamar aunque se termine invocando en cada activación.
+    /// Las ventanas en proceso de apertura todavía no tienen hilo al que
+    /// hablar y no aparecen en `cmd_tx`; no necesitan re-elevación porque
+    /// nacen con los hints ya puestos.
+    pub fn raise_open_plugins(&self) {
+        if self.cmd_tx.is_empty() {
+            return;
+        }
+        for tx in self.cmd_tx.values() {
+            let _ = tx.send(PluginWindowCommand::Raise);
+        }
     }
 
     pub fn close_plugin(&mut self, name: &str) {
@@ -363,548 +390,115 @@ impl PluginSettingsState {
 
 /// Hilo dueño de la ventana nativa de un plugin externo.
 ///
-/// Ciclo de vida (el orden importa, es lo que estaba roto):
+/// Todo lo que hace es **orquestar**: crear el envoltorio, cargar el plugin,
+/// embebedarlo y handing-le el bucle. La política de ventana y el tick viven en
+/// [`hikaru_plugin_host::hikaru_wrapper`]; lo que queda acá es el pegamento que
+/// necesita conocer el estado del DAW: el handle del plugin, la cinta de audio
+/// y los canales hacia el hilo principal.
 ///
-/// 1. Conectar a X11 (XWayland bajo Wayland) y crear la ventana **sin
-///    mapear**, hija de la ventana del DAW cuando la sesión es X11
-///    (`parent.x11_id()`): transient para el DAW y centrada sobre él, así no
-///    es un huérfano del WM sino una tool-window del DAW. En Wayland no hay
-///    XID que emparentar y cae al top-level de XWayland. Nada visible
-///    todavía: si la carga falla, no hay flash de ventana vacía.
-/// 2. Cargar el binario (`dlopen`). Si falla, destruir la ventana invisible
-///    y avisar a la UI con el motivo: el usuario ve el error en el rack, el
-///    hilo principal del DAW ni se entera.
-/// 3. Preguntar el tamaño preferido y embebido (`show_gui_embedded`, que
-///    devuelve `Result`). Sólo si el plugin confirma que su editor quedó
-///    adjunto (`is_gui_open`) se mapea la ventana.
-/// 4. Bucle por sondeo (nunca bloqueante ni con `unwrap`): drena los
-///    comandos del rack (`SetParam`/`Close`), los eventos X11 y cada ~100ms
-///    los cambios que el editor nativo hizo por su cuenta (feedback a la UI
-///    para mover los knobs del rack). Un error del servidor cierra la
-///    ventana, nunca el DAW.
-/// 5. Al salir: `hide_gui()` **antes** de destruir la ventana (el editor
-///    tiene que desengancharse mientras su padre sigue vivo), y después
-///    `destroy_window`. El `Drop` de la conexión cierra el contexto gráfico
-///    en último lugar, así ni el plugin ni el host pisan un XID muerto.
+/// # Ciclo de vida (el orden importa, es lo que estaba roto)
 ///
-/// Todo fallo manda `PluginClosedNotification { error: Some(..) }`; el
-/// cierre normal del usuario manda `error: None`.
+/// 1. Crear la ventana del envoltorio **sin mapear**
+///    ([`HikaruWrapperWindow::create`]). Nada visible todavía: si la carga
+///    falla, no hay flash de ventana vacía.
+/// 2. Cargar el binario (`dlopen`). Es lo que más falla (arquitectura, símbolos,
+///    dependencias) y por eso la ventana sigue invisible.
+/// 3. Preguntar el tamaño preferido y embebederse.
+/// 4. Mapear + activar. Recién ahora se muestra, con el primer frame ya
+///    teniendo contenido del plugin detrás.
+/// 5. Correr el bucle de 60 Hz hasta que alguien cierre la ventana.
+///
+/// Todo fallo manda `PluginClosedNotification { error: Some(..) }`; el cierre
+/// normal del usuario manda `error: None`.
 fn run_plugin_window(
     plugin_path: PathBuf,
     plugin_name: String,
     descriptor_id: String,
     format: PluginFormat,
-    parent: HostParentKind,
+    wrapper_config: WrapperConfig,
     cmd_rx: Receiver<PluginWindowCommand>,
     param_tx: Sender<ParamFeedbackEvent>,
     close_tx: Sender<PluginClosedNotification>,
     tap_key: hikaru_plugin_host::tap::TapKey,
 ) {
-    use raw_window_handle::{RawWindowHandle, XlibWindowHandle};
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::*;
-    use x11rb::protocol::Event;
-
     let notify = |error: Option<String>| {
         let _ = close_tx.send(PluginClosedNotification {
             name: plugin_name.clone(),
             error,
         });
     };
-    let fail = |message: String| {
-        eprintln!("[PluginWindow] '{}': {}", plugin_name, message);
-        notify(Some(message));
-    };
 
-    // --- 1. Conexión X11. Vive hasta el final de la función: es lo que
-    // mantiene vivo el contexto gráfico y la ventana.
-    let (conn, screen_num) = match x11rb::rust_connection::RustConnection::connect(None) {
-        Ok(c) => c,
-        Err(e) => {
-            fail(format!(
-                "Sin conexión X11/XWayland, no se puede abrir su ventana: {:?}. \
-                 Si estás en Wayland puro, revisa que XWayland esté activo.",
-                e
-            ));
-            return;
-        }
-    };
-    let screen = &conn.setup().roots[screen_num];
-    let root = screen.root;
-    let screen_w = screen.width_in_pixels as i16;
-    let screen_h = screen.height_in_pixels as i16;
-
-    // Padre del DAW cuando la sesión es X11: la ventana del plugin nace como
-    // hija suya (una ventana X11 puede tener por padre la de otro cliente de
-    // la misma DISPLAY). Se usa su geometría para centrar y su depth para no
-    // pedir un visual incompatible.
-    let daw_parent: Option<u32> = parent.x11_id();
-    let (parent_geom, parent_depth): (Option<(i16, i16)>, u8) = match daw_parent {
-        Some(xid) => match conn.get_geometry(xid) {
-            Ok(cookie) => match cookie.reply() {
-                Ok(geom) => (Some((geom.width as i16, geom.height as i16)), geom.depth),
-                Err(_) => (None, screen.root_depth),
-            },
-            Err(_) => (None, screen.root_depth),
-        },
-        None => (None, screen.root_depth),
-    };
-    if daw_parent.is_some() && parent_geom.is_none() {
-        eprintln!(
-            "[PluginWindow] El XID del DAW no respondió a GetGeometry; se usa top-level."
-        );
-    }
-
-    // --- 2. Ventana SIN mapear. Sin `RESIZE_REDIRECT` (esa máscara pide al
-    // servidor redirigir los resizes y bajo algunos WMs dejaba la ventana
-    // sin mapear para siempre: la ventana "no mostraba nada").
-    let window = match conn.generate_id() {
-        Ok(id) => id,
-        Err(e) => {
-            fail(format!("No se pudo reservar la ventana nativa: {:?}", e));
-            return;
-        }
-    };
-    // Si algo falla a partir de acá hay que destruir la ventana creada.
-    // (`window_created` sólo existe para no destruir dos veces lo que el
-    // servidor ya destruyó vía DestroyNotify.)
-    let width: u16 = 1024;
-    let height: u16 = 700;
-    // Posición: centrada sobre el DAW si es hija suya (coords relativas al
-    // padre), o sobre la pantalla si es top-level (coords relativas a root).
-    let (pos_x, pos_y) = match (daw_parent, parent_geom) {
-        (Some(_), Some((pw, ph))) => (
-            ((pw - width as i16) / 2).max(0),
-            ((ph - height as i16) / 2).max(0),
-        ),
-        _ => (
-            ((screen_w - width as i16) / 2).max(0),
-            ((screen_h - height as i16) / 2).max(0),
-        ),
-    };
-    let window_parent = match (daw_parent, parent_geom) {
-        (Some(xid), Some(_)) => xid,
-        _ => root,
-    };
-    let window_aux = CreateWindowAux::new()
-        .event_mask(EventMask::EXPOSURE | EventMask::KEY_PRESS | EventMask::STRUCTURE_NOTIFY);
-
-    if let Err(e) = conn.create_window(
-        parent_depth,
-        window,
-        window_parent,
-        pos_x,
-        pos_y,
-        width,
-        height,
-        0,
-        WindowClass::INPUT_OUTPUT,
-        0,
-        &window_aux,
-    ) {
-        fail(format!("No se pudo crear la ventana nativa: {:?}", e));
-        return;
-    }
-    let mut window_created = true;
-
-    // Metadatos de ventana (best-effort: si fallan, la ventana sigue válida).
-    let title = format!("{} — Hikaru", plugin_name);
-    if let Ok(cookie) = conn.intern_atom(false, b"_NET_WM_NAME") {
-        if let Ok(reply) = cookie.reply() {
-            let _ = conn.change_property(
-                PropMode::REPLACE,
-                window,
-                reply.atom,
-                u32::from(AtomEnum::STRING),
-                8,
-                title.len() as u32,
-                title.as_bytes(),
-            );
-        }
-    }
-    if let Ok(cookie) = conn.intern_atom(false, b"WM_CLASS") {
-        if let Ok(reply) = cookie.reply() {
-            let class = b"hikaru-plugin\0Hikaru\0";
-            let _ = conn.change_property(
-                PropMode::REPLACE,
-                window,
-                reply.atom,
-                u32::from(AtomEnum::STRING),
-                8,
-                class.len() as u32,
-                &class[..],
-            );
-        }
-    }
-    // Protocolo de cierre: se guarda el átomo para el bucle. Si no se puede
-    // negociar, la ventana se cierra igual por DestroyNotify.
-    let wm_delete: Option<u32> = conn
-        .intern_atom(false, b"WM_DELETE_WINDOW")
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .map(|reply| {
-            let atom = reply.atom;
-            if let Ok(proto_cookie) = conn.intern_atom(false, b"WM_PROTOCOLS") {
-                if let Ok(proto_reply) = proto_cookie.reply() {
-                    let data = atom.to_ne_bytes();
-                    let _ = conn.change_property(
-                        PropMode::REPLACE,
-                        window,
-                        proto_reply.atom,
-                        u32::from(AtomEnum::ATOM),
-                        32,
-                        1,
-                        &data[..],
-                    );
-                }
-            }
-            atom
-        });
-
-    // Emparentado con el DAW (sólo X11): transient + tipo diálogo para que el
-    // WM la apile, minimice y enfoque junto a la ventana principal en vez de
-    // tratarla como una app ajena. Todo best-effort: sin esto la ventana
-    // sigue abriendo, sólo menos integrada.
-    if let Some(daw) = daw_parent {
-        if let Ok(cookie) = conn.intern_atom(false, b"WM_TRANSIENT_FOR") {
-            if let Ok(reply) = cookie.reply() {
-                let data = daw.to_ne_bytes();
-                let _ = conn.change_property(
-                    PropMode::REPLACE,
-                    window,
-                    reply.atom,
-                    u32::from(AtomEnum::WINDOW),
-                    32,
-                    1,
-                    &data[..],
-                );
-            }
-        }
-        if let (Ok(type_cookie), Ok(dialog_cookie)) = (
-            conn.intern_atom(false, b"_NET_WM_WINDOW_TYPE"),
-            conn.intern_atom(false, b"_NET_WM_WINDOW_TYPE_DIALOG"),
-        ) {
-            if let (Ok(type_reply), Ok(dialog_reply)) =
-                (type_cookie.reply(), dialog_cookie.reply())
-            {
-                let data = dialog_reply.atom.to_ne_bytes();
-                let _ = conn.change_property(
-                    PropMode::REPLACE,
-                    window,
-                    type_reply.atom,
-                    u32::from(AtomEnum::ATOM),
-                    32,
-                    1,
-                    &data[..],
-                );
-            }
-        }
-        println!(
-            "[PluginWindow] Ventana {} emparentada al DAW (XID {})",
-            window, daw
-        );
-    } else {
-        println!(
-            "[PluginWindow] Sin padre X11 (Wayland u otro): ventana flotante de XWayland."
-        );
-    }
-
-    // --- 3. Cargar el binario. Es lo que más falla (arquitectura, símbolos,
-    // dependencias): por eso la ventana sigue invisible.
-    let instance: Option<Box<dyn hikaru_plugin_host::PluginInstance>> = match format {
-        PluginFormat::CLAP => match hikaru_plugin_host::ClapInstance::load(&plugin_path) {
-            Ok(inst) => {
-                println!("[PluginWindow] CLAP cargado para '{}'", plugin_name);
-                Some(Box::new(inst))
-            }
-            Err(e) => {
-                let _ = conn.destroy_window(window);
-                let _ = conn.flush();
-                fail(format!("No se pudo cargar el plugin: {}", e));
-                return;
-            }
-        },
-        PluginFormat::VST3 => match hikaru_plugin_host::Vst3Instance::load(&plugin_path) {
-            Ok(inst) => {
-                println!("[PluginWindow] VST3 cargado para '{}'", plugin_name);
-                Some(Box::new(inst))
-            }
-            Err(e) => {
-                let _ = conn.destroy_window(window);
-                let _ = conn.flush();
-                fail(format!("No se pudo cargar el plugin: {}", e));
-                return;
-            }
-        },
-    };
-    let mut inst = match instance {
-        Some(i) => i,
-        None => {
-            let _ = conn.destroy_window(window);
-            let _ = conn.flush();
-            fail("El plugin no devolvió una instancia válida.".to_string());
-            return;
-        }
-    };
-
-    // Cinta de audio del motor (tape bus).
-    //
-    // Esta ventana corre con una instancia PROPIA del plugin —la que suena
-    // vive dentro de `DspPluginNode`, en el hilo de audio— así que sin esto el
-    // editor no recibe un solo sample: los knobs andan (son derivados de
-    // parámetro) pero el display reactivo al audio queda plano para siempre.
-    //
-    // Con el tap, el motor publica en cada bloque el buffer ya procesado y acá
-    // se lo pasamos a la instancia de la ventana. Es el mismo patrón que un
-    // host mandando la entrada del plugin a su propio editor.
-    //
-    // La tasa sale del tap y no de una constante: VST3 sella la frecuencia en
-    // `setupProcessing`, así que si esta instancia arrancara a 44100 mientras
-    // el motor corre a 48000 el display se dibujaría con la escala mal.
-    let tap = hikaru_plugin_host::tap::lookup(tap_key);
-    let mut feed: Option<(std::sync::Arc<hikaru_plugin_host::PluginTap>, Vec<f32>)> = match &tap {
-        Some(t) => {
-            println!(
-                "[PluginWindow] '{}' alimentado desde el motor a {} Hz (tape bus)",
-                plugin_name,
-                t.sample_rate() as u32
-            );
-            Some((std::sync::Arc::clone(t), Vec::new()))
-        }
-        None => {
-            // El slot no tiene plugin en el motor, o ya se quitó. La ventana
-            // igual sirve para editar parámetros; sólo no hay display reactivo
-            // al audio.
-            println!(
-                "[PluginWindow] '{}' sin plugin en el motor: el editor abre, pero sin audio (display plano)",
-                plugin_name
-            );
-            None
-        }
-    };
-    if let Some((t, _)) = &feed {
-        inst.set_sample_rate(t.sample_rate());
-    }
-
-    // Tamaño preferido conocido antes de embebido (VST3 lo sabe; CLAP lo
-    // confirma después en `notify_gui_embedded`).
-    if let Some((pref_w, pref_h)) = inst.get_gui_size() {
-        if pref_w > 0 && pref_h > 0 {
-            let values = ConfigureWindowAux::new()
-                .width(pref_w)
-                .height(pref_h);
-            let _ = conn.configure_window(window, &values);
-            let _ = conn.flush();
-        }
-    }
-
-    // --- 4. Embebido. Si el plugin lo rechaza, la ventana nunca se muestra:
-    // se destruye invisible y la UI pinta el motivo en el rack.
-    let xlib_handle = XlibWindowHandle::new(window as u64);
-    let raw_handle = RawWindowHandle::Xlib(xlib_handle);
-    if let Err(e) = inst.show_gui_embedded(raw_handle) {
-        inst.hide_gui();
-        let _ = conn.destroy_window(window);
-        let _ = conn.flush();
-        fail(e);
-        return;
-    }
-    if !inst.is_gui_open() {
-        eprintln!(
-            "[PluginWindow] '{}' aceptó el embebido pero no confirma editor abierto",
-            plugin_name
-        );
-        inst.hide_gui();
-        let _ = conn.destroy_window(window);
-        let _ = conn.flush();
-        fail("El plugin no abrió su editor (lo rechazó sin dar un motivo).".to_string());
-        return;
-    }
-
-    if let Some((actual_w, actual_h)) = inst.notify_gui_embedded() {
-        if actual_w > 0 && actual_h > 0 {
-            let values = ConfigureWindowAux::new()
-                .width(actual_w)
-                .height(actual_h);
-            let _ = conn.configure_window(window, &values);
-            let _ = conn.flush();
-            println!(
-                "[PluginWindow] Ventana ajustada al tamaño del editor: {}x{}",
-                actual_w, actual_h
-            );
-        }
-    }
-
-    // --- 5. Recién ahora se muestra: el primer frame ya tiene contenido del
-    // plugin detrás, no una ventana vacía.
-    if let Err(e) = conn.map_window(window) {
-        inst.hide_gui();
-        let _ = conn.destroy_window(window);
-        let _ = conn.flush();
-        fail(format!("La ventana nativa no se pudo mostrar: {:?}", e));
-        return;
-    }
-    if let Err(e) = conn.flush() {
-        eprintln!("[PluginWindow] Aviso: flush tras map falló: {:?}", e);
-    }
-    println!(
-        "[PluginWindow] Ventana {} visible para '{}'",
-        window, plugin_name
+    // Todo el ciclo de vida —ventana, `dlopen`, embebido, apagado— vive en
+    // `HikaruWrapper::open`. Acá sólo se le pasa la cinta de audio del motor,
+    // se traduce el resultado al canal de la UI y se corre.
+    let (feedback_tx, feedback_rx) = channel::<ParamFeedback>();
+    let open_result = HikaruWrapper::open(
+        &plugin_path,
+        format,
+        &format!("{}", plugin_name),
+        wrapper_config,
+        WrapperRuntime::default(),
+        cmd_rx,
+        feedback_tx,
+        tap_key,
     );
 
-    // El consumidor se conecta recién acá, con la ventana ya visible y el
-    // editor ya embebido. Antes habría que acordarse de desconectarlo en cada
-    // `return` temprano (el fallo del `dlopen` es el caso normal, no el
-    // excepcional), y un consumidor colgado hace que el motor siga copiando
-    // bloques al pedo.
-    if let Some((t, _)) = &feed {
-        t.attach_consumer();
-    }
+    let mut wrapper = match open_result {
+        Ok(wrapper) => wrapper,
+        Err(e) => {
+            let message = e.to_string();
+            eprintln!("[PluginWindow] '{}': {}", plugin_name, message);
+            notify(Some(message));
+            return;
+        }
+    };
 
-    // --- 6. Bucle por sondeo (10ms): nunca bloquea ni paniquea. Drena tres
-    // fuentes sin que ninguna muera de hambre: comandos del rack (un knob
-    // movido llega al editor nativo en el siguiente tick), eventos X11 y, cada
-    // ~100ms, lo que el editor movió por su cuenta (feedback a los knobs del
-    // rack). Un error del servidor cierra la ventana, nunca el DAW (un panic
-    // dejaría la entrada de `open_plugins` colgada y la ventana zombie).
-    // Nota: esto NO toca el hilo principal ni el de audio; todo vive acá.
-    let mut tick: u64 = 0;
-    loop {
-        // 6a. Comandos del rack. `try_recv` no bloquea: el gesto del usuario
-        // no espera al servidor X11 ni viceversa.
-        let mut close_requested = false;
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                PluginWindowCommand::SetParam { id, value } => {
-                    if !inst.set_param_normalized(id, value) {
-                        eprintln!(
-                            "[PluginWindow] '{}' rechazó set_param(id={id})",
-                            plugin_name
-                        );
-                    }
-                }
-                PluginWindowCommand::Close => {
-                    println!(
-                        "[PluginWindow] Cierre pedido desde el DAW para '{}'",
-                        plugin_name
-                    );
-                    close_requested = true;
-                }
-            }
-        }
-        if close_requested {
-            break;
-        }
+    println!(
+        "[PluginWindow] '{}' abierto: {} (hija del DAW: {}, sin decoraciones: {})",
+        plugin_name,
+        wrapper.plugin_name(),
+        wrapper.is_child_of_daw(),
+        wrapper.is_borderless()
+    );
 
-        // 6a-bis. Audio del motor → esta instancia del plugin.
-        //
-        // Es lo que hace que el display del editor se mueva. Sin este paso el
-        // plugin de la ventana nunca recibe un bloque y su espectro/oscope
-        // queda permanentemente plano aunque el audio suene perfecto en la
-        // cadena.
-        //
-        // La salida se descarta a propósito: quien produce el audio es el
-        // motor, con su propia instancia. Acá sólo se necesita que el plugin
-        // "escuche" para que su medidor reaccione.
-        //
-        // Ojo: esto corre en el hilo de la ventana, no en el de audio, así que
-        // un plugin lentísimo estira el tick — de ahí que la cinta descarte
-        // bloques en vez de acumular (ver `PluginTap::publish`).
-        if let Some((t, scratch)) = &mut feed {
-            if t.take(scratch) {
-                inst.process(&mut hikaru_core::AudioBuffer::new(scratch.as_mut_slice()));
-            }
-        }
-
-        // 6b. Eventos X11 pendientes (tampoco bloquea).
-        let mut user_closed = false;
-        loop {
-            match conn.poll_for_event() {
-                Ok(None) => break,
-                Ok(Some(Event::ClientMessage(msg))) => {
-                    if wm_delete.is_some_and(|atom| msg.type_ == atom) {
-                        println!(
-                            "[PluginWindow] Cierre pedido por el WM para '{}'",
-                            plugin_name
-                        );
-                        user_closed = true;
-                        break;
-                    }
+    // El feedback se reenvía con el id del descriptor para que el hilo
+    // principal sepa a qué slot pertenece. Va en su propio hilo porque el
+    // canal del bucle no lo consume nadie más y sin drainedor se llenaría: los
+    // temporizadores de CLAP y los analizadores generan cambios a 60 Hz.
+    let feedback_forwarder = std::thread::Builder::new()
+        .name("hikaru-plugin-feedback".into())
+        .spawn(move || {
+            while let Ok(feedback) = feedback_rx.recv() {
+                if feedback.changes.is_empty() {
+                    continue;
                 }
-                Ok(Some(Event::DestroyNotify(ev))) => {
-                    if ev.window == window {
-                        println!(
-                            "[PluginWindow] Ventana destruida desde fuera para '{}'",
-                            plugin_name
-                        );
-                        window_created = false;
-                        user_closed = true;
-                        break;
-                    }
-                }
-                Ok(Some(Event::ConfigureNotify(ev))) => {
-                    if ev.window == window && ev.width > 0 && ev.height > 0 {
-                        inst.resize_gui(ev.width as u32, ev.height as u32);
-                    }
-                }
-                Ok(Some(_)) => {}
-                Err(e) => {
-                    eprintln!(
-                        "[PluginWindow] Conexión X11 perdida para '{}': {:?}",
-                        plugin_name, e
-                    );
-                    window_created = false;
-                    user_closed = true;
-                    break;
-                }
-            }
-        }
-        if user_closed {
-            break;
-        }
-
-        // 6c. Feedback del editor nativo (~100ms): lo que el usuario movió en
-        // la ventana del plugin viaja a la UI para mover los knobs del rack.
-        // Se manda aunque esté vacío? No: sólo con cambios, para no spamear
-        // el canal y despertar al hilo principal en cada tick.
-        tick += 1;
-        if tick % 10 == 0 {
-            let changes = inst.poll_param_changes();
-            if !changes.is_empty() {
                 let _ = param_tx.send(ParamFeedbackEvent {
                     descriptor_id: descriptor_id.clone(),
-                    changes,
+                    changes: feedback.changes,
+                    origin: feedback.origin,
                 });
             }
+        });
+
+    let exit = wrapper.run();
+
+    // El hilo del feedback termina solo: `feedback_tx` se suelta con el
+    // bucle, así que `recv` devuelve error y el hilo muere. No se hace join
+    // porque `param_tx` vive en el estado de la app y sólo se cae con ella.
+    drop(feedback_forwarder);
+
+    // Se reporta el motivo real: un cierre pedido o del usuario no es un
+    // fallo y no debe pintar una línea roja en el rack, pero perder la
+    // conexión con el servidor sí es algo que el usuario tiene que saber.
+    match exit {
+        LoopExit::Requested | LoopExit::UserClosed => notify(None),
+        LoopExit::Destroyed => {
+            notify(Some("La ventana del editor fue destruida por el sistema de ventanas.".into()))
         }
-
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-
-    // --- 7. Apagado en orden: primero el editor (padre aún vivo), después
-    // la ventana, y la conexión cae con la función. `hide_gui` es
-    // idempotente y `Drop` la repite sin daño.
-    //
-    // El consumidor de la cinta se suelta antes que el editor: si no, el motor
-    // seguiría Publicando bloques hacia una ventana que ya está apagándose.
-    if let Some((t, _)) = &feed {
-        let dropped = t.dropped_blocks();
-        if dropped > 0 {
-            eprintln!(
-                "[PluginWindow] '{}': la cinta del motor tiró {} bloques (esta ventana no llegó a procesarlos)",
-                plugin_name, dropped
-            );
+        LoopExit::ConnectionLost(e) => {
+            notify(Some(format!("Se perdió la conexión con el servidor X11: {e}")))
         }
-        t.detach_consumer();
     }
-    inst.hide_gui();
-    if window_created {
-        let _ = conn.destroy_window(window);
-        let _ = conn.flush();
-    }
-    drop(inst);
-
-    notify(None);
 }
 
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {

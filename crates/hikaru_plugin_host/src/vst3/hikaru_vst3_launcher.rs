@@ -528,6 +528,20 @@ impl PluginInstance for Vst3Instance {
             .map(|(id, v)| (id, v.clamp(0.0, 1.0) as f32))
             .collect()
     }
+
+    /// Bompea el editor.
+    ///
+    /// VST3 no tiene un `idle()` que el host llame (ver la nota de
+    /// [`PluginInstance::gui_tick`]), así que acá no hay nada que hacer y el
+    /// no-op del trait es la respuesta correcta.
+    ///
+    /// Lo que sí importa para el display de un VST3 —y que **no** ocurre acá—
+    /// es que el tick del envoltorio siga llamando `process()`, porque es lo
+    /// único que drena el anillo de control y lo único que llena los
+    /// analizadores del editor. Por eso `gui_tick` queda vacío a propósito:
+    /// meter aquí un trabajo caro se pagaría en el hilo de la ventana sin
+    /// cambiar nada que el usuario vea.
+    fn gui_tick(&mut self) {}
 }
 
 impl Drop for Vst3Instance {

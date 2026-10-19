@@ -10,7 +10,32 @@ pub mod scratch;
 pub mod floating_window;
 pub mod tap;
 
+// El envoltorio de ventana vive en `hikaru-wrapper/`, al lado de `src/` y no
+// dentro. El `#[path]` con `..` es lo que permite que el directorio físico sea
+// ese y no `src/hikaru_wrapper/`: la carpeta del módulo tiene que poder
+// auditarse por separado de la del crate, porque es la que tiene que explicar
+// por qué el editor del plugin no es una ventana del escritorio.
+#[path = "../hikaru-wrapper/mod.rs"]
+pub mod hikaru_wrapper;
+
 pub use tap::PluginTap;
+pub use hikaru_wrapper::{
+    HostFrame, HostRelation, WrapperConfig, WrapperStyle, WrapperWindowType,
+};
+
+/// El envoltorio de ventana completo.
+///
+/// Se re-exporta desde la raíz porque es lo que el DAW usa para mostrar un
+/// editor de plugin como ventana propia y no como una ventana suelta del
+/// escritorio. [`hikaru_wrapper`] tiene el detalle.
+#[cfg(target_os = "linux")]
+pub use hikaru_wrapper::HikaruWrapper;
+
+/// Alias del nombre histórico de [`WrapperConfig`].
+///
+/// El módulo pasó a llamarse `hikaru_wrapper` y la config `WrapperConfig`;
+/// este alias existe para no romper a los que importaban el nombre viejo.
+pub use hikaru_wrapper::WrapperConfig as PluginWrapperConfig;
 
 /// Serializa la instanciación de plugins en todo el proceso.
 ///
@@ -192,6 +217,36 @@ pub trait PluginInstance: Send {
     fn show_gui_floating(&mut self) -> Result<(), String>;
     fn hide_gui(&mut self);
     fn get_name(&self) -> &str;
+
+    /// Bompea el editor: el equivalente por formato a un `idle()` del host.
+    ///
+    /// Lo llama el tick de [`hikaru_wrapper::WrapperEventLoop`], a ritmo fijo
+    /// (60 Hz por defecto), desde el hilo de la ventana.
+    ///
+    /// # Por qué no es opcional para CLAP
+    ///
+    /// La extensión `timer` de CLAP deja que el plugin registre temporizadores
+    /// y espere que el host los dispare. Si nadie los dispara, el plugin se
+    /// queda esperando: sus medidores no se redibujan y, si el editor se
+    /// invalida desde un callback de temporizador, no vuelve a pintar. Es la
+    /// mitad de la razón por la que el display de los plugins CLAP queda
+    /// plano (la otra mitad es el audio, ver [`PluginInstance::process`]).
+    ///
+    /// # Por qué VST3 no hace nada
+    ///
+    /// El SDK de VST3 no tiene un `idle()` llamado por el host en la versión
+    /// de bindings que se usa acá: el temporizador del editor lo maneja el
+    /// propio plugin, en su hilo. Lo que sí depende del host es que
+    /// `process()` se siga llamando y que los parámetros lleguen al
+    /// controlador, y ambas cosas las hace el tick del envoltorio. Por eso la
+    /// implementación por defecto es un no-op y no un error.
+    ///
+    /// # Contrato
+    ///
+    /// Se llama desde el hilo de la ventana, fuera de la ruta de audio, así
+    /// que sí puede asignar, loguear y hablar con el servidor X11. Aun así no
+    /// debe bloquear: el tick comparte hilo con el manejo de la ventana.
+    fn gui_tick(&mut self) {}
 
     /// Si el editor está actualmente adjunto a una ventana.
     ///
