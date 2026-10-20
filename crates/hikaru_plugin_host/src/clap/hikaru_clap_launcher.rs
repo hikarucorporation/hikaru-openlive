@@ -15,12 +15,19 @@ use clack_host::events::io::{EventBuffer, OutputEvents};
 use clack_host::prelude::*;
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 use crate::platform::linux::X11Connection;
+
+/// Diferencia mínima entre dos valores para considerarlos el mismo.
+///
+/// Un plugin que cuantiza a sus propios escalones no cambia de valor en cada
+/// lectura; sin esta tolerancia el sondeo por diferencia sería ruido.
+const PARAM_EPSILON: f32 = 1e-6;
 
 /// Lo que el plugin pidió al host desde otro hilo y hay que atender en el
 /// hilo principal.
@@ -336,6 +343,17 @@ pub struct ClapInstance {
     /// `EventBuffer` reusado para construir la cola de entrada de cada bloque.
     /// Vive en el hilo de audio y no se aloca por bloque.
     event_buffer: EventBuffer,
+    /// Último valor que el **host** le mandó al plugin, por parámetro.
+    ///
+    /// Es lo que permite distinguir "el usuario movió el knob del editor" de
+    /// "el host movió el knob del rack" en el sondeo por diferencia.
+    host_sent: HashMap<u32, f32>,
+    /// Último valor leído del plugin, por parámetro.
+    ///
+    /// Base del sondeo por diferencia: CLAP no tiene un `performEdit` que
+    /// avise de los cambios que nacen en el editor del plugin, así que la
+    /// única forma de enterarse es leer los valores y compararlos.
+    seen: HashMap<u32, f32>,
     window_attached: bool,
     #[cfg(target_os = "linux")]
     _x11_conn: Option<X11Connection>,
@@ -389,6 +407,16 @@ unsafe impl Send for ClapInstance {}
 impl ClapInstance {
     pub fn load(path: &Path) -> Result<Self, String> {
         let _load_guard = crate::load_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+        // Xlib tiene que saber que el proceso es multihilo **antes** de que
+        // el plugin abra su Display. Si no, el hilo de X11 del toolkit y el
+        // hilo del host se pisan las respuestas del servidor y la apertura
+        // del editor se cuelga en un deadlock. Ver `crate::xlib`.
+        //
+        // Lo mismo decide si hay que desactivar XInput2: bajo XWayland los
+        // eventos XI2 no llegan a los clientes X11, y los toolkits que los
+        // usan para el ratón (JUCE 7 en adelante) se quedan sin ratón.
+        crate::xlib::prepare_for_plugin_gui();
 
         println!("[CLAP] Cargando '{}'...", path.display());
 
@@ -473,6 +501,8 @@ impl ClapInstance {
             params,
             param_queue: ParamQueue::new(PARAM_QUEUE_CAPACITY),
             event_buffer: EventBuffer::with_capacity(PARAM_QUEUE_CAPACITY),
+            host_sent: HashMap::new(),
+            seen: HashMap::new(),
             window_attached: false,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
@@ -947,10 +977,11 @@ impl PluginInstance for ClapInstance {
         if self.params.is_none() {
             return false;
         }
-        let pending = PendingParam {
-            id,
-            value: value.clamp(0.0, 1.0),
-        };
+        let value = value.clamp(0.0, 1.0);
+        // Anota que el valor es del host: el sondeo por diferencia no debe
+        // devolverlo como si el usuario lo hubiera movido en el editor.
+        self.host_sent.insert(id, value);
+        let pending = PendingParam { id, value };
 
         // Camino directo para un plugin que todavía no está sonando.
         if let Some(mut inactive_handle) = self.plugin.inactive_plugin_handle() {
@@ -977,8 +1008,64 @@ impl PluginInstance for ClapInstance {
         self.param_queue.push(pending)
     }
 
+    /// Lo que el editor nativo movió por su cuenta.
+    ///
+    /// # Por qué hay que sondear
+    ///
+    /// CLAP no tiene el equivalente de `IComponentHandler::performEdit`: no
+    /// existe un aviso de "el usuario movió el parámetro X". La única forma
+    /// de enterarse es **leer** los valores del plugin y compararlos con los
+    /// de la lectura anterior: si un valor se movió y no lo movió el host,
+    /// alguien lo movió — y ese alguien es el usuario, dentro del editor.
+    ///
+    /// Es el mismo mecanismo que usa el panel de plugins de REAPER para los
+    /// CLAP, y por eso el ritmo importa: se llama una vez por tick del
+    /// envoltorio (12 Hz por defecto), no en cada frame.
+    ///
+    /// Los valores que el propio host acaba de escribir (el rack movió un
+    /// knob) **no** se reportan: se comparan contra `host_sent` para no
+    /// devolverle al rack su propio eco.
     fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {
-        Vec::new()
+        // `PluginParams` es `Copy`: se copia para no dejar prestado `self` y
+        // poder llamar a `&mut self` dentro del bucle.
+        let Some(params) = self.params else {
+            return Vec::new();
+        };
+
+        let count = params.count(&self.plugin.plugin_handle()) as usize;
+        let mut changes = Vec::new();
+
+        for index in 0..count {
+            let Some(info) = self.param_info(index) else {
+                continue;
+            };
+            if !info.can_automate {
+                continue;
+            }
+            let Some(current) = self.get_param_normalized(info.id) else {
+                continue;
+            };
+
+            let previous = self.seen.insert(info.id, current);
+            let Some(previous) = previous else {
+                // Primera lectura de este parámetro: no hay con qué comparar.
+                continue;
+            };
+            if (previous - current).abs() <= PARAM_EPSILON {
+                continue;
+            }
+            if self
+                .host_sent
+                .get(&info.id)
+                .is_some_and(|sent| (sent - current).abs() <= PARAM_EPSILON)
+            {
+                // Es el eco del host: el rack ya sabe este valor.
+                continue;
+            }
+            changes.push((info.id, current));
+        }
+
+        changes
     }
 
     /// Bompea el editor del plugin desde el hilo principal.

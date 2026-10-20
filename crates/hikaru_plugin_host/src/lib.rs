@@ -9,6 +9,7 @@ pub mod registry;
 pub mod scratch;
 pub mod floating_window;
 pub mod tap;
+pub mod xlib;
 
 // El envoltorio de ventana vive en `hikaru-wrapper/`, al lado de `src/` y no
 // dentro. El `#[path]` con `..` es lo que permite que el directorio físico sea

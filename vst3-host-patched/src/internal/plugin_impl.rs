@@ -18,8 +18,8 @@ use vst3::{ComPtr, ComWrapper, Interface, Steinberg::Vst::*, Steinberg::*};
 use super::{
     com_implementations::{
         create_event_list, create_host_application, create_host_plug_frame, create_memory_stream,
-        create_memory_stream_from, ComponentHandler, HostApplication, HostEventList, HostPlugFrame,
-        ParameterChanges,
+        create_memory_stream_from, ComponentHandler, ComponentHandlerState, HostApplication,
+        HostEventList, HostPlugFrame, ParameterChanges,
     },
     module_loader::{load_module, VstModule},
 };
@@ -104,17 +104,31 @@ unsafe impl Send for SendChannelPtrs {}
 
 impl PluginImpl {
     /// Get parameter changes captured from the plugin GUI
+    ///
+    /// Los captura el `IComponentHandler` del host: el plugin los avisa por
+    /// `performEdit` cuando el usuario mueve un control **dentro** de su
+    /// editor. Es el flujo inverso del que el host manda con `set_parameter`.
     pub fn get_parameter_changes(&self) -> Vec<(u32, f64)> {
-        if let Some(ref handler) = self.component_handler {
-            if let Ok(mut changes) = handler.parameter_changes.lock() {
-                let result = changes.clone();
-                changes.clear(); // Clear after reading
-                result
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
+        match &self.component_handler {
+            Some(handler) => match handler.state.lock() {
+                Ok(mut state) => state.take_changes(),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        }
+    }
+
+    /// Si el usuario está moviendo un control del editor ahora mismo.
+    ///
+    /// Devuelve el id del parámetro en movimiento mientras el gesto esté
+    /// abierto (`beginEdit` sin `endEdit`).
+    pub fn get_edit_gesture(&self) -> Option<u32> {
+        match &self.component_handler {
+            Some(handler) => match handler.state.lock() {
+                Ok(state) => state.editing(),
+                Err(_) => None,
+            },
+            None => None,
         }
     }
 
@@ -176,9 +190,8 @@ impl PluginImpl {
 
             // Create component handler for parameter change notifications
             log::debug!("Step 8: Creating component handler...");
-            let parameter_changes = Arc::new(Mutex::new(Vec::new()));
-            let component_handler =
-                ComWrapper::new(ComponentHandler::new(parameter_changes.clone()));
+            let handler_state = Arc::new(Mutex::new(ComponentHandlerState::default()));
+            let component_handler = ComWrapper::new(ComponentHandler::new(handler_state.clone()));
             log::debug!("Component handler created");
 
             // Get or create controller (handles both single-component and separate controller)
@@ -1109,6 +1122,30 @@ impl PluginInternal for PluginImpl {
                     )));
                 }
 
+                // Tell the view how big it is, *right after* attaching.
+                //
+                // The VST3 contract is that the host calls `onSize` once the
+                // view is attached: until it does, the plugin has no size and
+                // many toolkits (JUCE among them) create their platform
+                // window at 1x1 and never lay anything out. The SDK's own
+                // `PlugView::attached` does exactly this, and hosts that skip
+                // it are the reason an editor shows up as a 1-pixel sliver or
+                // as an empty rectangle.
+                //
+                // `checkSizeConstraint` first, so the plugin can impose its
+                // minimum size and its aspect ratio; the constrained rect is
+                // the one that gets applied.
+                let _ = view.canResize();
+                let mut sized = ViewRect {
+                    left: view_rect.left,
+                    top: view_rect.top,
+                    right: view_rect.left + (view_rect.right - view_rect.left).max(1),
+                    bottom: view_rect.top + (view_rect.bottom - view_rect.top).max(1),
+                };
+                if view.checkSizeConstraint(&mut sized) == kResultOk {
+                    let _ = view.onSize(&mut sized);
+                }
+
                 self.plugin_view = Some(view);
                 Ok(())
             }
@@ -1168,6 +1205,10 @@ impl PluginInternal for PluginImpl {
 
     fn get_parameter_changes(&self) -> Vec<(u32, f64)> {
         self.get_parameter_changes()
+    }
+
+    fn get_edit_gesture(&self) -> Option<u32> {
+        self.get_edit_gesture()
     }
 
     fn take_output_events(&self) -> Vec<MidiEvent> {

@@ -3418,6 +3418,7 @@ dependencies = [
  "clack-extensions",
  "clack-host",
  "hikaru_core",
+ "libc",
  "raw-window-handle",
  "rtrb",
  "vst3-host",

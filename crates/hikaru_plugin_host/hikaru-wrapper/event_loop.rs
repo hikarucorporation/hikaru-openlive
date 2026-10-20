@@ -101,6 +101,32 @@ pub enum FeedbackOrigin {
     Host,
 }
 
+/// Cada cuántos ticks el envoltorio le recuerda al plugin que su superficie
+/// es visible.
+///
+/// X11 no tiene un "repintá": la única forma de que un toolkit vuelva a
+/// dibujar es que le llegue un `Expose`. El servidor lo genera cuando la
+/// ventana se mapea, pero hay plugins que se quedan con la bandera de
+/// "no necesito repintar" puesta y nunca más vuelven a dibujar.
+///
+/// El latido es la red de seguridad: cada dos segundos se le manda un
+/// `Expose` sintético a la vista del plugin. Es barato (32 bytes) y lo
+/// bastante raro como para no gastar CPU en un repintado continuo.
+const SURFACE_HEARTBEAT_TICKS: u64 = 120;
+
+/// Cada cuántos ticks se sondea al editor por cambios de parámetro.
+///
+/// Es más seguido que la cadencia del feedback (5 ticks) porque el valor que
+/// se pollá es el que el usuario está moviendo **ahora**: con 83 ms de
+/// espera, el knob del rack y el del plugin van con medio paso de retraso y
+/// el motor de audio tarda un instante en enterarse.
+///
+/// Dos ticks (30 Hz con el bucle de 60 Hz) es un buen compromiso: el sondeo
+/// por diferencia de VST3 lee el valor de cada parámetro del controlador, y a
+/// 30 Hz eso son unas treinta llamadas por segundo — nada comparado con el
+/// resto del trabajo del tick (X11, `process()` del plugin, repintados).
+const PARAM_POLL_TICKS: u64 = 2;
+
 /// Ritmo del bucle.
 ///
 /// Se declara en vez de dejar un `sleep` suelto porque es una decisión que
@@ -358,6 +384,25 @@ impl WrapperEventLoop {
             //    declarados por el plugin y hay que dispararlos.
             instance.gui_tick();
 
+            // 3-bis. Cambios de parámetro que nacen dentro del editor del
+            //       plugin (el usuario movió un knob de la GUI nativa).
+            //
+            //       Es el flujo inverso del que el rack manda: acá el valor
+            //       lo puso el usuario, en la ventana del plugin, y tiene que
+            //       llegar al rack y al motor de audio.
+            //
+            //       Se manda **ya**, sin esperar la cadencia del feedback:
+            //       durante un arrastre, 83 ms de retraso se ven.
+            if tick.is_multiple_of(PARAM_POLL_TICKS) {
+                let editor = instance.poll_param_changes();
+                if !editor.is_empty() {
+                    let _ = self.feedback.send(ParamFeedback {
+                        changes: editor,
+                        origin: FeedbackOrigin::Editor,
+                    });
+                }
+            }
+
             // 4. Eventos de la ventana: cierre, resize y redirección de
             //    entrada hacia el editor del plugin.
             match self.window.poll_events() {
@@ -390,6 +435,14 @@ impl WrapperEventLoop {
             self.window.sync_with_host();
             self.window.maintain(tick);
 
+            // 4-ter. Latido de superficie: le recuerda al plugin que su
+            //        ventana es visible. Hay plugins que se quedan con la
+            //        bandera de "no hay que repintar" puesta y congelan el
+            //        editor en el color de fondo para siempre.
+            if tick.is_multiple_of(SURFACE_HEARTBEAT_TICKS) {
+                self.window.request_repaint();
+            }
+
             if focus_requested && self.window.should_repair_focus() {
                 self.window.repair_focus();
             }
@@ -407,7 +460,7 @@ impl WrapperEventLoop {
             }
 
             if self.budget.feedback_due(tick) {
-                self.emit_feedback(instance, &host_echo);
+                self.emit_feedback(&host_echo);
             }
 
             std::thread::sleep(self.budget.period());
@@ -470,6 +523,8 @@ impl WrapperEventLoop {
     ///
     /// - Lo que el plugin movió por su cuenta ([`poll_param_changes`]): el
     ///   usuario tocó un knob dentro del editor y el rack tiene que enterarse.
+    ///   Eso se manda en el tick, sin esperar: durante un arrastre la espera
+    ///   se ve (ver [`PARAM_POLL_TICKS`]).
     /// - Lo que el host mandó y el editor aceptó (`host_echo`): cierra el
     ///   círculo. Sin esto, un knob del rack que el plugin recorta o cuantiza
     ///   queda mostrando un valor que el plugin nunca tuvo, y el usuario ve
@@ -477,18 +532,11 @@ impl WrapperEventLoop {
     ///
     /// Se manda sólo cuando hay algo: un evento vacío cada 83 ms despierta al
     /// hilo principal para nada.
-    fn emit_feedback(&mut self, instance: &mut dyn PluginInstance, host_echo: &[(u32, f32)]) {
+    fn emit_feedback(&mut self, host_echo: &[(u32, f32)]) {
         if !host_echo.is_empty() {
             let _ = self.feedback.send(ParamFeedback {
                 changes: host_echo.to_vec(),
                 origin: FeedbackOrigin::Host,
-            });
-        }
-        let editor = instance.poll_param_changes();
-        if !editor.is_empty() {
-            let _ = self.feedback.send(ParamFeedback {
-                changes: editor,
-                origin: FeedbackOrigin::Editor,
             });
         }
     }

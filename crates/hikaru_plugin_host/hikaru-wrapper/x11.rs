@@ -492,6 +492,12 @@ pub enum Color {
     Grip,
     /// Fondo del botón de cerrar.
     CloseHover,
+    /// Fondo de la superficie donde vive el editor.
+    ///
+    /// Es el mismo oscuro del DAW: si el plugin no pinta (o tarda en
+    /// hacerlo) lo que se ve es el color del panel, no un rectángulo negro
+    /// que parece un editor roto.
+    Surface,
 }
 
 impl Color {
@@ -507,6 +513,10 @@ impl Color {
             Self::Border => 0x4A5060,
             Self::Grip => 0x6A7080,
             Self::CloseHover => 0xB4644C,
+            // El mismo fondo que usa el panel de plugins del DAW
+            // (`rgb(0x181A20)`): el editor no debería contrastar con un
+            // blanco ni con un negro de "ventana rota".
+            Self::Surface => 0x181A20,
         }
     }
 
@@ -805,6 +815,92 @@ impl ViewGeometry {
         }
         Some((vx, vy))
     }
+
+    /// Una coordenada X clavada dentro de la vista.
+    ///
+    /// Se usa para la liberación del botón cuando el puntero ya se fue de la
+    /// vista: el evento tiene que llegar igual (si no, el control queda
+    /// pegado), pero con una coordenada que el plugin pueda entender.
+    pub fn clamp_x(&self, container_x: i16) -> i16 {
+        let vx = container_x.saturating_sub(self.x);
+        vx.clamp(0, (self.width as i16).saturating_sub(1))
+    }
+
+    /// Una coordenada Y clavada dentro de la vista.
+    ///
+    /// Ver [`Self::clamp_x`].
+    pub fn clamp_y(&self, container_y: i16) -> i16 {
+        let vy = container_y.saturating_sub(self.y);
+        vy.clamp(0, (self.height as i16).saturating_sub(1))
+    }
+}
+
+/// Manda un `Expose` sintético a una ventana.
+///
+/// # Por qué existe
+///
+/// X11 no tiene un "repintá esto" explícito: la única forma de pedirle a un
+/// toolkit que vuelva a dibujar su ventana es generarle un `Expose`. El
+/// servidor lo genera solo cuando la ventana se mapea o queda tapada, pero
+/// hay un caso en el que no lo hace: cuando el host arma la jerarquía
+/// (contenedor → contenido → vista del plugin) y la vista **ya estaba
+/// mapeada** desde antes de que existiera el padre. El toolkit la considera
+/// expuesta, no le llega ningún `Expose` y se queda sin pintar nunca.
+///
+/// Mandarlo a mano es la forma barata y estándar de decir "tu superficie es
+/// visible, dibujá": el plugin recibe el evento exactamente igual que si
+/// hubiera sido el servidor el que lo generó.
+///
+/// Es idempotente y barato: 32 bytes por ventana, y sólo se manda cuando la
+/// superficie cambia (se mapea, se redimensiona, se descubre la vista).
+///
+/// # Nota
+///
+/// El `Expose` es un evento "maskable": el servidor sólo lo entrega si el
+/// cliente receptor seleccionó `EXPOSURE` en esa ventana. Los toolkits de
+/// plugin lo hacen siempre, pero si no lo hicieron el `SendEvent` se ignora
+/// en silencio — que es exactamente lo que queremos: no es un error.
+pub fn send_expose(
+    conn: &impl Connection,
+    window: Window,
+    width: u16,
+    height: u16,
+) -> Result<(), String> {
+    let raw = expose_event_bytes(window, width, height);
+    conn.send_event(false, window, EventMask::EXPOSURE, raw)
+        .map_err(|e| format!("send_event(expose): {e}"))?
+        .check()
+        .map_err(|e| format!("send_event(expose): {e}"))
+}
+
+/// Los 32 bytes de un evento `Expose` para una ventana.
+///
+/// Va aparte de [`send_expose`] para que el formato del protocolo se pueda
+/// testear sin servidor de display: los offsets están tomados a mano y un
+/// byte corrido produce un `Expose` que el plugin entiende como "repintá
+/// otra ventana" o directamente como basura.
+pub fn expose_event_bytes(window: Window, width: u16, height: u16) -> [u8; 32] {
+    // Layout del evento `Expose` (32 bytes):
+    //
+    //   [0]      opcode (12 = Expose)
+    //   [1]      profundidad del evento
+    //   [2..4]   número de secuencia (lo ignora el servidor)
+    //   [4..8]   la ventana
+    //   [8..10]  x
+    //   [10..12] y
+    //   [12..14] ancho
+    //   [14..16] alto
+    //   [16..18] count (0 = último de la cadena)
+    //   [18..32] relleno
+    let mut raw = [0u8; 32];
+    raw[0] = 12;
+    raw[4..8].copy_from_slice(&window.to_ne_bytes());
+    raw[8..10].copy_from_slice(&0i16.to_ne_bytes());
+    raw[10..12].copy_from_slice(&0i16.to_ne_bytes());
+    raw[12..14].copy_from_slice(&width.to_ne_bytes());
+    raw[14..16].copy_from_slice(&height.to_ne_bytes());
+    raw[16..18].copy_from_slice(&0u16.to_ne_bytes());
+    raw
 }
 
 /// Busca la ventana hija en la que el plugin dibujó su editor.
@@ -1051,6 +1147,23 @@ mod tests {
             plan_input_disposition(0x99, 10, 10, 0x11, Some(&view)),
             InputDisposition::Drop
         );
+    }
+
+    #[test]
+    fn el_expose_sintetico_tiene_el_layout_del_protocolo() {
+        // El formato está a mano: un byte corrido produce un `Expose` que el
+        // plugin interpreta como "repintá otra ventana" o como basura.
+        let raw = expose_event_bytes(0x1234_5678, 800, 600);
+
+        assert_eq!(raw[0], 12, "el opcode de Expose es 12");
+        assert_eq!(raw[1], 0, "la profundidad del evento no se manda");
+        assert_eq!(&raw[4..8], &0x1234_5678u32.to_ne_bytes(), "la ventana");
+        assert_eq!(&raw[8..10], &0i16.to_ne_bytes(), "x");
+        assert_eq!(&raw[10..12], &0i16.to_ne_bytes(), "y");
+        assert_eq!(&raw[12..14], &800u16.to_ne_bytes(), "ancho");
+        assert_eq!(&raw[14..16], &600u16.to_ne_bytes(), "alto");
+        assert_eq!(&raw[16..18], &0u16.to_ne_bytes(), "count 0 = último");
+        assert!(raw[18..].iter().all(|b| *b == 0), "el resto es relleno");
     }
 
     #[test]

@@ -54,10 +54,19 @@ pub struct DspSlot {
     /// Se llena en diferido: asignar sólo guarda el descriptor, y un sondeo
     /// en hilo aparte instancia el plugin, lee `snapshot_params` y lo vuelca
     /// acá vía `AppState::drain_param_probes`. `value` lo escriben los gestos
-    /// del rack y el feedback del editor nativo; `dirty` marca lo que el
-    /// motor aún no aplicó a su instancia de audio
-    /// (`take_dirty_external_params`).
+    /// del rack y el feedback del editor nativo.
     pub external_params: Vec<ExternalParamState>,
+    /// Cambios de parámetro que el motor todavía no recibió.
+    ///
+    /// Es una cola y no una bandera por parámetro porque el editor nativo
+    /// suele tener **más** controles que el rack (un sintetizador con 50
+    /// controles y 29 en el rack). Los que no están en el rack no tienen
+    /// dónde anotarse, así que también van acá: sin ellos, mover un control
+    /// en el editor que el rack no muestra no cambiaría el audio.
+    ///
+    /// Un mismo parámetro no aparece dos veces: al encolar se reemplaza el
+    /// valor anterior, que ya quedó obsoleto.
+    pending_external_params: Vec<(u32, f32)>,
     /// En qué punto está el sondeo de parámetros (ver `AppState`).
     pub params_status: ExternalParamsStatus,
     /// Si el plugin externo de este slot declara editor gráfico.
@@ -89,6 +98,7 @@ impl DspSlot {
             external: None,
             load_error: None,
             external_params: Vec::new(),
+            pending_external_params: Vec::new(),
             params_status: ExternalParamsStatus::Idle,
             has_gui: None,
         }
@@ -118,23 +128,38 @@ impl DspSlot {
     }
 
     /// Cambios de parámetros que el motor aún no aplicó a su instancia de
-    /// audio: `(id, normalizado)`. Los producen los knobs del rack y el
-    /// feedback del editor nativo; el hilo de control los drena y los manda
-    /// con `hikaru_plugin_host::apply_params_to_instance` (o
-    /// `DspPluginNode::sync_params`). Drenar limpia las banderas: llamar dos
-    /// veces seguidas sin gestos en medio devuelve vacío la segunda.
-    pub fn take_dirty_external_params(&mut self) -> Vec<(u32, f32)> {
-        let mut out = Vec::new();
-        for param in self.external_params.iter_mut() {
-            if param.dirty {
-                param.dirty = false;
-                out.push((param.info.id, param.value));
-            }
-        }
-        out
+    /// audio: `(id, normalizado)`.
+    ///
+    /// Los producen los knobs del rack **y** el feedback del editor nativo
+    /// (el usuario movió un control dentro de la ventana del plugin): el
+    /// hilo de control los drena y los manda con
+    /// `hikaru_plugin_host::apply_params_to_instance` (o
+    /// `DspPluginNode::sync_params`).
+    ///
+    /// Drenar limpia la cola: llamar dos veces seguidas sin gestos en medio
+    /// devuelve vacío la segunda.
+    pub fn take_pending_external_params(&mut self) -> Vec<(u32, f32)> {
+        std::mem::take(&mut self.pending_external_params)
     }
 
-    /// Fija un parámetro desde la UI: actualiza la caché y lo marca para el
+    /// Encola un cambio de parámetro para el motor.
+    ///
+    /// Un mismo parámetro no se encola dos veces: el valor nuevo reemplaza al
+    /// viejo, que ya quedó obsoleto. Es lo que permite que un arrastre que
+    /// emite un cambio por píxel no amontone la cola.
+    pub fn enqueue_external_param(&mut self, id: u32, value: f32) {
+        if let Some(entry) = self
+            .pending_external_params
+            .iter_mut()
+            .find(|(existing, _)| *existing == id)
+        {
+            entry.1 = value;
+        } else {
+            self.pending_external_params.push((id, value));
+        }
+    }
+
+    /// Fija un parámetro desde la UI: actualiza la caché y lo encola para el
     /// motor.
     ///
     /// Devuelve el valor **efectivamente aplicado** (ya redondeado por `snap`),
@@ -155,7 +180,7 @@ impl DspSlot {
             return None;
         }
         param.value = snapped;
-        param.dirty = true;
+        self.enqueue_external_param(id, snapped);
         Some(snapped)
     }
 }
@@ -168,13 +193,11 @@ pub const EMPTY_SLOT_NAME: &str = "Empty Slot";
 /// Un parámetro externo cacheado para los knobs del rack.
 ///
 /// La `info` (rango, nombre, escalones) viene del sondeo y no cambia; `value`
-/// es la única parte viva. `dirty` es el puente con el motor: lo pone la UI
-/// y lo limpia quien drene (`take_dirty_external_params`).
+/// es la única parte viva.
 #[derive(Clone, Debug)]
 pub struct ExternalParamState {
     pub info: hikaru_plugin_host::PluginParamInfo,
     pub value: f32,
-    pub dirty: bool,
 }
 
 impl ExternalParamState {

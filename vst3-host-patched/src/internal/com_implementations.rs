@@ -484,14 +484,78 @@ pub fn create_host_plug_frame(
 }
 
 // Component Handler implementation
+
+/// Lo que el editor del plugin le cuenta al host.
+///
+/// # Por qué detrás de un `Mutex`
+///
+/// El plugin llama a `performEdit` desde **su** hilo de GUI (el hilo del
+/// editor), y el host lee el resultado desde el hilo de la ventana que lo
+/// embebió. Son dos hilos distintos, así que la lista necesita un lock.
+///
+/// No es un lock de ruta de audio: el hilo de audio nunca lo toca, así que no
+/// puede retrasar el quantum.
+#[derive(Debug, Default)]
+pub struct ComponentHandlerState {
+    /// Último valor de cada parámetro que el usuario movió, en el orden en que
+    /// se tocaron.
+    ///
+    /// Es una lista y no un mapa a propósito: dos ediciones del mismo parámetro
+    /// dentro de un mismo frame se colapsan en la última (lo que importa es el
+    /// valor final, con el que el plugin ya se quedó), pero los parámetros
+    /// distintos se conservan todos y en su orden.
+    changes: Vec<(u32, f64)>,
+    /// Parámetro que se está moviendo ahora mismo, si hay un gesto abierto.
+    editing: Option<u32>,
+    /// Si hay un gesto abierto (`beginEdit` sin su `endEdit`).
+    gesture_open: bool,
+}
+
+impl ComponentHandlerState {
+    /// Registra una edición del parámetro `id`.
+    ///
+    /// Colapsa por id: si el mismo parámetro se edita dos veces antes de que el
+    /// host drene la lista, sólo queda el último valor. Sin esto, un knob que
+    /// emite un `performEdit` por píxel de arrastre hace crecer la lista sin
+    /// límite cuando nadie la drena (por ejemplo, un plugin abierto desde el
+    /// panel de plugins, que no tiene rack detrás).
+    pub fn perform_edit(&mut self, id: u32, value: f64) {
+        if let Some(entry) = self.changes.iter_mut().find(|(existing, _)| *existing == id) {
+            entry.1 = value;
+        } else {
+            self.changes.push((id, value));
+        }
+        self.editing = Some(id);
+    }
+
+    /// Saca los cambios pendientes y vacía la lista.
+    pub fn take_changes(&mut self) -> Vec<(u32, f64)> {
+        std::mem::take(&mut self.changes)
+    }
+
+    /// El parámetro que el usuario está moviendo, si hay un gesto abierto.
+    pub fn editing(&self) -> Option<u32> {
+        if self.gesture_open {
+            self.editing
+        } else {
+            None
+        }
+    }
+}
+
+/// Manejador de componentes del host (`IComponentHandler`).
+///
+/// Es el punto de entrada del flujo inverso: cuando el usuario mueve un knob
+/// **dentro del editor del plugin**, el plugin avisa por acá y el host puede
+/// llevar ese valor al resto de la cadena (DSP Rack, motor de audio).
 pub struct ComponentHandler {
-    // Track parameter changes from the plugin
-    pub parameter_changes: Arc<Mutex<Vec<(u32, f64)>>>,
+    /// Estado compartido con el host.
+    pub state: Arc<Mutex<ComponentHandlerState>>,
 }
 
 impl ComponentHandler {
-    pub fn new(parameter_changes: Arc<Mutex<Vec<(u32, f64)>>>) -> Self {
-        ComponentHandler { parameter_changes }
+    pub fn new(state: Arc<Mutex<ComponentHandlerState>>) -> Self {
+        ComponentHandler { state }
     }
 }
 
@@ -500,26 +564,49 @@ impl Class for ComponentHandler {
 }
 
 impl IComponentHandlerTrait for ComponentHandler {
+    /// El usuario agarró un control del editor.
+    ///
+    /// Abre el gesto: a partir de acá el host sabe que hay un parámetro en
+    /// movimiento y que los valores que llegan son intermedios, no finales.
     unsafe fn beginEdit(&self, id: u32) -> i32 {
         log::debug!("Host: Begin edit for parameter {}", id);
+        if let Ok(mut state) = self.state.lock() {
+            state.gesture_open = true;
+            state.editing = Some(id);
+        }
         kResultOk
     }
 
+    /// El usuario movió un control del editor.
+    ///
+    /// Acá llega el valor **normalizado** (0..1) que el plugin quiere. Es el
+    /// único lugar del que sale un cambio que nació en la GUI del plugin, así
+    /// que es el que hay que interceptar para que el resto del host (el rack y
+    /// el motor de audio) se entere.
     unsafe fn performEdit(&self, id: u32, value_normalized: f64) -> i32 {
         log::debug!(
             "Host: Perform edit for parameter {} = {}",
             id,
             value_normalized
         );
-        // Store the parameter change
-        if let Ok(mut changes) = self.parameter_changes.lock() {
-            changes.push((id, value_normalized));
+        if let Ok(mut state) = self.state.lock() {
+            state.perform_edit(id, value_normalized);
         }
         kResultOk
     }
 
+    /// El usuario soltó el control.
+    ///
+    /// Cierra el gesto. El valor ya quedó registrado en el último
+    /// `performEdit`, así que acá no hay nada que guardar: sólo se marca el
+    /// fin del movimiento para que el host sepa que el próximo cambio es un
+    /// valor final y no un paso intermedio de un arrastre.
     unsafe fn endEdit(&self, id: u32) -> i32 {
         log::debug!("Host: End edit for parameter {}", id);
+        if let Ok(mut state) = self.state.lock() {
+            state.gesture_open = false;
+            state.editing = None;
+        }
         kResultOk
     }
 
@@ -956,6 +1043,56 @@ mod plug_frame_tests {
         let r = unsafe { frame.resizeView(std::ptr::null_mut(), std::ptr::null_mut()) };
         assert_eq!(r, kResultFalse);
         assert_eq!(*slot.lock().unwrap(), Some((640, 480)));
+    }
+}
+
+#[cfg(test)]
+mod component_handler_tests {
+    use super::*;
+
+    #[test]
+    fn perform_edit_colapses_repeated_edits_of_the_same_param() {
+        // Un knob que emite un `performEdit` por píxel de arrastre no puede
+        // hacer crecer la lista sin límite: del mismo parámetro sólo queda el
+        // valor final.
+        let mut state = ComponentHandlerState::default();
+        state.perform_edit(7, 0.1);
+        state.perform_edit(7, 0.5);
+        state.perform_edit(7, 0.9);
+
+        assert_eq!(state.take_changes(), vec![(7, 0.9)]);
+    }
+
+    #[test]
+    fn different_params_are_kept_in_order() {
+        let mut state = ComponentHandlerState::default();
+        state.perform_edit(3, 0.25);
+        state.perform_edit(9, 0.75);
+        state.perform_edit(3, 0.5);
+
+        // El 3 vuelve a aparecer, pero en su posición original y con el valor
+        // final: el host recibe el valor que el plugin se quedó.
+        assert_eq!(state.take_changes(), vec![(3, 0.5), (9, 0.75)]);
+    }
+
+    #[test]
+    fn take_changes_empties_the_list() {
+        let mut state = ComponentHandlerState::default();
+        state.perform_edit(1, 0.5);
+        assert_eq!(state.take_changes().len(), 1);
+        assert!(state.take_changes().is_empty(), "el segundo drenaje no repite");
+    }
+
+    #[test]
+    fn the_gesture_is_open_between_begin_and_end() {
+        let mut state = ComponentHandlerState::default();
+        state.gesture_open = true;
+        state.editing = Some(4);
+        assert_eq!(state.editing(), Some(4), "con el gesto abierto se ve el id");
+
+        state.gesture_open = false;
+        state.editing = None;
+        assert_eq!(state.editing(), None, "soltado el control no hay gesto");
     }
 }
 

@@ -279,8 +279,8 @@ pub fn keep_plugin_editors_above(cx: &mut gpui_kit::App) {
 
 /// Fija un parámetro externo desde un knob del rack.
 ///
-/// Escribe la caché del slot (lo que pintan los knobs), la marca `dirty`
-/// para el motor (`take_dirty_external_params`) y la manda en vivo a la
+/// Escribe la caché del slot (lo que pintan los knobs), lo deja pendiente
+/// para el motor (`flush_pending_external_params`) y la manda en vivo a la
 /// ventana abierta si la hay (el editor nativo la refleja al instante).
 /// Todo no bloqueante: si la ventana cayó, el gesto igual queda guardado.
 ///
@@ -298,11 +298,6 @@ fn commit_external_param(
     value: f32,
 ) -> bool {
     let st = state(cx);
-    let audio_proxy = st.read(cx).audio_proxy.clone();
-    // Misma conversión que al cargar el plugin: índice de mixer → índice de
-    // motor. Sin esto el knob mueve el parámetro de OTRA pista (la de arriba), y
-    // el efecto que el usuario está girando no suena.
-    let engine_idx = st.read(cx).engine_track_index();
 
     // `applied` es el valor ya redondeado: es el que se muestra, el que va al
     // editor nativo y el que tiene que ir al motor. Mandar el `value` crudo
@@ -338,15 +333,10 @@ fn commit_external_param(
     // Sólo ahora se repinta: el valor de la caché ya es el nuevo.
     st.update(cx, |_, cx| cx.notify());
 
-    // Enviar el cambio al motor de audio (lock-free hacia el hilo de audio).
-    if let Some(engine_idx) = engine_idx {
-        audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
-            track_idx: engine_idx,
-            slot_idx,
-            param_id: id,
-            value: applied,
-        });
-    }
+    // Al motor de audio lo mandan los pendientes del slot, que se drenan una
+    // vez por frame (`AppState::flush_pending_external_params`). Mandarlo acá
+    // también sería mandarlo dos veces: el knob del rack y el del editor
+    // nativo escriben en el mismo lugar.
     true
 }
 

@@ -84,6 +84,13 @@ pub(crate) trait PluginInternal: Send {
     fn close_editor(&mut self) -> Result<()>;
     fn get_editor_size(&self) -> Result<(i32, i32)>;
     fn get_parameter_changes(&self) -> Vec<(u32, f64)>;
+    /// The parameter the user is currently dragging in the plugin's own editor.
+    ///
+    /// `None` when no edit gesture is open. Implementations that cannot know
+    /// (e.g. process isolation) return `None`.
+    fn get_edit_gesture(&self) -> Option<u32> {
+        None
+    }
     /// Take the MIDI events the plugin has emitted since the last call. Defaults to empty
     /// for implementations that don't capture output MIDI (e.g. process isolation).
     fn take_output_events(&self) -> Vec<MidiEvent> {
@@ -477,6 +484,15 @@ impl Plugin {
             .as_ref()
             .map(|i| i.get_parameter_changes())
             .unwrap_or_default()
+    }
+
+    /// The parameter the user is dragging in the plugin's editor, if any.
+    ///
+    /// While the gesture is open, the values reported by
+    /// [`Self::get_parameter_changes`] are intermediate steps of a drag: the
+    /// last one is the value the plugin settled on.
+    pub fn get_edit_gesture(&self) -> Option<u32> {
+        self.internal.as_ref().and_then(|i| i.get_edit_gesture())
     }
 
     /// Take the MIDI events the plugin has emitted (e.g. from an arpeggiator or MPE

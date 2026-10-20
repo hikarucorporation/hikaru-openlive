@@ -234,4 +234,14 @@ pub enum GuiCommand {
         param_id: u32,
         value: f32,
     },
+    /// Varios parámetros de un plugin externo, de una sola vez.
+    ///
+    /// Es la vía que usan los knobs del rack y el feedback del editor nativo:
+    /// la GUI los deja pendientes en el slot y los manda juntos, una vez por
+    /// frame, en vez de un comando por parámetro.
+    SyncExternalPluginParams {
+        track_idx: usize,
+        slot_idx: usize,
+        params: Vec<(u32, f32)>,
+    },
 }

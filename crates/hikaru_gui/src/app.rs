@@ -757,7 +757,6 @@ impl AppState {
                             .map(|(info, value)| mixer::ExternalParamState {
                                 info: info.clone(),
                                 value: *value,
-                                dirty: false,
                             })
                             .collect();
                         slot.params_status = mixer::ExternalParamsStatus::Ready;
@@ -773,61 +772,115 @@ impl AppState {
     /// Respeta el gesto en curso: si el usuario está arrastrando ese mismo
     /// parámetro en el rack, manda el rack (el feedback se descarta para ese
     /// id hasta soltar, evitando que el knob pelee bajo el dedo).
-    /// Lo aplicado queda `dirty` para que el motor lo lleve a su instancia
-    /// de audio aunque el cambio naciera en la ventana nativa.
+    ///
+    /// Lo aplicado queda en la cola de pendientes del slot, que se drena en
+    /// [`Self::flush_pending_external_params`] para que el motor lo lleve a su
+    /// instancia de audio aunque el cambio naciera en la ventana nativa.
     ///
     /// # Por qué `origin` no cambia casi nada acá
     ///
     /// La ventana manda dos cosas y este código las trata igual a propósito:
     ///
     /// - `FeedbackOrigin::Editor`: el plugin cambió el valor por su cuenta.
-    ///   El motor no lo tiene, así que sí tiene que marcarse `dirty`.
+    ///   El motor no lo tiene, así que sí tiene que mandárselo.
     /// - `FeedbackOrigin::Host`: el editor confirmó un valor que el rack le
     ///   mandó. Casi siempre `set_external_param` devuelve `None` (el valor
     ///   ya era ese) y no hay nada que hacer. Cuando sí converge —porque el
-    ///   plugin recorta o cuantiza a un escalón distinto al del host— marcar
-    ///   `dirty` es lo correcto: el motor tiene que recibir el valor que el
+    ///   plugin recorta o cuantiza a un escalón distinto al del host— mandarlo
+    ///   al motor es lo correcto: el motor tiene que recibir el valor que el
     ///   plugin realmente terminó usando.
     ///
     /// Lo que `origin` sí protege está aguas arriba, en el envío: evita que
     /// el bucle reenvíe como `Editor` el eco de su propio `SetParam`, que
     /// provocaría un ciclo rack → editor → rack en cada knob.
+    ///
+    /// Devuelve `true` si algún knob del rack cambió de valor: el llamador
+    /// lo usa para repintar (el feedback llega por un canal, así que nada lo
+    /// repinta solo).
     pub fn apply_param_feedback(
         &mut self,
         events: Vec<external_plugins_settings::ParamFeedbackEvent>,
-    ) {
+    ) -> bool {
         if events.is_empty() {
-            return;
+            return false;
         }
         let drag = self.param_drag;
+        let mut changed = false;
+
         for event in events {
-            let slots = self
-                .tracks_mut()
-                .iter_mut()
-                .flat_map(|track| track.effects.iter_mut())
-                .filter(|slot| {
-                    slot.external
+            for (track_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+                for (slot_idx, slot) in track.effects.iter_mut().enumerate() {
+                    if !slot
+                        .external
                         .as_ref()
                         .is_some_and(|ext| ext.id == event.descriptor_id)
-                });
-            for slot in slots {
-                for (id, value) in &event.changes {
-                    if drag.is_some_and(|drag| drag.param_id == *id) {
+                    {
                         continue;
                     }
-                    if slot.set_external_param(*id, *value).is_some() {
-                        // Nacido en la ventana: la instancia de audio del
-                        // motor todavía no lo tiene.
-                        if let Some(param) = slot
-                            .external_params
-                            .iter_mut()
-                            .find(|p| p.info.id == *id)
-                        {
-                            param.dirty = true;
+                    for (id, value) in &event.changes {
+                        // El gesto del rack manda: si el usuario está moviendo
+                        // ese parámetro en **ese** slot, el feedback no lo pisa
+                        // (el knob pelearía bajo el dedo).
+                        if drag.is_some_and(|drag| {
+                            drag.param_id == *id && drag.track == track_idx && drag.slot == slot_idx
+                        }) {
+                            continue;
                         }
+                        // La caché del rack, si el rack conoce el parámetro.
+                        if slot.set_external_param(*id, *value).is_some() {
+                            changed = true;
+                        }
+                        // Y el motor, siempre: aunque el rack ya tuviera ese
+                        // valor, la instancia de audio del motor es **otra**
+                        // instancia del plugin y puede no tenerlo. Y si el rack
+                        // no muestra el parámetro (el editor suele tener más
+                        // controles), es el único camino que llega al audio.
+                        slot.enqueue_external_param(*id, *value);
                     }
                 }
             }
+        }
+
+        changed
+    }
+
+    /// Manda al motor los cambios de parámetros externos que todavía no
+    /// llegaron a su instancia de audio.
+    ///
+    /// Corre en el hilo principal desde `sync_frame`, después de
+    /// [`Self::apply_param_feedback`]: así un cambio que nació en el editor
+    /// nativo sale en el mismo frame en que se aplicó, sin esperar al
+    /// siguiente.
+    ///
+    /// El envío es lock-free hacia el hilo de audio: cada cambio viaja por el
+    /// anillo de la instancia del plugin.
+    pub fn flush_pending_external_params(&mut self) {
+        // El mixer mete un MASTER en la posición 0 y el motor no tiene master:
+        // la pista visible N vive en `tracks()[N + 1]` y en el motor es N - 1.
+        let mut pending: Vec<(usize, usize, Vec<(u32, f32)>)> = Vec::new();
+        for (track_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+            let Some(engine_track_idx) = track_idx.checked_sub(1) else {
+                // El MASTER no está en el motor.
+                continue;
+            };
+            for (slot_idx, slot) in track.effects.iter_mut().enumerate() {
+                if slot.external.is_none() {
+                    continue;
+                }
+                let params = slot.take_pending_external_params();
+                if !params.is_empty() {
+                    pending.push((engine_track_idx, slot_idx, params));
+                }
+            }
+        }
+
+        for (track_idx, slot_idx, params) in pending {
+            self.audio_proxy
+                .send(crate::audio_proxy::GuiCommand::SyncExternalPluginParams {
+                    track_idx,
+                    slot_idx,
+                    params,
+                });
         }
     }
 
@@ -1179,6 +1232,40 @@ impl HikaruApp {
         cx.set_global(wavetable_viewport.clone());
         wavetable_viewport.spawn_connect(cx);
 
+        // Latido para el feedback de los editores nativos.
+        //
+        // El feedback de un plugin (el usuario movió un knob **dentro** de su
+        // editor) llega por un canal y se drena en `sync_frame`, que corre en
+        // el render. Con el transporte parado la app no redibuja sola —sólo
+        // redibuja cuando algo la notifica—, así que el feedback se quedaría
+        // en el canal hasta que el usuario tocara algo en el DAW. El knob del
+        // rack dejaría de seguir al del plugin y el motor de audio no se
+        // enteraría del cambio.
+        //
+        // Este latido despierta la app mientras haya un editor de plugin
+        // abierto. Con el transporte sonando ya hay redibujado continuo, así
+        // que el latido no agrega trabajo: sólo cubre el caso parado, que es
+        // el que importa (el usuario toqueteando el plugin con el
+        // transporte quieto).
+        let heartbeat_state = state.clone();
+        cx.spawn(async move |_app, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(33))
+                    .await;
+                let hay_editor = cx.update(|cx| {
+                    heartbeat_state
+                        .read(cx)
+                        .plugin_settings_state
+                        .any_plugin_open()
+                });
+                if hay_editor {
+                    cx.update(|cx| cx.refresh_windows());
+                }
+            }
+        })
+        .detach();
+
         HikaruApp {
             state,
             focus_handle: cx.focus_handle(),
@@ -1253,7 +1340,16 @@ impl HikaruApp {
             // llegan por canal y se aplican acá, en el hilo principal.
             state.drain_param_probes();
             let param_feedback = state.plugin_settings_state.take_param_feedback();
-            state.apply_param_feedback(param_feedback);
+            let feedback_changed = state.apply_param_feedback(param_feedback);
+            // Y al motor: los cambios que nacieron en el editor nativo (o en
+            // un knob del rack) van a la instancia de audio del plugin. Va
+            // después del feedback para que un cambio que llegó en este frame
+            // salga en este mismo frame.
+            state.flush_pending_external_params();
+            if feedback_changed {
+                // El feedback llega por un canal: nada lo repinta solo.
+                cx.notify();
+            }
 
             // Resizes que pidió el editor nativo por su cuenta (un synth que
             // reorganiza su layout al abrir un filtro). El launcher VST3

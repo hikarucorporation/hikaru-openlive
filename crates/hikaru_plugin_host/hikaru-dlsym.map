@@ -1,0 +1,25 @@
+# Script de versiones para el enlazador.
+#
+# Exporta `dlsym` con las dos versiones con las que glibc ha publicado el
+# símbolo: 2.34 y 2.2.5 (esta última es la de todos los glibc anteriores a
+# 2.34).
+#
+# Hace falta porque el plugin referencia el símbolo **versionado**
+# (`dlsym@GLIBC_2.34` o `dlsym@GLIBC_2.2.5` según con qué glibc se compiló) y
+# una definición sin versión no satisface una referencia versionada: el
+# enlazador seguiría resolviendo al `dlsym` de libc y el interposador de
+# Hikaru no se vería nunca.
+#
+# Lo aplica el crate que arma el binario final:
+#
+#     println!("cargo:rustc-link-arg=-Wl,--version-script=.../hikaru-dlsym.map");
+#
+GLIBC_2.2.5 {
+    global:
+        *;
+};
+
+GLIBC_2.34 {
+    global:
+        *;
+} GLIBC_2.2.5;

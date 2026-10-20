@@ -134,9 +134,22 @@ pub struct HikaruWrapperWindow {
     ///   contenido, que ya está en el hueco. **Antes esto pintaba encima del
     ///   marco** y el editor aparecía sin título ni bordes.
     content: Option<Window>,
+    /// Dónde está la ventana de contenido dentro del contenedor.
+    ///
+    /// La vista del plugin es **hija del contenido**, así que sus
+    /// coordenadas son relativas al contenido. Para traducir un evento que
+    /// llegó al contenedor hay que sumar este offset: sin él, un click
+    /// caería desplazado por el alto del titlebar.
+    content_origin: (i16, i16),
     /// Vista propia del plugin dentro del contenido. Sólo hace falta para
     /// redirigir entrada: cacheada porque `QueryTree` es un viaje al servidor.
     view: Option<x11::ViewGeometry>,
+    /// Si se le reenvió una presión a la vista del plugin.
+    ///
+    /// Es lo que obliga a reenviarle también la liberación: un editor que se
+    /// come la presión y no la liberación deja el control **pegado** (el knob
+    /// sigue al puntero y el clic siguiente se cuenta dos veces).
+    pressed_in_view: bool,
     /// Cuántas veces se buscó la vista sin éxito, para avisar una sola vez.
     view_scan_failures: u32,
     /// Si el puntero está sobre la ventana.
@@ -311,7 +324,9 @@ impl HikaruWrapperWindow {
             keep_alive: WrapperKeepAlive::disabled(),
             policy,
             content: None,
+            content_origin: (0, 0),
             view: None,
+            pressed_in_view: false,
             view_scan_failures: 0,
             pointer_inside: false,
             host_frame: config.host_frame,
@@ -481,16 +496,13 @@ impl HikaruWrapperWindow {
                 .generate_id()
                 .map_err(|e| format!("generate_id(content): {e}"))?;
 
-            // Fondo opaco: sin esto el contenido arranca transparente y en
-            // cada repintado se ve el contenedor hasta que el plugin pinta.
-            // El píxel se resuelve una vez por ventana: `GetImageAttributes`
-            // con cada CreateWindow sería un viaje al servidor de más.
-            // `GetWindowAttributes` no expone el píxel de fondo, así que se
-            // va con `None`: el servidor usa el de su visual por defecto, que
-            // es un blanco opaco. Lo importante es que el contenido no sea
-            // transparente y se vea el contenedor en cada repintado.
+            // Fondo opaco y explícito: sin esto el contenido hereda el
+            // fondo del root —que en una sesión de escritorio es negro— y
+            // cada repintado del plugin muestra el rectángulo negro por
+            // debajo de un editor que todavía no pintó nada.
             let attributes = CreateWindowAux::new()
                 .border_pixel(0)
+                .background_pixel(x11::Color::Surface.pixel())
                 .event_mask(EventMask::EXPOSURE | EventMask::STRUCTURE_NOTIFY);
 
             self.conn
@@ -509,6 +521,29 @@ impl HikaruWrapperWindow {
                 )
                 .map_err(|e| format!("create_window(content): {e}"))?;
 
+            // **La ventana de contenido tiene que mapearse explícitamente.**
+            //
+            // En X11 el estado de mapeo es **por ventana**: mapear el padre no
+            // mapea a los hijos. Una ventana hija de una ventana que no está
+            // mapeada queda `IsUnviewable` *para siempre*: el servidor no le
+            // manda `Expose`, así que el toolkit del plugin (JUCE, Qt) nunca
+            // tiene un framebuffer visible que pintar.
+            //
+            // El síntoma es exactamente el cuadro negro fantasma: el
+            // contenedor dibuja su marco (se ve el título), la ventana de
+            // contenido existe y tiene el tamaño correcto, pero la vista
+            // que el plugin creó adentro está `IsUnviewable` y no pinta un
+            // solo pixel. Sin este `MapWindow` el editor es invisible aunque
+            // todo lo demás esté bien.
+            //
+            // Mapearla antes de que el contenedor esté mapeado no es un
+            // problema: en X11 una ventana mapeada dentro de otra no mapeada
+            // queda `IsUnviewable` y pasa a `IsViewable` —con su `Expose`—
+            // en cuanto el padre se mapea.
+            self.conn
+                .map_window(id)
+                .map_err(|e| format!("map_window(content): {e}"))?;
+
             let _ = self.conn.flush();
             self.content = Some(id);
         }
@@ -525,6 +560,11 @@ impl HikaruWrapperWindow {
         if !inner.is_usable() {
             return;
         }
+        // El origen del contenido dentro del contenedor se guarda acá porque
+        // la vista del plugin es **hija del contenido**, no del contenedor:
+        // sin esta traducción, un click que cae en el contenedor hay que
+        // restarle dos offsets y no uno.
+        self.content_origin = (inner.x, inner.y);
         let _ = x11::move_resize(
             &self.conn,
             content,
@@ -538,6 +578,20 @@ impl HikaruWrapperWindow {
     /// XID de la ventana del envoltorio.
     pub fn id(&self) -> u32 {
         self.window as u32
+    }
+
+    /// XID de la ventana de contenido, si ya existe.
+    ///
+    /// Es la ventana que se le da al plugin, y la que tiene que estar
+    /// **mapeada** para que la vista del plugin pueda ser visible: en X11 el
+    /// estado de mapeo es por ventana, así que una ventana de contenido sin
+    /// mapear deja a la vista del plugin en `IsUnviewable` para siempre —con
+    /// el editor congelado en negro— aunque el contenedor esté en pantalla.
+    ///
+    /// Se expone para que los tests puedan preguntarle al servidor X por el
+    /// estado real de la superficie.
+    pub fn content_id(&self) -> Option<u32> {
+        self.content
     }
 
     /// El plan de hints que se aplicó.
@@ -591,6 +645,12 @@ impl HikaruWrapperWindow {
         self.repaint();
         self.map()?;
 
+        // El editor del plugin tiene que saber que ya hay alguien mirando.
+        // El `Expose` sintético es lo que lo saca del "estoy mapeado pero no
+        // me miran" en el que un toolkit se queda si su ventana ya estaba
+        // mapeada antes de que existiera la jerarquía.
+        self.request_repaint();
+
         // La activación va UNA vez, aquí. `keep_alive` sólo re-apila, nunca
         // enfoca: reenfocar periódicamente le robaría el foco al DAW.
         //
@@ -622,6 +682,17 @@ impl HikaruWrapperWindow {
         if let Err(e) = self.conn.flush() {
             eprintln!("[hikaru-wrapper] aviso: flush tras map falló: {e:?}");
         }
+        // La ventana de contenido es hija del contenedor: mapping el
+        // contenedor no la mapea a ella (en X11 el estado de mapeo es por
+        // ventana). Sin mapearla, la vista del plugin queda `IsUnviewable`
+        // y nunca recibe un `Expose`: el editor no pinta nunca.
+        if let Some(content) = self.content {
+            let _ = self.conn.map_window(content);
+        }
+        let _ = self.conn.flush();
+        // Recién ahora la superficie del plugin es visible de verdad: se le
+        // manda el `Expose` para que empiece a emitir frames.
+        self.request_repaint();
         Ok(())
     }
 
@@ -653,6 +724,7 @@ impl HikaruWrapperWindow {
         self.layout_content();
         self.layout_view();
         self.repaint();
+        self.request_repaint();
     }
 
     /// Busca, dentro de la ventana de contenido, la vista del plugin.
@@ -668,17 +740,18 @@ impl HikaruWrapperWindow {
         };
         match x11::find_view_window(&self.conn, content) {
             Ok(view) => {
-                if view.map(|v| v.window) != self.view.map(|v| v.window) {
-                    // La vista del plugin cambió: hay que volver a colocar el
-                    // marco y a pintar encima. Sin esto, tras un resize el
-                    // editor queda del color del escritorio.
-                    self.view = view;
-                    self.layout_view();
-                    self.repaint();
-                    return;
-                }
+                let changed = view.map(|v| v.window) != self.view.map(|v| v.window);
                 self.view = view;
                 self.layout_view();
+                if changed {
+                    // La vista del plugin acaba de aparecer: hay que
+                    // colocarla y, sobre todo, avisarle de que su superficie
+                    // ya es visible. Sin el `Expose` el editor se queda
+                    // congelado en el color de fondo (el "cuadro negro
+                    // fantasma").
+                    self.repaint();
+                    self.request_repaint();
+                }
             }
             Err(e) => {
                 // Perder la vista no es fatal: la ventana sigue visible y el
@@ -692,6 +765,32 @@ impl HikaruWrapperWindow {
     /// Si se encontró una ventana hija a la que redirigir la entrada.
     pub fn view(&self) -> Option<&x11::ViewGeometry> {
         self.view.as_ref()
+    }
+
+    /// Le pide al plugin que repinte su superficie.
+    ///
+    /// X11 no tiene un "repintá esto": la única forma de que un toolkit
+    /// vuelva a dibujar su ventana es que le llegue un `Expose`. El servidor
+    /// lo genera cuando la ventana se mapea, pero **no** cuando la jerarquía
+    /// se arma después: la vista del plugin ya estaba mapeada desde antes de
+    /// que existiera su padre, así que su toolkit la cree expuesta, no le
+    /// llega ningún `Expose` y se queda congelado sin pintar un pixel.
+    ///
+    /// Por eso el envoltorio genera el `Expose` a mano: es la forma barata y
+    /// estándar de decirle "tu superficie es visible, emití un frame".
+    ///
+    /// Se manda a la vista del plugin y también al contenido, para el caso
+    /// de los plugins que dibujan directamente sobre la ventana que les pasó
+    /// el host y no crean ninguna hija.
+    pub fn request_repaint(&mut self) {
+        let inner = self.frame.inner_rect(self.width(), self.height());
+        if let Some(content) = self.content {
+            let _ = x11::send_expose(&self.conn, content, inner.width, inner.height);
+        }
+        if let Some(view) = self.view {
+            let _ = x11::send_expose(&self.conn, view.window, view.width, view.height);
+        }
+        let _ = self.conn.flush();
     }
 
     /// Dónde quiere el DAW que viva el editor.
@@ -811,6 +910,7 @@ impl HikaruWrapperWindow {
             self.size = (root.2, root.3);
             self.layout_view();
             self.repaint();
+            self.request_repaint();
         }
     }
 
@@ -1053,6 +1153,15 @@ fn paint_frame(&mut self) -> Result<(), String> {
 /// ventana que se le pasó, así que hay que moverla y redimensionarla a mano al
 /// hueco que deja el marco. Sin esto, el editor se dibuja **debajo** del
 /// titlebar y del botón de cerrar.
+///
+/// # El espacio de coordenadas
+///
+/// La vista es hija de la ventana de **contenido**, no del contenedor: lo que
+/// se le pasó al plugin fue el contenido (ver [`Self::prepare`]). Por eso sus
+/// coordenadas son relativas al contenido y va en `(0, 0)` ocupando todo el
+/// hueco. Usar el rect interior del marco —que es relativo al contenedor—
+/// dejaba la vista desplazada por el alto del titlebar y un borde más abajo
+/// del corte.
 pub fn layout_view(&mut self) {
     self.layout_content();
     let Some(view) = self.view else {
@@ -1062,18 +1171,14 @@ pub fn layout_view(&mut self) {
     if !inner.is_usable() {
         return;
     }
-    if inner.x == view.x
-        && inner.y == view.y
-        && inner.width == view.width
-        && inner.height == view.height
-    {
+    if view.x == 0 && view.y == 0 && view.width == inner.width && view.height == inner.height {
         return;
     }
     if let Err(e) = x11::move_resize(
         &self.conn,
         view.window,
-        inner.x,
-        inner.y,
+        0,
+        0,
         inner.width,
         inner.height,
     ) {
@@ -1081,11 +1186,29 @@ pub fn layout_view(&mut self) {
     }
     self.view = Some(x11::ViewGeometry::new(
         view.window,
-        inner.x,
-        inner.y,
+        0,
+        0,
         inner.width,
         inner.height,
     ));
+}
+
+/// La geometría de la vista en coordenadas del **contenedor**.
+///
+/// `GetGeometry` devuelve las coordenadas de la vista relativas a su padre, y
+/// su padre es la ventana de contenido. Para traducir un evento que llegó al
+/// contenedor hay que convertirlas a relativas al contenedor: se le suma el
+/// origen del contenido (ver [`Self::content_origin`]).
+fn view_in_container(&self) -> Option<x11::ViewGeometry> {
+    let view = self.view.as_ref()?;
+    let (cx, cy) = self.content_origin;
+    Some(x11::ViewGeometry::new(
+        view.window,
+        cx.saturating_add(view.x),
+        cy.saturating_add(view.y),
+        view.width,
+        view.height,
+    ))
 }
 
 /// El tamaño del editor, con el marco descontado.
@@ -1200,6 +1323,7 @@ pub fn on_motion(&mut self, root_x: i16, root_y: i16) -> FrameAction {
                     self.size = (w, h);
                     self.layout_view();
                     self.repaint();
+                    self.request_repaint();
                 }
             }
         }
@@ -1378,13 +1502,28 @@ pub fn cursor(&mut self) -> Option<CursorHint> {
                     if w == self.window {
                         self.set_pointer(x, y);
                         match self.on_button_press(x, y, e.root_x, e.root_y) {
-                            FrameAction::None => self.forward(
-                                w,
-                                x,
-                                y,
-                                EventMask::BUTTON_PRESS,
-                                e.serialize(),
-                            ),
+                            FrameAction::None => {
+                                if self.forward(
+                                    w,
+                                    x,
+                                    y,
+                                    EventMask::BUTTON_PRESS,
+                                    e.serialize(),
+                                ) {
+                                    // El plugin se quedó con la presión:
+                                    // hay que acordarse para soltarle el
+                                    // botón aunque el puntero se vaya de la
+                                    // vista (si no, el control queda pegado).
+                                    self.pressed_in_view = true;
+                                    // Y el foco de teclado pasa al editor:
+                                    // el foco del teclado va a una ventana
+                                    // y sube a sus ancestros, nunca baja a
+                                    // los hijos, así que enfocando el
+                                    // contenedor el plugin no vería
+                                    // ninguna tecla.
+                                    self.focus_view();
+                                }
+                            }
                             FrameAction::Close => return WindowEvent::CloseRequested,
                             FrameAction::Handled => {}
                         }
@@ -1401,6 +1540,7 @@ pub fn cursor(&mut self) -> Option<CursorHint> {
                     if !ended_drag {
                         let (w, x, y) = (e.event, e.event_x, e.event_y);
                         self.forward(w, x, y, EventMask::BUTTON_RELEASE, e.serialize());
+                        self.pressed_in_view = false;
                     }
                 }
                 Ok(Some(Event::MotionNotify(e))) => {
@@ -1460,6 +1600,33 @@ pub fn cursor(&mut self) -> Option<CursorHint> {
     /// 32 bytes del protocolo X11. La serialización ocurre en el `match`
     /// ([`Self::poll_events`]) porque el enum `Event` no la implementa: hay
     /// que hacerlo sobre la variante concreta.
+    /// Reenvía un evento de puntero a la vista del plugin.
+    ///
+    /// # Por qué hace falta
+    ///
+    /// La vista del plugin es una ventana **hija** de la ventana de
+    /// contenido. En X11, un evento de puntero lo recibe el cliente que
+    /// seleccionó ese tipo de evento en la ventana donde ocurrió, así que
+    /// hay dos casos:
+    ///
+    /// - El plugin selecciona el evento en su propia ventana: lo recibe
+    ///   solo, y acá no hay nada que hacer.
+    /// - El plugin **no** lo selecciona: el evento sube por la cadena de
+    ///   ancestros hasta la primera ventana que lo seleccionó, que es el
+    ///   contenedor. Lo recibe el host, que es quien tiene que se lo pasar
+    ///   al plugin.
+    ///
+    /// El segundo caso es el de los toolkits que dibujan sobre la ventana que
+    /// les pasó el host, o que esperan que el host les reenvíe la entrada.
+    ///
+    /// # Las coordenadas
+    ///
+    /// El evento llega con las coordenadas relativas a la ventana que lo
+    /// seleccionó (el contenedor). El plugin las necesita relativas a **su**
+    /// ventana, así que hay que restarle el offset de la vista —que está
+    /// dentro de la de contenido, que a su vez está dentro del contenedor.
+    ///
+    /// Devuelve `true` si el evento llegó al plugin.
     fn forward(
         &mut self,
         event_window: Window,
@@ -1467,20 +1634,55 @@ pub fn cursor(&mut self) -> Option<CursorHint> {
         y: i16,
         mask: EventMask,
         raw: [u8; 32],
-    ) {
-        let Some(view) = self.view.as_ref() else {
-            return;
+    ) -> bool {
+        // La geometría que se usa para traducir coordenadas es la de la
+        // vista **relativa al contenedor**: el evento llega al contenedor y
+        // hay que convertirlo al espacio del editor. `GetGeometry` la da
+        // relativa al contenido, que es un nivel más abajo.
+        let Some(view) = self.view_in_container() else {
+            return false;
         };
-        let x11::InputDisposition::Forward { x, y } =
-            x11::plan_input_disposition(event_window, x, y, self.window, Some(view))
-        else {
-            return;
+        let disposition =
+            x11::plan_input_disposition(event_window, x, y, self.window, Some(&view));
+
+        // Una liberación fuera de la vista no se puede descartar: el plugin
+        // se quedó con la presión y necesita la liberación, o el control
+        // queda **pegado** (el knob sigue siguiendo al puntero y el
+        // siguiente clic se come por duplicado). Se manda igual, con las
+        // coordenadas clavadas al borde de la vista.
+        let (x, y) = match disposition {
+            x11::InputDisposition::Forward { x, y } => (x, y),
+            x11::InputDisposition::Drop
+                if self.pressed_in_view && mask == EventMask::BUTTON_RELEASE =>
+            {
+                (view.clamp_x(x), view.clamp_y(y))
+            }
+            _ => return false,
         };
 
-        let rewritten = x11::rewrite_pointer_event(view, x, y, raw);
-        if let Err(e) = x11::forward_pointer_event(&self.conn, view, mask, rewritten) {
+        let rewritten = x11::rewrite_pointer_event(&view, x, y, raw);
+        if let Err(e) = x11::forward_pointer_event(&self.conn, &view, mask, rewritten) {
             eprintln!("[hikaru-wrapper] no se pudo redirigir el evento al editor: {e}");
+            return false;
         }
+        true
+    }
+
+    /// Le da el foco de teclado a la vista del plugin.
+    ///
+    /// El foco de teclado en X11 va a **una** ventana y de ahí sube a sus
+    /// ancestros: nunca baja a los hijos. El editor del plugin es un hijo
+    /// de la ventana de contenido, así que enfocando el contenedor el plugin
+    /// no ve ninguna tecla. Hay que enfocarlo a él.
+    ///
+    /// Sin foco, el editor recibe el ratón pero no el teclado: los atajos del
+    /// plugin (bypass,octavas,...) no funcionan y los campos de texto no
+    /// admiten escritura.
+    pub fn focus_view(&mut self) {
+        let Some(view) = self.view else {
+            return;
+        };
+        let _ = x11::focus(&self.conn, view.window);
     }
 
     /// Suelta el vínculo padre-hijo y destruye la ventana.

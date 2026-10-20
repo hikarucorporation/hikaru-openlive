@@ -382,8 +382,23 @@ fn main() {
                     }
                 }
                 GuiCommand::SetExternalPluginParam { track_idx, slot_idx, param_id, value } => {
-                    if let Ok(mut engine) = engine_for_commands.try_lock() {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_external_plugin_param(track_idx, slot_idx, param_id, value);
+                    }
+                }
+                GuiCommand::SyncExternalPluginParams { track_idx, slot_idx, params } => {
+                    // Lock de verdad y no `try_lock`: el hilo de audio tiene
+                    // tomado el motor durante `process()` y un `try_lock`
+                    // fallido **descartaba** el cambio en silencio. El knob se
+                    // movía, el rack lo mostraba y el plugin no se enteraba
+                    // nunca: el parámetro y el audio quedaban desfasados.
+                    //
+                    // La espera es, como mucho, el bloque de audio en curso
+                    // (1024 frames): el hilo de audio suelta el lock al
+                    // terminar de procesar, así que el hilo de la GUI no
+                    // espera más que eso.
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.sync_external_plugin_params(track_idx, slot_idx, &params);
                     }
                 }
 

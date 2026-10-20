@@ -24,6 +24,14 @@ members = [
 # usa gpui-pre. Sus tests de audio viven entonces en
 # `crates/hikaru_plugin_host/tests/`, que sí es miembro y puede alcanzar la API
 # pública del host.
+#
+# `exclude` lo deja fuera del workspace de forma explícita (si no, cargo se
+# queja de que el crate "cree estar en un workspace que no es"), y a la vez
+# permite correrle los tests unitarios con
+# `cargo test --manifest-path vst3-host-patched/Cargo.toml --lib`: al estar
+# excluido, ese comando lo trata como su propio workspace y no arrastra las
+# dev-dependencies del workspace padre.
+exclude = ["vst3-host-patched"]
 
 [workspace.package]
 # Versión del producto. Es la ÚNICA fuente de verdad: la cabecera de

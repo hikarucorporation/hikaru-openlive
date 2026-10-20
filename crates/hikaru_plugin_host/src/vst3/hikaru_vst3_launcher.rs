@@ -7,6 +7,7 @@ use crate::scratch::{NUM_CHANNELS, PlanarScratch};
 use crate::{PluginInstance, PluginParamInfo};
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use vst3_host::audio::AudioBuffers;
 use vst3_host::realtime::{RealtimePluginRunner, RtControl};
@@ -30,6 +31,13 @@ const CONTROL_RING_CAPACITY: usize = 1024;
 /// desde antes del primer bloque. 48 kHz es lo que devuelve casi cualquier
 /// dispositivo; [`Vst3Instance::set_sample_rate`] lo corrige si no.
 const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
+
+/// Diferencia mínima entre dos valores para considerarlos el mismo.
+///
+/// Un knob que se mueve a 0.0001 de diferencia no es un cambio: el plugin
+/// cuantiza a sus propios escalones y el sondeo por diferencia vería ruido
+/// donde no hay nada.
+const PARAM_EPSILON: f32 = 1e-6;
 
 /// Instancia VST3 alojada por Hikaru.
 ///
@@ -61,6 +69,26 @@ pub struct Vst3Instance {
     /// está embebido o nunca se abrió. Al soltar el struct se cierra la
     /// ventana (ver `Drop` de `FloatingEditor`).
     floating: Option<crate::floating_window::FloatingEditor>,
+    /// Último valor que el **host** le mandó al plugin, por parámetro.
+    ///
+    /// Sirve para distinguir "el usuario movió el knob del editor" de "el host
+    /// movió el knob del rack": cuando el rack cambia un parámetro, el host lo
+    /// escribe en el controlador y el valor del controlador cambia. Sin esta
+    /// marca, el sondeo por diferencia lo reportaría como un cambio del
+    /// editor y el rack se pelearía con su propio eco.
+    host_sent: HashMap<u32, f32>,
+    /// Último valor visto en el controlador, por parámetro.
+    ///
+    /// Es la base del sondeo por diferencia: los plugins que no llaman a
+    /// `performEdit` —o que lo llaman sólo al soltar el control— se detectan
+    /// igual.
+    seen: HashMap<u32, f32>,
+    /// Parámetro que el usuario está moviendo en el editor del plugin ahora
+    /// mismo (`beginEdit` sin `endEdit`).
+    ///
+    /// Mientras hay gesto, un cambio de ese parámetro es del usuario aunque
+    /// coincida con el último valor que mandó el host.
+    editing: Option<u32>,
     #[cfg(target_os = "linux")]
     _x11_conn: Option<X11Connection>,
 }
@@ -115,6 +143,16 @@ impl Vst3Instance {
     pub fn load(path: &Path) -> Result<Self, String> {
         let _load_guard = crate::load_lock().lock().unwrap_or_else(|e| e.into_inner());
 
+        // Xlib tiene que saber que el proceso es multihilo **antes** de que
+        // el plugin abra su Display. Si no, el hilo de X11 del toolkit y el
+        // hilo del host se pisan las respuestas del servidor y la apertura
+        // del editor se cuelga en un deadlock. Ver `crate::xlib`.
+        //
+        // Lo mismo decide si hay que desactivar XInput2: bajo XWayland los
+        // eventos XI2 no llegan a los clientes X11, y los toolkits que los
+        // usan para el ratón (JUCE 7 en adelante) se quedan sin ratón.
+        crate::xlib::prepare_for_plugin_gui();
+
         let resolved_path = Self::resolve_vst3_path(path);
         let plugin = simple::load_plugin(&resolved_path)
             .map_err(|e| format!("[VST3] Fallo al cargar '{}': {}", resolved_path.display(), e))?;
@@ -155,6 +193,14 @@ impl Vst3Instance {
         // vacía: el rack muestra "sin parámetros" en vez de romper nada.
         let params = runner.plugin().get_parameters().unwrap_or_default();
 
+        // La misma foto sirve de línea de base del sondeo por diferencia: sin
+        // ella, el primer cambio del editor quedaría sin detectar (no habría
+        // valor anterior con el cual comparar).
+        let seen: HashMap<u32, f32> = params
+            .iter()
+            .map(|p| (p.id, p.value.clamp(0.0, 1.0) as f32))
+            .collect();
+
         Ok(Self {
             runner,
             control,
@@ -168,6 +214,9 @@ impl Vst3Instance {
             last_error: None,
             window_attached: false,
             floating: None,
+            host_sent: HashMap::new(),
+            seen,
+            editing: None,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
         })
@@ -207,6 +256,17 @@ impl Vst3Instance {
     /// del audio thread.
     pub fn control(&mut self) -> &mut RtControl {
         &mut self.control
+    }
+
+    /// Lee el valor normalizado de un parámetro del controlador.
+    ///
+    /// `None` si el plugin no lo expone (o si el controlador no está).
+    fn read_param_normalized(&mut self, id: u32) -> Option<f32> {
+        self.runner
+            .plugin_mut()
+            .get_parameter(id)
+            .ok()
+            .map(|v| v.clamp(0.0, 1.0) as f32)
     }
 
     fn open_floating_window(&mut self) -> Result<(), String> {
@@ -485,9 +545,14 @@ impl PluginInstance for Vst3Instance {
 
     /// Manda el cambio por el anillo lock-free del runner: vuelve de
     /// inmediato (o `false` si la cola está llena) sin tocar el audio.
+    ///
+    /// El valor queda anotado en `host_sent`: es lo que permite distinguir
+    /// después un cambio del editor de un cambio del host (ver
+    /// [`PluginInstance::poll_param_changes`]).
     fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
-        self.control
-            .set_parameter(id, value.clamp(0.0, 1.0) as f64)
+        let value = value.clamp(0.0, 1.0);
+        self.host_sent.insert(id, value);
+        self.control.set_parameter(id, value as f64)
     }
 
     /// Drena lo que el editor pidió por su cuenta y lo aplica a la ventana.
@@ -520,13 +585,81 @@ impl PluginInstance for Vst3Instance {
     /// Lo que el editor nativo movió por su cuenta (el usuario arrastró un
     /// knob del plugin): el hilo de la ventana lo sondea y la UI mueve los
     /// knobs del rack para que no mientan.
+    ///
+    /// # De dónde sale cada cambio
+    ///
+    /// Hay dos fuentes y se combinan:
+    ///
+    /// 1. **El aviso explícito del plugin** (`IComponentHandler::performEdit`).
+    ///    Es la vía canónica de VST3 y la que usa un plugin bien portado: el
+    ///    controlador avisa "el usuario movió el parámetro 7 a 0.42".
+    /// 2. **El sondeo por diferencia** de los valores del controlador. Es la
+    ///    red de seguridad para los plugins que no implementan `performEdit`
+    ///    (o que sólo lo llaman al soltar el control): si el valor del
+    ///    controlador se movió y no lo movió el host, alguien lo movió.
+    ///
+    /// El sondeo **no** reporta los valores que el propio host acaba de
+    /// escribir (el rack movió un knob → el host lo escribe → el controlador
+    /// cambia): se comparan contra `host_sent` para no devolverle al rack su
+    /// propio eco.
     fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {
-        self.runner
+        // 1. Lo que el plugin avisó explícitamente.
+        let mut changes: Vec<(u32, f32)> = self
+            .runner
             .plugin()
             .get_parameter_changes()
             .into_iter()
             .map(|(id, v)| (id, v.clamp(0.0, 1.0) as f32))
-            .collect()
+            .collect();
+        let reported: Vec<u32> = changes.iter().map(|(id, _)| *id).collect();
+
+        // 2. El gesto en curso: mientras el usuario tiene un control
+        //    agarrado, cualquier cambio de ese parámetro es suyo.
+        self.editing = self.runner.plugin().get_edit_gesture();
+
+        // 3. Sondeo por diferencia sobre los valores del controlador.
+        let ids: Vec<u32> = self
+            .params
+            .iter()
+            .filter(|p| p.can_automate && !p.is_read_only)
+            .map(|p| p.id)
+            .collect();
+
+        for id in ids {
+            let Some(current) = self.read_param_normalized(id) else {
+                continue;
+            };
+            let previous = self.seen.insert(id, current);
+            let Some(previous) = previous else {
+                // Primer sondeo: no hay con qué comparar. La foto inicial la
+                // toma el sondeo de parámetros del rack.
+                continue;
+            };
+            if (previous - current).abs() <= PARAM_EPSILON {
+                continue;
+            }
+            if reported.contains(&id) {
+                // Ya vino por `performEdit`: no se duplica.
+                continue;
+            }
+            if self.editing == Some(id) {
+                // Gesto abierto: es del usuario, diga lo que diga el último
+                // valor que mandó el host.
+                changes.push((id, current));
+                continue;
+            }
+            if self
+                .host_sent
+                .get(&id)
+                .is_some_and(|sent| (sent - current).abs() <= PARAM_EPSILON)
+            {
+                // Es el eco del host: el rack ya sabe este valor.
+                continue;
+            }
+            changes.push((id, current));
+        }
+
+        changes
     }
 
     /// Bompea el editor.
