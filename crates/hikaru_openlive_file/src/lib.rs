@@ -1,5 +1,5 @@
 // Hikaru OpenLive File (`.oplf`) — esquema del formato.
-// SPDX-License-Identifier: LGPL-3.0-only
+// SPDX-License-Identifier: LGPL-3.0-or-later
 // crates/hikaru_openlive_file/src/lib.rs
 //
 // Especificación: docs/hikaru-project-files/hikaru-openlive-file/OPLF-README.md

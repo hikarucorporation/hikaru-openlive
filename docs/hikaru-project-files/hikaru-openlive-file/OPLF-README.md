@@ -4,7 +4,7 @@
 
 **Versión del software:** 2.22.2
 
-**Licencia de formato:** LGPL-3.0-only
+**Licencia de formato:** LGPL-3.0-or-later
 
 **MIME Type:** `application/x-hikaru-openlive` / `application/json`
 

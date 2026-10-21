@@ -1,5 +1,5 @@
 // Primitivas compartidas por los formatos de proyecto de Hikaru.
-// SPDX-License-Identifier: LGPL-3.0-only
+// SPDX-License-Identifier: LGPL-3.0-or-later
 // crates/hikaru_project_file/src/lib.rs
 //
 // =========================================================================

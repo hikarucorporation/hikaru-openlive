@@ -1,5 +1,5 @@
 // Hikaru OpenStudio File (`.opsf`) — esquema del formato.
-// SPDX-License-Identifier: LGPL-3.0-only
+// SPDX-License-Identifier: LGPL-3.0-or-later
 // crates/hikaru_openstudio_file/src/lib.rs
 //
 // =========================================================================

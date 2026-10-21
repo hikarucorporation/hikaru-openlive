@@ -30,7 +30,18 @@ keywords = [
     "immediate",
 ]
 categories = ["gui"]
-license = "Apache-2.0"
+# Relicensed (sublicensed) from Apache-2.0 to LGPL-3.0-or-later by Hikaru
+# OpenLive / OpenStudio. The Apache-2.0 section 2 grants the right to
+# sublicense, and the FSF's rule is that "any GNU license, version N,
+# subsumes the Apache 2.0 license provided N is at least 3" -- so LGPL-3.0
+# works and LGPL-2.1 does NOT (Apache-2.0 is incompatible with GPLv2, and
+# LGPL-2.1 is GPLv2-family).
+#
+# The upstream Apache-2.0 grant is irrevocable and still available to
+# recipients; it is retained verbatim in `LICENSE-APACHE` as Apache-2.0
+# section 4(a) requires. The full LGPL-3.0 (+ the GPL-3 it incorporates by
+# reference) is in `LICENSE`. See `NOTICE` and `PATCHES.md`.
+license = "LGPL-3.0-or-later"
 repository = "https://github.com/zed-industries/zed"
 resolver = "2"
 

@@ -1,0 +1,155 @@
+vst3-host — fork vendorizado por Hikaru OpenLive / OpenStudio
+=========================================================
+
+AVISO DE ATRIBUCION Y RELICENSING
+----------------------------------
+
+Este directorio contiene una copia vendorizada y parcheada del crate
+`vst3-host` publicado en crates.io.
+
+  Upstream:  https://crates.io/crates/vst3-host
+             https://github.com/HelgeSverre/rust-vst3-host/
+  Version:   0.1.1
+  Autoria:   Copyright (c) 2026 Helge Sverre
+  Licencia upstream: MIT
+
+Que paso con la licencia
+------------------------
+
+El codigo original de Helge Sverre estaba bajo MIT. Este fork se re-distribuye
+bajo la GNU Lesser General Public License version 2.1 o, a tu opcion, cualquier
+version posterior (SPDX: `LGPL-2.1-or-later`).
+
+Eso es licitamente posible porque la MIT es una licencia permisiva que concede
+explicitamente el derecho de "sublicense": "to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software". La unica condicion
+que impone es conservar el aviso de copyright original, y eso se cumple: el
+aviso MIT original esta intacto en el archivo `LICENSE-MIT` de este directorio, y
+se distribuye junto con cada copia de este crate.
+
+El texto completo de la LGPL-2.1 (mas el de la GPL-2, que la LGPL-2.1 incorpora
+por referencia) esta en el archivo `LICENSE` de este directorio.
+
+Por que `LGPL-2.1-or-later` y no `LGPL-2.1-only`
+-------------------------------------------------
+
+La aplicacion que enlaza este crate (Hikaru OpenLive / OpenStudio) es AGPL-3.0,
+que deriva de la GPL-3. La LGPL-2.1 deriva de la GPL-2 y, en su version
+`-only`, es codigo "GPLv2-only": no puede formar parte de una obra GPLv3/AGPLv3.
+La variante `-or-later` (que la propia LGPL-2.1 habilita en sus secciones 1 y
+13, y que es la que recomienda la FSF) deja que el material se use bajo
+LGPLv3/GPLv3/AGPLv3. Por eso el campo `license` del `Cargo.toml` dice
+`LGPL-2.1-or-later` y no `LGPL-2.1-only`.
+
+Dejalo asi, o la build de la app pasa a tener un conflicto de licencias.
+
+Cambios locales respecto del upstream (0.1.1 -> este fork)
+----------------------------------------------------------
+
+Estos cambios son obra de Hikaru OpenLive / OpenStudio y se publican bajo la
+misma LGPL-2.1-or-later. Inventario completo (diff contra el .crate de
+crates.io, 0.1.1):
+
+```
+src/audio.rs                        |  41 ++++++++
+src/host.rs                         |   9 +
+src/internal/com_implementations.rs | 151 ++++++++++++++++++++++++++++++--
+src/internal/module_loader/linux.rs | 121 +++++++++++++++----------
+src/internal/plugin_impl.rs         | 188 ++++++++++++++++++++++++++++++++++--
+src/plugin.rs                       |  77 ++++++++++++++++
+src/realtime.rs                     |  12 ++
+7 files changed, 515 insertions(+), 84 deletions(-)
+```
+
+  src/audio.rs
+    - `AudioBuffers::block_size` documentado como la longitud de bloque
+      autoritativa (no la longitud de los vectores de canales).
+    - Nueva funcion publica `resolve_block_frames(buffers, max_block_size)`:
+      resuelve el minimo entre el bloque pedido por el host, los frames
+      realmente disponibles en los canales y el maximo negociado en
+      `setupProcessing`. Arregla que se perdiera la cola de cada bloque cuando
+      el host entrega scratch channels mas largos que el bloque (el caso de
+      `PlanarScratch` de Hikaru).
+
+  src/internal/plugin_impl.rs
+    - Usa `resolve_block_frames()` en vez de derivar el bloque del largo de los
+      vectores. Sin esto, la mitad de cada bloque llegaba al plugin como
+      silencio digital.
+
+  src/host.rs
+    - Empuja la configuracion de audio del host (`sample_rate`, `block_size`)
+      al plugin recien cargado, antes del primer bloque. `PluginImpl::load` no
+      tiene configuracion y arranca con sus defaults (44100 Hz / 512 frames):
+      un plugin conducido a una tasa que nunca negocio suena a la altura
+      equivocada y descarta en silencio todo bloque mas largo que 512 frames.
+
+  src/internal/com_implementations.rs
+    - `ComponentHandlerState`: estado del flujo inverso de edicion de
+      parametros (knobs movidos dentro del editor del plugin), con lock, sin
+      tocar la ruta de audio.
+
+  src/internal/module_loader/linux.rs
+  src/plugin.rs
+  src/realtime.rs
+    - Ajustes de robustez y de tiempo real que requiere el host de Hikaru
+      (carga de plugins VST3 en Linux, sample rate, sinks de audio).
+
+El archivo `Cargo.toml.orig` se conserva sin tocar: es la copia pristina de lo
+que publico upstream, y sirve de referencia para re-vendorizar. El
+`Cargo.toml` de este directorio es el que cargo lee; si se re-vendoriza el
+crate, hay que volver a aplicar el `license = "LGPL-2.1-or-later"` y volver a
+copiar `LICENSE`, `LICENSE-MIT` y este `NOTICE`.
+
+Obligaciones de la LGPL-2.1 que quedan pendientes para la distribucion
+-------------------------------------------------------------------
+
+La LGPL-2.1 section 4 exige que quien distribuye la libreria en forma
+ejecutable permita al usuario relinkear contra una version modificada de la
+biblioteca. En un crate de Rust enlazado estaticamente, la via que la FSF
+contempla es la seccion 6(a): acompañar el ejecutable con el codigo fuente
+completo de la libreria y con los "object files" de la "work that uses the
+Library", de modo que el usuario pueda recompilar y relinkear.
+
+En este proyecto, la obligacion queda cubierta de facto por dos cosas:
+  1. La aplicacion completa ya es AGPL-3.0, lo que obliga a publicar el
+     codigo fuente completo del conjunto (incluido este crate).
+  2. El codigo fuente de esta libreria se distribuye en el mismo repositorio,
+     con estos archivos de licencia y este NOTICE.
+
+Aun asi, si se llega a publicar un binario cerrado que enlace este crate, hay
+que cumplir la seccion 6(a) explicitamente: publicar los object files o
+ofrecer la mecanica de enlazado compartido, o—instrumento valido—publicar el
+codigo fuente de la libreria y ofrecer el relinkado. No publicar un binario
+cerrado con este crate enlazado sin resolver esto.
+
+Que NO cambia esto
+------------------
+
+La relicencia agrega una offerta, no quita ninguna. Quien recibe este
+crate puede:
+
+  - usarlo bajo LGPL-2.1-or-later (la offerta de Hikaru), o
+  - usarlo bajo MIT (la grant original de Helge Sverre, que la licencia
+    MIT hace irrevocable: "Permission is hereby granted... to any person
+    obtaining a copy").
+
+No hay forma de "apagar" la MIT. Lo que si queda establecido es que este
+fork, tal como se distribuye, es copyleft, y que el parche propio de
+Hikaru va con esos terminos.
+
+En la practica, esto no es un problema: la aplicacion que lo enlaza es
+AGPL-3.0, y las obligaciones del AGPL se aplican al conjunto completo que
+se distribuye, parche incluido. El unico escenario donde la MIT gana es
+que alguien extraiga este crate *solo* y lo use por separado, y en ese
+caso estaria usando el codigo de Helge Sverre bajo la licencia que el
+mismo eligio, con tu parche de 500 lineas encima, que no es lo que
+"robarse el codigo" viene a ser.
+
+Resumen de licencias de este directorio
+----------------------------------------
+
+  Oferta de este fork .................... LGPL-2.1-or-later (LICENSE)
+  Codigo upstream de Helge Sverre ........ MIT (LICENSE-MIT, irrevocable)
+  Parche local de Hikaru ................. LGPL-2.1-or-later
+  Texto de la GPL-2 ...................... incorporado en `LICENSE`
+

@@ -3,7 +3,16 @@ name = "hikaru_project_file"
 description = "Primitivas compartidas por los formatos de proyecto de Hikaru (LGPLv3)"
 version.workspace = true
 edition = "2021"
-license = "LGPL-3.0-only"
+# "or-later" y no "only": el texto de la LGPL-3.0 (seccion 6) ya le da al
+# receptor la opcion de elegir una version posterior, asi que "only" no
+# aporta nada y si genera friccion: un proyecto GPLv3/AGPLv3 no podria
+# reutilizar este crate sin un acuerdo extra. Con "or-later" el receptor elige
+# entre {LGPL-3.0, GPL-3.0, AGPL-3.0}, y la opcion mas permisiva sigue
+# siendo la LGPL-3.0, que es la que habilita el enlace desde un DAW de codigo
+# cerrado. La frontera NO se debilita: LGPL-3.0 y GPL-3.0 son ambos mas
+# exigentes que lo que la LGPL-3.0 exige para el resto.
+# Texto de la licencia: LICENSE-LGPL-3.0 en la raiz del repo.
+license = "LGPL-3.0-or-later"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

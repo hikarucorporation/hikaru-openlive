@@ -145,6 +145,10 @@ Want to contribute? Pull Requests are highly welcome! (MIDI controller mapping, 
 
 This program is free software under the terms of the **GNU Affero General Public License (AGPLv3)**. See [`LICENSE`](https://www.gnu.org/licenses/agpl-3.0.en.html) for more details.
 
+The file-format and audio-driver libraries (`hikaru_project_file`, `hikaru_openlive_file`, `hikaru_openstudio_file`, `hikaru_audio_drivers`) are **LGPL-3.0-or-later** so third-party DAWs can use them without opening the engine. Their license text is in [`LICENSE-LGPL-3.0`](LICENSE-LGPL-3.0).
+
+The project vendors three third-party crates with their own licenses: `gpui-pre` / `gpui-pre-linux` (Zed, **Apache-2.0** upstream, relicensed here to **LGPL-3.0-or-later**) and `vst3-host` (**MIT** upstream, relicensed here to **LGPL-2.1-or-later**). See [`docs/licencias.md`](docs/licencias.md) for the full license map and the per-crate `NOTICE` files.
+
 ---
 
 ### 🛡️ Note on Development and Licensing (GNU AGPLv3)

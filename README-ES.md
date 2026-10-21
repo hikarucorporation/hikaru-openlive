@@ -149,6 +149,10 @@ Creadores:
 
 Este programa es software libre bajo los términos de la **GNU Affero General Public License (AGPLv3)**. Ver [`LICENSE`](https://www.gnu.org/licenses/agpl-3.0.en.html) para más detalles.
 
+Las librerías de formato de archivo y de drivers de audio (`hikaru_project_file`, `hikaru_openlive_file`, `hikaru_openstudio_file`, `hikaru_audio_drivers`) son **LGPL-3.0-or-later** para que DAWs de terceros las puedan usar sin abrir el motor. El texto de la licencia está en [`LICENSE-LGPL-3.0`](LICENSE-LGPL-3.0).
+
+El proyecto vendoriza tres crates de terceros con sus propias licencias: `gpui-pre` / `gpui-pre-linux` (Zed, **Apache-2.0** upstream, relicenciado acá a **LGPL-3.0-or-later**) y `vst3-host` (**MIT** upstream, relicenciado acá a **LGPL-2.1-or-later**). El mapa completo de licencias y los `NOTICE` por crate están en [`docs/licencias.md`](docs/licencias.md).
+
 ---
 
 ### 🛡️ Nota sobre el Desarrollo y Licencia (GNU AGPLv3)

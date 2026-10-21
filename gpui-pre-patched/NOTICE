@@ -1,0 +1,83 @@
+gpui-pre — fork vendorizado por Hikaru OpenLive / OpenStudio
+==============================================================
+
+AVISO DE ATRIBUCION
+--------------------
+
+Este directorio contiene una copia vendorizada y parcheada del crate
+`gpui-pre` publicado en crates.io.
+
+  Upstream:  https://crates.io/crates/gpui-pre
+             https://github.com/zed-industries/zed
+  Version:   0.3.6 (snapshot de zed@bcf6582)
+  Autoria:   Copyright 2022 - 2025 Zed Industries, Inc.
+             autores del crate: Nathan Sobo <nathan@zed.dev>
+  Licencia upstream: Apache License, Version 2.0
+
+Estado de los cambios
+---------------------
+
+Este fork se re-distribuye bajo **LGPL-3.0-or-later** (texto completo en
+`LICENSE`).
+
+La Apache-2.0 seccion 2 concede expresamente el derecho de "sublicense", asi
+que el upstream puede sublicenciarse: Hikaru OpenLive ofrece la obra
+completa bajo LGPL-3.0-or-later. Y la Apache-2.0 seccion 4 exige, para
+quien redistribuya, cuatro cosas, todas cumplidas:
+
+  (a) entregar una copia de la licencia  -> `LICENSE-APACHE` (se conserva);
+  (b) marcar los archivos modificados e indicar los cambios
+      -> `PATCHES.md` en este directorio, y los comentarios
+         "PATCH LOCAL (hikaru)" en el propio codigo;
+  (c) conservar todos los avisos de copyright, de patente y de atribucion
+      -> el encabezado `LICENSE-APACHE` esta intacto;
+  (d) reconocer cualquier NOTICE del upstream -> el upstream no distribuye
+      ningun NOTICE, asi que no hay nada que propagar; este archivo es el
+      NOTICE propio del fork.
+
+La licencia del codigo upstream NO cambia y no puede cambiar: la grant de
+Apache-2.0 es irrevocable y sigue disponible para cualquiera que reciba una
+copia. Lo que cambia es que Hikaru agrega una segunda offerta, la
+LGPL-3.0-or-later, que es la que gobierna este fork tal como se distribuye.
+
+Por que LGPL-3.0-or-later y no LGPL-2.1
+----------------------------------------
+
+La LGPL-2.1 deriva de la GPL-2, y la FSF declara que la Apache-2.0 es
+**incompatible con la GPL-2** (y por lo tanto con la LGPL-2.1) por sus
+clausulas de terminacion de patentes e indemnizacion. La regla de la FSF
+(https://www.gnu.org/licenses/license-compatibility.html) es:
+
+  "Any GNU license, version N, subsumes the Apache 2.0 license provided N is
+   at least 3."
+
+Es decir: para que una licencia copyleft pueda absorber a la Apache-2.0 hace
+falta que sea de la familia GPLv3 en adelante. La LGPL-2.1 es GPLv2, y no
+alcanza. La LGPL-3.0 si alcanza, y por eso es la version minima valida aca.
+
+Esto es exactamente la misma razon por la que la MIT si se puede relicenciar
+a LGPL-2.1 (la MIT es compatible con la GPLv2 y la GPLv3) y la Apache-2.0
+no: la diferencia entre los tres crates no es casual, sale de la licencia
+upstream de cada uno.
+
+Que NO cambia esto
+------------------
+
+La sublicencia agrega una offerta, no quita ninguna. Quien recibe este
+crate puede:
+
+  - usarlo bajo LGPL-3.0-or-later (la offerta de Hikaru), o
+  - usarlo bajo Apache-2.0 (la grant original de Zed, irrevocable).
+
+No hay forma de "apagar" la Apache-2.0: nadie tiene ese derecho. Lo que si
+queda protegido por la LGPL-3.0 es el parche propio de Hikaru y el hecho de
+que este fork, tal como se distribuye, es copyleft.
+
+Resumen de licencias de este directorio
+----------------------------------------
+
+  Oferta de este fork .................... LGPL-3.0-or-later (LICENSE)
+  Codigo upstream de Zed Industries ...... Apache-2.0 (LICENSE-APACHE,
+                                          irrevocable e irrevocable)
+  Parche local de Hikaru ................. LGPL-3.0-or-later
+  Texto de la GPL-3 ...................... incorporado en `LICENSE`

@@ -45,7 +45,16 @@ categories = [
     "multimedia",
     "development-tools",
 ]
-license = "MIT"
+# Relicensed from MIT (upstream, Helge Sverre) to LGPL-2.1-or-later by Hikaru
+# OpenLive / OpenStudio. The MIT allows sublicensing; its original notice is
+# retained verbatim in `LICENSE-MIT`, and the full LGPL-2.1 (+ GPL-2, which it
+# incorporates by reference) is in `LICENSE`. See `NOTICE` for the rationale,
+# the patch inventory and the outstanding LGPL-4 relinking obligations.
+#
+# Must stay `-or-later` (not `-only`): the host application is AGPL-3.0
+# (GPLv3 family) and LGPL-2.1-only is GPLv2-only, which cannot be combined
+# with an AGPL-3.0 work.
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/HelgeSverre/rust-vst3-host/"
 
 [package.metadata.docs.rs]
