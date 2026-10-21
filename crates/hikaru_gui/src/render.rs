@@ -995,7 +995,7 @@ pub struct ViewerRequest<'a> {
     pub camera: Camera,
     /// La tabla **entera** de la wavetable: `frames` bloques consecutivos de
     /// `frame_len` muestras, tal como la devuelve
-    /// [`crate::views::wavetable_io::load_wavetable`].
+    /// [`crate::views::hikaru_native_plugins::hikaru_openwavetable::wavetable_io::load_wavetable`].
     ///
     /// Pasa la tabla y no un solo ciclo a propósito: la malla apila los ciclos
     /// en el eje Z, que es la vista de wavetable que se espera de un

@@ -1,4 +1,4 @@
-// crates/hikaru_gui/src/views/open_wavetable.rs
+// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openwavetable/open_wavetable.rs
 
 //! Editor del sintetizador de Wavetable, en tira horizontal.
 //!
@@ -65,7 +65,7 @@
 //! El rótulo `WAVETABLE ▾` de la izquierda abre el menú de la tabla. Desde ahí
 //! se puede ir al explorador, que ya sabe navegar los directorios de Linux, o
 //! usar el diálogo nativo del sistema. La lectura del archivo está en
-//! [`crate::views::wavetable_io`].
+//! [`wavetable_io`].
 
 use std::path::PathBuf;
 
@@ -83,7 +83,7 @@ use crate::render::{
     ViewerRequest, WavetableView, WavetableViewRequest, WavetableViewportHandle,
     WAVETABLE_VIEWPORT,
 };
-use crate::views::wavetable_io::{self, Wavetable};
+use super::wavetable_io::{self, Wavetable};
 
 /// Lado del módulo, en píxeles.
 ///
@@ -176,8 +176,8 @@ pub(crate) const MAX_FRAMES: usize = 64;
 
 pub fn load_table_file(
     path: &std::path::Path,
-) -> Result<crate::views::wavetable_io::Wavetable, crate::views::wavetable_io::WavetableError> {
-    crate::views::wavetable_io::load_wavetable(path, MAX_FRAMES)
+) -> Result<wavetable_io::Wavetable, wavetable_io::WavetableError> {
+    wavetable_io::load_wavetable(path, MAX_FRAMES)
 }
 
 /// Colores de los knobs, en el espacio que espera el shader (lineal 0..1).

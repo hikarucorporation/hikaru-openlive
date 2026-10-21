@@ -49,7 +49,7 @@ use hikaru_gui::render::{
 };
 use hikaru_gui::views::controls::{finite, needle_angle};
 use hikaru_gui::views::dsp_rack::{rack_title, CARD_WIDTH, PLUGIN_CATALOG};
-use hikaru_gui::views::open_dms::{midi_note_name, DmsPad, OpenDms};
+use hikaru_gui::views::hikaru_native_plugins::hikaru_opendms::{midi_note_name, DmsPad, OpenDms};
 use hikaru_gui::views::util::normalized;
 use hikaru_gui::HikaruApp;
 use hikaru_render::{Camera, RenderMode, RenderSettings, WavetableMeshParams, wgpu};

@@ -25,7 +25,8 @@ use crate::render::render_image_from_rgba;
 ///
 /// Va con `include_bytes!` y no como ruta en disco a propósito: el ejecutable
 /// tiene que verse igual sin el árbol de assets al lado (mismo criterio que
-/// `views/wavetable_io.rs` con la wavetable de fábrica).
+/// `views/hikaru_native_plugins/hikaru_openwavetable/wavetable_io.rs` con la
+/// wavetable de fábrica).
 ///
 /// **Ojo con la extensión**: el diseño vive en
 /// `assets/logos/hikaru_energy_core_2.svg`, pero lo que se embebe es el `.png`

@@ -23,7 +23,7 @@ use crate::render::WavetableViewportHandle;
 use crate::views::{
     about, arranger_view, audio_settings, clip_editor, dsp_rack, explorer,
     external_plugins_settings, footer,
-    header, matrix, menu_bar, mixer, piano_roll, playlist,
+    header, matrix, mcp_port_settings, menu_bar, mixer, modal, piano_roll, playlist,
 };
 
 pub fn sync_matrix_mixer_bidirectional(
@@ -277,6 +277,16 @@ pub struct AppState {
 
     pub audio_settings_state: audio_settings::AudioSettingsState,
     pub plugin_settings_state: external_plugins_settings::PluginSettingsState,
+    /// El panel `Hikaru MCP Port Settings...`: los slots de puerto por los
+    /// que los agentes de IA se enganchan al DAW.
+    pub mcp_port_settings_state: mcp_port_settings::McpPortSettingsState,
+    /// El desplazamiento y el gesto de arrastre de cada ventana modal.
+    ///
+    /// Vive en el estado global (y no en cada panel) porque el gesto tiene
+    /// que sobrevivir a los `notify` del render: las modales se reconstruyen
+    /// en cada frame y un flag local moriría con el primer `notify`, cortando
+    /// el arrastre tras un solo paso. Ver `views::modal`.
+    pub modal_drags: modal::ModalDrags,
     pub playlist_state: playlist::PlaylistState,
     pub matrix_state: matrix::SessionMatrixState,
     /// Estado del Clip Editor (visualizador + sidebar). Es una entidad
@@ -1108,6 +1118,8 @@ impl HikaruApp {
             explorer_state: explorer::FileExplorerState::default(),
             audio_settings_state: audio_settings::AudioSettingsState::default(),
             plugin_settings_state: external_plugins_settings::PluginSettingsState::default(),
+            mcp_port_settings_state: mcp_port_settings::McpPortSettingsState::default(),
+            modal_drags: modal::ModalDrags::default(),
             playlist_state: playlist::PlaylistState::default(),
             clip_editor: clip_editor::ClipEditorState::default(),
             matrix_state,
@@ -1646,6 +1658,7 @@ impl Render for HikaruApp {
         let show_about = app_state.show_about;
         let audio_settings_open = app_state.audio_settings_state.is_open;
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
+        let mcp_port_settings_open = app_state.mcp_port_settings_state.is_open;
         let dragged_sample = app_state.dragged_sample.clone();
         // El alto del rack es fijo e inmutable: no se expande ni se achica al
         // insertar o abrir dispositivos. Todas las tarjetas ocupan el 100% de
@@ -1660,6 +1673,15 @@ impl Render for HikaruApp {
             .flex()
             .flex_col()
             .bg(crate::theme::WINDOW_BG)
+            // El seguimiento del arrastre de las ventanas modales. Va PRIMERO
+            // (se pinta antes que todo lo demás) para que su listener de
+            // ventana sea el primero en escucharse: GPUI despacha los
+            // eventos de mouse en fase de captura (en orden de pintado) y en
+            // fase de burbuja (al revés), y el gesto de arrastrar una modal
+            // tiene que survive a los `stop_propagation` del fondo.
+            //
+            // No tiene hitbox: no intercepta el mouse de nada.
+            .child(modal::drag_tracking_keepalive())
             
             // 1. BARRA SUPERIOR (MENÚ + TRANSPORT)
             .child(
@@ -1754,6 +1776,9 @@ impl Render for HikaruApp {
             .when(audio_settings_open, |this| this.child(audio_settings::render(cx)))
             .when(plugin_settings_open, |this| {
                 this.child(external_plugins_settings::render(cx))
+            })
+            .when(mcp_port_settings_open, |this| {
+                this.child(mcp_port_settings::render(cx))
             })
             .when_some(dragged_sample, |this, sample_path| {
                 this.child(render_drag_preview(&sample_path))

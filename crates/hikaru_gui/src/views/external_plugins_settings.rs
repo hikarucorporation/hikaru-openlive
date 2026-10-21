@@ -11,6 +11,12 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::*;
 
 use crate::app::{state, HikaruApp};
+use crate::views::modal::{self, ModalId, ModalRoot};
+
+/// Posición base de la ventana (px, desde la esquina superior izquierda de la
+/// ventana principal). El arrastre la mueve desde acá.
+const BASE_LEFT: f32 = 20.0;
+const BASE_TOP: f32 = 80.0;
 
 pub use hikaru_plugin_host::PluginDescriptor as DiscoveredPlugin;
 pub use hikaru_plugin_host::{HostParentKind, PluginFormat};
@@ -513,6 +519,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .plugin_settings_state
         .open_plugin_names();
     let gui_errors = app.plugin_settings_state.gui_errors.clone();
+    // El desplazamiento del arrastre de la ventana.
+    let drag = app.modal_drags.get(ModalId::PluginSettings);
+    let offset = drag.offset();
+    let dragging = drag.is_dragging();
     drop(app);
 
     if !is_open {
@@ -647,11 +657,14 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
-    v_flex()
+    // La posición de la ventana: la base más el desplazamiento del arrastre.
+    let (left, top) = modal::modal_position(BASE_LEFT, BASE_TOP, offset);
+
+    let panel = v_flex()
         .id("plugin_settings")
         .absolute()
-        .left(px(20.0))
-        .top(px(80.0))
+        .left(px(left))
+        .top(px(top))
         .w(px(560.0))
         .max_h(px(480.0))
         .bg(rgb(0x181A20))
@@ -672,7 +685,26 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .w_full()
                 .items_center()
                 .justify_between()
-                .child(Label::new("PLUGINS EXTERNOS · VST3 / CLAP").text_sm().font_weight(FontWeight::BOLD).text_color(rgb(0xE8EAF0)))
+                .gap(px(8.0))
+                .child(
+                    // El título es el ASA de arrastre de la ventana: el
+                    // usuario la agarra y la mueve. El `✕` queda fuera del
+                    // asa para que siga siendo un botón y no un asa.
+                    modal::drag_handle(
+                        h_flex()
+                            .id("plugin_settings_title")
+                            .flex_1()
+                            .items_center()
+                            .child(
+                                Label::new("PLUGINS EXTERNOS · VST3 / CLAP")
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xE8EAF0)),
+                            ),
+                        ModalId::PluginSettings,
+                        dragging,
+                    ),
+                )
                 .child(
                     Button::new("plugin_close_top").rounded(gpui_kit::component::button::ButtonRounded::None)
                         .label("✕")
@@ -683,6 +715,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             let st = state(cx);
                             cx.update_entity(&st, |state, cx| {
                                 state.plugin_settings_state.is_open = false;
+                                // La ventana vuelve a su posición base la
+                                // próxima vez que abra.
+                                state.modal_drags.reset(ModalId::PluginSettings);
                                 cx.notify();
                             });
                         }),
@@ -788,9 +823,19 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     let st = state(cx);
                     cx.update_entity(&st, |state, cx| {
                         state.plugin_settings_state.is_open = false;
+                        // La ventana vuelve a su posición base la próxima vez
+                        // que abra.
+                        state.modal_drags.reset(ModalId::PluginSettings);
                         cx.notify();
                     });
                 }),
         )
-        .into_any_element()
+        // El root del diálogo se traga los clics: los del panel nunca bajan
+        // al fondo de la app.
+        .absorb_clicks()
+        .into_any_element();
+
+    // El backdrop cubre toda la ventana: lo que se clicque fuera del panel no
+    // llega a la Session Matrix ni al resto de la app.
+    modal::overlay("plugin_settings_backdrop", panel)
 }

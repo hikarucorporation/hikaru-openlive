@@ -1,3 +1,12 @@
+// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/open_dms.rs
+
+//! La grilla de pads del sampler **Hikaru OpenDMS**.
+//!
+//! Es la vista grande del instrumento: 16, 32 o 64 pads, cada uno con su
+//! nombre, su color, su forma de onda y su estado de mute/solo. El modelo de
+//! los pads vive acá mismo ([`DmsPad`], [`OpenDms`]) y el sampler que los
+//! dispara es [`super::open_dms_sampler`].
+
 use std::path::PathBuf;
 
 use gpui_kit::component::*;

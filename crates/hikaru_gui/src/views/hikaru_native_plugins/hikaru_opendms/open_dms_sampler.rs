@@ -1,3 +1,13 @@
+// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/open_dms_sampler.rs
+
+//! El sampler de **Hikaru OpenDMS**: envolvente ADSR, sincronía de tempo, pitch
+//! en cents, posición de arranque y corte, y las slices del sample.
+//!
+//! Acá vive también [`load_peaks_from_wav`], que traduce un `.wav` de disco en
+//! los picos pre-calculados que la grilla de pads dibuja debajo de cada pad.
+//! La usan el explorador, el editor de clips y la apertura de proyecto, que
+//! por eso la buscan acá y no en la grilla: es **servicio**, no pantalla.
+
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;

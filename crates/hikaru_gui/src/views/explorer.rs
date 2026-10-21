@@ -512,7 +512,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             state.pending_wavetable_slot = None;
                                             let wavetable_path = path.clone();
                                             cx.defer(move |cx| {
-                                                crate::views::open_wavetable::load_table_deferred(
+                                                crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::load_table_deferred(
                                                     cx,
                                                     track_idx,
                                                     slot_idx,

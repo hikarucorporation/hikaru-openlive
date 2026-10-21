@@ -228,6 +228,18 @@ fn menu_items(idx: usize, mode: AppMode) -> Vec<MenuItem> {
                     });
                 }),
             ),
+            (
+                // El puerto MCP: los slots por los que los agentes de IA se
+                // enganchan al DAW. Va debajo de los plugins externos porque
+                // comparte la idea (procesos externos que se conectan al
+                // motor), pero es otra cosa: no carga VST3, expone el DAW.
+                "🤖 Hikaru MCP Port Settings...".to_string(),
+                Box::new(|cx: &mut App| {
+                    update_state(cx, |state| {
+                        state.mcp_port_settings_state.open();
+                    });
+                }),
+            ),
         ],
         _ => {
             let label = match mode {

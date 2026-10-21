@@ -1,4 +1,4 @@
-// crates/hikaru_gui/src/views/wavetable_io.rs
+// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openwavetable/wavetable_io.rs
 
 //! Lectura de wavetables desde archivos `.wav` de disco.
 //!
@@ -342,7 +342,13 @@ pub const WAVETABLE_EXTENSIONS: [&str; 1] = ["wav"];
 /// puede arrancar desde cualquier directorio, y una tabla cargada desde disco
 /// depende de que el archivo siga ahí al lado del binario. Con los bytes dentro,
 /// el slot inicial siempre tiene wavetable.
-pub const BUNDLED_WAVETABLE: &[u8] = include_bytes!("../../../../assets/wavetables/factory.wav");
+///
+/// OJO con la ruta: es relativa a **este** archivo, y este archivo vive dos
+/// niveles más adentro que cuando estaba en `views/`. Desde
+/// `src/views/hikaru_native_plugins/hikaru_openwavetable/` hay que subir seis
+/// niveles para llegar a `crates/hikaru_gui/`.
+pub const BUNDLED_WAVETABLE: &[u8] =
+    include_bytes!("../../../../../../assets/wavetables/factory.wav");
 
 /// El nombre que muestra el slot inicial.
 /// El nombre que muestra el slot inicial.

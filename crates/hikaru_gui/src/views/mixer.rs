@@ -81,8 +81,8 @@ pub struct DspSlot {
     pub has_gui: Option<bool>,
 }
 
-use crate::views::open_dms::OpenDms;
-use crate::views::open_wavetable::WavetableEditor;
+use crate::views::hikaru_native_plugins::hikaru_opendms::OpenDms;
+use crate::views::hikaru_native_plugins::hikaru_openwavetable::WavetableEditor;
 
 impl DspSlot {
     pub fn new(id: usize, name: String) -> Self {

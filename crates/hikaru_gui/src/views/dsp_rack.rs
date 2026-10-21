@@ -13,8 +13,10 @@ use gpui_kit::*;
 use crate::app::{state, HikaruApp, ParamDragState};
 use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::external_plugins_settings::capture_host_parent;
+use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
+use crate::views::hikaru_native_plugins::hikaru_openeq3;
+use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::mixer::{DspSlot, ExternalParamsStatus};
-use crate::views::open_wavetable;
 
 pub const RACK_HEIGHT: f32 = 340.0;
 
@@ -567,7 +569,7 @@ fn insert_slot_at(cx: &mut gpui_kit::App, track_idx: usize, at_idx: usize) {
             let new_id = track.effects.len();
             let insert_pos = at_idx.min(track.effects.len());
             track.effects.insert(insert_pos, DspSlot::new(new_id, "Empty Slot".to_string()));
-            crate::views::open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
+            open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
             state.selected_slot_index = insert_pos;
         }
         cx.notify();
@@ -737,7 +739,7 @@ fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, slot_co
                 if let Some(track) = state.tracks_mut().get_mut(track_idx) {
                     let new_id = track.effects.len();
                     track.effects.push(DspSlot::new(new_id, "Empty Slot".to_string()));
-                    crate::views::open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
+                    open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
                     state.selected_slot_index = new_id;
                     if let Some(slot) = state.slot_mut(track_idx, new_id) {
                         slot.menu_open = true;
@@ -893,26 +895,8 @@ fn render_card_body(
 
     match name {
         "OpenWavetable" => open_wavetable::render_module(cx, track_idx, idx),
-        "Hikaru OpenDMS" => render_dms_compact(cx, track_idx, idx),
-        "OpenEQ3" => v_flex()
-            .w_full()
-            .flex_1()
-            .min_h(px(100.0))
-            .items_center()
-            .justify_center()
-            .gap(px(2.0))
-            .child(
-                Label::new("OpenEQ3")
-                    .text_xs()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0xE8EAF0)),
-            )
-            .child(
-                Label::new("Low | Mid | Hi")
-                    .text_xs()
-                    .text_color(rgb(0x888888)),
-            )
-            .into_any_element(),
+        "Hikaru OpenDMS" => render_rack_card(cx, track_idx, idx),
+        "OpenEQ3" => hikaru_openeq3::render_module(),
         _ => {
             div()
                 .id(format!("dsp_empty_{track_idx}_{idx}"))
@@ -1825,32 +1809,6 @@ const PARAM_BAR_HEIGHT: f32 = 10.0;
 /// que apuntar al riel para que el `mouse_down` entrara, y un arrastre horizontal
 /// con la más mínima desviación vertical se salía de la caja.
 const PARAM_BAR_HIT_H: f32 = 20.0;
-
-fn render_dms_compact(cx: &mut Context<HikaruApp>, track_idx: usize, idx: usize) -> AnyElement {    let app = state(cx).read(cx);
-    let Some(dms) = app.slot(track_idx, idx).and_then(|slot| slot.dms_state.clone()) else {
-        return div()
-            .w_full()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Label::new("No DMS state").text_xs().text_color(rgb(0x555555)))
-            .into_any_element();
-    };
-    let pads = dms.pad_count;
-    let loaded = dms.pads.iter().filter(|pad| pad.sample_path.is_some()).count();
-
-    div()
-        .w_full()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(4.0))
-        .child(Label::new("OpenDMS Sampler").text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x00FFC8)))
-        .child(Label::new(format!("{loaded}/{pads} pads")).text_xs().text_color(rgb(0x888888)))
-        .into_any_element()
-}
 
 pub fn rack_title(track_name: &str, scene: Option<usize>) -> String {
     match scene {

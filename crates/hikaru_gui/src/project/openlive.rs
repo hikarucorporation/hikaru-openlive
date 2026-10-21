@@ -567,7 +567,7 @@ fn build_clip(saved: &Clip, base_dir: Option<&Path>) -> matrix::MatrixClip {
     }
 
     clip.refresh_preview();
-    clip.peaks = crate::views::open_dms_sampler::load_peaks_from_wav(
+    clip.peaks = crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
         &clip.path.to_string_lossy(),
         matrix::MatrixClip::PEAK_BINS,
     );

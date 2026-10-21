@@ -720,7 +720,7 @@ pub fn load_clip_into_slot(
     let peaks = if is_midi {
         Vec::new()
     } else {
-        crate::views::open_dms_sampler::load_peaks_from_wav(
+        crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
             path_str.as_str(),
             MatrixClip::PEAK_BINS,
         )
@@ -812,7 +812,7 @@ pub fn append_sample_as_event(
         }
         clip.refresh_preview();
         // La waveform del pad refleja el clip ya extendido con el sample nuevo.
-        clip.peaks = crate::views::open_dms_sampler::load_peaks_from_wav(
+        clip.peaks = crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
             path_str.as_str(),
             MatrixClip::PEAK_BINS,
         );

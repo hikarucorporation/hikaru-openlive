@@ -3369,6 +3369,7 @@ dependencies = [
  "gpui-kit",
  "hikaru_audio_engine",
  "hikaru_core",
+ "hikaru_mcp_port",
  "hikaru_openlive_file",
  "hikaru_openstudio_file",
  "hikaru_plugin_host",
@@ -3382,6 +3383,14 @@ dependencies = [
  "rfd",
  "serde_json",
  "x11rb",
+]
+
+[[package]]
+name = "hikaru_mcp_port"
+version = "2.22.2"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

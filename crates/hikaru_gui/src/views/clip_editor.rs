@@ -508,7 +508,7 @@ pub fn resolve_clip(s: &AppState, bpm: f32) -> Option<ClipEditorClip> {
             let detail = if is_midi {
                 Vec::new()
             } else {
-                crate::views::open_dms_sampler::load_peaks_from_wav(
+                crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
                     &clip.path.to_string_lossy(),
                     2048,
                 )
@@ -558,7 +558,7 @@ pub fn resolve_clip(s: &AppState, bpm: f32) -> Option<ClipEditorClip> {
             let duration_secs = clip.duration_ticks as f64 * secs_per_tick;
             let is_audio = !path.as_os_str().is_empty();
             let detail = if is_audio {
-                crate::views::open_dms_sampler::load_peaks_from_wav(
+                crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
                     &path.to_string_lossy(),
                     2048,
                 )

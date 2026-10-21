@@ -8,6 +8,10 @@ members = [
     "crates/hikaru_dsp",
     "crates/hikaru_plugin_host",
     "crates/hikaru_midi",
+    # El puerto MCP: la frontera que expone el DAW a los agentes de IA.
+    # Vive aparte de la GUI para que el binario standalone del agente no
+    # linkee GPUI. Ver docs/hikaru-mcp-port/.
+    "crates/hikaru_mcp_port",
     "crates/hikaru_gui",
     "crates/hikaru_audio_drivers",
     "crates/hikaru_render",

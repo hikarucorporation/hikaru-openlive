@@ -1,0 +1,17 @@
+[package]
+name = "hikaru_mcp_port"
+version.workspace = true
+edition = "2021"
+authors = ["Hikaru OpenStudio Developers"]
+license = "AGPL-3.0-later"
+description = "Hikaru MCP Port: la frontera que expone el DAW a los agentes de IA por MCP (Model Context Protocol)"
+
+[dependencies]
+# `serde` va con `derive` porque la configuración se persiste (y se cruza por el
+# socket en modo `files`): sin esto el estado del servidor MCP sería una
+# estructura que sólo existe en memoria y se perdería al cerrar la app.
+serde = { version = "1", features = ["derive"] }
+# La telemetría se exporta a JSON porque es lo que come el agente por el
+# recurso `hikaru://plugins/telemetry`. Ya está en el grafo del workspace
+# (lo usa `hikaru_gui`), así que no suma nada al build.
+serde_json = "1"

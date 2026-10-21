@@ -9,7 +9,7 @@ use gpui_kit::*;
 
 use crate::app::{state, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
-use super::open_dms::OpenDms;
+use super::hikaru_native_plugins::hikaru_opendms::OpenDms;
 use super::mixer::Track;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

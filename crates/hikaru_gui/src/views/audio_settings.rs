@@ -6,6 +6,12 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::*;
 
 use crate::app::{state, HikaruApp};
+use crate::views::modal::{self, ModalId, ModalRoot};
+
+/// Posición base de la ventana (px, desde la esquina superior izquierda de la
+/// ventana principal). El arrastre la mueve desde acá.
+const BASE_LEFT: f32 = 20.0;
+const BASE_TOP: f32 = 80.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AudioBackend {
@@ -51,13 +57,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let sample_rate = st.sample_rate;
     let buffer_size = st.buffer_size;
     let devices = st.available_devices.clone();
+    // El desplazamiento del arrastre de la ventana.
+    let drag = app.modal_drags.get(ModalId::AudioSettings);
+    let offset = drag.offset();
+    let dragging = drag.is_dragging();
     drop(app);
 
-    v_flex()
+    // La posición de la ventana: la base más el desplazamiento del arrastre.
+    let (left, top) = modal::modal_position(BASE_LEFT, BASE_TOP, offset);
+
+    let panel = v_flex()
         .id("audio_settings")
         .absolute()
-        .left(px(20.0))
-        .top(px(80.0))
+        .left(px(left))
+        .top(px(top))
         .w(px(440.0))
         .h(px(320.0))
         .bg(rgb(0x181A20))
@@ -66,7 +79,24 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .rounded(px(6.0))
         .p(px(12.0))
         .gap(px(8.0))
-        .child(Label::new("CONFIGURACIÓN DE AUDIO & HARDWARE").text_sm().font_weight(FontWeight::BOLD).text_color(rgb(0x00FFFF)))
+        // El título es el ASA de arrastre de la ventana: el usuario la agarra
+        // y la mueve.
+        .child(
+            modal::drag_handle(
+                h_flex()
+                    .id("audio_settings_title")
+                    .w_full()
+                    .items_center()
+                    .child(
+                        Label::new("CONFIGURACIÓN DE AUDIO & HARDWARE")
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x00FFFF)),
+                    ),
+                ModalId::AudioSettings,
+                dragging,
+            ),
+        )
         .child(
             h_flex()
                 .gap(px(6.0))
@@ -177,10 +207,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             let st = state(cx);
                             st.update(cx, |state, cx| {
                                 state.audio_settings_state.is_open = false;
+                                // La ventana vuelve a su posición base la
+                                // próxima vez que abra.
+                                state.modal_drags.reset(ModalId::AudioSettings);
                                 cx.notify();
                             });
                         }),
                 ),
         )
-        .into_any_element()
+        // El root del diálogo se traga los clics: los del panel nunca bajan
+        // al fondo de la app.
+        .absorb_clicks()
+        .into_any_element();
+
+    // El backdrop cubre toda la ventana: lo que se clicque fuera del panel no
+    // llega a la Session Matrix ni al resto de la app.
+    modal::overlay("audio_settings_backdrop", panel)
 }

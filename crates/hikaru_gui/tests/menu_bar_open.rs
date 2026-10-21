@@ -224,7 +224,7 @@ fn cambiar_de_menu(cx: &mut TestAppContext) {
 
     click(handle, cx, "menu_settings");
     assert_eq!(open_menu(handle, cx), Some(3));
-    assert_popup_open(handle, cx, 2);
+    assert_popup_open(handle, cx, 3);
 }
 
 // =========================================================================
@@ -269,6 +269,21 @@ fn settings_abre_el_panel_de_audio(cx: &mut TestAppContext) {
     click_item(handle, cx, 0); // 🔊 Audio Setup...
 
     assert!(set_state(handle, cx, |s| s.audio_settings_state.is_open));
+}
+
+/// El puerto MCP también tiene su ítem en `SETTINGS`, y tiene que montar el
+/// panel (no sólo cambiar un flag): si el panel no aparece, el agente no
+/// tiene por dónde conectarse.
+#[gpui_kit::gpui::test]
+fn settings_abre_el_panel_del_puerto_mcp(cx: &mut TestAppContext) {
+    let handle = open_app(cx);
+    set_state(handle, cx, |state| state.mcp_port_settings_state.is_open = false);
+
+    click(handle, cx, "menu_settings");
+    click_item(handle, cx, 2); // 🤖 Hikaru MCP Port Settings...
+
+    assert!(set_state(handle, cx, |s| s.mcp_port_settings_state.is_open));
+    assert_visible(handle, cx, "mcp_port_settings");
 }
 
 /// El rótulo de About depende del modo, y el popover lo arma al abrir: si se

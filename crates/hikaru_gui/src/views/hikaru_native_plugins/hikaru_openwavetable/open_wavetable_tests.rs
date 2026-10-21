@@ -1,4 +1,4 @@
-// crates/hikaru_gui/src/views/open_wavetable_tests.rs
+// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openwavetable/open_wavetable_tests.rs
 
 //! Tests de la interacción del knob `WT POS`.
 //!
@@ -86,7 +86,7 @@ fn the_drag_is_relative_to_the_grab_point() {
 
     editor.drag_to(995.0, false);
     let first = editor.position();
-    let expected = 0.5 + 5.0 / crate::views::open_wavetable::DRAG_RANGE_PX;
+    let expected = 0.5 + 5.0 / DRAG_RANGE_PX;
     assert!(
         (first - expected).abs() < 1.0e-4,
         "un delta de 5px dejó la posición en {first} y se esperaba {expected}"
