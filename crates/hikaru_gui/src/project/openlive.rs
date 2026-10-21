@@ -581,57 +581,16 @@ fn build_clip(saved: &Clip, base_dir: Option<&Path>) -> matrix::MatrixClip {
 
 /// La sesión de OpenLive con la que arranca la app, como [`OpenLiveProject`].
 ///
-/// Sale de los `Default` de la matriz (los mismos que usa `HikaruApp::build`)
-/// en vez de estar escrita a mano: si mañana el default de la Session Matrix
-/// pasa a 16 pistas, el `New Project` las tiene sin tocar este archivo.
+/// Sale de la PLANTILLA DEL FORMATO (`hikaru_openlive_file::template`) y no de
+/// una copia escrita acá: la consola (`hikaru_openlive new x.oplf`) crea
+/// archivos con esa misma plantilla, y un archivo creado por cualquiera de las
+/// dos tiene que abrir IGUAL en la otra.
+///
+/// La grilla por omisión de la Session Matrix también sale de ahí (ver
+/// `hikaru_openlive_file::default_matrix`), así que la app y el archivo
+/// siempre tienen las mismas dimensiones.
 pub fn blank() -> OpenLiveProject {
-    let default_matrix = matrix::SessionMatrixState::default();
-    let matrix = capture_matrix(&default_matrix);
-
-    // El master + un canal por fila de la matriz, que es la correspondencia
-    // que hace `sync_matrix_mixer_bidirectional`.
-    let mut live_tracks = common::default_live_tracks();
-    for (idx, meta) in default_matrix.tracks.iter().enumerate() {
-        live_tracks.push(Track {
-            id: idx + 1,
-            name: meta.name.clone(),
-            volume: meta.volume,
-            pan: meta.pan,
-            pan_mode: 0,
-            mute: meta.muted,
-            solo: meta.soloed,
-            arm: false,
-            is_master: false,
-            route_destination_id: 0,
-            sends: Vec::new(),
-            effects: Vec::new(),
-            matrix_idx: Some(idx),
-        });
-    }
-
-    OpenLiveProject {
-        format_version: common::FORMAT_VERSION,
-        created_by: format!("Hikaru OpenLive {}", VERSION),
-        engine_mode: EngineMode::OpenLive,
-        metadata: capture_metadata(&matrix),
-        transport: Transport {
-            bpm: 140.0,
-            time_signature: [4, 4],
-            launch_quantization: "1/4".to_string(),
-            tap_tempo_enabled: false,
-            loop_start_ticks: 0,
-            loop_end_ticks: 0,
-            loop_enabled: false,
-        },
-        dsp_global: capture_dsp_global(&live_tracks),
-        live_tracks,
-        matrix,
-        ui: UiState {
-            openlive_view: 0,
-            show_dsp_rack: false,
-            show_explorer: false,
-        },
-    }
+    hikaru_openlive_file::template(&format!("Hikaru OpenLive {}", VERSION))
 }
 
 // =========================================================================

@@ -1,16 +1,38 @@
+use std::process::ExitCode;
 use std::sync::mpsc::channel;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use hikaru_core::SampleRate;
 use hikaru_audio_engine::EngineMode;
+use hikaru_cli::{Dispatch, GuiOptions};
 use hikaru_gui::app::HikaruApp;
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
 use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 static DEFAULT_WAVETABLE: [f32; 2048] = [0.0; 2048];
 
-fn main() {
+/// El punto de entrada del binario `hikaru_openlive`.
+///
+/// Es un DISPATCHER: primero mira los argumentos y, si son un comando de
+/// consola, sale por ahí sin tocar GPUI ni el motor de audio. Si no hay
+/// comando (o si el usuario pidió la GUI explícitamente), sigue con la
+/// ventana.
+///
+/// La decisión se toma ANTES de crear el motor de audio y el canal de
+/// comandos: un `hikaru_openlive inspect x.oplf` no puede dejar un stream de
+/// CPAL abierto detrás (en un servidor sin placa de sonido, además, el stream
+/// falla y el comando se caería).
+fn main() -> ExitCode {
+    match hikaru_cli::dispatch_from_env() {
+        // La consola ya hizo su trabajo (o*)
+        Dispatch::Exit(code) => code,
+        Dispatch::Gui(options) => run_gui(options),
+    }
+}
+
+/// Levanta la interfaz gráfica y el motor de audio.
+fn run_gui(options: GuiOptions) -> ExitCode {
     #[cfg(target_os = "linux")]
     {
         std::env::set_var("WINIT_UNIX_BACKEND", "x11");
@@ -407,14 +429,22 @@ fn main() {
         }
     });
 
-    let audio_stream = match init_cpal_stream(engine_arc.clone()) {
-        Ok(stream) => {
-            println!("[Hikaru] Stream de audio CPAL iniciado correctamente.");
-            Some(stream)
-        }
-        Err(e) => {
-            eprintln!("[Hikaru Error] No se pudo iniciar el dispositivo de audio: {}", e);
-            None
+    // `--no-audio` deja la GUI sin el backend de audio: es el flag para
+    // debuggear en un servidor que no tiene placa de sonido (o que no quiere
+    // que el DAW le toque el dispositivo mientras se investiga otra cosa).
+    let audio_stream = if options.no_audio {
+        println!("[Hikaru] --no-audio: la GUI arranca sin dispositivo de audio.");
+        None
+    } else {
+        match init_cpal_stream(engine_arc.clone()) {
+            Ok(stream) => {
+                println!("[Hikaru] Stream de audio CPAL iniciado correctamente.");
+                Some(stream)
+            }
+            Err(e) => {
+                eprintln!("[Hikaru Error] No se pudo iniciar el dispositivo de audio: {}", e);
+                None
+            }
         }
     };
 
@@ -427,6 +457,11 @@ fn main() {
         .lock()
         .map(|engine| engine.output_level_bits.clone())
         .unwrap_or_else(|_| std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)));
+
+    // El proyecto a abrir, si el usuario pidió uno. Se carga DESPUÉS de que la
+    // app está construida (el estado del mixer y de la matriz tiene que
+    // existir antes de que `project::load` lo pise).
+    let project_path = options.project.clone();
 
     // OJO: NO registrar `.with_assets(...)` por ahora. Los SVG de Lucide traen
     // `stroke="currentColor"`, que el renderer de GPUI no resuelve: con la
@@ -468,12 +503,40 @@ fn main() {
                         Some(engine_arc.clone()),
                     );
                     app.sync_hardware_sample_rate(cx, hardware_sr);
+
+                    // `--project <ruta>`: el proyecto se carga al abrir la
+                    // ventana. Es el camino que usa un agente de IA para
+                    // levantar el DAW con una sesión concreta.
+                    if let Some(path) = project_path.clone() {
+                        let mut failure: Option<hikaru_gui::project::ProjectError> = None;
+                        app.state.update(cx, |state, _| {
+                            if let Err(err) = hikaru_gui::project::load(state, &path) {
+                                failure = Some(err);
+                            }
+                        });
+                        match failure {
+                            None => {
+                                let saved = path.clone();
+                                app.state.update(cx, |state, _| {
+                                    state.project_path = Some(saved.clone());
+                                    state.project_dirty = false;
+                                });
+                                println!("[PROJECT] proyecto cargado: {}", saved.display());
+                            }
+                            Some(err) => {
+                                eprintln!("[PROJECT] no se pudo abrir {}: {}", path.display(), err)
+                            }
+                        }
+                    }
+
                     app
                 })
             },
         )
         .expect("failed to open window");
     });
+
+    ExitCode::SUCCESS
 }
 
 fn init_cpal_stream(

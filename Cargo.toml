@@ -12,6 +12,10 @@ members = [
     # Vive aparte de la GUI para que el binario standalone del agente no
     # linkee GPUI. Ver docs/hikaru-mcp-port/.
     "crates/hikaru_mcp_port",
+    # La consola: el mismo binario `hikaru_openlive` con un dispatcher de
+    # argumentos que responde por terminal sin inicializar GPUI. Vive aparte
+    # para no linkear la ventana en el camino de la CLI.
+    "crates/hikaru_cli",
     "crates/hikaru_gui",
     "crates/hikaru_audio_drivers",
     "crates/hikaru_render",
@@ -47,6 +51,13 @@ version = "2.22.2"
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log", "params"] }
 vst3-host = "0.1"
+# La consola de `hikaru_openlive` (ver crates/hikaru_cli). `clap` parsea los
+# argumentos; `serde_json` arma la salida JSON que consumen los agentes de IA;
+# `colored` colorea el banner y los estados (se desactiva solo si la salida no
+# es una terminal).
+clap = { version = "4.6", features = ["derive"] }
+serde_json = "1"
+colored = "2"
 # La versión DEBE coincidir exactamente con la que usa `gpui-pre-wgpu`
 # (transitiva de gpui-kit). Si se desvía, cargo compila dos copias de wgpu en
 # el mismo binario y los tipos no son intercambiables entre crates.

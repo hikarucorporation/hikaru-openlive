@@ -279,6 +279,160 @@ pub fn parse(path: &Path) -> Result<OpenLiveProject, ProjectError> {
     parse_with_probe(path)
 }
 
+// =========================================================================
+// PLANTILLA
+// =========================================================================
+
+/// Filas (pistas) de la Session Matrix por omisión.
+pub const DEFAULT_TRACKS: usize = 8;
+
+/// Columnas (escenas) de la Session Matrix por omisión.
+pub const DEFAULT_SCENES: usize = 8;
+
+/// La Session Matrix por omisión: 8 pistas por 8 escenas, todos los pads vacíos.
+///
+/// Es la fuente ÚNICA de la forma por omisión de la matriz: de acá salen la
+/// plantilla del archivo ([`template`]) y el estado vivo de la GUI
+/// (`SessionMatrixState::default`). Si los dos salieran de sitios distintos,
+/// un proyecto creado por la consola abriría con una matriz distinta de la
+/// que muestra la app al arrancar.
+pub fn default_matrix() -> Matrix {
+    let tracks: Vec<TrackMeta> = (0..DEFAULT_TRACKS)
+        .map(|i| TrackMeta {
+            name: format!("Track {}", i + 1),
+            muted: false,
+            soloed: false,
+            volume: 0.75,
+            pan: 0.0,
+        })
+        .collect();
+
+    let scenes: Vec<SceneMeta> = (0..DEFAULT_SCENES)
+        .map(|i| SceneMeta {
+            name: format!("Scene {}", i + 1),
+        })
+        .collect();
+
+    // La grilla es rectangular: `tracks.len() == grid.len()` y
+    // `scenes.len() == grid[0].len()`. Los pads arrancan vacíos.
+    let grid = vec![vec![None; DEFAULT_SCENES]; DEFAULT_TRACKS];
+
+    Matrix {
+        tracks,
+        scenes,
+        grid,
+        next_clip_id: 1,
+    }
+}
+
+/// La sesión de OpenLive vacía, con la grilla por omisión.
+///
+/// Es la plantilla que usan las DOS puertas de entrada del producto: el
+/// `File > New Project` de la GUI y el `hikaru_openlive new <archivo.oplf>` de
+/// la consola. Que sea una sola función y no dos copias es lo que garantiza
+/// que un archivo creado por cualquiera de las dos se abra IGUAL en la otra.
+///
+/// `created_by` lo pasa quien llama (el binario), no esta librería: una
+/// librería de formato no tiene por qué saber qué versión se está compilando
+/// (ver el doc comment de [`OpenLiveProject::created_by`]).
+///
+/// La grilla es de 8 pistas por 8 escenas, que es la que trae la Session
+/// Matrix de la app. Las pistas se llaman "Track 1".."Track 8" y las escenas
+/// "Scene 1".."Scene 8": los mismos nombres que escribe la GUI.
+pub fn template(created_by: &str) -> OpenLiveProject {
+    let matrix = default_matrix();
+
+    // El master + un canal por fila de la matriz: es la correspondencia que
+    // hace la sincronización bidireccional entre la matriz y el mixer.
+    let mut live_tracks = vec![Track {
+        id: 0,
+        name: "MASTER".to_string(),
+        volume: 0.70,
+        pan: 0.0,
+        pan_mode: 0,
+        mute: false,
+        solo: false,
+        arm: false,
+        is_master: true,
+        route_destination_id: 0,
+        sends: Vec::new(),
+        effects: Vec::new(),
+        matrix_idx: None,
+    }];
+    for (idx, meta) in matrix.tracks.iter().enumerate() {
+        live_tracks.push(Track {
+            id: idx + 1,
+            name: meta.name.clone(),
+            volume: meta.volume,
+            pan: meta.pan,
+            pan_mode: 0,
+            mute: meta.muted,
+            solo: meta.soloed,
+            arm: false,
+            is_master: false,
+            route_destination_id: 0,
+            sends: Vec::new(),
+            effects: Vec::new(),
+            matrix_idx: Some(idx),
+        });
+    }
+
+    OpenLiveProject {
+        format_version: hikaru_project_file::FORMAT_VERSION,
+        created_by: created_by.to_string(),
+        engine_mode: EngineMode::OpenLive,
+        metadata: Metadata {
+            title: String::new(),
+            artist: None,
+            genre: None,
+            key: None,
+            stats: Stats {
+                total_scenes: matrix.scenes.len(),
+                total_tracks: matrix.tracks.len(),
+                audio_clips: 0,
+                midi_clips: 0,
+            },
+        },
+        transport: Transport {
+            bpm: 140.0,
+            time_signature: [4, 4],
+            launch_quantization: "1/4".to_string(),
+            tap_tempo_enabled: false,
+            loop_start_ticks: 0,
+            loop_end_ticks: 0,
+            loop_enabled: false,
+        },
+        dsp_global: DspGlobal {
+            master_volume: 0.70,
+            master_pan: 0.0,
+            effects_rack: Vec::new(),
+        },
+        live_tracks,
+        matrix,
+        ui: UiState {
+            openlive_view: 0,
+            show_dsp_rack: false,
+            show_explorer: false,
+        },
+    }
+}
+
+/// La sesión de OpenLive MÍNIMA: el master y nada más.
+///
+/// No tiene pistas ni escenas: es el punto de partida de quien quiere armar
+/// la sesión desde cero (o del agente que la va a escribir por JSON). Un
+/// archivo así abre sin problema: la GUI completa la grilla con los defaults
+/// cuando la matriz viene vacía.
+pub fn empty_template(created_by: &str) -> OpenLiveProject {
+    let mut project = template(created_by);
+    project.metadata.stats = Stats::default();
+    project.live_tracks.truncate(1); // sólo el master
+    project.matrix.tracks.clear();
+    project.matrix.scenes.clear();
+    project.matrix.grid.clear();
+    project
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +516,41 @@ mod tests {
         assert!((leido.transport.bpm - 160.0).abs() < 1e-9);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn la_plantilla_es_rectangular_y_tiene_master() {
+        let project = template("Hikaru OpenLive 0.0.0");
+
+        assert_eq!(project.matrix.tracks.len(), DEFAULT_TRACKS);
+        assert_eq!(project.matrix.scenes.len(), DEFAULT_SCENES);
+        assert_eq!(project.matrix.grid.len(), DEFAULT_TRACKS);
+        for row in &project.matrix.grid {
+            assert_eq!(row.len(), DEFAULT_SCENES);
+            assert!(row.iter().all(|slot| slot.is_none()));
+        }
+
+        // El master + un canal por fila de la matriz.
+        assert_eq!(project.live_tracks.len(), DEFAULT_TRACKS + 1);
+        assert!(project.live_tracks[0].is_master);
+        for (idx, track) in project.live_tracks.iter().skip(1).enumerate() {
+            assert_eq!(track.matrix_idx, Some(idx));
+            assert_eq!(track.name, format!("Track {}", idx + 1));
+        }
+
+        // El `dsp_global` es una VISTA del master, no un segundo master.
+        assert_eq!(project.dsp_global.master_volume, project.live_tracks[0].volume);
+    }
+
+    #[test]
+    fn la_plantilla_vacia_no_tiene_pistas_ni_escenas() {
+        let project = empty_template("Hikaru OpenLive 0.0.0");
+
+        assert!(project.matrix.tracks.is_empty());
+        assert!(project.matrix.scenes.is_empty());
+        assert!(project.matrix.grid.is_empty());
+        // El master sigue estando: sin master no hay salida de audio.
+        assert_eq!(project.live_tracks.len(), 1);
+        assert!(project.live_tracks[0].is_master);
     }
 }

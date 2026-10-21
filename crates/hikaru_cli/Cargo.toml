@@ -1,0 +1,28 @@
+# Cargo.toml del crate hikaru_cli
+[package]
+name = "hikaru_cli"
+version.workspace = true
+edition = "2021"
+authors = ["Hikaru OpenStudio Developers"]
+license = "AGPL-3.0-later"
+description = "Consola de línea de comandos de Hikaru OpenLive: inspección, validación y administración de puertos MCP sin GPU"
+
+[dependencies]
+# Parseo de la línea de comandos. El `dispatcher` del binario `hikaru_openlive`
+# le pasa los argv tal cual: esta crate decide si son un comando de consola o
+# si hay que levantar la GUI.
+clap = { workspace = true }
+# Salida JSON: la consume OpenCode, Claude Code y cualquier otro agente que
+# prefiera parsear a leer texto.
+serde_json = { workspace = true }
+# Banner y estados coloreados. `colored` desactiva el color solo cuando la
+# salida no es una terminal, así que el mismo código sirve para un pipe.
+colored = { workspace = true }
+# Los ESQUEMAS de los formatos de proyecto (LGPLv3): la CLI los lee y los
+# escribe sin tocar el motor AGPL. Ver docs/hikaru-project-files/.
+hikaru_project_file = { path = "../hikaru_project_file" }
+hikaru_openlive_file = { path = "../hikaru_openlive_file" }
+hikaru_openstudio_file = { path = "../hikaru_openstudio_file" }
+# La configuración de los puertos MCP (AGPLv3, pero sin GPUI: por eso el
+# servidor MCP del agente puede linkear esta crate sin arrastrar la ventana).
+hikaru_mcp_port = { path = "../hikaru_mcp_port" }

@@ -191,6 +191,112 @@ pub fn parse(path: &Path) -> Result<OpenStudioProject, ProjectError> {
     parse_with_probe(path)
 }
 
+// =========================================================================
+// PLANTILLA
+// =========================================================================
+
+/// Resolución del timeline (ticks por negra) por omisión.
+///
+/// Es el `DEFAULT_PPQN` del motor. Va escrito acá a mano y no importado del
+/// crate del transporte porque este crate es LGPLv3 y sólo puede depender de
+/// `serde`: si tomara la constante del motor, la frontera del formato se
+/// ataría al motor (ver el doc comment de `hikaru_project_file`).
+pub const DEFAULT_PPQN: u64 = 960;
+
+/// La sesión de OpenStudio vacía, con el master y una pista.
+///
+/// Es la plantilla que usan las DOS puertas de entrada del producto: el
+/// `File > New Project` de la GUI y el `hikaru_openlive new <archivo.opsf>` de
+/// la consola.
+///
+/// `created_by` lo pasa quien llama (el binario), no esta librería: una
+/// librería de formato no tiene por qué saber qué versión se está compilando.
+pub fn template(created_by: &str) -> OpenStudioProject {
+    let studio_tracks = vec![
+        Track {
+            id: 0,
+            name: "MASTER".to_string(),
+            volume: 0.70,
+            pan: 0.0,
+            pan_mode: 0,
+            mute: false,
+            solo: false,
+            arm: false,
+            is_master: true,
+            route_destination_id: 0,
+            sends: Vec::new(),
+            effects: Vec::new(),
+            matrix_idx: None,
+        },
+        Track {
+            id: 1,
+            name: "TRACK 01".to_string(),
+            volume: 0.70,
+            pan: 0.0,
+            pan_mode: 0,
+            mute: false,
+            solo: false,
+            arm: false,
+            is_master: false,
+            route_destination_id: 0,
+            sends: Vec::new(),
+            effects: Vec::new(),
+            matrix_idx: None,
+        },
+    ];
+
+    OpenStudioProject {
+        format_version: hikaru_project_file::FORMAT_VERSION,
+        created_by: created_by.to_string(),
+        engine_mode: EngineMode::OpenStudio,
+        metadata: Metadata {
+            title: String::new(),
+            artist: None,
+            genre: None,
+            key: None,
+            stats: Stats {
+                total_tracks: studio_tracks.len(),
+                total_clips: 0,
+                audio_clips: 0,
+                midi_clips: 0,
+            },
+        },
+        transport: Transport {
+            bpm: 140.0,
+            beats_per_bar: 4,
+            beat_division: 4,
+            loop_start_ticks: 0,
+            loop_end_ticks: 0,
+            loop_enabled: false,
+        },
+        studio_tracks,
+        playlist: Playlist {
+            clips: Vec::new(),
+            ppqn: DEFAULT_PPQN,
+            next_clip_id: 1,
+            loop_start_ticks: 0,
+            loop_end_ticks: 0,
+            loop_region_active: false,
+        },
+        ui: UiState {
+            openstudio_view: 0,
+            show_dsp_rack: false,
+            show_explorer: false,
+        },
+    }
+}
+
+/// La sesión de OpenStudio MÍNIMA: sólo el master.
+///
+/// Sin pistas y sin clips: es el punto de partida de quien quiere armar el
+/// arreglo desde cero (o del agente que lo va a escribir por JSON).
+pub fn empty_template(created_by: &str) -> OpenStudioProject {
+    let mut project = template(created_by);
+    project.metadata.stats = Stats::default();
+    project.studio_tracks.truncate(1); // sólo el master
+    project
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +365,26 @@ mod tests {
         assert_eq!(leido.playlist.clips[0].0, 1);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn la_plantilla_tiene_master_una_pista_y_el_ppqn_del_motor() {
+        let project = template("Hikaru OpenStudio 0.0.0");
+
+        assert_eq!(project.playlist.ppqn, DEFAULT_PPQN);
+        assert!(project.playlist.clips.is_empty());
+        assert_eq!(project.studio_tracks.len(), 2);
+        assert!(project.studio_tracks[0].is_master);
+        assert!(!project.studio_tracks[1].is_master);
+    }
+
+    #[test]
+    fn la_plantilla_vacia_deja_solo_el_master() {
+        let project = empty_template("Hikaru OpenStudio 0.0.0");
+
+        assert_eq!(project.studio_tracks.len(), 1);
+        assert!(project.studio_tracks[0].is_master);
+        // El PPQN se conserva: es la resolución del timeline, no del contenido.
+        assert_eq!(project.playlist.ppqn, DEFAULT_PPQN);
     }
 }

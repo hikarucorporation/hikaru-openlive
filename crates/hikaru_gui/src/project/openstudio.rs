@@ -319,33 +319,12 @@ fn build_playlist_clip(
 /// La sesión de OpenStudio con la que arranca la app, como
 /// [`OpenStudioProject`].
 ///
-/// Sale de [`PlaylistState::default`] en vez de estar escrita a mano, igual que
-/// en el módulo de `.oplf`.
+/// Sale de la PLANTILLA DEL FORMATO (`hikaru_openstudio_file::template`) y no
+/// de una copia escrita acá: la consola (`hikaru_openlive new x.opsf`) crea
+/// archivos con esa misma plantilla, y un archivo creado por cualquiera de las
+/// dos tiene que abrir IGUAL en la otra.
 pub fn blank() -> OpenStudioProject {
-    let playlist = capture_playlist(&PlaylistState::default());
-    let studio_tracks = common::default_studio_tracks();
-
-    OpenStudioProject {
-        format_version: common::FORMAT_VERSION,
-        created_by: format!("Hikaru OpenStudio {}", VERSION),
-        engine_mode: EngineMode::OpenStudio,
-        metadata: capture_metadata(&studio_tracks, &playlist),
-        transport: Transport {
-            bpm: 140.0,
-            beats_per_bar: 4,
-            beat_division: 4,
-            loop_start_ticks: 0,
-            loop_end_ticks: 0,
-            loop_enabled: false,
-        },
-        studio_tracks,
-        playlist,
-        ui: UiState {
-            openstudio_view: 0,
-            show_dsp_rack: false,
-            show_explorer: false,
-        },
-    }
+    hikaru_openstudio_file::template(&format!("Hikaru OpenStudio {}", VERSION))
 }
 
 // =========================================================================

@@ -366,6 +366,97 @@ pub fn socket_path_in(runtime_dir: &Path, id: PortSlotId) -> PathBuf {
     runtime_dir.join(format!("hikaru-mcp-{id}.sock"))
 }
 
+// =========================================================================
+// PERSISTENCIA
+// =========================================================================
+
+/// La ruta del archivo donde vive la configuración de los puertos MCP.
+///
+/// Es `$XDG_CONFIG_HOME/hikaru/mcp-ports.json` (o `~/.config/hikaru/...` si
+/// `XDG_CONFIG_HOME` no está definido), que es donde un DAW guarda lo que el
+/// usuario configura y no lo que la app calcula.
+///
+/// El archivo NO está en el runtime dir: aquel es efímero (se borra al
+/// reiniciar la sesión) y la configuración de los puertos tiene que
+/// sobrevivir a un reinicio de la máquina. Los SOCKETS sí viven en el runtime
+/// dir, porque son archivos de vida corta.
+pub fn default_config_path() -> PathBuf {
+    let base = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+            PathBuf::from(home).join(".config")
+        }
+    };
+    base.join("hikaru").join("mcp-ports.json")
+}
+
+/// Lee la configuración del archivo.
+///
+/// Si el archivo NO existe, devuelve la de por omisión: es lo que quiere el
+/// usuario la primera vez, y se diferencia de "hay un archivo roto" (que sí
+/// es un error) porque un archivo que no se puede leer no se puede
+/// distinguir de uno que nunca se escribió.
+pub fn load_config(path: &Path) -> Result<McpServerConfig, ConfigError> {
+    if !path.exists() {
+        return Ok(McpServerConfig::default());
+    }
+    let text = std::fs::read_to_string(path)?;
+    let config: McpServerConfig = serde_json::from_str(&text)?;
+    Ok(config)
+}
+
+/// Escribe la configuración al archivo.
+///
+/// El archivo se escribe con JSON lindo porque lo edita una persona a mano
+/// cuando algo sale mal (y es lo primero que se le pide al agente: "pasame
+/// la config del puerto 3").
+pub fn save_config(
+    config: &McpServerConfig,
+    path: &Path,
+) -> Result<(), ConfigError> {
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)?;
+        }
+    }
+    let json = serde_json::to_string_pretty(config)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Por qué no se pudo leer o escribir la configuración.
+#[derive(Debug)]
+pub enum ConfigError {
+    /// Error de E/S al leer o escribir el archivo.
+    Io(std::io::Error),
+    /// El archivo existe pero no es una configuración válida.
+    Parse(serde_json::Error),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::Io(e) => write!(f, "no se pudo acceder a la configuración: {}", e),
+            ConfigError::Parse(e) => write!(f, "la configuración no es válida: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl From<std::io::Error> for ConfigError {
+    fn from(e: std::io::Error) -> Self {
+        ConfigError::Io(e)
+    }
+}
+
+impl From<serde_json::Error> for ConfigError {
+    fn from(e: serde_json::Error) -> Self {
+        ConfigError::Parse(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +530,46 @@ mod tests {
             config.socket_path_for(2),
             PathBuf::from("/run/user/1000/hikaru/hikaru-mcp-2.sock")
         );
+    }
+
+    #[test]
+    fn una_configuracion_que_no_existe_devuelve_la_de_omision() {
+        let path = std::env::temp_dir().join("hikaru_mcp_no_existe_este_archivo.json");
+        let _ = std::fs::remove_file(&path);
+
+        let config = load_config(&path).expect("no debería fallar");
+        assert_eq!(config.port_count(), DEFAULT_PORT_SLOTS);
+        assert!(config.ports.iter().all(|p| !p.enabled));
+    }
+
+    #[test]
+    fn la_configuracion_sobrevive_al_viaje_de_ida_y_vuelta() {
+        let path = std::env::temp_dir()
+            .join(format!("hikaru_mcp_cfg_{}.json", std::process::id()));
+
+        let mut config = McpServerConfig::new();
+        config.enabled = true;
+        config.slot_mut(3).unwrap().enabled = true;
+        config.add_port();
+
+        save_config(&config, &path).expect("no debería fallar al guardar");
+        let leida = load_config(&path).expect("no debería fallar al leer");
+
+        assert!(leida.enabled);
+        assert!(leida.slot(3).unwrap().enabled);
+        assert_eq!(leida.port_count(), DEFAULT_PORT_SLOTS + 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn una_configuracion_rota_es_un_error_y_no_un_default() {
+        let path = std::env::temp_dir()
+            .join(format!("hikaru_mcp_rota_{}.json", std::process::id()));
+        std::fs::write(&path, b"{ esto no es json").unwrap();
+
+        assert!(matches!(load_config(&path), Err(ConfigError::Parse(_))));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

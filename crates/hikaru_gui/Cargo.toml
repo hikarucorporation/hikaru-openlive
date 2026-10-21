@@ -14,6 +14,11 @@ hikaru_plugin_host = { path = "../hikaru_plugin_host" }
 # se enganchan al DAW. Es un crate aparte para que el binario standalone del
 # servidor MCP no linkee GPUI.
 hikaru_mcp_port = { path = "../hikaru_mcp_port" }
+# La consola: el binario `hikaru_openlive` es un dispatcher que consulta esta
+# crate PRIMERO. Si el comando es de consola, sale sin inicializar GPUI ni el
+# motor de audio. La crate no depende de GPUI (por eso el camino de la CLI no
+# arrastra la ventana).
+hikaru_cli = { path = "../hikaru_cli" }
 # Render GPU offscreen (sprite sheets 2D y malla 3D de la Wavetable).
 # Comparte la misma versión de wgpu que gpui-kit a través del workspace, así
 # que no se compilan dos copias del backend.

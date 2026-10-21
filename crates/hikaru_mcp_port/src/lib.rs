@@ -37,8 +37,9 @@ pub mod ipc;
 pub mod telemetry;
 
 pub use config::{
-    socket_path_in, ConfigIssue, McpPortConfig, McpServerConfig, McpTransport, PortSlotId,
-    ServerFlags, DEFAULT_PORT_SLOTS, FIRST_PORT_SLOT,
+    default_config_path, load_config, save_config, socket_path_in, ConfigError, ConfigIssue,
+    McpPortConfig, McpServerConfig, McpTransport, PortSlotId, ServerFlags, DEFAULT_PORT_SLOTS,
+    FIRST_PORT_SLOT,
 };
 pub use ipc::{IpcDirection, IpcError, IpcEvent, IpcStub};
 pub use telemetry::{PluginTelemetry, TelemetryExporter};

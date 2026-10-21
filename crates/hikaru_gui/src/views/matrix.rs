@@ -354,26 +354,32 @@ pub struct SessionMatrixState {
 
 impl Default for SessionMatrixState {
     fn default() -> Self {
-        let initial_tracks = 8;
-        let initial_scenes = 8;
+        // La grilla por omisión sale de la PLANTILLA DEL FORMATO, que es la
+        // misma que usa el `hikaru_openlive new x.oplf` de la consola. Que el
+        // estado vivo y el archivo tengan la misma forma es lo que hace que
+        // un proyecto creado por la consola se vea igual que uno creado en
+        // la app.
+        let default = hikaru_openlive_file::default_matrix();
 
-        let tracks = (0..initial_tracks)
-            .map(|i| TrackMeta {
-                name: format!("Track {}", i + 1),
-                muted: false,
-                soloed: false,
-                volume: 0.75,
-                pan: 0.0,
+        let tracks: Vec<TrackMeta> = default
+            .tracks
+            .iter()
+            .map(|t| TrackMeta {
+                name: t.name.clone(),
+                muted: t.muted,
+                soloed: t.soloed,
+                volume: t.volume,
+                pan: t.pan,
             })
             .collect();
 
-        let scenes = (0..initial_scenes)
-            .map(|i| SceneMeta {
-                name: format!("Scene {}", i + 1),
-            })
+        let scenes: Vec<SceneMeta> = default
+            .scenes
+            .iter()
+            .map(|s| SceneMeta { name: s.name.clone() })
             .collect();
 
-        let grid = vec![vec![MatrixSlot::default(); initial_scenes]; initial_tracks];
+        let grid = vec![vec![MatrixSlot::default(); scenes.len()]; tracks.len()];
 
         Self {
             grid,
