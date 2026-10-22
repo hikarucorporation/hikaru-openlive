@@ -14,7 +14,7 @@ fn main() {
     let path = PathBuf::from(
         args.get(1)
             .cloned()
-            .unwrap_or_else(|| "/home/alex/.vst3/MonaChroma.vst3".to_string()),
+            .unwrap_or_else(|| "/home/user/.vst3/MonaChroma.vst3".to_string()),
     );
     let seconds: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60);
 

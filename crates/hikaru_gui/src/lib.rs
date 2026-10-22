@@ -9,6 +9,7 @@
  */
 
 pub mod app;
+pub mod mcp_port_launcher;
 pub mod views;
 pub mod theme;
 pub mod ui;

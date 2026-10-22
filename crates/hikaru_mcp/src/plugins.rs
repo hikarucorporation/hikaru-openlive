@@ -89,6 +89,27 @@ fn format_label(format: PluginFormat) -> &'static str {
 ///
 /// El agente no siempre tiene el id a mano: la ruta es lo que aparece en los
 /// archivos de proyecto, así que se acepta cualquiera de las dos formas.
+pub fn binario_de(
+    backend: &crate::Backend,
+    referencia: &str,
+) -> Result<PathBuf, String> {
+    let como_ruta = Path::new(referencia);
+    if como_ruta.is_file() {
+        return Ok(como_ruta.to_path_buf());
+    }
+
+    let descriptor = resolve(&backend.scan(false), referencia).ok_or_else(|| {
+        format!("no se encontró el plugin '{referencia}'")
+    })?;
+
+    binary_of(&descriptor).ok_or_else(|| {
+        format!(
+            "el plugin '{}' no tiene binario dentro (bundle vacío o formato raro)",
+            descriptor.display_label()
+        )
+    })
+}
+
 pub fn resolve(report: &ScanReport, referencia: &str) -> Option<PluginDescriptor> {
     if let Some(encontrado) = report.plugins.iter().find(|p| p.id == referencia) {
         return Some(encontrado.clone());

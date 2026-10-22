@@ -1,0 +1,26 @@
+# Hikaru OpenLive — patrones que no se versionan.
+# (Equivalente a lo que vive en .git/info/exclude, pero versionado para que
+# todos los clones lo respeten.)
+
+# Binarios compilados.
+target/
+*.o
+*.so
+*.a
+
+# El binario standalone del servidor MCP (se compila localmente).
+hikaru_mcp
+hikaru_openlive
+
+# La página de manual instalada en el directorio del usuario.
+*.1
+
+# El caché de Ghidra (proyectos de análisis, pesados).
+/var/tmp/hikaru/
+
+# Logs y archivos personales de OpenCode.
+.opencode/
+
+# Archivos de sistema.
+.DS_Store
+Thumbs.db

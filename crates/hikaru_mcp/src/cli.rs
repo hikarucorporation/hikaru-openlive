@@ -52,6 +52,14 @@ pub struct Cli {
     /// Imprime el estado del servidor y sale, sin hablar MCP.
     #[arg(long)]
     pub status: bool,
+
+    /// Consola interactiva: banner, ayuda y comandos por la entrada estándar.
+    ///
+    /// Es lo mismo que `hikaru_openlive --cli`, pero para el servidor MCP:
+    /// sirve para probar la ingeniería inversa y el descubrimiento de
+    /// plugins sin levantar un agente de IA.
+    #[arg(long)]
+    pub cli: bool,
 }
 
 /// El modo de operación, como lo ve la línea de comandos.

@@ -41,6 +41,15 @@ fn run_gui(options: GuiOptions) -> ExitCode {
     let (tx, rx) = channel();
     let audio_proxy = AudioProxy::new(tx);
 
+    // Los slots habilitados del puerto MCP: se lanzan como procesos
+    // `hikaru_mcp` para que los agentes se conecten. Ver
+    // `crates/hikaru_gui/src/mcp_port_launcher.rs`.
+    hikaru_gui::mcp_port_launcher::lanzar_slots_habilitados();
+    eprintln!(
+        "servidores MCP lanzados: {}",
+        hikaru_gui::mcp_port_launcher::lanzados()
+    );
+
     let sample_rate = SampleRate::new(44100.0);
 
     let position_clock = Arc::new(AtomicU64::new(0));

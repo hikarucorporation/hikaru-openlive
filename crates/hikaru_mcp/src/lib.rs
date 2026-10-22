@@ -156,6 +156,8 @@ pub fn tool_ok(value: &Value) -> rmcp::model::CallToolResult {
 
 pub mod catalog;
 pub mod cli;
+pub mod console;
+pub mod man;
 pub mod crash;
 pub mod ghidra;
 pub mod plugins;

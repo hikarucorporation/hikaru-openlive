@@ -102,10 +102,10 @@ El archivo `~/.config/hikaru/mcp-ports.json` tiene los slots. El campo
 
 ```json
 "server_flags": {
-  "executable": "/home/alex/Documentos/Codigo_Fuente/hikaru_mcp",
+  "executable": "/home/user/Documentos/Codigo_Fuente/hikaru_mcp",
   "args": ["--mode", "files"],
   "env": { "GHIDRA_INSTALL_DIR": "..." },
-  "working_dir": "/home/alex/Documentos/Codigo_Fuente/hikaru-workspace/hikaru-openlive"
+  "working_dir": "/home/user/Documentos/Codigo_Fuente/hikaru-workspace/hikaru-openlive"
 }
 ```
 

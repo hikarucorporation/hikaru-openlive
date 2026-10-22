@@ -73,6 +73,14 @@ async fn main() -> ExitCode {
         return estado(&backend, &ruta_proyecto);
     }
 
+    if cli.cli {
+        // La consola interactiva: banner, ayuda y un bucle que lee comandos.
+        // Sirve para probar la ingeniería inversa sin levantar un agente.
+        let consola = hikaru_mcp::console::Console::new(backend);
+        consola.run();
+        return ExitCode::SUCCESS;
+    }
+
     match cli.transport {
         TransportArg::Stdio => servir_stdio(backend).await,
         TransportArg::Unix => {

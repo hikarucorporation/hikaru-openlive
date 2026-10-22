@@ -429,7 +429,7 @@ fn ejecutar(backend: Arc<Backend>, llamada: ToolCall) -> CallToolResult {
             plugin,
             procedimiento,
             analisis,
-        } => match binario_de(&backend, &plugin) {
+        } => match crate::plugins::binario_de(&backend, &plugin) {
             Ok(binario) => {
                 // Ghidra directo es el camino principal: funciona con
                 // cualquier versión de Ghidra. REA queda de reserva para
@@ -470,7 +470,7 @@ fn ejecutar(backend: Arc<Backend>, llamada: ToolCall) -> CallToolResult {
             Err(err) => crate::tool_error(err),
         },
 
-        ToolCall::PluginSymbols { plugin } => match binario_de(&backend, &plugin) {
+        ToolCall::PluginSymbols { plugin } => match crate::plugins::binario_de(&backend, &plugin) {
             Ok(binario) => {
                 let formato = if binario.extension().map(|e| e == "clap").unwrap_or(false) {
                     hikaru_plugin_host::PluginFormat::CLAP
@@ -548,26 +548,6 @@ fn resolver(
         format!(
             "no se encontró el plugin '{referencia}'. \
              Usá `list_plugins` para ver los disponibles (algunos: {nombres:?})"
-        )
-    })
-}
-/// Devuelve el binario de un plugin (el `.so` de un bundle VST3 o el
-/// `.clap` suelto).
-///
-/// Acepta tanto el id de un plugin como una ruta directa a un binario: el
-/// agente muchas veces ya tiene el `.so` en la mano.
-fn binario_de(backend: &Backend, referencia: &str) -> Result<std::path::PathBuf, String> {
-    // Si es una ruta a un archivo, se usa tal cual.
-    let como_ruta = std::path::Path::new(referencia);
-    if como_ruta.is_file() {
-        return Ok(como_ruta.to_path_buf());
-    }
-
-    let descriptor = resolver(backend, referencia)?;
-    crate::plugins::binary_of(&descriptor).ok_or_else(|| {
-        format!(
-            "el plugin '{}' no tiene binario dentro (bundle vacío o formato raro)",
-            descriptor.display_label()
         )
     })
 }
