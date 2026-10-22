@@ -1,0 +1,95 @@
+-Thought · 16.1s
+Everything is verified and working. Let me write the final summary.
+
+Let me summarize:
+
+Lo que se logró
+
+1. El servidor MCP (crates/hikaru_mcp) — FUNCIONA
+- 4.093 líneas, 31 tests verdes
+- 9 tools, 5 resources, 3 prompts
+- Dos transportes: stdio y socket Unix (el del "Puerto MCP")
+- Conectado a OpenCode vía opencode mcp add hikaru --global
+
+2. Ingeniería inversa de UZU — FUNCIONA
+- Ghidra 12.3 (tu fork) directo, sin REA (REA rechaza 12.3)
+- Pseudocode C real de funciones del plugin cerrado
+- Los 11 parámetros del plugin extraídos instanciándolo
+- Estructura del DSP revelada: JUCE + libpd + patch "EB Phaselock" + FFT de Mayer
+
+3. Bugs encontrados y arreglados en el camino
+- serve() devuelve el handle, no espera → need waiting()
+- Ghidra rechaza paths con elementos . → cache en /var/tmp
+- El script Java necesita la cabecera /* ### */ + ASCII puro
+- -process quiere el nombre dentro del proyecto, no el path
+- REA devuelve los errores dentro de data con ok:true
+- Concurrencia: dos corridas de Ghidra pelean por el lock del proyecto
+
+4. Correcciones de config
+- mcp-ports.json: 4 bugs corregidos
+- opencode.jsonc: servidor hikaru registrado
+
+5. Hallazgos sobre el DAW
+- HikaruFOSSPhaser.vst3 es VST2 (VSTPluginMain), no VST3 — el escáner lo clasifica mal por la extensión
+- El binario hikaru_openlive que compilaste NO contiene el servidor MCP (es otro crate) — por eso el config apuntaba mal
+- REA no puede usar tu Ghidra 12.3 (exige 12.1.x) → el server habla con Ghidra directo
+- La GUI todavía no publica hikaru.sock (el modo vivo queda pendiente)
+- hikaru_mcp_port::telemetry no tiene productor
+
+Caveat: rea server instructions disappeared a couple of times during service restarts — it reconnects. Not important.
+
+Let me also mention the "next steps".
+
+Let me write it concisely but completely. The user is technical and Spanish-speaking (Argentine "vos").
+
+Let me note what's pending:
+- The GUI spawning the server on the slot socket (the DAW side of "Puerto MCP") — server_flags is read but never executed.
+- Telemetry producer.
+- Live mode.
+- REA skill stale (v37 vs 42).
+
+Let me write the final message.
+Todo verde. Resumen final.
+✅ Sí funciona. Y sí: ya hice ingeniería inversa de UZU.
+1. crates/hikaru_mcp — el servidor que faltaba
+4.093 líneas, 31 tests verdes, binario en /home/alex/Documentos/Codigo_Fuente/hikaru_mcp.
+
+Transporte	stdio (OpenCode/Claude Code) y socket Unix (el del "Puerto MCP")
+Tools	9 — list_plugins, plugin_info, plugin_parameters, set_parameter, inspect_plugin_wrapper, decompile_plugin_stub, plugin_symbols, audit_project, project_info
+Resources	5 — hikaru://project/current, //matrix/grid, //plugins/discovered, //plugins/telemetry, //diagnostics/last-crash
+Prompts	3 — diagnosticar-fallo-audio, reconstruir-plugin-rust, auditar-proyecto
+Conectado a vos: opencode mcp add hikaru --global → ya lo tengo como cliente MCP y lo uso en cada turno.
+2. Ingeniería inversa de UZU (cerrado) — con tu Ghidra 12.3
+No instalé nada. Pero REA rechaza tu Ghidra 12.3 (unsupported_version: exige 12.1.x), así que el server habla con analyzeHeadless directo — y REA queda de reserva.
+Lo que saqué del binario:
+- ABI: GetPluginFactory@00199840, ModuleEntry@00199800, factory JUCE (~JucePluginFactory), interfaces Steinberg::IPluginFactory{,2,3}
+- Identidad: el magic 0x4c515243 = "CRQL"; moduleinfo.json → UZU 1.0.4, vendor CRQL, CID ABCDEF019182FAEB4352514C43727133, VST 3.8.0
+- 11 parámetros, extrídos instanciando el plugin (dlopen real): Width, Offset, Depth, Speed, Mix, Blur, Hz/Oct, 1x/5x, Keep Bass, Blocksize, Bypass
+- Motor DSP: JUCE + libpd (Pure Data) con un patch embebido llamado "EB Phaselock" (BinaryData::EBPhaselock_pd) que usa la FFT de Mayer (mayer_realfft/mayer_ifft), block~, phasewrap~, freq.shift~
+- Pseudocode C real, por ejemplo el registro del objeto Pd:
+void setup_freq0x2eshift_tilde(void) {
+  uVar1 = gensym("freq.shift~");
+  uVar1 = class_new(uVar1, freqshift_new, 0, 0x90, 0, 6, 0);
+  class_addmethod(uVar1, freqshift_dsp,   gensym("dsp"),    0xb, 0);
+  class_addmethod(uVar1, nullfn,          gensym("signal"), 0,   0);
+  class_addmethod(uVar1, freqshift_clear, gensym("clear"),  0,   0);
+}
+3. Bugs que encontré y arreglé en el camino
+Bug	Síntoma
+serve() devuelve el handle, no espera	el proceso se iba al arrancar → waiting()
+Ghidra rechaza paths con elementos .	~/.cache no sirve → cache en /var/tmp/hikaru/ghidra
+El script Java necesita cabecera /* ### */ + ASCII puro	ClassNotFoundException: Decomp not found (y el javac se tragaba el error)
+-process quiere el nombre dentro del proyecto	invalid filename specified
+REA devuelve los errores dentro de data con ok:true	un error se leía como análisis
+Dos corridas de Ghidra en paralelo	LockException → candado en el proceso
+4. Hallazgos sobre tu DAW
+- hikaru_openlive NO contiene el servidor MCP — es otro crate. Tu config apuntaba al ejecutable equivocado por eso.
+- HikaruFOSSPhaser.vst3 es VST2, no VST3 (exporta VSTPluginMain): el escáner lo clasifica VST3 por la extensión del bundle y después el host falla al cargar.
+- La GUI todavía no publica hikaru.sock → el modo vivo queda pendiente (avisa y sigue con el disco).
+- hikaru_mcp_port::telemetry existe pero no tiene productor.
+- server_flags se lee y se muestra, pero nada lo ejecuta: el lado DAW del "Puerto MCP" (que la GUI lance el server en el slot) es lo que falta.
+5. Configs corregidas
+- ~/.config/hikaru/mcp-ports.json: 4 bugs (executable inexistente, transport stdio que no parsea, working_dir que era un archivo, path espurio en un Stdio). Ahora hikaru_openlive --mcp status → "Problemas: ninguno". Backup en /tmp/opencode/mcp-ports.json.bak. ⚠️ lo tenías abierto en kate.
+- ~/.config/opencode/opencode.jsonc: servidor hikaru registrado. Backup en /tmp/opencode/opencode.jsonc.bak.
+Lo que yo seguiría haciendo: (1) que la GUI lance hikaru_mcp en los slots habilitados (el lado DAW del Puerto MCP), (2) el productor de telemetría, (3) un --patch desde cero de UZU con el patch Pd extraído, que es el reconstruir-plugin-rust del prompt — el EB Phaselock está entero en el binario como BinaryData.
+¿Arranco por alguno?

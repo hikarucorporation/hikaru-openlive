@@ -44,6 +44,7 @@ use clap::Parser;
 pub mod banner;
 pub mod cli;
 pub mod console;
+pub mod man;
 pub mod mcp;
 pub mod project;
 pub mod version;

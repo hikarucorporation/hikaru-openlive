@@ -1,0 +1,346 @@
+.\" Copyright (C) Hikaru Corporation - 2026
+.\" SPDX-License-Identifier: AGPL-3.0-or-later
+.\"
+.\" Página de manual del binario `hikaru_openlive`.
+.\"
+.\" ARCHIVO CANÓNICO: crates/hikaru_cli/man/hikaru_openlive.1
+.\" Espejo en docs/man/hikaru_openlive.1 (se mantiene con `make man-sync`;
+.\" un test del crate verifica que las dos copias sean idénticas).
+.\"
+.\" La página documenta la gramática REAL del programa: la misma que
+.\" implementa `crates/hikaru_cli/src/cli.rs` con `clap`.
+.TH HIKARU_OPENLIVE 1 "2026-10-21" "Hikaru OpenLive 2.22.2" "User Commands"
+.SH NAME
+hikaru_openlive \- DAW de performance en vivo y arreglo, con consola para agentes de IA
+.SH SYNOPSIS
+.B hikaru_openlive
+.RI [ OPTIONS ]
+.br
+.B hikaru_openlive new
+.I PATH
+.RI [ OPTIONS ]
+.br
+.B hikaru_openlive inspect
+.I PATH
+.br
+.B hikaru_openlive validate
+.I PATH
+.br
+.B hikaru_openlive mcp
+.RI "[\fIACTION\fR] [\fIPORT\fR]"
+.br
+.B hikaru_openlive
+.RI "[\fB\-\-cli\fR|\fB\-\-mcp\fR \fIACTION\fR]"
+.SH DESCRIPTION
+.B hikaru_openlive
+es una estación de trabajo de audio digital (DAW) para performance en vivo y
+composición, escrita en Rust. El mismo binario sirve para dos cosas:
+.PP
+.RS 4
+Levantar la interfaz gráfica del DAW (camino por omisión: sin argumentos, o
+con
+.BR \-\-gui ).
+.br
+Responder por terminal a los comandos de la consola: crear, inspeccionar y
+validar proyectos, y administrar los puertos MCP por los que los agentes de
+IA se enganchan al DAW.
+.RE
+.PP
+El camino de consola NO inicializa la interfaz gráfica ni el motor de audio:
+es rápido y funciona en servidores sin placa de sonido y sin
+.BR DISPLAY .
+La gramática de la consola interactiva (
+.BR \-\-cli )
+es la misma que la de la línea de comandos: cada línea que se escribe se
+parsea con el mismo analizador, así que lo que funciona en la terminal
+funciona en la consola y al revés.
+.PP
+Los proyectos se guardan en dos formatos:
+.B .oplf
+(OpenLive: sesión de performance con Session Matrix) y
+.B .opsf
+(OpenStudio: arreglo con timeline lineal). La extensión del archivo decide el
+formato.
+.PP
+Con
+.B \-\-json
+la salida es JSON en vez de texto: es lo que prefieren los agentes de IA y lo
+que permite parsear la salida en vez de leerla.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Muestra el banner del producto y la ayuda de la línea de comandos, y sale con
+código 0.
+.TP
+.BR \-V ", " \-\-version
+Muestra la versión del producto y sale con código 0.
+.TP
+.B \-\-gui
+Levanta la interfaz gráfica. Es lo mismo que invocar el binario sin
+subcomando.
+.TP
+.B \-\-no\-audio
+Levanta la interfaz gráfica sin el backend de audio. Es lo que hay que usar en
+servidores sin placa de sonido, en containers y cuando se depura el motor.
+.TP
+.BI \-\-project " PATH"
+Carga el proyecto
+.I PATH
+(\fB.oplf\fR o \fB.opsf\fR) al abrir la ventana.
+.TP
+.B \-\-json
+La salida de los comandos es JSON. Es una opción global: funciona antes y
+después del subcomando.
+.TP
+.B \-\-cli
+Atajo de
+.BR "hikaru_openlive cli" .
+Abre la consola interactiva: banner, ayuda y un bucle que lee comandos de la
+entrada estándar. El EOF (la entrada estándar cerrada) la termina con código
+0, así que un agente puede usarla como un pipe:
+.IP "" 4
+.EX
+printf 'new x.oplf\\ninspect x.oplf\\nexit\\n' | hikaru_openlive \-\-cli
+.EE
+.TP
+.B \-\-mcp
+Atajo de
+.BR "hikaru_openlive mcp" .
+Administra los puertos MCP. Acepta las mismas acciones que el subcomando
+.BR mcp .
+.SH COMMANDS
+.TP
+.B new \fIPATH\fR
+Crea un proyecto nuevo con la plantilla por omisión. La extensión de
+.I PATH
+decide el formato:
+.B .oplf
+(OpenLive) o
+.B .opsf
+(OpenStudio); cualquier otra extensión es un error de uso.
+Las opciones son:
+.IP "" 4
+.EX
+\-\-template \fIdefault\fR|\fIempty\fR   La plantilla del proyecto nuevo.
+\-\-empty                            Alias de \-\-template empty.
+\-\-title \fITEXTO\fR                El título del proyecto.
+\-\-bpm \fIBPM\fR                     El BPM inicial (140 por omisión).
+\-\-force                            Sobrescribe el archivo si ya existe.
+.EE
+.TP
+.B inspect \fIPATH\fR
+Muestra los metadatos del proyecto: BPM, compás, pistas, clips, escenas,
+región de loop y versión del esquema. No abre la interfaz ni el motor de
+audio.
+.TP
+.B metadata \fIPATH\fR
+Alias de
+.BR inspect .
+.TP
+.B validate \fIPATH\fR
+Chequea la integridad del proyecto y de los recursos que referencia: samples
+que faltan, plugins y wavetables que no están en disco, grilla no rectangular,
+BPM inválido, región de loop al revés y canal master ausente.
+.TP
+.B check \fIPATH\fR
+Alias de
+.BR validate .
+.TP
+.B mcp \fR[\fIACTION\fR]
+Administra los puertos MCP. Sin acción es lo mismo que
+.BR list .
+Ver la sección
+.BR "MCP PORTS" .
+.TP
+.B cli
+Abre la consola interactiva. Es lo mismo que
+.BR \-\-cli .
+.TP
+.B gui
+Levanta la interfaz gráfica. Es lo mismo que
+.BR \-\-gui .
+.SH MCP PORTS
+Los "puertos MCP" no son números de red: son
+.I slots
+numerados ("MCP Port 1", "MCP Port 2", ...), porque cada agente de IA que se
+conecta quiere una sesión propia. La consola administra esos slots: cuáles
+existen, si están habilitados, y por qué transporte habla cada uno.
+.PP
+Por omisión hay diez slots (del 1 al 10) y
+.B todos nacen deshabilitados
+: que aparezcan en la lista no significa que estén escuchando. El socket de
+un slot lo crea el DAW al arrancar.
+.PP
+Las acciones de
+.B mcp
+son:
+.TP
+.B list
+Muestra la tabla de slots: identificador, estado, transporte, máximo de
+clientes y el socket o destino de cada uno.
+.TP
+.BI status " PORT"
+Muestra el detalle de un slot: etiqueta, estado, transporte, máximo de
+clientes y la ruta del socket.
+.TP
+.B status
+Sin número: muestra la configuración completa del servidor y los problemas
+que tenga (ids duplicados, slots inválidos, sockets sin ruta). Los problemas
+se muestran, no se corrigen solos.
+.TP
+.BI enable " PORT"
+Habilita un slot: el puerto pasa a aceptar conexiones de agentes.
+.TP
+.BI disable " PORT"
+Deshabilita un slot: el puerto deja de aceptar conexiones.
+.TP
+.B add
+Agrega un slot nuevo al final de la lista. El slot nace deshabilitado.
+.TP
+.BI remove " PORT"
+Elimina un slot.
+.TP
+.BI transport " PORT TRANSPORTE"
+Cambia el transporte con el que habla un slot. Los transportes son:
+.RS 4
+.TP
+.B unix
+Socket de dominio Unix: el DAW escucha y el agente se conecta.
+.TP
+.B stdio
+JSON\-RPC 2.0 por la entrada y la salida estándar del proceso.
+.TP
+.B server\-flags
+Un servidor MCP externo, lanzado con la línea de comandos configurada.
+.RE
+.PP
+Los ids que quedan huecos al borrar un slot no se reutilizan: un id es la
+dirección que el agente usa para elegir puerto.
+.SH ENVIRONMENT
+.TP
+.B HIKARU_MCP_CONFIG
+Ruta del archivo de configuración de los puertos MCP. Si no está definida se
+usa la ruta por omisión (ver
+.BR FILES ).
+.TP
+.B XDG_CONFIG_HOME
+Directorio base de la configuración del usuario. Si no está definido se usa
+.BR $HOME/.config .
+.TP
+.B XDG_RUNTIME_DIR
+Directorio base del runtime efímero donde viven los sockets de los puertos
+MCP. Si no está definido se usa
+.BR /tmp .
+.TP
+.B MANPATH
+Ruta donde
+.BR man (1)
+busca las páginas de manual. Si la página se instaló en el directorio del
+usuario, basta con tener
+.B $HOME/.local/share/man
+en el
+.BR MANPATH .
+.SH FILES
+.TP
+.B $XDG_CONFIG_HOME/hikaru/mcp\-ports.json
+Configuración de los puertos MCP. Sin
+.B XDG_CONFIG_HOME
+es
+.BR $HOME/.config/hikaru/mcp\-ports.json .
+Es un JSON que también se puede editar a mano.
+.TP
+.B $XDG_RUNTIME_DIR/hikaru/hikaru\-mcp\-\fIPORT\fR.sock
+Socket de dominio Unix del slot
+.IR PORT .
+Sin
+.B XDG_RUNTIME_DIR
+es
+.BR /tmp/hikaru/hikaru\-mcp\-\fIPORT\fR.sock .
+.TP
+.B $HOME/.local/share/man/man1/hikaru_openlive.1
+Página de manual del usuario, si se instaló con
+.BR "make man\-install" .
+.TP
+.B /usr/share/man/man1/hikaru_openlive.1
+Página de manual del sistema, si se instaló con
+.BR "make man\-install\-system" .
+.SH EXIT STATUS
+.TP
+.B 0
+El comando terminó bien.
+.TP
+.B 1
+El comando falló: no se pudo leer o escribir un archivo, o el chequeo de
+integridad encontró errores.
+.TP
+.B 2
+Error de uso: argumento desconocido, extensión que no es de Hikaru, proyecto
+que ya existe sin
+.BR \-\-force ,
+o puerto MCP que no existe.
+.SH EXAMPLES
+Crear un proyecto de performance y ver su estructura:
+.PP
+.EX
+hikaru_openlive new set.oplf \-\-bpm 128
+hikaru_openlive inspect set.oplf
+.EE
+.PP
+Pasar el chequeo de integridad y leerlo como JSON:
+.PP
+.EX
+hikaru_openlive validate set.oplf \-\-json
+.EE
+.PP
+Habilitar el puerto MCP 3 y ver cómo quedó:
+.PP
+.EX
+hikaru_openlive \-\-mcp enable 3
+hikaru_openlive \-\-mcp status 3
+.EE
+.PP
+Abrir la consola interactiva y hablar por un pipe:
+.PP
+.EX
+printf 'mcp list\\nexit\\n' | hikaru_openlive \-\-cli
+.EE
+.SH LICENSE
+.B Hikaru OpenLive
+es software libre bajo los términos de la
+.B Licencia Pública General GNU Affero
+versión 3 o posterior (AGPLv3). El texto completo está en el archivo
+.B LICENSE
+de la distribución (con su traducción oficial al español en
+.BR LICENSE-ES )
+y en
+.UR https://www.gnu.org/licenses/agpl-3.0.html
+.UE .
+.PP
+La diferencia con la GPL clásica no es un detalle de forma: la AGPLv3 exige
+que, si el programa se ofrece como un servicio a través de una red, quien lo
+use reciba el código fuente completo. Por eso el motor no se puede encerrar
+en un servicio de streaming en la nube sin liberar el código: no hay
+tivoización por la vía del servicio.
+.PP
+Los formatos de archivo
+.B .oplf
+y
+.B .opsf
+(las crates
+.BR hikaru_project_file ,
+.B hikaru_openlive_file
+y
+.BR hikaru_openstudio_file )
+son LGPLv3\-or\-later, para que un DAW de código cerrado pueda leer y
+escribir proyectos de Hikaru sin abrir el motor AGPL.
+.SH SEE ALSO
+.BR docs/hikaru-openlive-cli/hikaru-openlive-cli-README.md ,
+la documentación de la consola de línea de comandos.
+.br
+.BR docs/hikaru-mcp-port/ ,
+la documentación del puerto MCP.
+.br
+.BR docs/hikaru-project-files/ ,
+los esquemas de los formatos de proyecto.
+.br
+.BR man (1)

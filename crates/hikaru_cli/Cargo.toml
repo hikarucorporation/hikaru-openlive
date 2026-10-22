@@ -26,3 +26,10 @@ hikaru_openstudio_file = { path = "../hikaru_openstudio_file" }
 # La configuración de los puertos MCP (AGPLv3, pero sin GPUI: por eso el
 # servidor MCP del agente puede linkear esta crate sin arrastrar la ventana).
 hikaru_mcp_port = { path = "../hikaru_mcp_port" }
+
+[dev-dependencies]
+# Los tests de la página de manual (`tests/man_page.rs`) necesitan la
+# gramática REAL del programa (`clap`) para comprobar que la página no se
+# quedó atrás: si `clap` agrega un subcomando y la página no lo menciona,
+# el test falla.
+clap = { workspace = true }

@@ -1,0 +1,44 @@
+# Cargo.toml del crate hikaru_mcp
+[package]
+name = "hikaru_mcp"
+version.workspace = true
+edition = "2021"
+authors = ["Hikaru OpenStudio Developers"]
+license = "AGPL-3.0-or-later"
+description = "Servidor MCP (Model Context Protocol) standalone de Hikaru OpenLive: la puerta por la que se enganchan OpenCode, Claude Code y REA"
+
+[[bin]]
+name = "hikaru_mcp"
+path = "src/main.rs"
+
+[dependencies]
+# El SDK oficial de Rust para MCP. Trae el transporte por stdio, el de
+# socket de dominio Unix y la negociación de versión de protocolo.
+rmcp = { version = "3.6", features = ["transport-io"] }
+# El runtime asíncrono: rmcp lo usa por debajo y acá hace falta para el
+# listener de Unix y para las llamadas a procesos externos (REA, objdump).
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "io-std",
+    "process",
+    "time",
+] }
+# Los esquemas de proyecto (LGPLv3): el modo `files` lee `.oplf`/`.opsf` sin
+# tocar la GUI ni el motor de audio.
+hikaru_project_file = { path = "../hikaru_project_file" }
+hikaru_openlive_file = { path = "../hikaru_openlive_file" }
+hikaru_openstudio_file = { path = "../hikaru_openstudio_file" }
+# La configuración de los slots de puerto MCP: el servidor lee el mismo
+# archivo que edita la ventana de ajustes, así que los slots que el usuario
+# habilitó son los que este proceso publica.
+hikaru_mcp_port = { path = "../hikaru_mcp_port" }
+# El host de VST3/CLAP: escanea los plugins instalados y los instancia para
+# leer y escribir sus parámetros.
+hikaru_plugin_host = { path = "../hikaru_plugin_host" }
+# Parseo de la línea de comandos y salida JSON para los agentes.
+clap = { workspace = true }
+serde_json = { workspace = true }
+serde = { version = "1", features = ["derive"] }

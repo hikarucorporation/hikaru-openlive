@@ -152,7 +152,61 @@ La interfaz CLI también actúa como punto de entrada (entrypoint) para levantar
 
 ---
 
-## 3. Integración en Crate Architecture
+## 3. La Página de Manual (`man`)
+
+El binario tiene su página de manual nativa, escrita en groff/troff, para que
+`man hikaru_openlive` funcione en cualquier sistema Unix/BSD/Linux:
+
+```bash
+man hikaru_openlive
+```
+
+* **Archivo canónico**: [`crates/hikaru_cli/man/hikaru_openlive.1`](../../crates/hikaru_cli/man/hikaru_openlive.1)
+  (es el que viaja con el crate y el que copia el `build.rs` a `$OUT_DIR/man/`
+  para el empaquetado).
+* **Espejo en la documentación**: [`docs/man/hikaru_openlive.1`](../man/hikaru_openlive.1)
+  (se mantiene sincronizado con `make man-sync`).
+
+### Instalarla
+
+```bash
+# En el directorio del usuario (no hace falta root):
+make man-install-user
+
+# En el sistema (hace falta root; PREFIX es /usr/local por omisión):
+sudo make man-install PREFIX=/usr
+```
+
+Después de la instalación de usuario, `man` la encuentra si
+`$HOME/.local/share/man` está en el `MANPATH` (en la mayoría de las
+distribuciones ya lo está):
+
+```bash
+MANPATH=$HOME/.local/share/man man hikaru_openlive
+```
+
+El `build.rs` del crate también la instala si se lo pide explícitamente:
+
+```bash
+HIKARU_INSTALL_MAN=1 cargo build --release --bin hikaru_openlive
+# (HIKARU_INSTALL_MAN=system la instala en /usr/share/man/man1)
+```
+
+### Verificarla
+
+```bash
+make man-check      # groff no tiene que quejarse de nada
+make man-render     # el renderizado en la terminal
+man ./docs/man/hikaru_openlive.1
+```
+
+La página no se desactualiza sola: `crates/hikaru_cli/tests/man_page.rs` la
+compara con la gramática real de `clap` y falla si hay un subcomando, una
+bandera o una acción de puerto MCP que la página no menciona.
+
+---
+
+## 4. Integración en Crate Architecture
 
 Se sugiere implementar una caja independiente o un binario secundario en el workspace de Rust:
 

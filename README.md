@@ -66,6 +66,29 @@ cargo build --release --bin hikaru_openlive
 
 ---
 
+## 📖 Manual Page
+
+The CLI ships a native man page, so `man hikaru_openlive` works on any
+Unix/BSD/Linux system:
+
+```bash
+# Install it for the current user (no root needed):
+make man-install-user
+
+# Or for the whole system:
+sudo make man-install PREFIX=/usr
+
+man hikaru_openlive
+```
+
+The page lives in [`crates/hikaru_cli/man/hikaru_openlive.1`](crates/hikaru_cli/man/hikaru_openlive.1)
+(mirrored in [`docs/man/`](docs/man/)) and is kept in sync with the real CLI
+grammar by the test suite. See
+[`docs/hikaru-openlive-cli/`](docs/hikaru-openlive-cli/hikaru-openlive-cli-README.md)
+for the details.
+
+---
+
 ## Cross-compilation for Windows
 
 Hikaru OpenLive can be compiled directly from Linux to generate a native Windows executable (`.exe`) using Rust's GNU target.

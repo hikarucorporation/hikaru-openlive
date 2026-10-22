@@ -12,6 +12,10 @@ members = [
     # Vive aparte de la GUI para que el binario standalone del agente no
     # linkee GPUI. Ver docs/hikaru-mcp-port/.
     "crates/hikaru_mcp_port",
+    # El servidor MCP: el binario que habla JSON-RPC con los agentes.
+    # Es el otro lado del puerto: `hikaru_mcp_port` tiene la configuración de
+    # los slots, este crate tiene el proceso que los atiende.
+    "crates/hikaru_mcp",
     # La consola: el mismo binario `hikaru_openlive` con un dispatcher de
     # argumentos que responde por terminal sin inicializar GPUI. Vive aparte
     # para no linkear la ventana en el camino de la CLI.
