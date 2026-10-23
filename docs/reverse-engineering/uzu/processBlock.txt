@@ -1,0 +1,84 @@
+Hikaru MCP Server — consola interactiva (v2.22.2)
+Modo: files | escribe 'help' para la lista de comandos
+hikaru_mcp> 
+/* AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) */
+
+void AudioPluginAudioProcessor::processBlock(AudioBuffer *param_1,MidiBuffer *param_2)
+
+{
+uint uVar1;
+ulong uVar2;
+uint uVar3;
+int iVar4;
+int iVar5;
+long lVar6;
+bool bVar7;
+float fVar8;
+ScopedNoDenormals local_38 [8];
+
+juce::ScopedNoDenormals::ScopedNoDenormals(local_38);
+iVar4 = *(int *)(param_1 + 0xf4);
+if (iVar4 != 0) {
+uVar3 = *(uint *)(param_1 + 0xf0);
+lVar6 = (long)(int)uVar3;
+if (((int)uVar3 < iVar4) && (param_2[0x120] == (MidiBuffer)0x0)) {
+iVar5 = ~uVar3 + iVar4;
+do {
+juce::FloatVectorOperationsBase<float,int>::clear
+(*(float **)(*(long *)(param_2 + 0x10) + lVar6 * 8),*(int *)(param_2 + 4));
+do {
+bVar7 = iVar5 == 0;
+iVar5 = iVar5 + -1;
+if (bVar7) goto LAB_00170b38;
+lVar6 = lVar6 + 1;
+} while (param_2[0x120] != (MidiBuffer)0x0);
+} while( true );
+}
+LAB_00170b38:
+if ((((byte)param_1[0x278] & 1) == 0) || (*(long *)(param_1 + 0x280) == 0)) {
+if (param_2[0x120] == (MidiBuffer)0x0) {
+if (0 < *(int *)param_2) {
+lVar6 = 0;
+do {
+juce::FloatVectorOperationsBase<float,int>::clear
+(*(float **)(*(long *)(param_2 + 0x10) + lVar6 * 8),*(int *)(param_2 + 4));
+lVar6 = lVar6 + 1;
+} while (lVar6 < *(int *)param_2);
+}
+param_2[0x120] = (MidiBuffer)0x1;
+}
+}
+else {
+/* try { // try from 00170b55 to 00170b65 has its CatchHandler @ 00170c9c */
+processBlockOffline((AudioPluginAudioProcessor *)param_1,(AudioBuffer *)param_2,uVar3,iVar4);
+/* try { // try from 00170b74 to 00170bf8 has its CatchHandler @ 00170c9e */
+fVar8 = (float)(**(code **)(**(long **)(*(long *)(param_1 + 0x238) + 0x48) + 0x10))();
+if ((fVar8 != processBlock(juce::AudioBuffer<float>&,juce::MidiBuffer&)::lastLatencyParam) ||
+(NAN(fVar8) ||
+NAN(processBlock(juce::AudioBuffer<float>&,juce::MidiBuffer&)::lastLatencyParam))) {
+uVar1 = SUB84((double)(fVar8 * 4.0) + 6755399441055744.0,0);
+uVar3 = 4;
+if ((int)uVar1 < 4) {
+uVar3 = uVar1;
+}
+uVar2 = 0;
+if (-1 < (int)uVar3) {
+uVar2 = (ulong)uVar3;
+}
+iVar4 = (&(anonymous_namespace)::blocksizeChoices)[uVar2] + -100;
+if (iVar4 != *(int *)(param_1 + 0x524)) {
+applyPipelineLatencyChange((AudioPluginAudioProcessor *)param_1,iVar4);
+*(int *)(param_1 + 0x520) = iVar4;
+juce::AsyncUpdater::triggerAsyncUpdate((AsyncUpdater *)(param_1 + 0x148));
+}
+processBlock(juce::AudioBuffer<float>&,juce::MidiBuffer&)::lastLatencyParam = fVar8;
+}
+}
+}
+juce::ScopedNoDenormals::~ScopedNoDenormals(local_38);
+return;
+}
+
+(GhidraScript)
+
+hikaru_mcp> Hasta luego.

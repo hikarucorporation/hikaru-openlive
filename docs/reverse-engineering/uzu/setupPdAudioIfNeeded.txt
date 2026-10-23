@@ -1,0 +1,60 @@
+Hikaru MCP Server — consola interactiva (v2.22.2)
+Modo: files | escribe 'help' para la lista de comandos
+hikaru_mcp> 
+/* AudioPluginAudioProcessor::setupPdAudioIfNeeded(double, int, int) */
+
+AudioPluginAudioProcessor __thiscall
+AudioPluginAudioProcessor::setupPdAudioIfNeeded
+(AudioPluginAudioProcessor *this,double param_1,int param_2,int param_3)
+
+{
+AudioPluginAudioProcessor AVar1;
+int iVar2;
+
+AVar1 = this[0x278];
+if ((((((byte)AVar1 & 1) == 0) || (*(double *)(this + 600) != param_1)) ||
+(NAN(*(double *)(this + 600)) || NAN(param_1))) ||
+((*(int *)(this + 0x260) != param_2 || (*(int *)(this + 0x264) != param_3)))) {
+AVar1 = this[0x268];
+if ((((byte)AVar1 & 1) != 0) && (*(long *)(this + 0x280) != 0)) {
+libpd_set_instance();
+libpd_start_message(1);
+libpd_add_float(0);
+libpd_finish_message(&DAT_0061d1e8,&DAT_006541c3);
+LOCK();
+AVar1 = this[0x268];
+this[0x268] = (AudioPluginAudioProcessor)0x0;
+UNLOCK();
+}
+if (*(long *)(this + 0x280) != 0) {
+libpd_set_instance();
+iVar2 = libpd_init_audio(param_2,param_3,(int)param_1);
+if (iVar2 == 0) {
+LOCK();
+this[0x278] = (AudioPluginAudioProcessor)0x1;
+UNLOCK();
+this[0x550] = (AudioPluginAudioProcessor)0x0;
+*(double *)(this + 600) = param_1;
+*(int *)(this + 0x260) = param_2;
+*(int *)(this + 0x264) = param_3;
+libpd_start_message(1);
+libpd_add_float(0x3f800000);
+AVar1 = (AudioPluginAudioProcessor)libpd_finish_message(&DAT_0061d1e8,&DAT_006541c3);
+LOCK();
+this[0x268] = (AudioPluginAudioProcessor)0x1;
+UNLOCK();
+}
+else {
+LOCK();
+AVar1 = this[0x278];
+this[0x278] = (AudioPluginAudioProcessor)0x0;
+UNLOCK();
+}
+}
+}
+return AVar1;
+}
+
+(GhidraScript)
+
+hikaru_mcp> Hasta luego.

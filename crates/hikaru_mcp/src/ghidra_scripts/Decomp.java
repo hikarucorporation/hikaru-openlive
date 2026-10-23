@@ -123,6 +123,7 @@ public class Decomp extends GhidraScript {
             currentProgram.getFunctionManager().getFunctions(true);
         StringBuilder lote = new StringBuilder();
         int n = 0;
+        int chunk = 0;
         while (iterador.hasNext() && n < 3000) {
             Function funcion = iterador.next();
             if (lote.length() > 0) {
@@ -137,14 +138,19 @@ public class Decomp extends GhidraScript {
             n++;
 
             // El log de Ghidra corta las lineas largas: se corta en trozos.
+            // Cada trozo lleva un sufijo numerico para que no se pisen en el
+            // parseo (si todos fueran "FUNCS", el último pisaría al primero).
             if (lote.length() > 1500) {
-                println("HIKARU_FUNCS=" + lote);
+                println("HIKARU_FUNCS_" + chunk + "=" + lote);
                 lote.setLength(0);
+                chunk++;
             }
         }
         if (lote.length() > 0) {
-            println("HIKARU_FUNCS=" + lote);
+            println("HIKARU_FUNCS_" + chunk + "=" + lote);
+            chunk++;
         }
+        println("HIKARU_FUNCS_CHUNKS=" + chunk);
         println("HIKARU_FUNCS_TOTAL=" + n);
     }
 

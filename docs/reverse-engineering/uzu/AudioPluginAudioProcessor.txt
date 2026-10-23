@@ -1,0 +1,295 @@
+Hikaru MCP Server — consola interactiva (v2.22.2)
+Modo: files | escribe 'help' para la lista de comandos
+hikaru_mcp> 
+/* AudioPluginAudioProcessor::AudioPluginAudioProcessor() */
+
+void __thiscall
+AudioPluginAudioProcessor::AudioPluginAudioProcessor(AudioPluginAudioProcessor *this)
+
+{
+undefined8 *puVar1;
+void *__src;
+undefined8 uVar2;
+ulong uVar3;
+void *__dest;
+String *pSVar4;
+long *plVar5;
+ulong uVar6;
+long lVar7;
+ulong uVar8;
+AudioProcessorValueTreeState *pAVar9;
+int iVar10;
+long lVar11;
+size_t __n;
+String local_148 [8];
+String local_140 [8];
+void *local_138;
+undefined8 uStack_130;
+void *local_128;
+undefined8 uStack_120;
+void *local_110;
+int local_104;
+void *local_100;
+int local_f4;
+void *local_f0;
+int local_e4;
+void *local_e0;
+int local_d4;
+AudioProcessorValueTreeState *local_d0;
+undefined8 local_c8;
+AudioPluginAudioProcessor *local_c0;
+String *local_b8;
+AsyncUpdater *local_b0;
+AudioPluginAudioProcessor *local_a8;
+undefined8 local_a0;
+long *local_98;
+long *local_90;
+AudioChannelSet local_80 [40];
+AudioChannelSet local_58 [40];
+
+local_128 = (void *)0x0;
+uStack_120 = 0;
+local_138 = (void *)0x0;
+uStack_130 = 0;
+/* try { // try from 0016cce1 to 0016ccf1 has its CatchHandler @ 0016d4d1 */
+juce::String::String(local_140,"Input");
+/* try { // try from 0016ccf2 to 0016ccfe has its CatchHandler @ 0016d4cc */
+juce::AudioChannelSet::stereo(local_80);
+/* try { // try from 0016ccff to 0016cd20 has its CatchHandler @ 0016d4a0 */
+juce::AudioProcessor::BusesProperties::withInput
+((String *)&local_110,(AudioChannelSet *)&local_138,SUB81(local_140,0));
+/* try { // try from 0016cd21 to 0016cd31 has its CatchHandler @ 0016d491 */
+juce::String::String(local_148,"Output");
+/* try { // try from 0016cd32 to 0016cd3e has its CatchHandler @ 0016d482 */
+juce::AudioChannelSet::stereo(local_58);
+/* try { // try from 0016cd3f to 0016cd60 has its CatchHandler @ 0016d470 */
+juce::AudioProcessor::BusesProperties::withOutput
+((String *)&local_f0,(AudioChannelSet *)&local_110,SUB81(local_148,0));
+/* try { // try from 0016cd61 to 0016cd6d has its CatchHandler @ 0016d461 */
+juce::AudioProcessor::AudioProcessor((AudioProcessor *)this,(BusesProperties *)&local_f0);
+if (0 < local_d4) {
+lVar7 = 0;
+lVar11 = 0;
+do {
+pSVar4 = (String *)((long)local_e0 + lVar7);
+juce::BigInteger::~BigInteger((BigInteger *)((long)local_e0 + lVar7 + 8));
+juce::String::~String(pSVar4);
+lVar11 = lVar11 + 1;
+lVar7 = lVar7 + 0x38;
+} while (lVar11 < local_d4);
+}
+local_d4 = 0;
+free(local_e0);
+if (0 < local_e4) {
+lVar7 = 0;
+lVar11 = 0;
+do {
+pSVar4 = (String *)((long)local_f0 + lVar7);
+juce::BigInteger::~BigInteger((BigInteger *)((long)local_f0 + lVar7 + 8));
+juce::String::~String(pSVar4);
+lVar11 = lVar11 + 1;
+lVar7 = lVar7 + 0x38;
+} while (lVar11 < local_e4);
+}
+local_e4 = 0;
+free(local_f0);
+juce::BigInteger::~BigInteger((BigInteger *)local_58);
+juce::String::~String(local_148);
+if (0 < local_f4) {
+lVar7 = 0;
+lVar11 = 0;
+do {
+pSVar4 = (String *)((long)local_100 + lVar7);
+juce::BigInteger::~BigInteger((BigInteger *)((long)local_100 + lVar7 + 8));
+juce::String::~String(pSVar4);
+lVar11 = lVar11 + 1;
+lVar7 = lVar7 + 0x38;
+} while (lVar11 < local_f4);
+}
+local_f4 = 0;
+free(local_100);
+if (0 < local_104) {
+lVar7 = 0;
+lVar11 = 0;
+do {
+pSVar4 = (String *)((long)local_110 + lVar7);
+juce::BigInteger::~BigInteger((BigInteger *)((long)local_110 + lVar7 + 8));
+juce::String::~String(pSVar4);
+lVar11 = lVar11 + 1;
+lVar7 = lVar7 + 0x38;
+} while (lVar11 < local_104);
+}
+local_104 = 0;
+free(local_110);
+juce::BigInteger::~BigInteger((BigInteger *)local_80);
+juce::String::~String(local_140);
+if (0 < uStack_120._4_4_) {
+lVar7 = 0;
+lVar11 = 0;
+do {
+pSVar4 = (String *)((long)local_128 + lVar7);
+juce::BigInteger::~BigInteger((BigInteger *)((long)local_128 + lVar7 + 8));
+juce::String::~String(pSVar4);
+lVar11 = lVar11 + 1;
+lVar7 = lVar7 + 0x38;
+} while (lVar11 < uStack_120._4_4_);
+}
+uStack_120 = uStack_120 & 0xffffffff;
+free(local_128);
+if (0 < uStack_130._4_4_) {
+lVar7 = 0;
+lVar11 = 0;
+do {
+pSVar4 = (String *)((long)local_138 + lVar7);
+juce::BigInteger::~BigInteger((BigInteger *)((long)local_138 + lVar7 + 8));
+juce::String::~String(pSVar4);
+lVar11 = lVar11 + 1;
+lVar7 = lVar7 + 0x38;
+} while (lVar11 < uStack_130._4_4_);
+}
+uStack_130 = uStack_130 & 0xffffffff;
+free(local_138);
+/* try { // try from 0016cfa9 to 0016cfb5 has its CatchHandler @ 0016d459 */
+juce::AsyncUpdater::AsyncUpdater((AsyncUpdater *)(this + 0x148));
+*(undefined ***)this = &PTR__AudioPluginAudioProcessor_00701a98;
+*(undefined ***)(this + 0x148) = &PTR__AudioPluginAudioProcessor_00701d08;
+/* try { // try from 0016cfd0 to 0016cfeb has its CatchHandler @ 0016d451 */
+local_b0 = (AsyncUpdater *)(this + 0x148);
+juce::Identifier::Identifier((Identifier *)local_80,"Parameters");
+/* try { // try from 0016cfec to 0016cff8 has its CatchHandler @ 0016d43c */
+param::createParameterLayout((param *)&local_98);
+pAVar9 = (AudioProcessorValueTreeState *)(this + 0x158);
+/* try { // try from 0016d001 to 0016d01d has its CatchHandler @ 0016d42a */
+juce::AudioProcessorValueTreeState::AudioProcessorValueTreeState(pAVar9,this,0,local_80,&local_98)
+;
+for (plVar5 = local_98; plVar5 != local_90; plVar5 = plVar5 + 1) {
+if ((long *)*plVar5 != (long *)0x0) {
+(**(code **)(*(long *)*plVar5 + 8))();
+}
+*plVar5 = 0;
+}
+if (local_98 != (long *)0x0) {
+operator_delete(local_98);
+}
+juce::Identifier::~Identifier((Identifier *)local_80);
+local_a8 = this + 0x238;
+*(undefined8 *)(this + 600) = 0;
+*(undefined8 *)(this + 0x238) = 0;
+*(undefined8 *)(this + 0x240) = 0;
+*(undefined8 *)(this + 0x241) = 0;
+*(undefined8 *)(this + 0x249) = 0;
+*(undefined8 *)(this + 0x260) = 0xffffffffffffffff;
+this[0x268] = (AudioPluginAudioProcessor)0x0;
+*(undefined8 *)(this + 0x270) = 0;
+*(undefined2 *)(this + 0x278) = 0;
+*(undefined8 *)(this + 0x280) = 0;
+*(undefined4 *)(this + 0x288) = 0x200;
+*(undefined8 *)(this + 0x290) = 0;
+*(undefined8 *)(this + 0x298) = 0;
+*(AudioPluginAudioProcessor **)(this + 0x2a0) = this + 0x2b0;
+*(undefined8 *)(this + 0x2a8) = 0;
+this[0x3b0] = (AudioPluginAudioProcessor)0x0;
+*(undefined8 *)(this + 0x3b8) = 0;
+*(undefined8 *)(this + 0x3c0) = 0;
+*(AudioPluginAudioProcessor **)(this + 0x3c8) = this + 0x3d8;
+*(undefined8 *)(this + 0x3d0) = 0;
+this[0x4d8] = (AudioPluginAudioProcessor)0x0;
+*(undefined8 *)(this + 0x4e0) = 0;
+*(undefined8 *)(this + 0x4e8) = 0;
+*(undefined8 *)(this + 0x4f0) = 0;
+*(undefined8 *)(this + 0x4f8) = 0;
+*(undefined8 *)(this + 0x500) = 0;
+*(undefined8 *)(this + 0x508) = 0;
+*(undefined8 *)(this + 0x510) = 0;
+*(undefined8 *)(this + 0x518) = 0;
+*(undefined8 *)(this + 0x520) = 0xffffffffffffffff;
+*(undefined8 *)(this + 0x543) = 0;
+*(undefined8 *)(this + 0x54b) = 0;
+*(undefined8 *)(this + 0x538) = 0;
+*(undefined8 *)(this + 0x540) = 0;
+*(undefined8 *)(this + 0x528) = 0;
+*(undefined8 *)(this + 0x530) = 0;
+iVar10 = 0;
+memset(this + 0x554,0,0x214);
+*(AudioPluginAudioProcessor **)(this + 0x768) = this + 0x778;
+*(undefined8 *)(this + 0x770) = 0;
+this[0x878] = (AudioPluginAudioProcessor)0x0;
+*(undefined4 *)(this + 0x880) = 0;
+local_b8 = (String *)(this + 0x888);
+juce::String::String(local_b8);
+local_c0 = this + 0x890;
+*(undefined8 *)(this + 0x890) = 0;
+*(undefined8 *)(this + 0x898) = 0;
+*(undefined8 *)(this + 0x8a0) = 0;
+*(undefined4 *)(this + 0x528) = 0x7fc00000;
+*(undefined4 *)(this + 0x52c) = 0x7fc00000;
+*(undefined4 *)(this + 0x530) = 0x7fc00000;
+*(undefined4 *)(this + 0x534) = 0x7fc00000;
+*(undefined4 *)(this + 0x538) = 0x7fc00000;
+*(undefined4 *)(this + 0x53c) = 0x7fc00000;
+*(undefined4 *)(this + 0x540) = 0x7fc00000;
+*(undefined4 *)(this + 0x544) = 0x7fc00000;
+*(undefined8 *)(this + 0x548) = 0x7fc000007fc00000;
+local_d0 = pAVar9;
+do {
+/* try { // try from 0016d292 to 0016d29c has its CatchHandler @ 0016d4fa */
+param::toID((param *)local_80,iVar10);
+juce::StringRef::StringRef((StringRef *)&local_c8,(String *)local_80);
+uVar2 = juce::AudioProcessorValueTreeState::getParameter(pAVar9,local_c8);
+puVar1 = *(undefined8 **)(this + 0x240);
+if (puVar1 == *(undefined8 **)(this + 0x248)) {
+__src = *(void **)local_a8;
+__n = (long)puVar1 - (long)__src;
+if (__n == 0x7ffffffffffffff8) {
+/* try { // try from 0016d41e to 0016d429 has its CatchHandler @ 0016d4e8 */
+/* WARNING: Subroutine does not return */
+std::__throw_length_error("vector::_M_realloc_insert");
+}
+uVar8 = (long)__n >> 3;
+uVar3 = uVar8;
+if (__n == 0) {
+uVar3 = 1;
+}
+uVar6 = uVar3 + uVar8;
+if (0xfffffffffffffff < uVar6) {
+uVar6 = 0xfffffffffffffff;
+}
+if (CARRY8(uVar3,uVar8)) {
+uVar6 = 0xfffffffffffffff;
+}
+if (uVar6 == 0) {
+__dest = (void *)0x0;
+*(undefined8 *)(uVar8 * 8) = uVar2;
+}
+else {
+local_a0 = uVar2;
+/* try { // try from 0016d33c to 0016d340 has its CatchHandler @ 0016d4e6 */
+__dest = operator_new(uVar6 * 8);
+*(undefined8 *)((long)__dest + uVar8 * 8) = local_a0;
+}
+if (0 < (long)__n) {
+memmove(__dest,__src,__n);
+}
+if (__src != (void *)0x0) {
+operator_delete(__src);
+}
+*(void **)(this + 0x238) = __dest;
+*(ulong *)(this + 0x240) = (long)__dest + uVar8 * 8 + 8;
+*(void **)(this + 0x248) = (void *)(uVar6 * 8 + (long)__dest);
+pAVar9 = local_d0;
+}
+else {
+*puVar1 = uVar2;
+*(long *)(this + 0x240) = *(long *)(this + 0x240) + 8;
+}
+juce::String::~String((String *)local_80);
+iVar10 = iVar10 + 1;
+} while (iVar10 != 10);
+this[0x279] = (AudioPluginAudioProcessor)0x0;
+*(undefined8 *)(this + 0x280) = 0;
+return;
+}
+
+(GhidraScript)
+
+hikaru_mcp> Hasta luego.

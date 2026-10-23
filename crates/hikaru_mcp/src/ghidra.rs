@@ -509,6 +509,25 @@ fn parsear(texto: &str) -> Option<Value> {
         }
     }
 
+    // Los trozos de funciones (`FUNCS_0`, `FUNCS_1`, ...) se unen en una
+    // sola lista `FUNCS`, porque un solo trozo de 1500 caracteres no
+    // alcanza para los binarios grandes.
+    let mut todas: Vec<Value> = Vec::new();
+    let mut chunk = 0;
+    while let Some(texto) = resultado.remove(&format!("FUNCS_{chunk}")) {
+        if let Some(texto) = texto.as_str() {
+            for entrada in texto.split(',') {
+                if !entrada.is_empty() {
+                    todas.push(Value::String(entrada.to_string()));
+                }
+            }
+        }
+        chunk += 1;
+    }
+    if !todas.is_empty() {
+        resultado.insert("FUNCS".to_string(), Value::Array(todas));
+    }
+
     Some(Value::Object(resultado))
 }
 
