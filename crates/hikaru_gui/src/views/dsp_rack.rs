@@ -16,6 +16,7 @@ use crate::views::external_plugins_settings::capture_host_parent;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
 use crate::views::hikaru_native_plugins::hikaru_openeq3;
 use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
+use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
 use crate::views::mixer::{DspSlot, ExternalParamsStatus};
 
 pub const RACK_HEIGHT: f32 = 340.0;
@@ -37,8 +38,9 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 3] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 4] = [
     PluginEntry { category: "Efectos", name: "OpenEQ3", label: "OpenEQ3" },
+    PluginEntry { category: "Efectos", name: "OpenSpectral Phaser", label: "OpenSpectral Phaser" },
     PluginEntry { category: "Generadores", name: "OpenWavetable", label: "Hikaru OpenWavetable" },
     PluginEntry { category: "Generadores", name: "Hikaru OpenDMS", label: "Hikaru OpenDMS" },
 ];
@@ -897,6 +899,9 @@ fn render_card_body(
         "OpenWavetable" => open_wavetable::render_module(cx, track_idx, idx),
         "Hikaru OpenDMS" => render_rack_card(cx, track_idx, idx),
         "OpenEQ3" => hikaru_openeq3::render_module(),
+        "OpenSpectral Phaser" | "OpenSpectralPhaser" | "OpenSpectralFX" | "OpenSpectral" => {
+            openspectral_phaser::render_module(cx, track_idx, idx)
+        }
         _ => {
             div()
                 .id(format!("dsp_empty_{track_idx}_{idx}"))

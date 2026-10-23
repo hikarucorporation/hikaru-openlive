@@ -61,6 +61,7 @@
 pub mod hikaru_opendms;
 pub mod hikaru_openeq3;
 pub mod hikaru_openwavetable;
+pub mod hikaru_openspectral_phaser;
 
 // Reexports de superficie. Los que el resto de la app usa por nombre;
 // dejarlos acá evita repetir la cadena completa

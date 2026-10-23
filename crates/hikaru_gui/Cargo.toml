@@ -8,6 +8,7 @@ license = "AGPL-3.0-later"
 [dependencies]
 hikaru_core = { path = "../hikaru_core" }
 hikaru_audio_engine = { path = "../hikaru_audio_engine" }
+hikaru_dsp = { path = "../hikaru_dsp" }
 hikaru_transport = { path = "../hikaru_transport" }
 hikaru_plugin_host = { path = "../hikaru_plugin_host" }
 # El puerto MCP: la configuración de los slots por los que los agentes de IA

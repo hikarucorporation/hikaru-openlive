@@ -52,7 +52,7 @@ Let me write the final message.
 Todo verde. Resumen final.
 ✅ Sí funciona. Y sí: ya hice ingeniería inversa de UZU.
 1. crates/hikaru_mcp — el servidor que faltaba
-4.093 líneas, 31 tests verdes, binario en /home/alex/Documentos/Codigo_Fuente/hikaru_mcp.
+4.093 líneas, 31 tests verdes, binario en /home/user/Documentos/Codigo_Fuente/hikaru_mcp.
 
 Transporte	stdio (OpenCode/Claude Code) y socket Unix (el del "Puerto MCP")
 Tools	9 — list_plugins, plugin_info, plugin_parameters, set_parameter, inspect_plugin_wrapper, decompile_plugin_stub, plugin_symbols, audit_project, project_info

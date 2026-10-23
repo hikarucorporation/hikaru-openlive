@@ -3523,6 +3523,7 @@ dependencies = [
  "hikaru_audio_engine",
  "hikaru_cli",
  "hikaru_core",
+ "hikaru_dsp",
  "hikaru_mcp_port",
  "hikaru_openlive_file",
  "hikaru_openstudio_file",
