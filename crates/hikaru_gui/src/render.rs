@@ -63,6 +63,14 @@ use hikaru_render::wgpu;
 /// ahorra un 25% de los bytes de readback, que en CPU es lo caro del camino.
 pub const WAVETABLE_VIEWPORT: (u32, u32) = (768, 384);
 
+/// Resolución del scope espectral del OpenSpectral Phaser: respuesta en
+/// magnitud de la cascada de biquads, con baseline abajo.
+///
+/// Es 2:1 y se estira al panel; la curva se interpola a columnas de 2 px, así
+/// que 512 px de ancho ya dan una curva suave. El readback se cachea por firma
+/// de las magnitudes: sólo se rehace cuando los params o el LFO cambian.
+pub const PHASER_SCOPE_RESOLUTION: (u32, u32) = (512, 256);
+
 /// Columnas de la cinta en el eje de la forma de onda.
 ///
 /// 512 columnas sobre 768 píxeles de ancho dan un poco más de un píxel por
@@ -177,6 +185,9 @@ pub enum TargetId {
     /// y aunque ya no se pintaba seguía en el pipeline: se renderizaba y se
     /// leía de vuelta un target entero en cada frame, para taparlo con nada.
     WtPosKnob,
+    /// El scope espectral del OpenSpectral Phaser: curva de respuesta de la
+    /// cascada de biquads, calculada analíticamente por el DSP en vivo.
+    PhaserScope,
 }
 
 impl TargetId {
@@ -191,6 +202,7 @@ impl TargetId {
             TargetId::WtPosKnob => {
                 (hikaru_render::KNOB_RESOLUTION, hikaru_render::KNOB_RESOLUTION)
             }
+            TargetId::PhaserScope => PHASER_SCOPE_RESOLUTION,
         }
     }
 }
@@ -209,6 +221,9 @@ pub struct HikaruRenderer {
     /// Geometría del knob, subida una sola vez: no depende del valor, que viaja
     /// en los uniforms.
     knob_mesh: GpuMesh,
+    /// Hoja sólida de 1x1 para los quads del scope del Phaser. Se sube una vez:
+    /// crear una textura por frame era basura de GPU en el camino caliente.
+    phaser_sheet: SpriteSheet,
     /// Un target por imagen. `BTreeMap` y no array porque el enum es chico y
     /// esto se lee más claro que un índice.
     targets: BTreeMap<TargetId, RenderTarget>,
@@ -248,7 +263,28 @@ impl HikaruRenderer {
         let knob_mesh =
             upload_knob(&ctx, "hikaru::knob_mesh", &KnobMesh::new(Default::default()))?;
 
-        Ok(Self { ctx, sheets, quads, mesh, knob, knob_mesh, targets: BTreeMap::new() })
+        // Un único píxel blanco para los quads de color plano del scope.
+        let phaser_sheet = SpriteSheet::from_rgba8(
+            &ctx,
+            &sheets,
+            "hikaru::phaser_scope_solid",
+            1,
+            1,
+            &[255u8, 255, 255, 255],
+            SpriteLayout::Strip { count: 1 },
+        )
+        .expect("hoja sólida 1x1 inválida");
+
+        Ok(Self {
+            ctx,
+            sheets,
+            quads,
+            mesh,
+            knob,
+            knob_mesh,
+            phaser_sheet,
+            targets: BTreeMap::new(),
+        })
     }
 
     /// Sube una imagen RGBA8 como hoja de sprites.
@@ -303,6 +339,98 @@ impl HikaruRenderer {
         let target = self.targets.get(&TargetId::WavetableViewer).expect("recién creado");
         self.quads.draw(&self.ctx, &target.color_view, width as f32, height as f32, quads, sheet);
         Ok(())
+    }
+
+    /// Dibuja el scope espectral del OpenSpectral Phaser y devuelve la imagen.
+    ///
+    /// Es el mismo camino que el visor de la Wavetable —clear al target del
+    /// scope, draw de quads, readback a CPU, `RenderImage`— pero en el target
+    /// dedicado de `PhaserScope`. Los quads forman la curva de respuesta de la
+    /// cascada de biquads: grilla, área bajo la curva y filo superior brillante.
+    ///
+    /// `magnitudes` ya viene normalizada por el pico del frame; el caller (la
+    /// vista del phaser) es quien lee los params del DSP y arma el barrido.
+    pub fn render_phaser_scope(
+        &mut self,
+        magnitudes: &[f32],
+    ) -> Result<Arc<RenderImage>, RendererError> {
+        let (width, height) = TargetId::PhaserScope.resolution();
+        self.clear(wgpu::Color::TRANSPARENT, TargetId::PhaserScope)?;
+        self.target(TargetId::PhaserScope)?;
+
+        let mut quads = Vec::new();
+        if !magnitudes.is_empty() && width > 0 && height > 0 {
+            let width_f = width as f32;
+            let height_f = height as f32;
+            let bin_count = magnitudes.len();
+            let peak = magnitudes
+                .iter()
+                .fold(0.0f32, |acc, value| if value.is_finite() { acc.max(*value) } else { acc })
+                .max(1.0e-6);
+
+            // Grilla horizontal tenue: da profundidad y ayuda a leer la curva.
+            for step in 1..4 {
+                let y = (height_f * step as f32 / 4.0).floor();
+                quads.push(
+                    QuadInstance::new(0.0, y, width_f, 1.0)
+                        .with_uv(hikaru_render::UvRect::FULL)
+                        .with_tint([0.45, 0.5, 0.62, 0.10]),
+                );
+            }
+
+            // Curva de respuesta: una columna de 2 px cada dos píxeles,
+            // interpolando linealmente entre bins. Es la cascada de biquads
+            // como curva continua, no como barras sueltas.
+            let cols = (width / 2).max(1) as usize;
+            for col in 0..cols {
+                let t = if cols > 1 { col as f32 / (cols - 1) as f32 } else { 0.0 };
+                let pos = t * (bin_count - 1) as f32;
+                let i0 = pos.floor() as usize;
+                let i1 = (i0 + 1).min(bin_count - 1);
+                let frac = pos - i0 as f32;
+                let m0 = if magnitudes[i0].is_finite() { magnitudes[i0] } else { 0.0 };
+                let m1 = if magnitudes[i1].is_finite() { magnitudes[i1] } else { 0.0 };
+                let mag = m0 + (m1 - m0) * frac;
+                let curve_h = (mag / peak).clamp(0.0, 1.0) * (height_f - 8.0);
+                if curve_h <= 0.5 {
+                    continue;
+                }
+                let x = col as f32 * 2.0;
+                let top = height_f - curve_h;
+                // Área bajo la curva.
+                quads.push(
+                    QuadInstance::new(x, top, 2.0, curve_h)
+                        .with_uv(hikaru_render::UvRect::FULL)
+                        .with_tint([1.0, 0.43, 0.0, 0.22]),
+                );
+                // Filo superior brillante: la curva propiamente dicha.
+                quads.push(
+                    QuadInstance::new(x, top, 2.0, 2.0)
+                        .with_uv(hikaru_render::UvRect::FULL)
+                        .with_tint([1.0, 0.58, 0.16, 0.95]),
+                );
+            }
+
+            // Baseline del analizador.
+            quads.push(
+                QuadInstance::new(0.0, height_f - 1.0, width_f, 1.0)
+                    .with_uv(hikaru_render::UvRect::FULL)
+                    .with_tint([1.0, 0.43, 0.0, 0.55]),
+            );
+        }
+
+        let target = self.targets.get(&TargetId::PhaserScope).expect("recién creado");
+        self.quads.draw(
+            &self.ctx,
+            &target.color_view,
+            width as f32,
+            height as f32,
+            &quads,
+            &self.phaser_sheet,
+        );
+
+        let rgba = self.read_frame(TargetId::PhaserScope)?;
+        Ok(Arc::new(render_image_from_rgba(width, height, rgba)))
     }
 
     /// Sube al GPU una cinta construida a partir de los samples de audio.
@@ -559,6 +687,12 @@ pub struct WavetableViewport {
     /// Uno solo: el knob de índice que había antes ya no se pintaba, así que
     /// mantener su cache era reservar una imagen y una firma que nada leía.
     knob: CachedImage,
+    /// Cache del scope espectral del Phaser.
+    ///
+    /// La firma es un hash de las magnitudes: mientras los params (y la fase
+    /// del LFO, que ya viaja dentro de las magnitudes) no cambien, no hay
+    /// readback. Sin esto el scope leería la GPU en cada frame de la app.
+    phaser_scope: CachedImage,
     /// Malla cacheada con la firma del waveform con la que se construyó.
     /// Reconstruirla en cada frame es lo más caro del camino: son dos buffers y
     /// una validación de índices.
@@ -657,6 +791,58 @@ pub fn knob_key(fill: f32, body: [f32; 4], marker: [f32; 4]) -> u64 {
     key
 }
 
+/// Firma del scope espectral del Phaser.
+///
+/// Hash FNV-1a de los bits de cada magnitud. Dos frames con la misma curva
+/// tienen la misma firma y se reusan; un cambio de parámetro o de fase del LFO
+/// cambia al menos un bit y dispara un solo readback.
+fn phaser_scope_key(magnitudes: &[f32]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut key = OFFSET;
+    for value in magnitudes {
+        let bits = if value.is_finite() { value.to_bits() } else { 0.0f32.to_bits() };
+        for word in bits.to_le_bytes() {
+            key ^= u64::from(word);
+            key = key.wrapping_mul(PRIME);
+        }
+    }
+    key
+}
+
+impl WavetableViewport {
+    /// Renderiza el scope espectral del OpenSpectral Phaser y devuelve la
+    /// imagen para pintar en el panel.
+    ///
+    /// Misma arquitectura que [`WavetableViewport::view`]: clear al target del
+    /// scope, draw de quads, readback, `RenderImage`, con cache por firma de
+    /// las magnitudes. Devuelve `None` cuando no hay renderer conectado (la
+    /// vista muestra su placeholder).
+    pub fn render_phaser_scope(&mut self, magnitudes: &[f32]) -> Option<Arc<RenderImage>> {
+        let key = phaser_scope_key(magnitudes);
+        if let Some(image) = self.phaser_scope.get(key) {
+            return Some(image);
+        }
+
+        let mut renderer = self.renderer.take()?;
+        let result = renderer.render_phaser_scope(magnitudes);
+        self.renderer = Some(renderer);
+
+        match result {
+            Ok(image) => {
+                self.phaser_scope.store(key, image.clone());
+                Some(image)
+            }
+            Err(error) => {
+                eprintln!("[Hikaru] No se pudo renderizar el scope del phaser: {error}");
+                self.phaser_scope.invalidate();
+                None
+            }
+        }
+    }
+}
+
 impl WavetableViewport {
     /// Levanta el contexto offscreen. Es `async` porque pedir adapter y device a
     /// wgpu lo es.
@@ -665,6 +851,7 @@ impl WavetableViewport {
             renderer: Some(HikaruRenderer::new().await?),
             viewer: CachedImage::EMPTY,
             knob: CachedImage::EMPTY,
+            phaser_scope: CachedImage::EMPTY,
             mesh: None,
             last_error: None,
             init_started: true,
@@ -679,6 +866,7 @@ impl WavetableViewport {
             renderer: None,
             viewer: CachedImage::EMPTY,
             knob: CachedImage::EMPTY,
+            phaser_scope: CachedImage::EMPTY,
             mesh: None,
             last_error: Some("sin GPU: la vista 3D está desactivada".to_string()),
             init_started: true,
@@ -1238,6 +1426,16 @@ impl WavetableViewportHandle {
     /// "hay GPU pero este frame no cambió" (imagen cacheada).
     pub fn is_ready(&self) -> bool {
         self.0.lock().map(|viewport| viewport.renderer.is_some()).unwrap_or(false)
+    }
+
+    /// Renderiza el scope espectral del OpenSpectral Phaser en el target
+    /// dedicado y devuelve la imagen para pintar.
+    ///
+    /// Va por el [`WavetableViewport`] porque es el dueño del renderer offscreen
+    /// (`HikaruRenderer`); el alcance del render es del phaser y no del visor 3D,
+    /// pero los recursos (contexto, pipeline de quads, targets) se comparten.
+    pub fn render_phaser_scope(&self, magnitudes: &[f32]) -> Option<Arc<RenderImage>> {
+        self.0.lock().ok().and_then(|mut viewport| viewport.render_phaser_scope(magnitudes))
     }
 }
 

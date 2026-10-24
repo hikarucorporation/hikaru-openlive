@@ -23,6 +23,10 @@ pub const RACK_HEIGHT: f32 = 340.0;
 
 pub const CARD_WIDTH: f32 = 388.0;
 
+/// Ancho de la tarjeta del OpenSpectral Phaser: dos columnas maestras
+/// (display FFT | controles) que no caben en el rack estándar de 388 px.
+pub const PHASER_CARD_WIDTH: f32 = 840.0;
+
 const CARD_PADDING: f32 = 6.0;
 
 const CARD_GAP: f32 = 6.0;
@@ -626,7 +630,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         let open_options = track.effects.iter().position(|slot| slot.options_open);
         (open_browser, open_options)
     };
-    let options_left = open_options.map(|idx| card_x_offset(cards.len(), idx));
+    let options_left = open_options.map(|idx| card_x_offset(&cards, idx));
 
     div()
         .id("dsp_rack")
@@ -712,10 +716,27 @@ impl CardSnapshot {
     }
 }
 
-/// X de la tarjeta `idx` dentro de la tira. Todas las tarjetas miden lo mismo,
-/// así que sólo hace falta cuántas hay: por eso el conteo y no un `&[DspSlot]`.
-fn card_x_offset(slot_count: usize, idx: usize) -> f32 {
-    let before = idx.min(slot_count) as f32 * (CARD_WIDTH + CARD_GAP);
+/// X de la tarjeta `idx` dentro de la tira. Las tarjetas pueden tener anchos
+/// distintos (el phaser es más ancho), así que se suma el ancho real de cada
+/// una en vez de asumir un ancho fijo.
+fn card_width(name: &str) -> f32 {
+    if name == "OpenSpectral Phaser"
+        || name == "OpenSpectralPhaser"
+        || name == "OpenSpectralFX"
+        || name == "OpenSpectral"
+    {
+        PHASER_CARD_WIDTH
+    } else {
+        CARD_WIDTH
+    }
+}
+
+fn card_x_offset(cards: &[CardSnapshot], idx: usize) -> f32 {
+    let before = cards
+        .iter()
+        .take(idx)
+        .map(|c| card_width(&c.name) + CARD_GAP)
+        .sum::<f32>();
     8.0 + before
 }
 
@@ -775,7 +796,7 @@ fn render_card(
 
     div()
         .id(format!("dsp_card_{track_idx}_{idx}"))
-        .w(px(CARD_WIDTH))
+        .w(px(card_width(&name)))
         .h_full()
         .flex()
         .flex_col()
@@ -938,6 +959,9 @@ fn render_card_footer(
 ) -> AnyElement {
     match name {
         "OpenWavetable" => open_wavetable::render_module_footer(cx, track_idx, idx),
+        "OpenSpectral Phaser" | "OpenSpectralPhaser" | "OpenSpectralFX" | "OpenSpectral" => {
+            openspectral_phaser::render_module_footer(cx, track_idx, idx)
+        }
         _ => div().w_full().h(px(CARD_FOOTER_HEIGHT)).into_any_element(),
     }
 }

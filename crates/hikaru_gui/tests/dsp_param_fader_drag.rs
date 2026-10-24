@@ -81,7 +81,6 @@ fn open_rack(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<HikaruApp>, usi
                         can_automate: true,
                     },
                     value: 0.5,
-                    dirty: false,
                 }];
                 s.tracks_mut()[track].effects.push(slot);
             });

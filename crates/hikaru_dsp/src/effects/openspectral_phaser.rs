@@ -8,8 +8,10 @@
 
 use std::f32::consts::PI;
 
-/// Los 11 parámetros del plugin original, normalizados a 0..1.
-#[derive(Clone, Copy, Debug, Default)]
+/// Los 11 parámetros del plugin, en las unidades oficiales de la interfaz:
+/// knobs normales 0..100, knobs bipolares -100..+100, toggles 0/1 y blocksize
+/// discreto (512..16384).
+#[derive(Clone, Copy, Debug)]
 pub struct SpectralPhaserParams {
     pub width: f32,
     pub offset: f32,
@@ -22,6 +24,24 @@ pub struct SpectralPhaserParams {
     pub keep_bass: f32,
     pub blocksize: f32,
     pub bypass: f32,
+}
+
+impl Default for SpectralPhaserParams {
+    fn default() -> Self {
+        Self {
+            width: 50.0,
+            offset: 0.0,
+            depth: 0.0,
+            speed: 0.0,
+            mix: 100.0,
+            blur: 0.0,
+            hz_per_oct: 0.0,
+            times_five: 0.0,
+            keep_bass: 0.0,
+            blocksize: 1024.0,
+            bypass: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -94,13 +114,19 @@ impl SpectralPhaser {
 
     pub fn set_params(&mut self, params: SpectralPhaserParams) {
         self.params = params;
-        let n = (2.0 + params.width.clamp(0.0, 1.0) * 48.0).round() as usize;
+        let width_norm = (params.width / 100.0).clamp(0.0, 1.0);
+        let n = (2.0 + width_norm * 48.0).round() as usize;
         self.num_sections = n.max(1).min(100);
         self.resize_sections();
     }
 
     pub fn params(&self) -> SpectralPhaserParams {
         self.params
+    }
+
+    /// Cantidad de secciones biquad de la cascada (la fija `width`).
+    pub fn num_sections(&self) -> usize {
+        self.num_sections
     }
 
     pub fn reset(&mut self) {
@@ -151,36 +177,88 @@ impl SpectralPhaser {
         }
     }
 
+    /// Frecuencia del LFO en Hz, con el multiplicador `1x/5x` y el piso de
+    /// velocidad que usa el DSP. Es la misma cuenta que hace `process_sample`.
+    pub fn lfo_rate_hz(&self) -> f32 {
+        let mut rate = self.params.speed / 10.0;
+        if self.params.times_five >= 0.5 {
+            rate *= 5.0;
+        }
+        if rate != 0.0 && rate.abs() < 0.01 {
+            rate = 0.01 * rate.signum();
+        }
+        rate
+    }
+
+    /// Cutoff (Hz) que produce el LFO en la fase dada, para los params
+    /// actuales. Se usa tanto en la ruta de audio como en el análisis.
+    pub fn cutoff_at_phase(&self, phase: f32) -> f32 {
+        let lfo = if phase.is_finite() { phase.sin() } else { 0.0 };
+        let base = 200.0 + (self.params.offset / 100.0) * 4000.0;
+        let octaves = (self.params.depth / 100.0).clamp(0.0, 1.0)
+            * lfo
+            * (1.0 + (self.params.hz_per_oct / 100.0) * 4.0);
+        let cutoff = base * (2.0_f32).powf(octaves);
+        if cutoff.is_finite() {
+            cutoff.clamp(20.0, self.sample_rate * 0.49)
+        } else {
+            20.0
+        }
+    }
+
+    /// Fija el cutoff de análisis (Hz) y recalcula los coeficientes, sin
+    /// procesar audio. Pensado para dibujar la curva de respuesta en la GUI.
+    pub fn set_analysis_cutoff(&mut self, cutoff: f32) {
+        self.smoothed_cutoff = if cutoff.is_finite() {
+            cutoff.clamp(20.0, self.sample_rate * 0.49)
+        } else {
+            20.0
+        };
+        self.recompute(self.smoothed_cutoff);
+    }
+
+    /// Magnitud de la respuesta en frecuencia de la cascada completa
+    /// (`|H(f)|`) para los coeficientes actuales.
+    ///
+    /// Es analítica: evalúa `H(z)` sobre el círculo unitario en vez de procesar
+    /// audio, así que sirve para un scope en tiempo real sin costo de DSP.
+    pub fn magnitude_response(&self, freq: f32) -> f32 {
+        let freq = freq.clamp(1.0, self.sample_rate * 0.49);
+        let w = 2.0 * PI * freq / self.sample_rate;
+        let (sin1, cos1) = w.sin_cos();
+        let (sin2, cos2) = (2.0 * w).sin_cos();
+
+        let mut magnitude = 1.0_f32;
+        for s in &self.sections {
+            // H(z) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2)
+            // con z^-1 = cos(w) - j·sin(w).
+            let num_re = s.b0 + s.b1 * cos1 + s.b2 * cos2;
+            let num_im = -(s.b1 * sin1 + s.b2 * sin2);
+            let den_re = 1.0 + s.a1 * cos1 + s.a2 * cos2;
+            let den_im = -(s.a1 * sin1 + s.a2 * sin2);
+            let num = (num_re * num_re + num_im * num_im).sqrt();
+            let den = (den_re * den_re + den_im * den_im).sqrt();
+            if den > 1.0e-12 {
+                magnitude *= num / den;
+            }
+        }
+        if magnitude.is_finite() { magnitude } else { 0.0 }
+    }
+
     /// Procesa una muestra. RT-safe: sin alocaciones.
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        if self.params.bypass > 0.5 {
+        if self.params.bypass >= 0.5 {
             return input;
         }
 
-        let rate = self.params.speed.clamp(0.0, 1.0) * 10.0;
-        let rate = if self.params.times_five > 0.5 {
-            rate * 5.0
-        } else {
-            rate
-        };
-        let rate = rate.max(0.01);
-
-        self.lfo_phase += 2.0 * PI * rate / self.sample_rate;
+        self.lfo_phase += 2.0 * PI * self.lfo_rate_hz() / self.sample_rate;
         if self.lfo_phase > 2.0 * PI {
             self.lfo_phase -= 2.0 * PI;
         }
-        let lfo = self.lfo_phase.sin();
 
-        let base = 200.0 + self.params.offset.clamp(0.0, 1.0) * 4000.0;
-        let cutoff = base
-            * (2.0_f32).powf(
-                self.params.depth.clamp(0.0, 1.0)
-                    * lfo
-                    * (1.0 + self.params.hz_per_oct.clamp(0.0, 1.0) * 4.0),
-            );
-        let cutoff = cutoff.clamp(20.0, self.sample_rate * 0.49);
+        let cutoff = self.cutoff_at_phase(self.lfo_phase);
 
-        let blur = self.params.blur.clamp(0.0, 1.0);
+        let blur = (self.params.blur / 100.0).clamp(0.0, 1.0);
         let alpha = 1.0 - blur * 0.9;
         self.smoothed_cutoff += (cutoff - self.smoothed_cutoff) * alpha;
 
@@ -192,13 +270,13 @@ impl SpectralPhaser {
         }
 
         let mut out = x;
-        if self.params.keep_bass > 0.0 {
+        if self.params.keep_bass >= 0.5 {
             let a = (2.0 * PI * 120.0 / self.sample_rate).clamp(0.0, 1.0);
             self.bass_lp += a * (input - self.bass_lp);
-            out += self.params.keep_bass.clamp(0.0, 1.0) * self.bass_lp;
+            out += self.bass_lp;
         }
 
-        let wet = self.params.mix.clamp(0.0, 1.0);
+        let wet = (self.params.mix / 100.0).clamp(0.0, 1.0);
         let y = input * (1.0 - wet) + out * wet;
         if y.is_finite() { y } else { input }
     }
@@ -236,11 +314,11 @@ mod tests {
     fn coeffs_finite() {
         let mut p = SpectralPhaser::new(44100.0);
         p.set_params(SpectralPhaserParams {
-            width: 0.5,
-            offset: 0.3,
-            depth: 0.5,
-            speed: 0.4,
-            mix: 1.0,
+            width: 50.0,
+            offset: 30.0,
+            depth: 50.0,
+            speed: 40.0,
+            mix: 100.0,
             ..Default::default()
         });
         let mut buf = vec![0.0f32; 256];
@@ -259,5 +337,24 @@ mod tests {
         let mut buf = input.clone();
         p.process_block(&mut buf);
         assert_eq!(buf, input);
+    }
+
+    #[test]
+    fn analytic_response_is_finite() {
+        let mut p = SpectralPhaser::new(44100.0);
+        p.set_params(SpectralPhaserParams {
+            width: 50.0,
+            depth: 60.0,
+            speed: 20.0,
+            ..Default::default()
+        });
+        let cutoff = p.cutoff_at_phase(1.234);
+        assert!(cutoff.is_finite() && cutoff > 0.0);
+        p.set_analysis_cutoff(cutoff);
+        for freq in [40.0, 120.0, 800.0, 5_000.0, 15_000.0] {
+            let magnitude = p.magnitude_response(freq);
+            assert!(magnitude.is_finite(), "|H({freq})| no es finito: {magnitude}");
+            assert!(magnitude >= 0.0);
+        }
     }
 }
