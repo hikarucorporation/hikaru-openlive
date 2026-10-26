@@ -19,7 +19,7 @@ hikaru_openlive
 /var/tmp/hikaru/
 
 # Logs y archivos personales de OpenCode.
-.opencode/
+# .opencode/
 
 # Archivos de sistema.
 .DS_Store

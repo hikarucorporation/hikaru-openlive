@@ -146,9 +146,18 @@ pub fn knob_row(
 /// Vive aparte de [`dial`] porque es la única parte con regla: el resto es
 /// dibujo. El rango es de -135° a +135°, los 270° del arco habitual de un dial,
 /// con el hueco de abajo como "mínimo".
+//
+// Coordenadas de pantalla (Y hacia abajo): el ángulo de pantalla corre al revés
+// del ángulo matemático. La convención del knob 3D (`knob_angle` de
+// `render.rs`, 225° − 270°·fill en un plano Y-arriba) se traduce acá en negar
+// el ángulo, que da 135° + 270°·fill: el recorrido arranca en las 7:30
+// (abajo-izquierda), sube por las 12 y termina en las 4:30 (abajo-derecha), con
+// el hueco abajo. La versión anterior era `−135° + 270°·fill`, o sea el dial
+// entero girado −270°: el hueco caía a la izquierda y el mínimo apuntaba a las
+// 10:30, invertido respecto al valor.
 pub fn needle_angle(fill: f32) -> f32 {
     let fill = finite(fill).clamp(0.0, 1.0);
-    (-135.0 + 270.0 * fill) * std::f32::consts::PI / 180.0
+    (135.0 + 270.0 * fill) * std::f32::consts::PI / 180.0
 }
 
 /// El dial: círculo y aguja.

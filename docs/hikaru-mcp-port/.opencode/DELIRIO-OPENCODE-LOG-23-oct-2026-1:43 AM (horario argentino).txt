@@ -1,0 +1,39 @@
+El pseudocode C de UZU quedó guardado en:
+docs/reverse-engineering/uzu/
+
+├── README.md                    ← el reporte completo de la RE
+├── AudioPluginAudioProcessor.txt (constructor del procesador JUCE)
+├── processBlock.txt             (callback de audio)
+├── setupPdAudioIfNeeded.txt     (inicialización de libpd)
+├── setupParameters.txt          (configuración de los 11 parámetros)
+├── shiftAt.txt                  (utilidad de buffer de Steinberg)
+└── EBPhaselock.pd               (el patch Pd completo, 3239 bytes)
+
+Lo más valioso: el patch Pd completo
+
+El archivo EBPhaselock.pd es el algoritmo entero del phaser, extraído del binario. Es un patch de Pure Data (librería ELSE) que:
+- Recibe audio (inlet~), cutoff (Hz) y order (número de polos, 2..100)
+- Calcula coeficientes de biquad por polo: g, re, im, r, phi
+- Aplica los biquads en cascada con biquads~
+- Tiene clear para resetear el estado
+- Usa la FFT de Mayer para el procesamiento espectral
+
+Es un phaser de N polos con cutoff variable — esencialmente un "AU5-style" phaser, como sospechabas.
+
+El resto del reporte
+
+El README.md documenta:
+- La identidad del plugin (CRQL, v1.0.4, VST 3.8.0)
+- Los 11 parámetros con sus rangos y defaults
+- La arquitectura (JUCE + libpd + patch embebido)
+- El pseudocode C de GetPluginFactory, setup_freq0x2eshift_tilde, processBlock, setupPdAudioIfNeeded
+- Lo que NO se pudo extraer (el patch como recurso binario comprimido de JUCE)
+
+Cómo reproducir
+./hikaru_mcp --cli
+hikaru_mcp> decompile /home/user/.vst3/UZU.vst3 GetPluginFactory
+hikaru_mcp> decompile /home/user/.vst3/UZU.vst3 setup_freq0x2eshift_tilde
+hikaru_mcp> params /home/user/.vst3/UZU.vst3
+
+O desde un agente MCP:
+decompile_plugin_stub(plugin="/home/user/.vst3/UZU.vst3", analisis="decompile", procedimiento="GetPluginFactory")

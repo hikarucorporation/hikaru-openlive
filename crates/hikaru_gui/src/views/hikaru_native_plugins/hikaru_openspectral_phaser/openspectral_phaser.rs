@@ -111,7 +111,8 @@ fn drag_map() -> &'static DragMap {
     CELL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-const DRAG_RANGE_PX: f32 = 160.0;
+// Sensibilidad de los knobs
+const DRAG_RANGE_PX: f32 = 500.0;
 
 fn phaser_dragging(track_idx: usize, slot_idx: usize) -> bool {
     match drag_map().lock() {
@@ -172,8 +173,10 @@ fn drag_move(
         };
         let idx = drag.knob_idx;
         let delta_px = drag.origin_y - window_y;
-        let gain = if fine { 0.25 } else { 1.0 };
-        let mut fill = drag.grab_fill + delta_px / DRAG_RANGE_PX * gain;
+        drag.origin_y = window_y;
+        let gain = if fine { 0.2 } else { 1.0 };
+        // let mut fill = drag.grab_fill + ((delta_px / 5.0) / DRAG_RANGE_PX) * gain;
+        let mut fill = drag.grab_fill + (delta_px / DRAG_RANGE_PX) * gain;
         if !fill.is_finite() {
             fill = drag.grab_fill;
         }
@@ -197,10 +200,11 @@ fn register_drag_tracking(window: &mut gpui_kit::Window, track_idx: usize, slot_
     window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
         let window_y = event.position.y.as_f32();
         let fine = event.modifiers.shift;
-        let changed = drag_move(cx, track_idx, slot_idx, window_y, fine);
-        if changed {
-            notify(cx);
-        }
+        // `drag_move` ya pide el redibujado cuando algo cambió. Notificar
+        // acá también duplicaba el rebuild de la tarjeta entera en cada
+        // evento de mouse del drag, por cada frame de GPU que el refresco
+        // tenía que pagar.
+        drag_move(cx, track_idx, slot_idx, window_y, fine);
     });
 }
 
@@ -237,7 +241,83 @@ fn scope_time_secs() -> f32 {
     START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32()
 }
 
-fn phaser_scope_magnitudes(params: [f32; 11]) -> Vec<f32> {
+/// FNV-1a de los bits de los params, para el cache de magnitudes.
+///
+/// El cero se normaliza a `+0.0`: `-0.0` y `0.0` dan la misma curva y no
+/// tienen por qué ocupar dos entradas del cache.
+fn phaser_fingerprint(params: &[f32; 11]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut key = OFFSET;
+    for value in params {
+        let bits = if *value == 0.0 { 0.0f32.to_bits() } else { value.to_bits() };
+        for word in bits.to_le_bytes() {
+            key ^= u64::from(word);
+            key = key.wrapping_mul(PRIME);
+        }
+    }
+    key
+}
+
+type MagnitudeCacheMap = Mutex<HashMap<(u64, u64), std::sync::Arc<Vec<f32>>>>;
+fn magnitude_cache() -> &'static MagnitudeCacheMap {
+    static CELL: OnceLock<MagnitudeCacheMap> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Cuál es el "cuadro" actual del scope, cuantizado a [`SCOPE_FPS`].
+///
+/// La fase del LFO sólo cambia entre cuadro y cuadro, así que este entero es la
+/// clave temporal del cache: durante un tick (66 ms a 15 fps) todos los
+/// redibujos de la app reusan la misma curva sin tocar ni el DSP ni la GPU.
+fn scope_tick() -> u64 {
+    (scope_time_secs() * SCOPE_FPS) as u64
+}
+
+/// Respuesta en magnitud del scope, cacheada por (firma de params, cuadro).
+///
+/// La app entera redibuja en cada notify (medidores de audio incluidos), así
+/// que esta función corre más veces por segundo que cuadros lógicos hay: cada
+/// una de esas corridas extra era una alloc de `SpectralPhaser`, 48 bins de
+/// respuesta analítica y un hash que daba igual al anterior. Con el cache, un
+/// redibujo que no cruza el límite del cuadro sale en un clon de `Arc` y el
+/// readback de GPU encima queda cubierto por la firma del viewport.
+///
+/// El cache es acotado: si más de una tarjeta de phaser vive con params
+/// distintos, las entradas sobran nomás y se limpian.
+fn phaser_scope_magnitudes(params: [f32; 11]) -> std::sync::Arc<Vec<f32>> {
+    let key = (phaser_fingerprint(&params), scope_tick());
+
+    {
+        let cache = match magnitude_cache().lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(hit) = cache.get(&key) {
+            return hit.clone();
+        }
+    }
+
+    let magnitudes = std::sync::Arc::new(compute_phaser_scope_magnitudes(params));
+
+    {
+        let mut cache = match magnitude_cache().lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if cache.len() >= 128 {
+            // Cuantización de cuadros + drags cambian las llaves a cada rato:
+            // las viejas nunca se vuelven a pedir, no hay que conservarlas.
+            cache.clear();
+        }
+        cache.insert(key, magnitudes.clone());
+    }
+
+    magnitudes
+}
+
+fn compute_phaser_scope_magnitudes(params: [f32; 11]) -> Vec<f32> {
     use hikaru_dsp::effects::openspectral_phaser::{SpectralPhaser, SpectralPhaserParams};
 
     // Bypass: respuesta plana (0 dB) en todo el espectro.
@@ -268,7 +348,7 @@ fn phaser_scope_magnitudes(params: [f32; 11]) -> Vec<f32> {
     // Fase del LFO desde el reloj, cuantizada para no pedir un readback por
     // frame. La respuesta se calcula analíticamente: no procesa audio.
     let rate = phaser.lfo_rate_hz();
-    let t = (scope_time_secs() * SCOPE_FPS).floor() / SCOPE_FPS;
+    let t = scope_tick() as f32 / SCOPE_FPS;
     let phase = std::f32::consts::TAU * rate * t;
     phaser.set_analysis_cutoff(phaser.cutoff_at_phase(phase));
 

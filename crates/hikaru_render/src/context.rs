@@ -3,6 +3,8 @@
 //! Creación del contexto de GPU (instancia, adapter, device y queue) para
 //! render offscreen.
 
+use std::sync::Mutex;
+
 /// Contexto de GPU para renders offscreen.
 ///
 /// No está asociado a ninguna ventana: se usa para renderizar a texturas en
@@ -17,6 +19,27 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     /// Queue para enviar comandos.
     pub queue: wgpu::Queue,
+    /// Buffer de staging de readbacks, reutilizado entre llamadas.
+    ///
+    /// `read_color_rgba8` corre en el hilo de UI y los targets --salvo
+    /// resize-- son de tamaño constante: crear y destruir el buffer de
+    /// `MAP_READ` en cada readback era alocación + trabajo de driver metidos en
+    /// la parte bloqueante del camino. Con el buffer cacheado, el readback se
+    /// reduce a copia GPU→CPU y map. El `Mutex` es chico y el contention
+    /// nulo: el readback siempre pasa por el viewport, que ya está detrás de
+    /// otro lock.
+    readback_buffer: Mutex<ReadbackCache>,
+}
+
+/// Cache del buffer de staging de readbacks, claveada por tamaño en bytes.
+///
+/// El buffer queda **desmapeado** entre uso y uso (`read_color_rgba8` hace
+/// `unmap` al final), que es la única condición para poder volver a escribirlo
+/// con un `copy_texture_to_buffer`.
+#[derive(Default)]
+struct ReadbackCache {
+    buffer: Option<wgpu::Buffer>,
+    size: u64,
 }
 
 impl GpuContext {
@@ -50,7 +73,13 @@ impl GpuContext {
             .await
             .map_err(ContextError::Device)?;
 
-        Ok(Self { instance, adapter, device, queue })
+        Ok(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            readback_buffer: Mutex::new(ReadbackCache::default()),
+        })
     }
 
     /// Formato de color para las texturas offscreen de este crate.
@@ -211,12 +240,33 @@ impl GpuContext {
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
         let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
 
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hikaru_render::readback"),
-            size: (padded_bytes_per_row * height as usize) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let size = (padded_bytes_per_row * height as usize) as u64;
+
+        // Buffer de staging, reutilizado entre readbacks. Si el lock quedó
+        // envenenado se recupera igual: es un cache de un recurso descriptible,
+        // no estado que valga la pena invalidar. Un buffer desmapeado y del
+        // tamaño exacto se puede re-copiar sin nada más.
+        let mut cache = match self.readback_buffer.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if cache.size != size {
+            *cache = ReadbackCache {
+                buffer: Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("hikaru_render::readback"),
+                    size,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })),
+                size,
+            };
+        }
+        let Some(buffer) = cache.buffer.as_ref() else {
+            unreachable!("la rama de arriba deja el buffer cargado");
+        };
+        // Un `wgpu::Buffer` es un handle con refcount: clonarlo no toca la GPU.
+        let buffer = buffer.clone();
+        drop(cache);
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("hikaru_render::readback::copy"),
