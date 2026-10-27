@@ -1,0 +1,16 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: 10"; labelloc=t; fontsize=14;
+n0 [label="0: outlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 [label="1: *~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n2 [label="2: inlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n3 [label="3: [subpatch hann-table]", shape=doubleoctagon, style=filled, fillcolor="#cfe2ff"];
+n4 [label="4: text Part of ELSE \\; https://github.com/porres/pd-else", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n5 [label="5: text Alexandre Torres Porres (2018)", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n1 -> n0 [label="0->0"];
+n2 -> n1 [label="0->0"];
+n3 -> n1 [label="0->1"];
+}

@@ -1,0 +1,7 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: (subpatch)"; labelloc=t; fontsize=14;
+}

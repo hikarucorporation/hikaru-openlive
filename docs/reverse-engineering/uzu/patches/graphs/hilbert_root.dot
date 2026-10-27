@@ -1,0 +1,30 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: 12"; labelloc=t; fontsize=14;
+n0 [label="0: biquad~ 0.83774 -0.06338 0.06338 -0.83774 1", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 [label="1: biquad~ 1.94632 -0.94657 0.94657 -1.94632 1", shape=box, style=filled, fillcolor="#e2e3e5"];
+n2 [label="2: biquad~ -0.02569 0.260502 -0.260502 0.02569 1", shape=box, style=filled, fillcolor="#e2e3e5"];
+n3 [label="3: biquad~ 1.8685 -0.870686 0.870686 -1.8685 1", shape=box, style=filled, fillcolor="#e2e3e5"];
+n4 [label="4: inlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n5 [label="5: outlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n6 [label="6: outlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n7 [label="7: text This is a pair of 4th-order all-pass filters whose", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n8 [label="8: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n9 [label="9: text bang to clear", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n10 [label="10: text signal in", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n11 [label="11: msg clear", shape=note, style=filled, fillcolor="#fff3cd"];
+n0 -> n5 [label="0->0"];
+n1 -> n0 [label="0->0"];
+n2 -> n3 [label="0->0"];
+n3 -> n6 [label="0->0"];
+n4 -> n1 [label="0->0"];
+n4 -> n2 [label="0->0"];
+n8 -> n11 [label="0->0"];
+n11 -> n1 [label="0->0"];
+n11 -> n0 [label="0->0"];
+n11 -> n3 [label="0->0"];
+n11 -> n2 [label="0->0"];
+}

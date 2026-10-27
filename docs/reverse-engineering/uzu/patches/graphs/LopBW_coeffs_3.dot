@@ -1,0 +1,33 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: coeffs"; labelloc=t; fontsize=14;
+n0 [label="0: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 [label="1: text re", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n2 [label="2: text im", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n3 [label="3: text gain", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n4 [label="4: v re", shape=box, style=filled, fillcolor="#e2e3e5"];
+n5 [label="5: v im", shape=box, style=filled, fillcolor="#e2e3e5"];
+n6 [label="6: v g", shape=box, style=filled, fillcolor="#e2e3e5"];
+n7 [label="7: expr (pow(re - 1 \\, 2) + pow(im \\, 2)) / 4 \\; (1 - r*r) / (1 ...", shape=box, style=filled, fillcolor="#e2e3e5"];
+n8 [label="8: pack f f f f f", shape=box, style=filled, fillcolor="#e2e3e5"];
+n9 [label="9: expr 2 * re \\; -pow(sqrt(re*re + im*im) \\, 2) \\; g \\; 2 * g ...", shape=box, style=filled, fillcolor="#e2e3e5"];
+n10 [label="10: outlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n11 [label="11: t b b", shape=box, style=filled, fillcolor="#e2e3e5"];
+n12 [label="12: insert append", shape=box, style=filled, fillcolor="#e2e3e5"];
+n0 -> n11 [label="0->0"];
+n7 -> n6 [label="0->0"];
+n7 -> n4 [label="1->0"];
+n7 -> n5 [label="2->0"];
+n8 -> n12 [label="0->0"];
+n9 -> n8 [label="0->0"];
+n9 -> n8 [label="1->1"];
+n9 -> n8 [label="2->2"];
+n9 -> n8 [label="3->3"];
+n9 -> n8 [label="4->4"];
+n11 -> n9 [label="0->0"];
+n11 -> n7 [label="1->0"];
+n12 -> n10 [label="0->0"];
+}

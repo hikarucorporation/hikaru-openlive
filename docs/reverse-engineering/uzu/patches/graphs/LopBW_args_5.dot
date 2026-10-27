@@ -1,0 +1,28 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: args"; labelloc=t; fontsize=14;
+n0 [label="0: outlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 [label="1: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n2 [label="2: v even_\\$0", shape=box, style=filled, fillcolor="#e2e3e5"];
+n3 [label="3: v order_\\$0", shape=box, style=filled, fillcolor="#e2e3e5"];
+n4 [label="4: expr 1 - (order_\\$0 % 2) \\; min(max($f1 \\, 2) \\, 100)", shape=box, style=filled, fillcolor="#e2e3e5"];
+n5 [label="5: t b f", shape=box, style=filled, fillcolor="#e2e3e5"];
+n6 [label="6: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n7 [label="7: text hz", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n8 [label="8: text order", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n9 [label="9: f \\$1", shape=box, style=filled, fillcolor="#e2e3e5"];
+n10 [label="10: f \\$2", shape=box, style=filled, fillcolor="#e2e3e5"];
+n11 [label="11: loadbang", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 -> n10 [label="0->0"];
+n4 -> n2 [label="0->0"];
+n4 -> n3 [label="1->0"];
+n5 -> n9 [label="0->0"];
+n5 -> n4 [label="1->0"];
+n6 -> n9 [label="0->0"];
+n9 -> n0 [label="0->0"];
+n10 -> n5 [label="0->0"];
+n11 -> n10 [label="0->0"];
+}

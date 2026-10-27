@@ -1,0 +1,22 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: coeffs"; labelloc=t; fontsize=14;
+n0 [label="0: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 [label="1: outlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n2 [label="2: [subpatch r]", shape=doubleoctagon, style=filled, fillcolor="#cfe2ff"];
+n3 [label="3: [subpatch coeffs]", shape=doubleoctagon, style=filled, fillcolor="#cfe2ff"];
+n4 [label="4: [subpatch phi]", shape=doubleoctagon, style=filled, fillcolor="#cfe2ff"];
+n5 [label="5: list store", shape=box, style=filled, fillcolor="#e2e3e5"];
+n6 [label="6: trigger bang float bang", shape=box, style=filled, fillcolor="#e2e3e5"];
+n0 -> n6 [label="0->0"];
+n2 -> n4 [label="0->0"];
+n3 -> n5 [label="0->0"];
+n4 -> n3 [label="0->0"];
+n5 -> n1 [label="0->0"];
+n6 -> n5 [label="0->0"];
+n6 -> n2 [label="1->0"];
+n6 -> n5 [label="2->1"];
+}

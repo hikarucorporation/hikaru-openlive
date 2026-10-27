@@ -1,0 +1,30 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: 10"; labelloc=t; fontsize=14;
+n0 [label="0: [subpatch coeffs]", shape=doubleoctagon, style=filled, fillcolor="#cfe2ff"];
+n1 [label="1: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n2 [label="2: outlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n3 [label="3: inlet~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n4 [label="4: [subpatch args]", shape=doubleoctagon, style=filled, fillcolor="#cfe2ff"];
+n5 [label="5: text audio", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n6 [label="6: text cutoff", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n7 [label="7: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n8 [label="8: text order", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n9 [label="9: msg clear", shape=note, style=filled, fillcolor="#fff3cd"];
+n10 [label="10: t f b", shape=box, style=filled, fillcolor="#e2e3e5"];
+n11 [label="11: text Part of ELSE \\; https://github.com/porres/pd-else", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n12 [label="12: text Alexandre Torres Porres (2018)", shape=plaintext, style=filled, fillcolor="#ffffff"];
+n13 [label="13: biquads~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n0 -> n13 [label="0->0"];
+n1 -> n4 [label="0->0"];
+n3 -> n13 [label="0->0"];
+n4 -> n0 [label="0->0"];
+n7 -> n10 [label="0->0"];
+n9 -> n13 [label="0->0"];
+n10 -> n4 [label="0->1"];
+n10 -> n9 [label="1->0"];
+n13 -> n2 [label="0->0"];
+}

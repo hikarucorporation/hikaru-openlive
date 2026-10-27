@@ -1,0 +1,30 @@
+digraph G {
+rankdir=LR;
+graph [fontname="monospace",bgcolor="white"];
+node [fontname="monospace",fontsize=9];
+edge [fontname="monospace",fontsize=7,color="#666666"];
+label="canvas: r"; labelloc=t; fontsize=14;
+n0 [label="0: t b f", shape=box, style=filled, fillcolor="#e2e3e5"];
+n1 [label="1: clip 0 1", shape=box, style=filled, fillcolor="#e2e3e5"];
+n2 [label="2: /", shape=box, style=filled, fillcolor="#e2e3e5"];
+n3 [label="3: *", shape=box, style=filled, fillcolor="#e2e3e5"];
+n4 [label="4: tan", shape=box, style=filled, fillcolor="#e2e3e5"];
+n5 [label="5: v half_pi_\\$0", shape=box, style=filled, fillcolor="#e2e3e5"];
+n6 [label="6: inlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n7 [label="7: outlet", shape=box, style=filled, fillcolor="#e2e3e5"];
+n8 [label="8: v r", shape=box, style=filled, fillcolor="#e2e3e5"];
+n9 [label="9: msg 1.5709", shape=note, style=filled, fillcolor="#fff3cd"];
+n10 [label="10: loadbang", shape=box, style=filled, fillcolor="#e2e3e5"];
+n11 [label="11: nyquist~", shape=box, style=filled, fillcolor="#e2e3e5"];
+n0 -> n7 [label="0->0"];
+n0 -> n8 [label="1->0"];
+n1 -> n3 [label="0->0"];
+n2 -> n1 [label="0->0"];
+n3 -> n4 [label="0->0"];
+n4 -> n0 [label="0->0"];
+n6 -> n2 [label="0->0"];
+n9 -> n3 [label="0->1"];
+n9 -> n5 [label="0->0"];
+n10 -> n9 [label="0->0"];
+n11 -> n2 [label="0->1"];
+}

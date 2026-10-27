@@ -61,38 +61,39 @@ Patchs embebidos encontrados:
 Librerías Pd embebidas: `bob~`, `bonk~`, `fiddle~`, `loop~`, `lrshift~`,
 `pd~`, `pique`, `sigmund~`, `helmholtz~` (pitch tracker), `mayer_fft`/`mayer_ifft`.
 
-### 2.4 El patch Pd completo (extraído del binario)
+### 2.4 Los patches Pd reales (extraídos del binario)
 
-El patch está guardado en `docs/reverse-engineering/uzu/EBPhaselock.pd`.
+**Corrección:** el archivo que antes se guardó como `EBPhaselock.pd` (3.239
+bytes) no era el patch principal, sino `HipBW.pd`, un filtro de banda de 3
+polos. El patch principal real mide **22.487 bytes** y es un procesador
+**espectral con FFT**, no un phaser de biquads.
 
-Es un **phaser de N polos** (configurable por `order`, entre 2 y 100) con
-cutoff variable, usando biquads en cascada. Usa la librería ELSE
-(pd-else, por Alexandre Torres Porres). Estructura:
+Los seis recursos Pd ya están extraídos en
+`docs/reverse-engineering/uzu/patches/`:
 
 ```
-inlet~ (audio) ──┐
-inlet (cutoff Hz) ──┤── args ──┐
-inlet (order) ──────┘         │
-                              ▼
-                    coeffs (calcula re, im, g por polo)
-                              │
-                              ▼
-                    phi (calcula el ángulo por polo)
-                              │
-                              ▼
-                    r (calcula el radio)
-                              │
-                              ▼
-                    biquads~ (aplica los biquads en cascada)
-                              │
-                              ▼
-                    outlet~ (audio procesado)
+EBPhaselock.pd   patch principal (FFT 4096, overlap 4, keep bass, modulación)
+HipBW.pd         filtro de banda alto (biquads en cascada, ELSE)
+LopBW.pd         filtro de banda bajo (biquads en cascada, ELSE)
+hann.pd          ventana Hann (ELSE)
+hilbert.pd       transformada de Hilbert (no usada por el patch principal)
+insert.pd        utilidad de inserción (no usada por el patch principal)
 ```
 
-Los coeficientes se calculan con:
-- `g = (1 - r²) / (1 + r² + 2·r·cos(φ))`
-- `im = 2·r·sin(φ) / (1 + r² + 2·r·cos(φ))`
-- `re = 2·re / (re² + im²)` (normalizado)
+Cadena principal:
+
+```
+adc~ ──┬──> LOP (keep bass) ──┬──> FilterCalc (FFT 4096) ──> dac~
+       │                      └──> delay~ 16384 (compensación) ──> dac~
+```
+
+`FilterCalc` hace `hann → rfft~ → /1024 → cartopol~ → curva espectral →
+poltocar~ → rifft~ → hann → *0.5`. La curva se construye con `Freq`, `Width`,
+`Blur`, `Mix`, `Param_4`/`Param_5`, `ConversionArray` y `LINFILT`.
+
+Los detalles completos (direcciones, tamaños, mapeo de los 10 parámetros y por
+qué la implementación Rust actual suena a low-pass) están en
+[`PATCHES.md`](PATCHES.md).
 
 ### 2.5 El wrapper JUCE
 
@@ -114,16 +115,16 @@ Extraído con `decompile_plugin_stub` (Ghidra 12.3 headless):
 
 Los archivos están en `docs/reverse-engineering/uzu/`.
 
-## 3. Lo que NO se pudo extraer
+## 3. Lo que no se pudo extraer
 
-- **El patch Pd completo como texto**: el patch está embebido como recurso
-  binario (JUCE BinaryData) y se carga en runtime con `libpd_openfile` o
-  `glob_evalfile`. La cadena `"EBPhaselock.pd"` aparece en el binario pero
-  el contenido del patch no es un string directo (está comprimido o en
-  formato de recurso JUCE). Se necesita extraer el recurso de JUCE.
-- **Los nombres de las funciones Pd internas**: los objetos Pd (`freq.shift~`,
-  `phasewrap~`, `lrshift~`) están compilados en el binario pero sus nombres
-  están ofuscados o son símbodos de libpd.
+- **El código C++ del wrapper JUCE**: solo se tienen funciones sueltas
+  (`processBlock`, `processBlockOffline`, `setupPdAudioIfNeeded`, etc.).
+- **El layout exacto de la GUI**: el plugin no expone editor propio
+  (`tiene_gui: false`); los objetos GUI del patch son internos.
+- **Los recursos de UI** (`keepbass.png`, `xy.png`, fuentes) no hacen falta
+  para el DSP y no se exportaron.
+- **El binario libpd/ELSE estático**: el plugin los enlaza dentro de
+  `UZU.so`, pero no se pueden reutilizar como bibliotecas separadas.
 
 ## 4. Cómo reproducir
 
@@ -153,5 +154,14 @@ docs/reverse-engineering/uzu/
 ├── setupPdAudioIfNeeded.txt        (inicialización de libpd)
 ├── setupParameters.txt             (configuración de los 11 parámetros)
 ├── shiftAt.txt                     (utilidad de buffer de Steinberg)
-└── EBPhaselock.pd                  (el patch Pd, 3239 bytes)
+├── PATCHES.md                      (extracción y análisis de los patches reales)
+├── EBPhaselock.pd                  (patch principal real, 22.487 bytes)
+└── patches/
+    ├── EBPhaselock.pd              (patch principal, FFT espectral)
+    ├── HipBW.pd                    (filtro de banda alto, ELSE)
+    ├── LopBW.pd                    (filtro de banda bajo, ELSE)
+    ├── hann.pd                     (ventana Hann, ELSE)
+    ├── hilbert.pd                  (Hilbert, no usado por el principal)
+    ├── insert.pd                   (utilidad, no usado por el principal)
+    └── HipBW_legacy_3239.pd        (el archivo mal identificado que había antes)
 ```
