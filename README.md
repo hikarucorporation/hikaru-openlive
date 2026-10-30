@@ -6,8 +6,8 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey.svg)](#-quick-build-linux)
-[![GUI: egui](https://img.shields.io/badge/GUI-egui%200.27-ff4154.svg)](https://github.com/emilk/egui)
-[![Audio: CPAL](https://img.shields.io/badge/Audio-CPAL%200.18-green.svg)](https://github.com/RustAudio/cpal)
+[![GUI: gpui-kit](https://img.shields.io/badge/GUI-gpui--kit-6E4AFF.svg)](https://github.com/zed-industries/gpui)
+[![Audio: CPAL](https://img.shields.io/badge/Audio-CPAL%200.18.2-green.svg)](https://github.com/RustAudio/cpal)
 
 **Hikaru OpenLive** is a digital audio workstation (DAW) designed for **live performance, real-time clip launching and linear composition**. Built entirely in Rust, it offers an ultra-low-latency audio engine with no dynamic memory allocations on the critical thread.
 
@@ -23,9 +23,9 @@
 ![Session Matrix](assets/screenshots/session-matrix.png)
 *Ableton/Bitwig-style clip grid for quantized scene triggering and real-time waveforms.*
 
-### Piano Roll & MIDI Editor
-![Piano Roll](assets/screenshots/piano-roll-dev-1.png)
-*Sequenced MIDI note editing, clip editing and rhythmic control.*
+### About
+![About](assets/screenshots/about.png)
+*Version info, credits and project links.*
 
 ### VST3 / CLAP Plugin Host (Experimental/Beta)
 ![Plugin Host](assets/screenshots/lgpl-vst3-clap-host-dev-1.png)
@@ -40,6 +40,46 @@
 - **Lock-Free Audio Engine:** Real-time audio thread powered by CPAL and a sample-accurate sequencer.
 - **DSP & Native Synthesis:** Effect racks (filters, flanger, phaser) and integrated wavetable generator.
 - **VST3 / CLAP Host:** Experimental integration for external instruments and effects.
+
+---
+
+## 🧭 Project Direction: Reverse Engineering Bitwig Studio
+
+We're making a **call to the open-source audio community**: the goal of **Hikaru OpenLive** is to perform **reverse engineering of Bitwig Studio**.
+
+Why Bitwig? Because the open-source community lacks **free/libre and open-source software (FOSS)** that lets you **loopear** like the proprietary programs — Ableton Live and Bitwig Studio — and especially not Bitwig, which owns the deepest live-looping / session-view / clip-launching workflow in the industry.
+
+Ableton and Bitwig perfected the realtime looping, clip launching and performance workflows, and the open-source world couldn't reach that level. **Hikaru OpenLive is our answer**: a free and open-source DAW built with the single purpose of **reverse engineering those proprietary workflows** and re-implementing them from scratch in Rust — session matrix, arranger, DSP, realtime engine — without depending on any closed-source code.
+
+If you want to help steer this direction: this is the **north star**. 🚀
+
+### Bitwig Is Doing Programmed Obsolescence
+
+**Bitwig is doing programmed obsolescence on certain Intel processors** (like my current one, an i3-3110m).
+
+The point: **Hikaru OpenLive doesn't demand an Intel NASA-grade processor** and **costs nothing** — while **Bitwig charges three mortgages, an egg and half of the other**, and even if you spend all your money on a Bitwig license, **they can technically revoke it at any time** (legally, it's not yours).
+
+On top of that, Bitwig leans on **instruction sets** (like AVX1, AVX2, and whatever comes next) as an excuse to **ban you from running Bitwig on an "old" processor**.
+
+### 🔧 Reverse Engineering Accepted: Ghidra, REA and the Hikaru MCP Port
+
+Reverse engineering of proprietary software is **explicitly accepted** here. We welcome:
+
+* **Ghidra** — the open-source reverse engineering suite.
+* **REA** — our reverse engineering agent pipeline (OpenCode + Frida/Ghidra) used to dig into closed-source binaries.
+* **The Hikaru OpenLive MCP port / server** — the bridge that turns legacy closed-source code (C/C++, JUCE, Steinberg SDK) into readable Rust-like pseudocode that AI agents (Claude Code, OpenCode, Cursor, Kimi Code, Google Antigravity, etc.) can consume.
+
+Applied to proprietary plugins like **Serum 1 and 2**, **reFX Nexus** and other legacy C/C++ instruments/effects, so that hard-earned knowledge gets turned into **free/libre and open-source software** (Rust) for the whole community — under the same AGPLv3 terms.
+
+### Hikaru OpenLive MCP Port
+
+The **Hikaru OpenLive MCP port** is not just for reverse engineering — it also **connects Hikaru OpenLive to AI agents** like **Claude Code, OpenCode**, or any agentic CLI AI.
+
+It also serves **development**: analyzing bugs, adding features, refactoring, and so on.
+
+And in the future, **music production**: for example, having **Google Antigravity** (just as an example) generate a **Hikaru OpenStudio File (`.opsf`)** with all the samples, audio clips and MIDI clips properly placed, with structure and all.
+
+This is **a thousand times better than Suno/Udio**, which can't make a proper dubstep track to save their lives — full of artifacts and white noise self-perceived as growls and heavy basses. Enough of that garbage for Bass Music (Dubstep, Future Riddim, Hi-Tech, Future Bass, etc.). With Hikaru OpenLive + an AI agent, you get full control and a real result.
 
 ---
 
@@ -128,26 +168,23 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ---
 
-### 🗺️ Roadmap & Next Steps (to switch graphics framework from **`egui`** to **`gpui-kit`**)
+### 🗺️ Roadmap & Next Steps: Reverse Engineering Bitwig (legacy Java/C++ → Rust)
 
-```
-/*
-1. **Fixed buggy looping**: I think the `hikaru_audio_engine` crate broke and that's why looping works like crap. **[DONE]**
-2. **Fixed Piano Roll**: Because the current Piano Roll is totally broken **[DONE]**
-3. **Virtual MIDI Input from Piano Roll**: that **[DONE]**
-4. **Wavetable and Spectral Synthesis and Effects**: that too
-5. **Hikaru OpenDMS properly fixed**: Right now it's super buggy lol **[DONE]**
-6. **Automation Clips**: Kind of similar to FL Studio's but well haha
-*/
-```
-
-# Note: The transition from `egui` to `gpui-kit` has been completed.
-
-Hikaru OpenLive will now have GPU-based rendering of its interface (GUI/UI/UX) as if it were a proprietary DAW, without giving up free and open-source software.
+1. **Clip Launcher (Session Matrix)**: scene/clip triggering, quantized launching, real-time waveforms — Bitwig's deepest live workflow. **[IN PROGRESS]**
+2. **Playlist**: clip arrangement, scenes, follow actions, looping — Bitwig's session-view side.
+3. **Arrange / Mix / Edit views**: linear timeline, mixer console, edit view — layout, panels and button positions reverse-engineered.
+4. **Piano Roll & MIDI editor**: note editing, clip editing, rhythmic control. **[IN PROGRESS]**
+5. **Mixer & DSP rack**: channel strips, filters, flanger, phaser, wavetable/spectral synthesis — from proprietary instruments. **[IN PROGRESS]**
+6. **Reverse-engineer proprietary plugins**: Serum 1 & 2, reFX Nexus, UZU (spectral phaser) — convert legacy C/C++/JUCE to Rust. **[IN PROGRESS]**
+7. **Automation clips**: Bitwig/FL Studio-style automation, real-time modulation.
+8. **Hardware & MIDI mapping**: controllers, physical input, real-time timestretching, bug fixes.
+9. **GPU-based UI (gpui-kit)**: keep the proprietary-DAW look & feel with free/open-source software. **[DONE]**
 
 ---
 
 ## 👥 Community & Contributors
+
+We're **looking for contributors** to keep pushing **Hikaru OpenLive** forward! 🙌
 
 Special thanks to all the contributors and the open-source community supporting **Hikaru OpenLive**:
 
@@ -160,7 +197,26 @@ Creators:
 * [DTG](https://github.com/doujintechnologicsgroup)
 * 🤖 [OpenCode](https://github.com/opencode-agent)
 
-Want to contribute? Pull Requests are highly welcome! (MIDI controller mapping, physical hardware support, real-time timestretching, and bug fixes are top priority).
+### 🤝 Code Contributors Wanted
+
+We're actively **seeking new code contributors** for the Rust codebase of **Hikaru OpenLive**! If you want to dive into real-time audio engines, lock-free Rust, DSP, GPU rendering or hardware integration — this is your invitation.
+
+* **Pull Requests are highly welcome!** (MIDI controller mapping, physical hardware support, real-time timestretching, and bug fixes are top priority).
+
+### 🤖 AI-Assisted Issues: With or Without Agents
+
+**We accept all types of issues**, whether they come from a human or from an AI coding agent such as:
+
+* Claude Code
+* OpenCode
+* Cursor
+* Kimi Code
+* Google Antigravity
+* ...or any other AI agent of your choice (Codex, Gemini CLI, Qwen Code, DeepSeek, Copilot, etc.).
+
+That includes bug reports, feature requests, reproductions and Pull Requests — **with or without AI agents**. If an AI agent helped you triage, reproduce or even fix something, **open the issue anyway**: the agent's findings, logs or proposals are more than welcome. Plain human-written issues are equally valid and always accepted.
+
+Don't hesitate: open the issue however it came to be. If it's valid, it's valid. 🚀
 
 ---
 
@@ -178,7 +234,7 @@ The project vendors three third-party crates with their own licenses: `gpui-pre`
 
 To those in the community crying *"AI Slop"* just for using LLMs/OpenCode to translate architecture and design vision into functional Rust code:
 
-> **Hikaru OpenLive / OpenStudio is 100% Free and Open Software under the GNU AGPLv3 license.** (as stated above)
+> **Hikaru OpenLive / OpenStudio is 100% Free/Libre and Open Software under the GNU AGPLv3 license.** (as stated above)
 
 This means that:
 1. You can use, study, modify, redistribute it and even commercialize it or deploy it on Cloud services.
