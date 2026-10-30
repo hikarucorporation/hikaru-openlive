@@ -245,6 +245,59 @@ pub fn step_sig(num: u32, den: u32, delta: i32) -> (u32, u32) {
     STANDARD_SIGS[next]
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanelLayout {
+    /// Fraccion [0..1] del splitter `touch_keyboard_and_main_splitter`
+    /// (teclado vs main).
+    pub keyboard_main_splitter: f32,
+    /// Fraccion [0..1] del splitter `inspector_and_main_splitter`.
+    pub inspector_main_splitter: f32,
+    /// Fraccion [0..1] del splitter `main_and_browser_splitter`.
+    pub main_browser_splitter: f32,
+    /// Fraccion [0..1] del splitter `main.1.arranger_detail_splitter`
+    /// (arranger vs complementary: mixer / clip launcher / note editor).
+    pub arranger_detail_splitter: f32,
+    /// Fraccion [0..1] del splitter `main.2.mixer_detail_editor_splitter`.
+    pub mixer_detail_editor_splitter: f32,
+    /// Fraccion [0..1] del splitter `main.3.editor_other_splitter`.
+    pub editor_other_splitter: f32,
+    /// Visibilidad del teclado (Bitwig: parte del `touch_keyboard_and_main_splitter`).
+    pub show_keyboard: bool,
+    /// Visibilidad del inspector lateral (Bitwig: `inspector_and_main_splitter`).
+    pub show_inspector: bool,
+    /// Visibilidad de la vista Arranger / Playlist / Clip Launcher.
+    pub show_arranger: bool,
+    /// Visibilidad del Clip Launcher (Bitwig:
+    /// `main.1.arranger_detail_splitter.complementary_panel.mixer.is_clip_launcher_visible`).
+    pub show_clip_launcher: bool,
+    /// Visibilidad del mixer / device chain (Bitwig:
+    /// `...complementary_panel.mixer.is_device_chain_visible` /
+    /// `is_crossfade_visible`).
+    pub show_mixer: bool,
+    /// Visibilidad del editor de notas (Bitwig:
+    /// `...complementary_panel.note_editor.Is Automation Section Visible`).
+    pub show_note_editor: bool,
+}
+
+impl Default for PanelLayout {
+    fn default() -> Self {
+        Self {
+            keyboard_main_splitter: 0.0,
+            inspector_main_splitter: 0.0,
+            main_browser_splitter: 0.0,
+            arranger_detail_splitter: 0.6,
+            mixer_detail_editor_splitter: 0.5,
+            editor_other_splitter: 0.5,
+            show_keyboard: false,
+            show_inspector: false,
+            show_arranger: true,
+            show_clip_launcher: true,
+            show_mixer: false,
+            show_note_editor: false,
+        }
+    }
+}
+
 pub struct AppState {
     pub mode: AppMode,
     pub transport: TransportPosition,
@@ -272,6 +325,8 @@ pub struct AppState {
     pub is_recording: bool,
     pub show_explorer: bool,
     pub show_piano_roll: bool,
+    /// Layout de paneles estilo Bitwig Studio (arbol de splitters + flags).
+    pub panel_layout: PanelLayout,
     pub piano_roll_state: piano_roll::PianoRollState,
     pub explorer_state: explorer::FileExplorerState,
 
@@ -992,7 +1047,11 @@ pub fn handle_global_key_mod(key: &str, mods: gpui_kit::Modifiers, cx: &mut App)
         }
         "f11" => {
             update_state(cx, |state| {
+                // Bitwig: el inspector lateral se oculta/ muestra desde el flag
+                // del splitter `inspector_and_main_splitter`
+                // (`inspector.is_shown` en el view-settings).
                 state.show_explorer = !state.show_explorer;
+                state.panel_layout.show_inspector = state.show_explorer;
             });
         }
         "delete" | "backspace" => {
@@ -1114,6 +1173,7 @@ impl HikaruApp {
             is_recording: false,
             show_explorer: false,
             show_piano_roll: false,
+            panel_layout: PanelLayout::default(),
             piano_roll_state: piano_roll::PianoRollState::default(),
             explorer_state: explorer::FileExplorerState::default(),
             audio_settings_state: audio_settings::AudioSettingsState::default(),
@@ -1655,6 +1715,7 @@ impl Render for HikaruApp {
         let show_clip_editor = app_state.clip_editor.show_editor;
         let clip_editor_height = app_state.clip_editor.editor_height.max(120.0);
         let show_explorer = app_state.show_explorer;
+        let panel_layout = app_state.panel_layout;
         let show_about = app_state.show_about;
         let audio_settings_open = app_state.audio_settings_state.is_open;
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
@@ -1698,7 +1759,9 @@ impl Render for HikaruApp {
                     .w_full()
                     .overflow_hidden()
                     
-                    // PANEL LATERAL IZQUIERDO: EXPLORADOR DE ARCHIVOS (Slo si F11 está activo)
+                    // PANEL LATERAL IZQUIERDO: INSPECTOR (Bitwig: inspector en el
+                    // splitter `inspector_and_main_splitter`, visible con el flag
+                    // `panel_layout.show_inspector` / F11)
                     .when(show_explorer, |this| {
                         this.child(
                             div()
@@ -1718,15 +1781,28 @@ impl Render for HikaruApp {
                             .h_full()
                             .overflow_hidden()
                             
-                            // VISTA PRINCIPAL (Session Matrix / Arranger / Studio Playlist)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .overflow_hidden()
-                                    .child(render_central(mode, openlive_view, cx)),
-                            )
-                            
+                            // VISTA PRINCIPAL (Session Matrix / Arranger / Studio Playlist / Clip Launcher)
+                            // Bitwig monta la vista central desde el splitter
+                            // `main.1.arranger_detail_splitter` (`arranger` vs
+                            // complementary): el arranger es el pane principal y el
+                            // complementary panel (mixer con el clip launcher) el
+                            // resto. El flag `panel_layout.show_arranger` es la
+                            // visibilidad con la que se arma esta vista.
+                            .when(panel_layout.show_arranger, |this| {
+                                this.child(
+                                    div()
+                                        .flex_1()
+                                        .w_full()
+                                        .overflow_hidden()
+                                        .child(render_central(
+                                            mode,
+                                            openlive_view,
+                                            panel_layout.show_arranger,
+                                            panel_layout.show_clip_launcher,
+                                            cx,
+                                        )),
+                                )
+                            })
                             // PANEL INFERIOR PLEGABLE: CLIP EDITOR
                             // Alimentado por Session Matrix Y Playlist, así que
                             // vive acá (global) y no dentro de la matriz.
@@ -1809,10 +1885,29 @@ impl Render for HikaruApp {
     }
 }
 
-fn render_central(mode: AppMode, openlive_view: OpenLiveView, cx: &mut Context<HikaruApp>) -> AnyElement {
+fn render_central(
+    mode: AppMode,
+    openlive_view: OpenLiveView,
+    show_arranger: bool,
+    show_clip_launcher: bool,
+    cx: &mut Context<HikaruApp>,
+) -> AnyElement {
+    // Bitwig: la vista central (Arranger / Playlist / Clip Launcher) se monta
+    // del splitter `main.1.arranger_detail_splitter`. El flag `show_arranger` es
+    // la visibilidad del panel; el Clip Launcher (`...complementary_panel.mixer
+    // .is_clip_launcher_visible`) decide si la Session Matrix con su grid de
+    // clips/escenas se monta dentro del main.
+    if !show_arranger {
+        return div().into_any_element();
+    }
     match mode {
         AppMode::OpenLive => match openlive_view {
-            OpenLiveView::SessionMatrix => matrix::render(cx),
+            OpenLiveView::SessionMatrix => {
+                if !show_clip_launcher {
+                    return div().into_any_element();
+                }
+                matrix::render(cx)
+            }
             OpenLiveView::ArrangerView => arranger_view::render(cx),
         },
         // OpenStudio también es el Arranger View: columnas con el contenedor
