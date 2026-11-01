@@ -145,6 +145,8 @@ pub enum ModalId {
     PluginSettings,
     /// La ventana «HIKARU MCP PORT · MODEL CONTEXT PROTOCOL».
     McpPortSettings,
+    /// La ventana «HIKARU DASHBOARD · PANEL DE CONTROL».
+    ControlPanel,
 }
 
 /// El desplazamiento de una ventana modal y el gesto de arrastre en curso.
@@ -230,6 +232,7 @@ pub struct ModalDrags {
     audio_settings: ModalDrag,
     plugin_settings: ModalDrag,
     mcp_port_settings: ModalDrag,
+    control_panel: ModalDrag,
 }
 
 impl ModalDrags {
@@ -240,6 +243,7 @@ impl ModalDrags {
             ModalId::AudioSettings => &self.audio_settings,
             ModalId::PluginSettings => &self.plugin_settings,
             ModalId::McpPortSettings => &self.mcp_port_settings,
+            ModalId::ControlPanel => &self.control_panel,
         }
     }
 
@@ -250,6 +254,7 @@ impl ModalDrags {
             ModalId::AudioSettings => &mut self.audio_settings,
             ModalId::PluginSettings => &mut self.plugin_settings,
             ModalId::McpPortSettings => &mut self.mcp_port_settings,
+            ModalId::ControlPanel => &mut self.control_panel,
         }
     }
 
@@ -260,6 +265,7 @@ impl ModalDrags {
             &mut self.audio_settings,
             &mut self.plugin_settings,
             &mut self.mcp_port_settings,
+            &mut self.control_panel,
         ]
         .into_iter()
         .find(|drag| drag.dragging)
@@ -271,6 +277,7 @@ impl ModalDrags {
             || self.get(ModalId::AudioSettings).dragging
             || self.get(ModalId::PluginSettings).dragging
             || self.get(ModalId::McpPortSettings).dragging
+            || self.get(ModalId::ControlPanel).dragging
     }
 
     /// Olvida el gesto y el desplazamiento de una modal.

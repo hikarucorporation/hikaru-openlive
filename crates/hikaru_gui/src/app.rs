@@ -21,7 +21,7 @@ use hikaru_plugin_host::{spawn_floating_gui, PluginFormat, PluginInstance};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::render::WavetableViewportHandle;
 use crate::views::{
-    about, arranger_view, audio_settings, clip_editor, dsp_rack, explorer,
+    about, arranger_view, audio_settings, clip_editor, control_panel, dsp_rack, explorer,
     external_plugins_settings, footer,
     header, matrix, mcp_port_settings, menu_bar, mixer, modal, piano_roll, playlist,
 };
@@ -335,6 +335,9 @@ pub struct AppState {
     /// El panel `Hikaru MCP Port Settings...`: los slots de puerto por los
     /// que los agentes de IA se enganchan al DAW.
     pub mcp_port_settings_state: mcp_port_settings::McpPortSettingsState,
+    /// El Panel de Control / Dashboard estilo Bitwig Studio que se abre desde
+    /// el botón Energy Core de la barra de transporte.
+    pub control_panel_state: control_panel::ControlPanelState,
     /// El desplazamiento y el gesto de arrastre de cada ventana modal.
     ///
     /// Vive en el estado global (y no en cada panel) porque el gesto tiene
@@ -1179,6 +1182,7 @@ impl HikaruApp {
             audio_settings_state: audio_settings::AudioSettingsState::default(),
             plugin_settings_state: external_plugins_settings::PluginSettingsState::default(),
             mcp_port_settings_state: mcp_port_settings::McpPortSettingsState::default(),
+            control_panel_state: control_panel::ControlPanelState::default(),
             modal_drags: modal::ModalDrags::default(),
             playlist_state: playlist::PlaylistState::default(),
             clip_editor: clip_editor::ClipEditorState::default(),
@@ -1720,6 +1724,7 @@ impl Render for HikaruApp {
         let audio_settings_open = app_state.audio_settings_state.is_open;
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
         let mcp_port_settings_open = app_state.mcp_port_settings_state.is_open;
+        let control_panel_open = app_state.control_panel_state.is_open;
         let dragged_sample = app_state.dragged_sample.clone();
         // El alto del rack es fijo e inmutable: no se expande ni se achica al
         // insertar o abrir dispositivos. Todas las tarjetas ocupan el 100% de
@@ -1855,6 +1860,9 @@ impl Render for HikaruApp {
             })
             .when(mcp_port_settings_open, |this| {
                 this.child(mcp_port_settings::render(cx))
+            })
+            .when(control_panel_open, |this| {
+                this.child(control_panel::render(cx))
             })
             .when_some(dragged_sample, |this, sample_path| {
                 this.child(render_drag_preview(&sample_path))

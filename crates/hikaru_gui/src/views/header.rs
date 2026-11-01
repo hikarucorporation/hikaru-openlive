@@ -58,7 +58,7 @@ const TRANSPORT_LOGO_RADIUS: f32 = 2.0;
 /// Lo mismo aplica a cualquier `div` con `items_center` en este repo: usar
 /// `h_flex()`/`v_flex()`, que ya fijan `display: flex`, es más seguro.
 fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement {
-    let show_dsp_rack = state(cx).read(cx).show_dsp_rack;
+    let control_panel_open = state(cx).read(cx).control_panel_state.is_open;
 
     div()
         .id("transport_energy_core_logo")
@@ -68,9 +68,9 @@ fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement
         .h(px(TRANSPORT_BTN_H))
         .rounded(px(TRANSPORT_LOGO_RADIUS))
         // Mismo fondo que los botones vecinos (`rgb(0x3D3D3D)`), y se ilumina
-        // con el acento cuando el panel del motor ya está abierto, para que el
+        // con el acento cuando el Panel de Control ya está abierto, para que el
         // estado del logo y el del panel no puedan contradecirse.
-        .bg(if show_dsp_rack {
+        .bg(if control_panel_open {
             rgb(0x4A4A4A)
         } else {
             rgb(0x3D3D3D)
@@ -80,11 +80,13 @@ fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0x4A4A4A)))
         .on_click(move |_, _, cx| {
-            // Mismo comportamiento que el botón "DSP RACK (F10)" de la barra:
-            // abre/cierra el panel del motor, sin duplicar la lógica.
+            // Abre/cierra el Panel de Control (Hikaru Dashboard).
             let st = state(cx);
             st.update(cx, |state, cx| {
-                state.show_dsp_rack = !state.show_dsp_rack;
+                state.control_panel_state.is_open = !state.control_panel_state.is_open;
+                if !state.control_panel_state.is_open {
+                    state.modal_drags.reset(crate::views::modal::ModalId::ControlPanel);
+                }
                 cx.notify();
             });
         })

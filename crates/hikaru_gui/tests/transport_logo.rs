@@ -56,10 +56,10 @@ fn open_app(cx: &mut TestAppContext) -> gpui_kit::WindowHandle<HikaruApp> {
     handle
 }
 
-fn dsp_rack_open(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext) -> bool {
+fn control_panel_open(handle: gpui_kit::WindowHandle<HikaruApp>, cx: &mut TestAppContext) -> bool {
     cx.update_window(handle.into(), |view, _, cx| {
         let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
-        app.read(cx).state.read(cx).show_dsp_rack
+        app.read(cx).state.read(cx).control_panel_state.is_open
     })
     .unwrap()
 }
@@ -156,19 +156,21 @@ fn logo_is_centered_in_its_control(cx: &mut TestAppContext) {
     );
 }
 
-/// Clic en el logo: abre el panel del motor (el DSP Rack), igual que el botón
-/// "DSP RACK (F10)" de la misma barra.
+/// Clic en el logo: abre el Panel de Control (Hikaru Dashboard).
 #[gpui_kit::gpui::test]
-fn clicking_transport_logo_toggles_dsp_rack(cx: &mut TestAppContext) {
+fn clicking_transport_logo_toggles_control_panel(cx: &mut TestAppContext) {
     let handle = open_app(cx);
-    assert!(!dsp_rack_open(handle, cx), "el rack arranca cerrado");
+    assert!(!control_panel_open(handle, cx), "el panel de control arranca cerrado");
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.draw(cx).clear(cx);
         window.click_at(LOGO_ID, point(px(20.0), px(16.0)), cx);
     })
     .unwrap();
-    assert!(dsp_rack_open(handle, cx), "el clic en el logo debería abrir el rack");
+    assert!(
+        control_panel_open(handle, cx),
+        "el clic en el logo debería abrir el panel de control"
+    );
 
     // Y el toggle es reversible: un segundo clic lo cierra.
     cx.update_window(handle.into(), |_, window, cx| {
@@ -177,7 +179,7 @@ fn clicking_transport_logo_toggles_dsp_rack(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert!(
-        !dsp_rack_open(handle, cx),
-        "el segundo clic en el logo debería cerrar el rack"
+        !control_panel_open(handle, cx),
+        "el segundo clic en el logo debería cerrar el panel de control"
     );
 }
