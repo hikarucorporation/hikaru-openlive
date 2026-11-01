@@ -39,6 +39,42 @@ pub const ACCENT_STUDIO: Hsla = Hsla { h: 0.55, s: 0.80, l: 0.50, a: 1.0 }; // A
 pub const SLOT_ACTIVE_BG: Hsla = Hsla { h: 0.60, s: 0.35, l: 0.25, a: 1.0 }; // Fondo de slot activo
 
 // =========================================================================
+// TOKENS DE ALTA DENSIDAD (SESSION MATRIX & ARRANGER)
+// =========================================================================
+
+pub const DAW_MAIN_BG: u32        = 0x2B2B2B; // #2b2b2b - Panel / TrackHeader base
+pub const DAW_GRID_BG: u32        = 0x1E1E1E; // #1e1e1e - Fondo de grilla oscura
+pub const DAW_CELL_EMPTY_BG: u32  = 0x262626; // #262626 - Celda vacía de Clip Launcher
+pub const DAW_CELL_HOVER_BG: u32  = 0x303030; // #303030 - Celda en hover
+pub const DAW_HEADER_DARK_BG: u32 = 0x222222; // #222222 - Cabeceras de escena / sub-barras
+pub const DAW_STATUS_BG: u32      = 0x1A1A1A; // #1a1a1a - Barra de estado inferior
+pub const DAW_BORDER_SUBTLE: u32  = 0x141414; // #141414 - Líneas divisorias de 1px
+pub const DAW_BORDER_LIGHT: u32   = 0x3A3A3A; // #3a3a3a - Contorno de controles
+pub const DAW_ACCENT_ORANGE: u32  = 0xE8782A; // #e8782a - Acento primario (Inst / Activo)
+pub const DAW_FADER_FILL: u32     = 0x8A5A2A; // #8a5a2a - Relleno de fader horizontal
+pub const DAW_AUDIO_YELLOW: u32   = 0xE8C52A; // #e8c52a - Acento de pista de audio
+pub const DAW_PLAYHEAD_BLUE: u32  = 0x3AA8E0; // #3aa8e0 - Cabezal de reproducción / Selección
+pub const DAW_SOLO_GOLD: u32      = 0xD9B32A; // #d9b32a - Solo activo
+pub const DAW_MUTE_AMBER: u32     = 0xC86428; // #c86428 - Mute activo
+pub const DAW_ARM_RED: u32        = 0xD93838; // #d93838 - Record Arm activo
+
+/// Paleta determinista de colores de banda lateral para pistas (TrackHeader / Playlist).
+pub const TRACK_STRIPE_PALETTE: [u32; 8] = [
+    0xE8782A, // Track 1: Naranja cálido (Instrument)
+    0xE8C52A, // Track 2: Amarillo dorado (Audio)
+    0x3AA8E0, // Track 3: Azul cian
+    0x9B59B6, // Track 4: Púrpura
+    0x2ECC71, // Track 5: Esmeralda
+    0xE74C3C, // Track 6: Coral/Rojo
+    0x1ABC9C, // Track 7: Turquesa
+    0xF39C12, // Track 8: Ámbar
+];
+
+pub fn track_stripe_hex(track_idx: usize) -> u32 {
+    TRACK_STRIPE_PALETTE[track_idx % TRACK_STRIPE_PALETTE.len()]
+}
+
+// =========================================================================
 // CONVERSORES RGB / RGBA
 // =========================================================================
 

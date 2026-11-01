@@ -1,4 +1,4 @@
-// Copyright (C) Hikaru Corporation - 2026
+.// Copyright (C) Hikaru Corporation - 2026
 // Hikaru OpenLive / OpenStudio - Arranger View (columnas unificadas)
 // GNU Affero General Public License v3
 // crates/hikaru_gui/src/views/arranger_view.rs
@@ -1839,9 +1839,9 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
         .w_full()
         .h(px(WAVEFORM_HEIGHT))
         .flex_shrink_0()
-        .bg(rgb(0x101014))
+        .bg(rgb(0x141619))
         .border_1()
-        .border_color(rgb(0x2D2D37))
+        .border_color(rgb(theme::DAW_BORDER_LIGHT))
         .rounded(px(2.0))
         .relative()
         .overflow_hidden()
@@ -1860,11 +1860,8 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
                     axis.move_to(point(cx0, bounds.origin.y));
                     axis.line_to(point(cx0, bounds.origin.y + bounds.size.height));
                     if let Ok(axis) = axis.build() {
-                        window.paint_path(axis, rgb(0x32323C));
+                        window.paint_path(axis, rgb(0x2E3138));
                     }
-                    // Ventana móvil en cascada: el futuro entra por arriba y
-                    // desciende hacia la línea de presente (centro); el pasado
-                    // sale por abajo. Matemática entera exacta.
                     let n = view.peaks.len();
                     let step = 2.0_f32;
                     let steps = (h / step) as usize;
@@ -1896,7 +1893,7 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
                             path.line_to(point(cx0 - px(bw * 0.5), y + px(1.0)));
                             path.close();
                             if let Ok(path) = path.build() {
-                                window.paint_path(path, rgba(0x5AB4FFCC));
+                                window.paint_path(path, rgba(0xE8782ACC));
                             }
                         }
                     }
@@ -1909,7 +1906,7 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
                         cy,
                     ));
                     if let Ok(play) = play.build() {
-                        window.paint_path(play, rgb(0x00E5FF));
+                        window.paint_path(play, rgb(theme::DAW_PLAYHEAD_BLUE));
                     }
                 },
             )
@@ -1926,7 +1923,7 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
                     Label::new(label)
                         .text_size(px(9.0))
                         .text_color(if has_wave {
-                            rgb(0x5AB4FF)
+                            rgb(theme::DAW_ACCENT_ORANGE)
                         } else {
                             rgb(0x808080)
                         }),
@@ -1951,16 +1948,16 @@ fn track_header_cell(
         .h(px(HEADER_HEIGHT))
         .flex_shrink_0()
         .bg(if selected {
-            // Mismo azul de selección que la Session Matrix y la Playlist. El
-            // `.into()` sólo convierte de Rgba a Hsla: los colores de `theme`
-            // son Hsla y los hex de las otras vistas son Rgba, y el `if` exige
-            // que las dos ramas sean del mismo tipo.
-            rgb(0x1E2A38).into()
+            rgb(0x343438)
         } else {
-            theme::PANEL_BG
+            rgb(theme::DAW_HEADER_DARK_BG)
         })
         .border_1()
-        .border_color(theme::BORDER_COLOR)
+        .border_color(if selected {
+            rgb(theme::DAW_PLAYHEAD_BLUE).into()
+        } else {
+            theme::BORDER_COLOR
+        })
         .rounded(px(2.0))
         .flex()
         .flex_col()
@@ -1975,9 +1972,6 @@ fn track_header_cell(
         .child(
             Label::new(name.to_string())
                 .text_size(px(9.0))
-                // El nombre se enciende cuando la pista está seleccionada: el
-                // marco de la columna es la señal primaria, ésta la refuerza
-                // para que no dependa de ver un píxel de borde.
                 .text_color(if selected {
                     theme::TEXT_PRIMARY
                 } else {
@@ -1993,9 +1987,9 @@ fn scene_launcher_cell(scene_idx: usize, name: &str) -> AnyElement {
         .w_full()
         .h(px(PAD_HEIGHT))
         .flex_shrink_0()
-        .bg(rgb(0x1E1E28))
+        .bg(rgb(theme::DAW_HEADER_DARK_BG))
         .border_1()
-        .border_color(rgb(0x0096BE))
+        .border_color(rgb(theme::DAW_ACCENT_ORANGE))
         .rounded(px(2.0))
         .flex()
         .items_center()
@@ -2012,22 +2006,13 @@ fn scene_launcher_cell(scene_idx: usize, name: &str) -> AnyElement {
         .child(
             Label::new(format!("▶ {}", name))
                 .text_size(px(9.0))
-                .text_color(rgb(0xFFFFFF)),
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0xE6E6E6)),
         )
         .into_any_element()
 }
 
 /// Columna unificada: cabecera + contenido superior + channel strip.
-///
-/// `target` + `selected` son lo que convierte la columna en "seleccionable": el
-/// fondo y el marco son el indicador, y el `.on_mouse_down` elige la pista.
-/// Antes no había ninguno de los dos, así que clicar una columna del Arranger
-/// no escribía nada (lo único que seleccionaba era una fila de 14px del rack de
-/// devices, imposible de acertar) y no había forma de ver qué pista estaba
-/// activa.
-///
-/// Los hijos con hitbox propia (faders, pads, botones S/M/R, filas de device)
-/// resuelven el clic antes que este padre, así que siguen haciendo lo suyo.
 fn track_column(
     width: f32,
     header: AnyElement,
@@ -2042,17 +2027,17 @@ fn track_column(
         .w(px(width))
         .flex_shrink_0()
         .bg(if selected {
-            rgb(0x1E2A38).into()
+            rgb(0x32343A)
         } else {
-            theme::PANEL_BG
+            rgb(theme::DAW_MAIN_BG)
         })
         .border_1()
         .border_color(if selected {
-            rgb(0x5AB4FF).into()
+            rgb(theme::DAW_PLAYHEAD_BLUE)
         } else {
-            theme::BORDER_COLOR
+            rgb(0x161616)
         })
-        .rounded(px(4.0))
+        .rounded(px(3.0))
         .p(px(3.0))
         .gap(px(2.0))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {

@@ -351,14 +351,14 @@ fn la_cabecera_usa_la_version_dinamica_del_software(cx: &mut TestAppContext) {
         project::save(state, &opsf).unwrap();
     });
 
-    assert_eq!(VERSION, "2.22.2", "la versión del producto se define en el Cargo.toml");
+    assert_eq!(VERSION, "2.24.0", "la versión del producto se define en el Cargo.toml");
 
     let oplf_json = json_of(&oplf);
-    assert_eq!(oplf_json["created_by"], "Hikaru OpenLive 2.22.2");
+    assert_eq!(oplf_json["created_by"], "Hikaru OpenLive 2.24.0");
     assert_eq!(oplf_json["format_version"], project::FORMAT_VERSION);
 
     let opsf_json = json_of(&opsf);
-    assert_eq!(opsf_json["created_by"], "Hikaru OpenStudio 2.22.2");
+    assert_eq!(opsf_json["created_by"], "Hikaru OpenStudio 2.24.0");
     assert_eq!(opsf_json["format_version"], project::FORMAT_VERSION);
 
     // La versión del formato y la del software son dos números distintos, y

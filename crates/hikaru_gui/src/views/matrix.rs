@@ -878,55 +878,61 @@ use gpui_kit::prelude::{InteractiveElement as _, Styled as _};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 use crate::app::{state, AppState, HikaruApp};
+use crate::theme;
 
-fn slot_colors(slot_state: &SlotState, has_clip: bool, is_selected: bool) -> (Hsla, Hsla) {
+fn slot_colors(
+    slot_state: &SlotState,
+    has_clip: bool,
+    is_selected: bool,
+    is_armed: bool,
+) -> (Hsla, Hsla) {
     // Con el pad en reproducción el fondo NO se re-tiñe de azul: el verde es el
     // único indicio de "sonando" que sobrevive, y la selección ya se marca con
     // el marco (ver el orden de los `.when()` en `render_pad`).
     if is_selected && !matches!(slot_state, SlotState::Playing) {
-        // Focus/selección: resaltado azul profesional.
-        return (rgb(0x2D3A4A).into(), rgb(0x5AB4FF).into());
+        return (rgb(0x2D3846).into(), rgb(theme::DAW_PLAYHEAD_BLUE).into());
     }
     if !has_clip {
-        return (rgb(0x252525).into(), rgb(0x3A3A3A).into());
+        if is_armed {
+            return (rgb(0x2A2020).into(), rgb(0x5A2A2A).into());
+        }
+        return (
+            rgb(theme::DAW_CELL_EMPTY_BG).into(),
+            rgb(0x161616).into(),
+        );
     }
     match slot_state {
-        SlotState::Stopped => (rgb(0x35404F).into(), rgb(0x6B9FD4).into()),
-        SlotState::QueuedToPlay => (rgb(0x5C4A1A).into(), rgb(0xE6C84C).into()),
-        // En reproducción: fondo oscuro verdoso sutil para que el nombre del
-        // clip siga legible; el progreso lo marca el playhead del canvas.
-        SlotState::Playing => (rgb(0x14301F).into(), rgb(0x4CFF8A).into()),
-        SlotState::QueuedToStop => (rgb(0x6B2A2A).into(), rgb(0xE06060).into()),
-        SlotState::Empty => (rgb(0x252525).into(), rgb(0x3A3A3A).into()),
+        SlotState::Stopped => (rgb(0x22262C).into(), rgb(0x454D59).into()),
+        SlotState::QueuedToPlay => (rgb(0x3D3216).into(), rgb(0xE8C52A).into()),
+        SlotState::Playing => (rgb(0x162E20).into(), rgb(0x3DF57A).into()),
+        SlotState::QueuedToStop => (rgb(0x3D1E1E).into(), rgb(0xE05252).into()),
+        SlotState::Empty => (
+            rgb(theme::DAW_CELL_EMPTY_BG).into(),
+            rgb(0x161616).into(),
+        ),
     }
 }
 
 fn slot_hover_border(slot_state: &SlotState, has_clip: bool) -> Hsla {
     if !has_clip {
-        // Vacío: borde sutilmente encendido al hover para invitar a crear/cargar.
-        return rgb(0x0096BE).into();
+        return rgb(theme::DAW_ACCENT_ORANGE).into();
     }
     match slot_state {
-        SlotState::Playing => rgb(0xB6FFD2).into(),
+        SlotState::Playing => rgb(0x9EFFC0).into(),
         SlotState::QueuedToPlay | SlotState::QueuedToStop => rgb(0xFFFFFF).into(),
-        _ => rgb(0x9CC8FF).into(),
+        _ => rgb(theme::DAW_PLAYHEAD_BLUE).into(),
     }
 }
 
 fn slot_display_text(_slot_state: &SlotState, has_clip: bool, clip_name: &str) -> String {
     if !has_clip {
-        // Celda vacía: pad oscuro limpio, sin texto genérico.
         return String::new();
     }
-    // Nombre limpio, sin prefijos de estado (▶/■/…): el mini-botón de la
-    // esquina es el indicador de estado único y el label se trunca con
-    // ellipsis en el layout (una sola línea pequeña).
     clip_name.to_string()
 }
 
 fn play_glyph(slot_state: &SlotState, has_clip: bool) -> &'static str {
     if !has_clip {
-        // Vacío: no se usa glyph de texto; se dibuja cuadrado Stop sólido (ver render_pad).
         return "■";
     }
     match slot_state {
@@ -934,6 +940,39 @@ fn play_glyph(slot_state: &SlotState, has_clip: bool) -> &'static str {
         SlotState::QueuedToPlay => "…",
         SlotState::QueuedToStop => "…",
         _ => "▶",
+    }
+}
+
+/// Celda individual de la Session Matrix (`ClipCell`) estilo Bitwig Clip Launcher.
+pub struct ClipCell {
+    pub track_idx: usize,
+    pub scene_idx: usize,
+    pub slot_state: SlotState,
+    pub clip_name: String,
+    pub has_clip: bool,
+    pub is_selected: bool,
+    pub is_armed: bool,
+    pub drop_sample_ready: bool,
+    pub clipboard_ready: bool,
+    pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
+    pub peaks: Vec<f32>,
+}
+
+impl ClipCell {
+    pub fn into_element(self) -> AnyElement {
+        render_pad_with_arm(
+            self.track_idx,
+            self.scene_idx,
+            self.slot_state,
+            self.clip_name,
+            self.has_clip,
+            self.is_selected,
+            self.is_armed,
+            self.drop_sample_ready,
+            self.clipboard_ready,
+            self.engine_handle,
+            self.peaks,
+        )
     }
 }
 
@@ -950,12 +989,43 @@ fn render_pad(
     engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
     peaks: Vec<f32>,
 ) -> AnyElement {
-    let (bg, border) = slot_colors(&slot_state, has_clip, is_selected);
+    render_pad_with_arm(
+        track_idx,
+        scene_idx,
+        slot_state,
+        clip_name,
+        has_clip,
+        is_selected,
+        false,
+        drop_sample_ready,
+        clipboard_ready,
+        engine_handle,
+        peaks,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_pad_with_arm(
+    track_idx: usize,
+    scene_idx: usize,
+    slot_state: SlotState,
+    clip_name: String,
+    has_clip: bool,
+    is_selected: bool,
+    is_armed: bool,
+    drop_sample_ready: bool,
+    clipboard_ready: bool,
+    engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
+    peaks: Vec<f32>,
+) -> AnyElement {
+    let (bg, border) = slot_colors(&slot_state, has_clip, is_selected, is_armed);
     let hover_border = slot_hover_border(&slot_state, has_clip);
     let display_text = slot_display_text(&slot_state, has_clip, &clip_name);
     let glyph = play_glyph(&slot_state, has_clip);
     let is_playing = slot_state == SlotState::Playing;
+    let is_queued = matches!(slot_state, SlotState::QueuedToPlay | SlotState::QueuedToStop);
     let is_empty = !has_clip;
+    let track_hex = theme::track_stripe_hex(track_idx);
 
     let pad = div()
         .id(SharedString::from(format!("matrix_pad_{}_{}", track_idx, scene_idx)))
@@ -966,100 +1036,114 @@ fn render_pad(
         .bg(bg)
         .border_1()
         .border_color(border)
-        .rounded(px(3.0))
+        .rounded(px(2.0))
         .overflow_hidden()
         .cursor_pointer()
-        // Hover: borde azul sutilmente encendido + leve variación de fondo.
-        .hover(move |this| this.border_color(hover_border).bg(rgb(0x2E3A4A)))
+        .hover(move |this| {
+            this.border_color(hover_border)
+                .bg(rgb(theme::DAW_CELL_HOVER_BG))
+        })
         // Orden de prioridad del marco: transporte → drop → selección.
-        // `is_selected` va POR ÚLTIMO a propósito: el clic en un pad dispara el
-        // clip en el mismo gesto (`trigger_pad`), así que en el frame siguiente
-        // el pad ya está `Playing` y el verde tapaba el azul de selección. Con
-        // este orden el pad seleccionado queda azul pase lo que pase, y el
-        // estado "sonando" sigue visible por el fondo y por el glyph del botón.
         .when(is_playing, |d| {
             d.border_2().border_color(rgb(0x4CFF8A))
         })
-        .when(drop_sample_ready && is_empty, |d| {
-            d.border_color(rgb(0x0096BE)).border_2()
+        .when(is_queued, |d| {
+            d.border_2().border_color(rgb(theme::DAW_AUDIO_YELLOW))
         })
-        .when(is_selected, |d| d.border_2().border_color(rgb(0x5AB4FF)))
-        // Capas 2 y 3 (contenedor oscuro + picos) en un solo canvas absoluto:
-        // el contenedor se pinta primero como lienzo de la waveform y los picos
-        // encima, ambos por debajo del playhead (capa 4) y de la cabecera con
-        // el nombre y el botón (capa 5), que son hijos posteriores del pad.
-        .when(!peaks.is_empty(), |d| {
-            d.child(canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let left = bounds.origin.x.as_f32();
-                    let width = bounds.size.width.as_f32().max(1.0);
-                    let height = bounds.size.height.as_f32().max(1.0);
-                    // Margen interno: ni el contenedor ni la silueta tocan los
-                    // bordes del pad, así el marco y el nombre siguen libres.
-                    let pad_x = 4.0_f32;
-                    let pad_y = 4.0_f32;
-                    let inner_w = (width - pad_x * 2.0).max(1.0);
-                    let inner_h = (height - pad_y * 2.0).max(1.0);
-                    let inner_y = bounds.origin.y.as_f32() + pad_y;
-
-                    // Capa 2: lienzo oscuro del clip. En Playing lleva un tinte
-                    // verde muy sutil para diferenciar el estado sin perder el
-                    // contraste de los picos.
-                    let container_color = if is_playing {
-                        rgb(0x0E1F16)
+        .when(drop_sample_ready && is_empty, |d| {
+            d.border_color(rgb(theme::DAW_ACCENT_ORANGE)).border_2()
+        })
+        .when(is_selected, |d| {
+            d.border_2().border_color(rgb(theme::DAW_PLAYHEAD_BLUE))
+        })
+        // Indicador central sutil en celdas vacías (cuadrado Stop o círculo Arm rojo)
+        .when(is_empty, move |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(if is_armed {
+                        div()
+                            .w(px(7.0))
+                            .h(px(7.0))
+                            .rounded(px(3.5))
+                            .bg(rgb(theme::DAW_ARM_RED))
+                            .into_any_element()
                     } else {
-                        rgb(0x121418)
-                    };
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
+                        div()
+                            .w(px(6.0))
+                            .h(px(6.0))
+                            .bg(rgb(0x363636))
+                            .border_1()
+                            .border_color(rgb(0x4A4A4A))
+                            .into_any_element()
+                    }),
+            )
+        })
+        // Capas 2 y 3 (lienzo inferior del clip + forma de onda vectorial en GPU)
+        .when(!peaks.is_empty(), |d| {
+            d.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let left = bounds.origin.x.as_f32();
+                        let width = bounds.size.width.as_f32().max(1.0);
+                        let height = bounds.size.height.as_f32().max(1.0);
+                        let top_bar_h = 17.0_f32;
+                        let pad_x = 2.0_f32;
+                        let pad_bottom = 2.0_f32;
+                        let inner_w = (width - pad_x * 2.0).max(1.0);
+                        let inner_h = (height - top_bar_h - pad_bottom).max(1.0);
+                        let inner_y = bounds.origin.y.as_f32() + top_bar_h;
+
+                        let container_color = if is_playing {
+                            rgb(0x0D1F15)
+                        } else {
+                            rgb(0x15171A)
+                        };
+                        let wf_bounds = Bounds::new(
                             point(px(left + pad_x), px(inner_y)),
                             size(px(inner_w), px(inner_h)),
-                        ),
-                        background: container_color.into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::all(px(2.0)),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
+                        );
+                        window.paint_quad(PaintQuad {
+                            bounds: wf_bounds,
+                            background: container_color.into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::all(px(1.5)),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
 
-                    // Capa 3: picos. Tonos fríos al detener, verde claro en
-                    // reproducción; ambos al ~50% para no competir con el texto.
-                    let peak_color: Hsla = if is_playing {
-                        rgba(0x8CFFC7).into()
-                    } else {
-                        rgba(0x7FA8D8).into()
-                    };
-                    let middle = bounds.origin.y.as_f32() + height / 2.0;
-                    // Un path por mitad: silueta simétrica legible con menos
-                    // segmentos que una barra por bin.
-                    for mirror in [false, true] {
-                        let mut path = PathBuilder::stroke(px(1.0));
-                        for (index, peak) in peaks.iter().enumerate() {
-                            let x = left + pad_x + inner_w * index as f32 / peaks.len() as f32;
-                            let amplitude = inner_h * 0.5 * peak.clamp(0.0, 1.0);
-                            let y = if mirror {
-                                middle + amplitude
-                            } else {
-                                middle - amplitude
+                        let (peak_col, rms_col): (Hsla, Hsla) = if is_playing {
+                            (rgb(0x52FF9A).into(), rgb(0xA8FFD0).into())
+                        } else {
+                            let base: Hsla = rgb(track_hex).into();
+                            let bright = Hsla {
+                                l: (base.l + 0.18).clamp(0.0, 0.92),
+                                ..base
                             };
-                            if index == 0 {
-                                path.move_to(point(px(x), px(y)));
-                            } else {
-                                path.line_to(point(px(x), px(y)));
-                            }
-                        }
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, peak_color);
-                        }
-                    }
-                },
+                            (base, bright)
+                        };
+
+                        crate::views::waveform::draw_waveform_peaks_bounds(
+                            window,
+                            wf_bounds,
+                            &peaks,
+                            0.0,
+                            1.0,
+                            peak_col,
+                            rms_col,
+                        );
+                    },
+                )
+                .absolute()
+                .inset_0(),
             )
-            .absolute()
-            .inset_0())
         })
-        // Drop target del Drag & Drop desde el Explorer: acepta solo el
-        // payload tipado `ExplorerAudioDrag` y carga el clip en este slot.
+        // Drop target del Drag & Drop desde el Explorer
         .can_drop(|payload: &dyn std::any::Any, _, _| {
             payload.is::<ExplorerAudioDrag>()
         })
@@ -1067,8 +1151,6 @@ fn render_pad(
             let path = payload.0.clone();
             let st = state(cx);
             st.update(cx, |s, cx| {
-                // El gesto nativo ya trae el path; limpiar el flag legacy
-                // para apagar el resaltado y el fantasma flotante.
                 s.dragged_sample = None;
                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
                 select_matrix_track(s, track_idx);
@@ -1089,7 +1171,6 @@ fn render_pad(
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |s, cx| {
-                // Si hay un sample arrastrado desde el explorer, cargarlo aquí.
                 if let Some(path) = s.dragged_sample.take() {
                     if crate::views::explorer::is_audio_file(&path)
                         || crate::views::explorer::is_midi_file(&path)
@@ -1109,14 +1190,11 @@ fn render_pad(
                         cx.notify();
                         return;
                     } else {
-                        // No era un archivo válido: devolverlo para no perderlo.
                         s.dragged_sample = Some(path);
                     }
                 }
                 s.matrix_state.selected_slot = Some((track_idx, scene_idx));
                 select_matrix_track(s, track_idx);
-                // El Clip Editor sigue a la selección de la matriz: seleccionar
-                // un pad lo carga acá (es el binding bidireccional pedido).
                 crate::views::clip_editor::select_target(
                     s,
                     Some(crate::views::clip_editor::ClipEditorTarget::Matrix {
@@ -1125,21 +1203,13 @@ fn render_pad(
                     }),
                 );
                 if has_clip {
-                    // Con clip (Stopped/Playing/...): el pad completo es disparador.
                     let proxy = s.audio_proxy.clone();
                     trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
-                } else {
-                    // Vacío: queda seleccionado para que el Clip Editor ofrezca
-                    // "crear/grabar clip" o cargar un sample/MIDI.
-                    // No se dispara nada al engine (trigger_pad lo ignoraría).
                 }
                 cx.notify();
             });
         })
-        // Playhead discreto en Playing: línea vertical fina + barra inferior
-        // de progreso. Solo pinta dos primitivas pequeñas cuyas coordenadas X
-        // derivan del progreso (sin tocar el layout: el canvas es un overlay
-        // absoluto y el fondo del pad permanece oscuro para no tapar el texto).
+        // Playhead en Playing: línea vertical + barra inferior de progreso
         .child(
             canvas(
                 |_, _, _| {},
@@ -1147,8 +1217,6 @@ fn render_pad(
                     if !is_playing {
                         return;
                     }
-                    // Lectura no bloqueante: si el motor está ocupado este
-                    // frame, se omite el pintado en vez de frenar la UI.
                     let Some(ref handle) = engine_handle else {
                         return;
                     };
@@ -1167,8 +1235,6 @@ fn render_pad(
                     let origin = bounds.origin;
                     let width: f32 = bounds.size.width.into();
                     let height: f32 = bounds.size.height.into();
-                    // Opción B: barra horizontal fina (3px) clavada abajo,
-                    // rellenada de izquierda a derecha según el progreso.
                     let bar_h = 3.0_f32;
                     let fill_w = width * progress;
                     if fill_w > 0.5 {
@@ -1184,32 +1250,34 @@ fn render_pad(
                             border_style: BorderStyle::default(),
                         });
                     }
-                    // Opción A: línea vertical delgada (2px) que avanza con el
-                    // progreso, en blanco/verde claro.
                     let x = origin.x + px(width * progress);
-                    let mut path = PathBuilder::stroke(px(2.0));
-                    path.move_to(point(x, origin.y));
+                    let mut path = PathBuilder::stroke(px(1.5));
+                    path.move_to(point(x, origin.y + px(16.0)));
                     path.line_to(point(x, origin.y + px(height)));
                     if let Ok(p) = path.build() {
-                        window.paint_path(p, rgb(0xB6FFD2));
+                        window.paint_path(p, rgb(0xFFFFFF));
                     }
                 },
             )
             .absolute()
             .inset_0(),
         )
-        // Cabecera del pad: mini-botón Play/Stop + nombre del clip en una
-        // sola fila (padding 4px arriba/izquierda, alineados con items_center).
-        // El botón es el indicador de estado único (▶/■/… + color); el nombre
-        // va en una sola línea pequeña truncada con ellipsis (`Cymatics - …`)
-        // y el resto de la superficie queda limpia para progreso y selección.
+        // Cabecera superior del clip (barra de color del track cuando hay clip + botón de disparo)
         .child(
             div()
                 .absolute()
-                .top(px(3.0))
-                .left(px(4.0))
-                .right(px(4.0))
+                .top(px(0.0))
+                .left(px(0.0))
+                .right(px(0.0))
                 .h(px(16.0))
+                .px(px(3.0))
+                .when(has_clip, move |d| {
+                    d.bg(if is_playing {
+                        rgb(0x1E6F3D)
+                    } else {
+                        rgb(track_hex)
+                    })
+                })
                 .flex()
                 .flex_row()
                 .items_center()
@@ -1217,30 +1285,28 @@ fn render_pad(
                 .overflow_hidden()
                 .child(
                     div()
-                        .w(px(16.0))
-                        .h(px(16.0))
+                        .w(px(13.0))
+                        .h(px(13.0))
                         .flex_shrink_0()
-                        .rounded(px(3.0))
+                        .rounded(px(2.0))
                         .bg(if has_clip {
-                            if is_playing {
-                                rgb(0x062B16)
-                            } else {
-                                rgb(0x1B6FB5)
-                            }
+                            rgb(0x141414)
                         } else {
-                            rgb(0x32323C)
+                            rgb(0x2B2B2B)
                         })
                         .border_1()
                         .border_color(if is_playing {
                             rgb(0x4CFF8A)
+                        } else if has_clip {
+                            rgb(0x3A3A3A)
                         } else {
-                            rgb(0x5A5A5A)
+                            rgb(0x383838)
                         })
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .hover(|this| this.border_color(rgb(0x5AB4FF)))
+                        .hover(|this| this.border_color(rgb(theme::DAW_ACCENT_ORANGE)))
                         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
                             let st = state(cx);
                             st.update(cx, |s, cx| {
@@ -1257,25 +1323,36 @@ fn render_pad(
                                     let proxy = s.audio_proxy.clone();
                                     trigger_pad(&mut s.matrix_state, &proxy, track_idx, scene_idx);
                                 }
-                                // En vacío el mini-botón no dispara: sólo selecciona.
                                 cx.notify();
                             });
                         })
                         .child(if has_clip {
                             Label::new(glyph)
                                 .text_size(px(8.0))
-                                .text_color(rgb(0xFFFFFF))
+                                .text_color(if is_playing {
+                                    rgb(0x4CFF8A)
+                                } else {
+                                    rgb(0xFFFFFF)
+                                })
                                 .into_any_element()
                         } else {
-                            // Stop: cuadrado sólido limpio, al estilo del Arranger.
-                            div().w(px(6.0)).h(px(6.0)).bg(rgb(0xFFFFFF)).into_any_element()
+                            div()
+                                .w(px(5.0))
+                                .h(px(5.0))
+                                .bg(rgb(0x686868))
+                                .into_any_element()
                         }),
                 )
                 .when(has_clip, move |this| {
                     this.child(
                         Label::new(display_text.clone())
                             .text_size(px(9.0))
-                            .text_color(rgb(0xFFFFFF))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(if is_playing {
+                                rgb(0xFFFFFF)
+                            } else {
+                                rgb(0x121212)
+                            })
                             .flex_1()
                             .truncate(),
                     )
@@ -1354,22 +1431,62 @@ fn render_pad(
     .into_any_element()
 }
 
+/// Cabecera de columna de escena (`SceneHeader`) con disparador `▶`.
+pub struct SceneHeader {
+    pub scene_idx: usize,
+    pub name: String,
+    pub has_any_clip: bool,
+    pub any_playing: bool,
+}
+
+impl SceneHeader {
+    pub fn into_element(self) -> AnyElement {
+        render_scene_launcher_ex(
+            self.scene_idx,
+            self.name,
+            self.has_any_clip,
+            self.any_playing,
+        )
+    }
+}
+
 fn render_scene_launcher(scene_idx: usize, name: String, has_any_clip: bool) -> AnyElement {
+    render_scene_launcher_ex(scene_idx, name, has_any_clip, false)
+}
+
+fn render_scene_launcher_ex(
+    scene_idx: usize,
+    name: String,
+    has_any_clip: bool,
+    any_playing: bool,
+) -> AnyElement {
     div()
         .id(SharedString::from(format!("matrix_scene_{}", scene_idx)))
         .w(px(110.0))
         .h(px(SCENE_HEADER_HEIGHT))
+        .px(px(6.0))
         .flex()
         .items_center()
-        .justify_center()
-        .rounded(px(3.0))
-        .bg(rgb(0x1E1E28))
+        .justify_between()
+        .rounded(px(2.0))
+        .bg(if any_playing {
+            rgb(0x1E3324)
+        } else {
+            rgb(theme::DAW_HEADER_DARK_BG)
+        })
         .border_1()
-        .border_color(rgb(0x0096BE))
+        .border_color(if any_playing {
+            rgb(0x4CFF8A)
+        } else if has_any_clip {
+            rgb(theme::DAW_ACCENT_ORANGE)
+        } else {
+            rgb(theme::DAW_BORDER_LIGHT)
+        })
         .cursor_pointer()
-        // Hover: borde encendido para feedback visual.
-        .hover(|this| this.border_color(rgb(0x4CD6FF)).bg(rgb(0x2A2A3A)))
-        // Click: dispara simultáneamente todos los clips activos de la fila.
+        .hover(|this| {
+            this.border_color(rgb(theme::DAW_ACCENT_ORANGE))
+                .bg(rgb(0x2F2F2F))
+        })
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |s, cx| {
@@ -1379,16 +1496,36 @@ fn render_scene_launcher(scene_idx: usize, name: String, has_any_clip: bool) -> 
             });
         })
         .child(
-            Label::new(format!("▶ {}", name))
-                .text_xs()
-                .text_color(if has_any_clip {
-                    rgb(0xFFFFFF)
-                } else {
-                    rgb(0x808080)
-                }),
+            h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .overflow_hidden()
+                .child(
+                    Label::new("▶")
+                        .text_size(px(9.0))
+                        .text_color(if any_playing {
+                            rgb(0x4CFF8A)
+                        } else if has_any_clip {
+                            rgb(theme::DAW_ACCENT_ORANGE)
+                        } else {
+                            rgb(0x787878)
+                        }),
+                )
+                .child(
+                    Label::new(name)
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if has_any_clip || any_playing {
+                            rgb(0xE6E6E6)
+                        } else {
+                            rgb(0x969696)
+                        })
+                        .truncate(),
+                ),
         )
         .into_any_element()
 }
+
 
 /// Texto de dB del volumen lineal (misma curva que el mixer): lo reutiliza el
 /// header de la Playlist para que ambas vistas lean igual.
@@ -1772,28 +1909,30 @@ pub fn h_mix_slider_ex(
                     .absolute()
                     .inset_0(),
                 )
-                // Riel
+                // Riel estilo Bitwig horizontal fader (fondo oscuro empotrado)
                 .child(
                     div()
                         .absolute()
                         .left(px(0.0))
-                        .top(px((MIX_SLIDER_H - 3.0) / 2.0))
+                        .top(px(2.0))
                         .w(px(MIX_SLIDER_W))
-                        .h(px(3.0))
-                        .bg(rgb(0x2D2D2D))
-                        .rounded(px(1.0)),
+                        .h(px(MIX_SLIDER_H - 4.0))
+                        .bg(rgb(0x181818))
+                        .border_1()
+                        .border_color(rgb(0x333333))
+                        .rounded(px(1.5)),
                 )
-                // Relleno desde la izquierda
+                // Relleno ámbar/naranja cálido desde la izquierda (#8a5a2a)
                 .child(
                     div()
                         .absolute()
-                        .left(px(0.0))
-                        .top(px((MIX_SLIDER_H - 3.0) / 2.0))
-                        .w(px(thumb_x.max(1.0)))
-                        .h(px(3.0))
-                        .bg(rgb(0x0096BE)),
+                        .left(px(1.0))
+                        .top(px(3.0))
+                        .w(px((thumb_x - 1.0).max(1.0)))
+                        .h(px(MIX_SLIDER_H - 6.0))
+                        .bg(rgb(theme::DAW_FADER_FILL)),
                 )
-                // Thumb
+                // Indicador/marcador vertical naranja brillante + filo claro
                 .child(
                     div()
                         .absolute()
@@ -1801,9 +1940,9 @@ pub fn h_mix_slider_ex(
                         .top(px(1.0))
                         .w(px(MIX_THUMB_W))
                         .h(px(MIX_SLIDER_H - 2.0))
-                        .bg(rgb(0x00A2E8))
+                        .bg(rgb(theme::DAW_ACCENT_ORANGE))
                         .border_1()
-                        .border_color(rgb(0x000000)),
+                        .border_color(rgb(0x101010)),
                 ),
         )
         .into_any_element()
@@ -1818,16 +1957,6 @@ const PAN_KNOB_PAD: f32 = 3.0;
 const PAN_KNOB_TRAVEL: f32 = 150.0;
 
 /// Knob rotativo de pan para el header (`Pan: ( O ) C`).
-///
-/// Disco + aguja pintados en canvas (misma técnica que el dial de
-/// `controls.rs`): el ángulo va de −135° (L) a +135° (R) medidos desde las
-/// 12, con el centro arriba.
-///
-/// Interacción estilo DAW estándar:
-/// - Agarrar (mouse_down) NO cambia el valor: solo siembra la base del gesto.
-/// - Drag vertical desde ahí: arriba → R, abajo → L (relativo al punto de
-///   agarre, recorrido completo en `PAN_KNOB_TRAVEL` px).
-/// - Doble-clic: vuelve exacto al centro.
 fn pan_knob(track_idx: usize, pan: f32, dragging_this: bool) -> AnyElement {
     pan_knob_ex(
         SharedString::from(format!("matrix_panknob_{}", track_idx)),
@@ -1848,14 +1977,11 @@ pub fn pan_knob_ex(
     dragging_this: bool,
     apply: impl Fn(&mut AppState, usize, f32) + Copy + 'static,
 ) -> AnyElement {
-    // Display con detent central: aguja y etiqueta ven el mismo valor.
     let pan = snap_center_pan(if pan.is_finite() {
         pan.clamp(-1.0, 1.0)
     } else {
         0.0
     });
-    // Sin bounds locales: agarrar no mapea posición a valor, así que el knob
-    // no necesita medir nada (el gesto relativo vive en el estado global).
     div()
         .id(id)
         .test_support()
@@ -1867,7 +1993,7 @@ pub fn pan_knob_ex(
         .rounded(px(14.0))
         .when(dragging_this, |d| d.cursor_grabbing())
         .when(!dragging_this, |d| d.cursor_pointer())
-        .hover(|this| this.bg(rgb(0x232329)))
+        .hover(|this| this.bg(rgb(0x282828)))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
                 end_mix_drag(cx);
@@ -1893,95 +2019,73 @@ pub fn pan_knob_ex(
                 .flex_shrink_0()
                 .child(
                     canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    // Eje de origen explícito en f32 (ver requisito de
-                    // bounding-box centering del knob).
-                    let center_x =
-                        bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
-                    let center_y =
-                        bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
-                    let side = bounds
-                        .size
-                        .width
-                        .as_f32()
-                        .min(bounds.size.height.as_f32());
-                    let radius = side / 2.0 - 1.0;
-                    // Disco: quad con los cuatro radios a la mitad del lado.
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
-                            point(px(center_x - radius), px(center_y - radius)),
-                            size(px(radius * 2.0), px(radius * 2.0)),
-                        ),
-                        background: rgb(0x232329).into(),
-                        border_color: rgb(0x3D3D3D).into(),
-                        corner_radii: gpui_kit::Corners {
-                            top_left: px(radius),
-                            top_right: px(radius),
-                            bottom_right: px(radius),
-                            bottom_left: px(radius),
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let center_x =
+                                bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
+                            let center_y =
+                                bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
+                            let side = bounds
+                                .size
+                                .width
+                                .as_f32()
+                                .min(bounds.size.height.as_f32());
+                            let radius = side / 2.0 - 1.0;
+                            window.paint_quad(PaintQuad {
+                                bounds: Bounds::new(
+                                    point(px(center_x - radius), px(center_y - radius)),
+                                    size(px(radius * 2.0), px(radius * 2.0)),
+                                ),
+                                background: rgb(0x1B1B1B).into(),
+                                border_color: rgb(0x464646).into(),
+                                corner_radii: gpui_kit::Corners {
+                                    top_left: px(radius),
+                                    top_right: px(radius),
+                                    bottom_right: px(radius),
+                                    bottom_left: px(radius),
+                                },
+                                border_widths: gpui_kit::Edges {
+                                    top: px(1.0),
+                                    right: px(1.0),
+                                    bottom: px(1.0),
+                                    left: px(1.0),
+                                },
+                                border_style: BorderStyle::default(),
+                            });
+                            let len = (radius - 3.5).max(0.0);
+                            let (tip_x, tip_y) = pan_needle_tip(pan, center_x, center_y, len);
+                            let mut needle = PathBuilder::stroke(px(2.5));
+                            needle.move_to(point(px(center_x), px(center_y)));
+                            needle.line_to(point(px(tip_x), px(tip_y)));
+                            if let Ok(needle) = needle.build() {
+                                window.paint_path(needle, rgb(theme::DAW_ACCENT_ORANGE));
+                            }
+                            window.paint_quad(PaintQuad {
+                                bounds: Bounds::new(
+                                    point(px(center_x - 2.0), px(center_y - 2.0)),
+                                    size(px(4.0), px(4.0)),
+                                ),
+                                background: rgb(0xEAEAEA).into(),
+                                border_color: Hsla::default(),
+                                corner_radii: gpui_kit::Corners {
+                                    top_left: px(2.0),
+                                    top_right: px(2.0),
+                                    bottom_right: px(2.0),
+                                    bottom_left: px(2.0),
+                                },
+                                border_widths: gpui_kit::Edges::default(),
+                                border_style: BorderStyle::default(),
+                            });
                         },
-                        border_widths: gpui_kit::Edges {
-                            top: px(1.0),
-                            right: px(1.0),
-                            bottom: px(1.0),
-                            left: px(1.0),
-                        },
-                        border_style: BorderStyle::default(),
-                    });
-                    // Aguja: el ángulo sale de `pan_needle_tip` (anchors del
-                    // spec: L→−3π/4, C→−π/2, R→−π/4; barrido ±135°). En C la
-                    // punta es bit-exacta sobre `center_x`.
-                    //
-                    // Nota sobre el stroke: la línea se pinta CENTRADA sobre
-                    // el path (1.5px por lado), así que es simétrica por
-                    // construcción y NO lleva compensación de `stroke/2`:
-                    // restarla DESPLAZARÍA la aguja y crearía el offset
-                    // reportado. Esa compensación solo aplica a fills
-                    // alineados a borde.
-                    let len = (radius - 4.0).max(0.0);
-                    let (tip_x, tip_y) = pan_needle_tip(pan, center_x, center_y, len);
-                    let mut needle = PathBuilder::stroke(px(3.0));
-                    needle.move_to(point(px(center_x), px(center_y)));
-                    needle.line_to(point(px(tip_x), px(tip_y)));
-                    if let Ok(needle) = needle.build() {
-                        window.paint_path(needle, rgb(0x00A2E8));
-                    }
-                    // Punto central: generoso y del mismo cian que la aguja
-                    // para que pivote + aguja lean como una sola masa
-                    // centrada (ancla visual contra offsets de 1px por
-                    // reescalado del display).
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
-                            point(px(center_x - 2.5), px(center_y - 2.5)),
-                            size(px(5.0), px(5.0)),
-                        ),
-                        background: rgb(0x00A2E8).into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners {
-                            top_left: px(2.5),
-                            top_right: px(2.5),
-                            bottom_right: px(2.5),
-                            bottom_left: px(2.5),
-                        },
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
-                },
-            )
-            .w(px(PAN_KNOB_SIZE))
-            .h(px(PAN_KNOB_SIZE)),
-                )
+                    )
+                    .w(px(PAN_KNOB_SIZE))
+                    .h(px(PAN_KNOB_SIZE)),
+                ),
         )
         .into_any_element()
 }
 
-/// Mini-toggle M/S de altura fija para el header.
-///
-/// El `Button` del kit fija su alto por tema (~24px+); este div de 22×18
-/// compacta la fila del título y con ella toda la caja del header. Mismo
-/// contrato que los botones originales (id + `test_support` + click).
-/// También lo reutiliza el channel strip del Arranger (S/M/R compactos).
+/// Mini-toggle M/S de altura fija para el header y channel strips.
 pub fn ms_button(
     id: String,
     glyph: &'static str,
@@ -1989,80 +2093,183 @@ pub fn ms_button(
     active_color: Rgba,
     on_toggle: impl Fn(&mut App) + 'static,
 ) -> AnyElement {
+    ms_button_sized(id, glyph, MS_BTN_W, MS_BTN_H, active, active_color, on_toggle)
+}
+
+/// Variante de ancho parametrizable para botones compactos del TrackHeader (`R`, `M`, `S`).
+pub fn ms_button_sized(
+    id: String,
+    glyph: &'static str,
+    width: f32,
+    height: f32,
+    active: bool,
+    active_color: Rgba,
+    on_toggle: impl Fn(&mut App) + 'static,
+) -> AnyElement {
+    let (bg_col, fg_col, border_col) = if active {
+        (active_color, rgb(0x111111), rgb(0x111111))
+    } else {
+        (rgb(0x333333), rgb(0xD4D4D4), rgb(0x1A1A1A))
+    };
+
     div()
         .id(SharedString::from(id))
         .test_support()
-        .w(px(MS_BTN_W))
-        .h(px(MS_BTN_H))
+        .w(px(width))
+        .h(px(height))
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(2.0))
-        .bg(rgb(0x3D3D3D))
-        .hover(|this| this.bg(rgb(0x4D4D4D)))
+        .bg(bg_col)
+        .border_1()
+        .border_color(border_col)
+        .hover(move |this| {
+            if active {
+                this.bg(active_color)
+            } else {
+                this.bg(rgb(0x444444))
+            }
+        })
         .active(|this| this.bg(rgb(0x5A5A5A)))
         .cursor_pointer()
         .child(
             Label::new(glyph)
-                .text_size(px(10.0))
+                .text_size(px(9.5))
                 .font_weight(FontWeight::BOLD)
-                .text_color(if active {
-                    active_color
-                } else {
-                    rgb(0xE0E0E0)
-                }),
+                .text_color(fg_col),
         )
         .on_click(move |_, _, cx| on_toggle(cx))
         .into_any_element()
 }
 
-/// Cabecera de pista con mezcla integrada (layout legacy de una sola fila):
-///
-///   Fila superior: nombre (ellipsis) + [M] [S].
-///   Fila de mezcla: knob de pan + lectura C/Lxx/Rxx + fader de volumen + dB.
-///
-/// ```text
-/// +-------------------------------------+
-/// | Track 1                     [M] [S] |
-/// | (O) C   [|======------] -3.2dB      |
-/// +-------------------------------------+
-/// ```
-fn track_header(
+/// Vúmetro vertical compacto (`LevelMeter`) para cabeceras de pista (Session Matrix y Playlist).
+pub struct LevelMeter {
+    pub level: f32,
+    pub height: f32,
+}
+
+impl LevelMeter {
+    pub fn into_element(self) -> AnyElement {
+        compact_level_meter(self.level, self.height)
+    }
+}
+
+pub fn compact_level_meter(level: f32, height: f32) -> AnyElement {
+    let lvl = if level.is_finite() {
+        level.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let h = height.max(16.0);
+    div()
+        .w(px(4.0))
+        .h(px(h))
+        .flex_shrink_0()
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    window.paint_quad(PaintQuad {
+                        bounds,
+                        background: rgb(0x121212).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::all(px(1.0)),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                    if lvl <= 0.002 {
+                        return;
+                    }
+                    let fw = bounds.size.width;
+                    let fh = bounds.size.height;
+                    let sig_h = fh * lvl;
+                    let fill_col = crate::views::mixer::vu_fill_color(lvl);
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(bounds.origin.x, bounds.origin.y + fh - sig_h),
+                            size(fw, sig_h),
+                        ),
+                        background: fill_col.into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::all(px(1.0)),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                },
+            )
+            .w(px(4.0))
+            .h(px(h)),
+        )
+        .into_any_element()
+}
+
+/// Cabecera de pista (`TrackHeader`) de la Session Matrix estilo Bitwig Studio.
+pub struct TrackHeader {
+    pub track_idx: usize,
+    pub name: String,
+    pub muted: bool,
+    pub soloed: bool,
+    pub armed: bool,
+    pub volume: f32,
+    pub pan: f32,
+    pub peak_level: f32,
+    pub mix_drag: Option<MatrixMixTarget>,
+    pub selected_row: bool,
+}
+
+impl TrackHeader {
+    pub fn into_element(self) -> AnyElement {
+        track_header_full(
+            self.track_idx,
+            self.name,
+            self.muted,
+            self.soloed,
+            self.armed,
+            self.volume,
+            self.pan,
+            self.peak_level,
+            self.mix_drag,
+            self.selected_row,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn track_header_full(
     track_idx: usize,
     name: String,
     muted: bool,
     soloed: bool,
+    armed: bool,
     volume: f32,
     pan: f32,
+    peak_level: f32,
     mix_drag: Option<MatrixMixTarget>,
     selected_row: bool,
 ) -> AnyElement {
-    v_flex()
+    let stripe_hex = theme::track_stripe_hex(track_idx);
+
+    h_flex()
         .id(SharedString::from(format!("matrix_track_hdr_{track_idx}")))
         .test_support()
         .w(px(HEADER_WIDTH))
+        .items_center()
         .bg(if selected_row {
-            rgb(0x1E2A38)
+            rgb(0x343438)
         } else {
-            rgb(0x1C1C20)
+            rgb(theme::DAW_MAIN_BG)
         })
         .border_1()
-        // El borde es el indicador de "pista seleccionada", igual que en el
-        // header de la Playlist (`playlist_track_header_with_selected`).
         .border_color(if selected_row {
-            rgb(0x5AB4FF)
+            rgb(theme::DAW_PLAYHEAD_BLUE)
         } else {
-            rgb(0x2D2D37)
+            rgb(0x161616)
         })
-        .rounded(px(4.0))
+        .rounded(px(2.0))
         .p(px(1.0))
-        .gap(px(1.0))
-        // Clic en el fondo del header selecciona la pista. Sin esto el clic en
-        // la Session Matrix no escribía NADA: la pista quedaba del color de las
-        // demás y el rack/piano roll seguían apuntando a la anterior. Los hijos
-        // con handler propio (M, S, knob, fader) conservan su hit-testing
-        // porque GPUi resuelve el elemento más profundo bajo el cursor.
+        .gap(px(2.0))
         .on_click(move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |state, cx| {
@@ -2070,106 +2277,226 @@ fn track_header(
                 cx.notify();
             });
         })
+        // Banda lateral de color de pista (Bitwig Track Color Bar)
         .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(
-                            Label::new(name)
-                                .text_xs()
-                                .text_color(rgb(0xE0E0E0))
-                                .text_ellipsis(),
-                        ),
-                )
+            div()
+                .w(px(4.0))
+                .h(px(45.0))
+                .flex_shrink_0()
+                .rounded(px(1.0))
+                .bg(rgb(stripe_hex)),
+        )
+        // Columna central de controles (Fila 1: Arm + Nombre + M/S | Fila 2: Pan + Fader + dB)
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
                 .child(
                     h_flex()
+                        .items_center()
+                        .justify_between()
                         .gap(px(2.0))
-                        .flex_shrink_0()
-                        .child(ms_button(
-                            format!("track_mute_{}", track_idx),
-                            "M",
-                            muted,
-                            rgb(0xFF5050),
+                        .child(ms_button_sized(
+                            format!("track_arm_{}", track_idx),
+                            "●",
+                            15.0,
+                            MS_BTN_H,
+                            armed,
+                            rgb(theme::DAW_ARM_RED),
                             move |cx| {
                                 let st = state(cx);
                                 st.update(cx, |state, cx| {
-                                    state.matrix_state.tracks[track_idx].muted =
-                                        !state.matrix_state.tracks[track_idx].muted;
-                                    state.audio_proxy.send(GuiCommand::SetTrackMute {
-                                        track_idx,
-                                        mute: state.matrix_state.tracks[track_idx].muted,
-                                    });
+                                    let mix_idx = mixer_index_of_matrix_track(track_idx);
+                                    if let Some(tr) = state.live_tracks.get_mut(mix_idx) {
+                                        tr.arm = !tr.arm;
+                                    }
                                     cx.notify();
                                 });
                             },
                         ))
-                        .child(ms_button(
-                            format!("track_solo_{}", track_idx),
-                            "S",
-                            soloed,
-                            rgb(0xFFC800),
-                            move |cx| {
-                                let st = state(cx);
-                                st.update(cx, |state, cx| {
-                                    state.matrix_state.tracks[track_idx].soloed =
-                                        !state.matrix_state.tracks[track_idx].soloed;
-                                    state.audio_proxy.send(GuiCommand::SetTrackSolo {
-                                        track_idx,
-                                        solo: state.matrix_state.tracks[track_idx].soloed,
-                                    });
-                                    cx.notify();
-                                });
-                            },
-                        )),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(
+                                    Label::new(name)
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(if selected_row {
+                                            rgb(0xFFFFFF)
+                                        } else {
+                                            rgb(0xE0E0E0)
+                                        })
+                                        .text_ellipsis(),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap(px(1.0))
+                                .flex_shrink_0()
+                                .child(ms_button_sized(
+                                    format!("track_mute_{}", track_idx),
+                                    "M",
+                                    16.0,
+                                    MS_BTN_H,
+                                    muted,
+                                    rgb(theme::DAW_MUTE_AMBER),
+                                    move |cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            state.matrix_state.tracks[track_idx].muted =
+                                                !state.matrix_state.tracks[track_idx].muted;
+                                            state.audio_proxy.send(GuiCommand::SetTrackMute {
+                                                track_idx,
+                                                mute: state.matrix_state.tracks[track_idx].muted,
+                                            });
+                                            cx.notify();
+                                        });
+                                    },
+                                ))
+                                .child(ms_button_sized(
+                                    format!("track_solo_{}", track_idx),
+                                    "S",
+                                    16.0,
+                                    MS_BTN_H,
+                                    soloed,
+                                    rgb(theme::DAW_SOLO_GOLD),
+                                    move |cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            state.matrix_state.tracks[track_idx].soloed =
+                                                !state.matrix_state.tracks[track_idx].soloed;
+                                            state.audio_proxy.send(GuiCommand::SetTrackSolo {
+                                                track_idx,
+                                                solo: state.matrix_state.tracks[track_idx].soloed,
+                                            });
+                                            cx.notify();
+                                        });
+                                    },
+                                )),
+                        ),
+                )
+                // Fila inferior de mezcla: [Knob Pan] [Pan Text] [Fader Horizontal Naranja] [dB]
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap(px(3.0))
+                        .child(pan_knob(
+                            track_idx,
+                            pan,
+                            mix_drag == Some(MatrixMixTarget::Pan(track_idx)),
+                        ))
+                        .child(
+                            Label::new(pan_text(snap_center_pan(pan)))
+                                .text_size(px(9.0))
+                                .text_color(rgb(0xBDBDBD))
+                                .w(px(20.0)),
+                        )
+                        .child(h_mix_slider(
+                            format!("matrix_vol_{}", track_idx),
+                            track_idx,
+                            volume,
+                            mix_drag == Some(MatrixMixTarget::Volume(track_idx)),
+                        ))
+                        .child(
+                            Label::new(db_text(volume))
+                                .text_size(px(9.0))
+                                .text_color(rgb(0xBDBDBD))
+                                .w(px(38.0)),
+                        ),
                 ),
         )
-        // Fila única de mezcla (layout legacy):
-        //   [Knob Pan] [Pan Text] | [Vol Slider] [Vol dB Text]
+        // Vúmetro vertical lateral derecho (LevelMeter)
         .child(
-            h_flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(pan_knob(
-                    track_idx,
-                    pan,
-                    mix_drag == Some(MatrixMixTarget::Pan(track_idx)),
-                ))
-                .child(
-                    Label::new(pan_text(snap_center_pan(pan)))
-                        .text_size(px(9.0))
-                        .text_color(rgb(0xE0E0E0))
-                        .w(px(24.0)),
-                )
-                .child(h_mix_slider(
-                    format!("matrix_vol_{}", track_idx),
-                    track_idx,
-                    volume,
-                    mix_drag == Some(MatrixMixTarget::Volume(track_idx)),
-                ))
-                .child(
-                    Label::new(db_text(volume))
-                        .text_size(px(9.0))
-                        .text_color(rgb(0xE0E0E0))
-                        .w(px(42.0)),
-                ),
+            LevelMeter {
+                level: peak_level,
+                height: 45.0,
+            }
+            .into_element(),
         )
         .into_any_element()
+}
+
+/// Contenedor principal de la grilla de clips (`ClipGrid`) de la Session Matrix.
+pub struct ClipGrid {
+    pub scene_headers: Vec<AnyElement>,
+    pub track_rows: Vec<AnyElement>,
+}
+
+impl ClipGrid {
+    pub fn into_element(self) -> AnyElement {
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap(px(4.0))
+            .child(
+                h_flex()
+                    .gap(px(4.0))
+                    .px(px(8.0))
+                    .child(
+                        div()
+                            .w(px(HEADER_SPACER_W))
+                            .h(px(SCENE_HEADER_HEIGHT))
+                            .px(px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .bg(rgb(theme::DAW_HEADER_DARK_BG))
+                            .border_1()
+                            .border_color(rgb(theme::DAW_BORDER_LIGHT))
+                            .rounded(px(2.0))
+                            .child(
+                                Label::new("TRACKS")
+                                    .text_size(px(9.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0x9E9E9E)),
+                            )
+                            .child(
+                                Label::new("■")
+                                    .text_size(px(9.0))
+                                    .text_color(rgb(0x808080)),
+                            ),
+                    )
+                    .children(self.scene_headers),
+            )
+            .child(
+                div()
+                    .id("matrix_rows")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        v_flex()
+                            .overflow_y_scrollbar()
+                            .gap(px(3.0))
+                            .children(self.track_rows),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
     // Snapshot mínimo para no mantener el borrow durante el armado de la UI.
-    let tracks_meta: Vec<(String, bool, bool, f32, f32)> = app
+    let tracks_meta: Vec<(String, bool, bool, bool, f32, f32, f32)> = app
         .matrix_state
         .tracks
         .iter()
-        .map(|t| (t.name.clone(), t.muted, t.soloed, t.volume, t.pan))
+        .enumerate()
+        .map(|(idx, t)| {
+            let armed = app
+                .live_tracks
+                .get(mixer_index_of_matrix_track(idx))
+                .map(|tr| tr.arm)
+                .unwrap_or(false);
+            let peak = app.smoothed_track_peaks.get(idx).copied().unwrap_or(0.0);
+            (t.name.clone(), t.muted, t.soloed, armed, t.volume, t.pan, peak)
+        })
         .collect();
     let scene_names: Vec<String> = app
         .matrix_state
@@ -2177,8 +2504,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .iter()
         .map(|s| s.name.clone())
         .collect();
-    // El snapshot incluye los picos ya cacheados del clip: el render solo
-    // copia el `Vec` para pintarlo, nunca recalcula la forma de onda.
     let slots: Vec<Vec<(SlotState, Option<String>, Vec<f32>)>> = app
         .matrix_state
         .grid
@@ -2196,12 +2521,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         })
         .collect();
     let selected = app.matrix_state.selected_slot;
-    // La selección de PISTA vive en `AppState::selected_track_index` (índice de
-    // mixer, con el +1 del MASTER), que es lo que leen el rack de DSP, el piano
-    // roll y el mixer. Leerlo acá es lo que hace que el header pueda encenderse
-    // con la MISMA pista que está seleccionada en la Playlist.
     let selected_track = app.selected_track_index;
-    // Gesto de mezcla en curso (para cursores y el overlay de captura).
     let mix_drag = app.matrix_mix_drag;
     let clipboard_ready = app.matrix_clipboard.has_content();
     let drop_sample_ready = app.dragged_sample.is_some();
@@ -2213,8 +2533,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
 
     let mut track_rows: Vec<AnyElement> = Vec::new();
     for track_idx in 0..tracks_len {
-        let (track_name, track_muted, track_soloed, track_volume, track_pan) =
-            tracks_meta[track_idx].clone();
+        let (
+            track_name,
+            track_muted,
+            track_soloed,
+            track_armed,
+            track_volume,
+            track_pan,
+            track_peak,
+        ) = tracks_meta[track_idx].clone();
         let mut scene_cells: Vec<AnyElement> = Vec::new();
 
         for scene_idx in 0..scenes_len {
@@ -2227,33 +2554,42 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             let has_clip = !clip_name.is_empty();
             let is_selected = selected == Some((track_idx, scene_idx));
 
-            scene_cells.push(render_pad(
-                track_idx,
-                scene_idx,
-                slot_state,
-                clip_name,
-                has_clip,
-                is_selected,
-                drop_sample_ready,
-                clipboard_ready,
-                engine_handle.clone(),
-                peaks,
-            ));
+            scene_cells.push(
+                ClipCell {
+                    track_idx,
+                    scene_idx,
+                    slot_state,
+                    clip_name,
+                    has_clip,
+                    is_selected,
+                    is_armed: track_armed,
+                    drop_sample_ready,
+                    clipboard_ready,
+                    engine_handle: engine_handle.clone(),
+                    peaks,
+                }
+                .into_element(),
+            );
         }
 
         track_rows.push(
             h_flex()
                 .gap(px(4.0))
-                .child(track_header(
-                    track_idx,
-                    track_name.clone(),
-                    track_muted,
-                    track_soloed,
-                    track_volume,
-                    track_pan,
-                    mix_drag,
-                    selected_track == mixer_index_of_matrix_track(track_idx),
-                ))
+                .child(
+                    TrackHeader {
+                        track_idx,
+                        name: track_name,
+                        muted: track_muted,
+                        soloed: track_soloed,
+                        armed: track_armed,
+                        volume: track_volume,
+                        pan: track_pan,
+                        peak_level: track_peak,
+                        mix_drag,
+                        selected_row: selected_track == mixer_index_of_matrix_track(track_idx),
+                    }
+                    .into_element(),
+                )
                 .children(scene_cells)
                 .into_any_element(),
         );
@@ -2262,31 +2598,58 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let mut scene_headers: Vec<AnyElement> = Vec::new();
     for scene_idx in 0..scenes_len {
         let name = scene_names[scene_idx].clone();
-        // ¿Hay al menos un clip en esta escena? Atenúa el header si está vacía.
         let has_any_clip = slots
             .iter()
             .any(|row| row.get(scene_idx).map(|(_, n, _)| n.is_some()).unwrap_or(false));
-        scene_headers.push(render_scene_launcher(scene_idx, name, has_any_clip));
+        let any_playing = slots.iter().any(|row| {
+            row.get(scene_idx)
+                .map(|(st, _, _)| *st == SlotState::Playing)
+                .unwrap_or(false)
+        });
+        scene_headers.push(
+            SceneHeader {
+                scene_idx,
+                name,
+                has_any_clip,
+                any_playing,
+            }
+            .into_element(),
+        );
     }
 
     v_flex()
         .id("session_matrix")
         .relative()
         .size_full()
-        .bg(rgb(0x1E1E1E))
+        .bg(rgb(theme::DAW_GRID_BG))
         .gap(px(4.0))
         .child(
             h_flex()
                 .items_center()
-                .gap(px(8.0))
+                .gap(px(6.0))
                 .px(px(8.0))
                 .py(px(2.0))
-                .child(Label::new("SESSION MATRIX").text_sm().font_weight(FontWeight::BOLD).text_color(rgb(0xE0E0E0)))
+                .bg(rgb(theme::DAW_HEADER_DARK_BG))
+                .border_b_1()
+                .border_color(rgb(theme::DAW_BORDER_SUBTLE))
                 .child(
-                    Button::new("matrix_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("➕")
+                    Label::new("CLIP LAUNCHER")
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
+                )
+                .child(
+                    div()
+                        .w(px(1.0))
+                        .h(px(12.0))
+                        .bg(rgb(theme::DAW_BORDER_LIGHT)),
+                )
+                .child(
+                    Button::new("matrix_add_track")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("+ Track")
                         .compact()
-                        .bg(rgb(0x3D3D3D))
+                        .bg(rgb(0x2F2F2F))
                         .text_color(rgb(0xE0E0E0))
                         .on_click(move |_, _, cx| {
                             let st = state(cx);
@@ -2297,10 +2660,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("matrix_remove_track").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("➖")
+                    Button::new("matrix_remove_track")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("- Track")
                         .compact()
-                        .bg(rgb(0x3D3D3D))
+                        .bg(rgb(0x2F2F2F))
                         .text_color(rgb(0xE0E0E0))
                         .on_click(move |_, _, cx| {
                             let st = state(cx);
@@ -2311,10 +2675,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("matrix_add_scene").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("➕ Scene")
+                    Button::new("matrix_add_scene")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("+ Scene")
                         .compact()
-                        .bg(rgb(0x3D3D3D))
+                        .bg(rgb(0x2F2F2F))
                         .text_color(rgb(0xE0E0E0))
                         .on_click(move |_, _, cx| {
                             let st = state(cx);
@@ -2325,10 +2690,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         }),
                 )
                 .child(
-                    Button::new("matrix_remove_scene").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("➖ Scene")
+                    Button::new("matrix_remove_scene")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("- Scene")
                         .compact()
-                        .bg(rgb(0x3D3D3D))
+                        .bg(rgb(0x2F2F2F))
                         .text_color(rgb(0xE0E0E0))
                         .on_click(move |_, _, cx| {
                             let st = state(cx);
@@ -2340,35 +2706,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 ),
         )
         .child(
-            h_flex()
-                .gap(px(4.0))
-                .px(px(8.0))
-                .child(div().w(px(HEADER_SPACER_W)))
-                .children(scene_headers),
+            ClipGrid {
+                scene_headers,
+                track_rows,
+            }
+            .into_element(),
         )
-        .child(
-            // Wrapper observable del área de filas: el `Scrollable` interno
-            // sobrescribe el id de su contenido con uno propio, así que la
-            // medición (y el `flex_1` que habilita el scroll condicional)
-            // viven en este `div` externo.
-            div()
-                .id("matrix_rows")
-                .test_support()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .child(
-                    v_flex()
-                        .overflow_y_scrollbar()
-                        .gap(px(3.0))
-                        .children(track_rows),
-                ),
-        )
-        // Capturador de drag a ventana completa: mientras hay un gesto de
-        // mezcla en curso, este overlay invisible recibe TODOS los
-        // mouse_move/mouse_up aunque el cursor se salga del control, así el
-        // arrastre nunca se corta por 1px. Se monta solo durante el gesto.
+        // Capturador de drag a ventana completa
         .when(mix_drag.is_some(), |this| {
             this.child(
                 div()
@@ -2377,9 +2721,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .id("matrix_mix_drag_catcher")
                     .cursor_grabbing()
                     .on_mouse_move(move |event, _, cx| {
-                        // Si el botón se soltó fuera de la ventana, el próximo
-                        // move llega sin botón: se cierra el gesto en vez de
-                        // dejarlo colgado.
                         if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
                             end_mix_drag(cx);
                             return;

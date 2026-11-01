@@ -23,10 +23,11 @@ use gpui_kit::*;
 
 use crate::app::{state, AppState, HikaruApp};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::theme;
 use crate::views::clip_editor::ClipEditorTarget;
 use crate::views::matrix::{
-    self, end_mix_drag, h_mix_slider_ex, ms_button, pan_knob_ex, step_mix_pan_gesture,
-    step_mix_slider_gesture, MatrixMixTarget,
+    self, compact_level_meter, end_mix_drag, h_mix_slider_ex, ms_button_sized, pan_knob_ex,
+    step_mix_pan_gesture, step_mix_slider_gesture, MatrixMixTarget,
 };
 use crate::views::mixer::Track;
 use hikaru_transport::DEFAULT_PPQN;
@@ -1736,45 +1737,88 @@ fn playlist_row_mix(s: &AppState, row: usize) -> (String, bool, bool, f32, f32) 
     }
 }
 
-/// Header de pista de la Playlist con la MISMA caja de mezcla que la Session
-/// Matrix: nombre (con ellipsis) + [M] [S], y debajo knob de pan + lectura
-/// C/Lxx/Rxx + fader de volumen + dB.
-///
-/// Los widgets son los de `matrix` (reutilizados vía `*_ex` con el apply de
-/// esta vista), así el comportamiento de drag/doble-clic es idéntico y sólo
-/// cambia la escritura. El click en el fondo selecciona la pista destino.
+fn playlist_row_arm_and_peak(s: &AppState, row: usize) -> (bool, f32) {
+    let engine_idx = playlist_row_to_engine_idx(s, row);
+    let armed = match s.mode {
+        crate::app::AppMode::OpenLive => s
+            .live_tracks
+            .get(engine_idx + 1)
+            .map(|t| t.arm)
+            .unwrap_or(false),
+        crate::app::AppMode::OpenStudio => s
+            .studio_tracks
+            .get(engine_idx)
+            .map(|t| t.arm)
+            .unwrap_or(false),
+    };
+    let peak = s
+        .smoothed_track_peaks
+        .get(row)
+        .copied()
+        .unwrap_or(0.0);
+    (armed, peak)
+}
+
+fn toggle_playlist_arm(cx: &mut App, row: usize) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let engine_idx = playlist_row_to_engine_idx(s, row);
+        match s.mode {
+            crate::app::AppMode::OpenLive => {
+                if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
+                    live.arm = !live.arm;
+                }
+            }
+            crate::app::AppMode::OpenStudio => {
+                if let Some(t) = s.studio_tracks.get_mut(engine_idx) {
+                    t.arm = !t.arm;
+                }
+            }
+        }
+        cx.notify();
+    });
+}
+
+/// Header de pista de la Playlist con la MISMA jerarquía visual de Bitwig Studio
+/// que la Session Matrix: banda lateral de color, botón Arm (●), nombre (con ellipsis),
+/// [M] [S], knob de pan, fader horizontal naranja con dB y vúmetro vertical.
+#[allow(clippy::too_many_arguments)]
 fn playlist_track_header_with_selected(
     row: usize,
     vec_idx: usize,
     name: String,
     muted: bool,
     soloed: bool,
+    armed: bool,
     volume: f32,
     pan: f32,
+    peak_level: f32,
     mix_drag: Option<MatrixMixTarget>,
     selected_row: bool,
     row_h: f32,
 ) -> AnyElement {
-    v_flex()
+    let stripe_hex = theme::track_stripe_hex(row);
+    let meter_h = (row_h - 6.0).max(16.0);
+
+    h_flex()
         .w_full()
-        // Alto EXPLÍCITO = alto del carril de la grilla. Antes usaba
-        // `h_full()`, que dentro de la `v_flex` de headers resuelve al alto
-        // del CONTENIDO (título + caja de mezcla), no al del carril: medía
-        // 73.5px contra los 68px de la fila y acumulaba 5.5px de desfase por
-        // pista. Fijarlo acá además ata el header al zoom vertical, porque
-        // ambos leen el mismo `track_height` acotado.
         .h(px(row_h))
         .flex_shrink_0()
-        .bg(rgb(0x1C1C20))
+        .items_center()
+        .bg(if selected_row {
+            rgb(0x343438)
+        } else {
+            rgb(theme::DAW_MAIN_BG)
+        })
         .border_1()
         .border_color(if selected_row {
-            rgb(0x5AB4FF)
+            rgb(theme::DAW_PLAYHEAD_BLUE)
         } else {
-            rgb(0x2D2D37)
+            rgb(0x161616)
         })
-        .rounded(px(4.0))
+        .rounded(px(2.0))
         .p(px(1.0))
-        .gap(px(1.0))
+        .gap(px(2.0))
         .overflow_hidden()
         .id(format!("pl_row_{}", vec_idx))
         .test_support()
@@ -1785,78 +1829,115 @@ fn playlist_track_header_with_selected(
                 cx.notify();
             });
         })
+        // Banda lateral de color de pista
         .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .gap(px(4.0))
+            div()
+                .w(px(4.0))
+                .h(px(meter_h))
                 .flex_shrink_0()
+                .rounded(px(1.0))
+                .bg(rgb(stripe_hex)),
+        )
+        // Cuerpo central (Fila 1: Arm + Nombre + M/S | Fila 2: Pan + Fader + dB)
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .overflow_hidden()
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(2.0))
+                        .flex_shrink_0()
+                        .child(ms_button_sized(
+                            format!("pl_track_arm_{}", vec_idx),
+                            "●",
+                            14.0,
+                            18.0,
+                            armed,
+                            rgb(theme::DAW_ARM_RED),
+                            move |cx| toggle_playlist_arm(cx, row),
+                        ))
                         .child(
-                            Label::new(name)
-                                .text_xs()
-                                .text_color(rgb(0xE0E0E0))
-                                .text_ellipsis(),
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(
+                                    Label::new(name)
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(if selected_row {
+                                            rgb(0xFFFFFF)
+                                        } else {
+                                            rgb(0xE0E0E0)
+                                        })
+                                        .text_ellipsis(),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap(px(1.0))
+                                .flex_shrink_0()
+                                .child(ms_button_sized(
+                                    format!("pl_track_mute_{}", vec_idx),
+                                    "M",
+                                    16.0,
+                                    18.0,
+                                    muted,
+                                    rgb(theme::DAW_MUTE_AMBER),
+                                    move |cx| toggle_playlist_mute(cx, row),
+                                ))
+                                .child(ms_button_sized(
+                                    format!("pl_track_solo_{}", vec_idx),
+                                    "S",
+                                    16.0,
+                                    18.0,
+                                    soloed,
+                                    rgb(theme::DAW_SOLO_GOLD),
+                                    move |cx| toggle_playlist_solo(cx, row),
+                                )),
                         ),
                 )
                 .child(
                     h_flex()
+                        .items_center()
                         .gap(px(2.0))
                         .flex_shrink_0()
-                        .child(ms_button(
-                            format!("pl_track_mute_{}", vec_idx),
-                            "M",
-                            muted,
-                            rgb(0xFF5050),
-                            move |cx| toggle_playlist_mute(cx, row),
+                        .overflow_hidden()
+                        .child(pan_knob_ex(
+                            SharedString::from(format!("pl_panknob_{}", vec_idx)),
+                            row,
+                            pan,
+                            mix_drag == Some(MatrixMixTarget::Pan(row)),
+                            apply_playlist_pan,
                         ))
-                        .child(ms_button(
-                            format!("pl_track_solo_{}", vec_idx),
-                            "S",
-                            soloed,
-                            rgb(0xFFC800),
-                            move |cx| toggle_playlist_solo(cx, row),
-                        )),
+                        .child(
+                            Label::new(matrix::pan_text(matrix::snap_center_pan(pan)))
+                                .text_size(px(9.0))
+                                .text_color(rgb(0xBDBDBD))
+                                .w(px(18.0)),
+                        )
+                        .child(h_mix_slider_ex(
+                            format!("pl_vol_{}", vec_idx),
+                            row,
+                            volume,
+                            mix_drag == Some(MatrixMixTarget::Volume(row)),
+                            matrix::VOLUME_RESET,
+                            apply_playlist_volume,
+                        ))
+                        .child(
+                            Label::new(matrix::db_text(volume))
+                                .text_size(px(9.0))
+                                .text_color(rgb(0xBDBDBD))
+                                .w(px(36.0)),
+                        ),
                 ),
         )
-        .child(
-            h_flex()
-                .items_center()
-                .gap(px(4.0))
-                .flex_shrink_0()
-                .overflow_hidden()
-                .child(pan_knob_ex(
-                    SharedString::from(format!("pl_panknob_{}", vec_idx)),
-                    row,
-                    pan,
-                    mix_drag == Some(MatrixMixTarget::Pan(row)),
-                    apply_playlist_pan,
-                ))
-                .child(
-                    Label::new(matrix::pan_text(matrix::snap_center_pan(pan)))
-                        .text_size(px(9.0))
-                        .text_color(rgb(0xE0E0E0))
-                        .w(px(24.0)),
-                )
-                .child(h_mix_slider_ex(
-                    format!("pl_vol_{}", vec_idx),
-                    row,
-                    volume,
-                    mix_drag == Some(MatrixMixTarget::Volume(row)),
-                    matrix::VOLUME_RESET,
-                    apply_playlist_volume,
-                ))
-                .child(
-                    Label::new(matrix::db_text(volume))
-                        .text_size(px(9.0))
-                        .text_color(rgb(0xE0E0E0))
-                        .w(px(42.0)),
-                ),
-        )
+        // Vúmetro vertical lateral derecho
+        .child(compact_level_meter(peak_level, meter_h))
         .into_any_element()
 }
 
@@ -2168,42 +2249,29 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .filter(|(_, t)| !t.is_master)
         .collect();
 
-    // Snapshot de mezcla por fila (nombre, M, S, vol, pan) para los headers:
+    // Snapshot de mezcla por fila (nombre, M, S, arm, vol, pan, peak) para los headers:
     // se copia acá porque el render no puede mantener el borrow de `app`
     // mientras arma la UI.
-    let rows_mix: Vec<(usize, String, bool, bool, f32, f32)> = non_master
+    let rows_mix: Vec<(usize, String, bool, bool, bool, f32, f32, f32)> = non_master
         .iter()
         .map(|(idx, _)| {
             let (name, muted, soloed, volume, pan) = playlist_row_mix(&app, *idx);
-            (*idx, name, muted, soloed, volume, pan)
+            let (armed, peak) = playlist_row_arm_and_peak(&app, *idx);
+            (*idx, name, muted, soloed, armed, volume, pan, peak)
         })
         .collect();
 
     let track_height = clamped_row_h(pl.row_h);
     let ruler_h = RULER_H;
-    // Geometría del lienzo en DOS columnas (headers fijos + grilla temporal):
-    // la columna izquierda (`header_width`) viaja SÓLO en vertical junto a
-    // las filas, y el contenido temporal (regla, líneas, clips, playhead)
-    // vive en su propio panel derecho con scroll horizontal independiente.
-    // Dentro de ese panel el compás 1 arranca en x=0: NADA suma ya el ancho
-    // de headers (`grid_ox` anterior) a las coords temporales.
-    // Altura del lienzo: N filas × altura actual (zoom vertical).
     let row_count = non_master.len().max(1);
     let canvas_h = ruler_h + row_count as f32 * track_height;
     let total_ticks = (ticks_per_bar_val * 128).max(playhead_tick + ticks_per_bar_val * 16);
     let canvas_w = (header_width + total_ticks as f32 * zoom_x).max(800.0);
     let grid_w = (canvas_w - header_width).max(1.0);
 
-    // Cabeceras de fila con la MISCA caja de mezcla del Session Matrix
-    // (nombre + M/S + knob de pan + fader de volumen con dB). El id de
-    // control sigue siendo `pl_row_{idx}` (lo usan los tests de click) y el
-    // apply de cada gesto escribe en la pista del modo activo espejando
-    // mixer/matriz/motor, así queda bidireccional.
     let mut track_headers: Vec<AnyElement> = Vec::new();
-    for (row, name, muted, soloed, volume, pan) in &rows_mix {
+    for (row, name, muted, soloed, armed, volume, pan, peak) in &rows_mix {
         let vec_idx = *row;
-        // Resaltado de la fila seleccionada: se pasa por el borde del header
-        // comparando contra el estado leído en el snapshot del render.
         let selected_border = selected_track == vec_idx;
         track_headers.push(
             playlist_track_header_with_selected(
@@ -2212,8 +2280,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 name.clone(),
                 *muted,
                 *soloed,
+                *armed,
                 *volume,
                 *pan,
+                *peak,
                 mix_drag,
                 selected_border,
                 track_height,
@@ -2222,12 +2292,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
-    // Bounds de la zona de grilla en coords de ventana (patrón `record_bounds`
-    // del arranger): `mouse_position()` viene en coords de ventana, así que el
-    // mapeo px→ticks/fila resta el origen real medido cada frame, no una
-    // constante. La zona ES la grilla (el panel derecho, sin headers).
-    // Se crea acá arriba porque los handlers de drag de los clips (definidos
-    // abajo) también lo necesitan para traducir el cursor a ticks/fila.
     let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
     let zone_bounds_clip = zone_bounds.clone();
     let zone_bounds_move = zone_bounds.clone();
@@ -2248,7 +2312,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let clip_id = clip.id;
         let clip_x_for_edge = clip_x;
         let clip_w_for_edge = clip_w;
-        // Cursor/estado de recorte: el handle activo usa el cursor de resize.
         let trim_state = pl.trim_drag.filter(|d| d.clip_id == clip_id);
         let hover_edge = pl.trim_hover.filter(|(id, _)| *id == clip_id).map(|(_, e)| e);
         let edge_cursor = match trim_state {
@@ -2256,22 +2319,18 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             None => hover_edge.map(|e| e.cursor()),
         };
 
-        // --- ClipView: bloque horizontal con título + contenido ---------------
-        // Posición dinámica: x = start_tick × zoom (origen del panel
-        // temporal, a la derecha de los headers fijos), w = duration × zoom,
-        // y = fila de `track_index` × altura actual (`track_height`).
-        let title_h = 14.0_f32;
+        let title_h = 15.0_f32;
         let body_h = (clip_h - title_h).max(8.0);
-        // Fondo del clip SIEMPRE opaco (`a = 1.0`): el rectángulo del clip
-        // debe tapar las líneas verticales de la grilla que pasan por detrás.
-        // El orden de pintado (grilla → clips → playhead) pone la grilla
-        // debajo, y la opacidad total garantiza que no se transparente.
-        let mut clip_bg: Hsla = if is_sel { rgb(0x325078).into() } else { clip.color };
-        clip_bg.a = 1.0;
-        let clip_border = if is_sel {
-            rgb(0xFFC800)
+        let track_stripe_col = theme::track_stripe_hex(track_row);
+        let clip_bg: Hsla = if is_sel {
+            rgb(0x233040).into()
         } else {
-            rgba(0xFFFFFF66)
+            rgb(0x1B1E24).into()
+        };
+        let clip_border = if is_sel {
+            rgb(theme::DAW_PLAYHEAD_BLUE)
+        } else {
+            rgb(track_stripe_col)
         };
         let title_text = clip_name.clone();
         let dragging_this = pl
@@ -2293,9 +2352,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .overflow_hidden()
             .id(format!("pl_clip_{}", clip_id))
             .test_support()
-            // Cursor de movimiento durante el arrastre (GPUI no tiene
-            // `Move`/`Grabbing`: `ClosedHand` es el equivalente, igual que
-            // en el pan del mixer).
             .cursor(if let Some(c) = edge_cursor {
                 c
             } else if dragging_this {
@@ -2306,9 +2362,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
                 let zb = zone_down.get();
                 let cursor_x = event.position.x.as_f32();
-                // Los bordes recortan; el resto del clip mueve. Se decide por
-                // posición del cursor, no por hijo: los handles son decorativos
-                // (sólo cursor) y así la zona de agarre no depende del layout.
                 let clip_left = zb[0] + clip_x_for_edge;
                 let clip_right = clip_left + clip_w_for_edge;
                 let hit = trim_edge_at(cursor_x, clip_left, clip_right - clip_left, TRIM_EDGE_PX);
@@ -2346,9 +2399,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             - (zb[1] + row as f32 * row_h + 1.0),
                         moved: false,
                     });
-                    // El clip agarrado queda seleccionado (borde amarillo que
-                    // lo sigue en vivo = feedback del arrastre) y el Clip
-                    // Editor se carga con ese clip.
                     s.playlist_state.selected_clips = vec![clip_id];
                     crate::views::clip_editor::select_target(
                         s,
@@ -2358,8 +2408,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     cx.notify();
                 });
             })
-            // Cursor de recorte sobre los bordes: `on_mouse_move` sin botón
-            // cambia el cursor a e-resize/w-resize según el borde más cercano.
             .on_mouse_move(move |event, _, cx| {
                 if state(cx).read(cx).playlist_state.trim_drag.is_some() {
                     return;
@@ -2381,8 +2429,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 let st = state(cx);
                 st.update(cx, |state, cx| {
                     if state.playlist_state.clip_click_suppress {
-                        // Click que cierra un drag con movimiento: la
-                        // selección ya quedó fijada al agarrar.
                         state.playlist_state.clip_click_suppress = false;
                         return;
                     }
@@ -2395,7 +2441,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     } else {
                         state.playlist_state.selected_clips = vec![clip_id];
                     }
-                    // El Clip Editor sigue a la selección de la Playlist.
                     if let Some(id) = state.playlist_state.selected_clips.first().copied() {
                         crate::views::clip_editor::select_target(
                             state,
@@ -2405,18 +2450,28 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     cx.notify();
                 });
             })
-            // Título del clip (ej. "Cymatics - X Full Drum Loop 29").
+            // Barra de título del clip con color de la pista estilo Bitwig Arranger
             .child(
                 div()
                     .w_full()
                     .h(px(title_h))
                     .flex_shrink_0()
-                    .bg(rgba(0x00000066))
-                    .px(px(4.0))
+                    .bg(if is_sel {
+                        rgb(theme::DAW_PLAYHEAD_BLUE)
+                    } else {
+                        rgb(track_stripe_col)
+                    })
+                    .px(px(5.0))
                     .flex()
                     .items_center()
                     .overflow_hidden()
-                    .child(Label::new(title_text).text_xs()),
+                    .child(
+                        Label::new(title_text)
+                            .text_size(px(9.5))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x111111))
+                            .truncate(),
+                    ),
             );
         if let ClipType::Audio { peaks, sample_offset_ticks, total_sample_ticks, .. } = &clip.clip_type {
             let peaks = peaks.clone();
@@ -2426,42 +2481,31 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        let cx0 = bounds.origin.x;
-                        let cy = bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
-                        let n = peaks.len();
-                        if n == 0 {
+                        if peaks.is_empty() {
                             return;
                         }
-                        let start_ratio = soff as f32 / ttot as f32;
-                        let dur_ratio = clip_dur as f32 / ttot as f32;
-                        let step = 2.0;
-                        let steps = (bounds.size.width.as_f32() / step) as usize;
-                        for i in 0..steps {
-                            let local = i as f32 / steps.max(1) as f32;
-                            let sample_norm = start_ratio + local * dur_ratio;
-                            let peak_idx = (sample_norm * n as f32) as usize;
-                            if let Some(&pv) = peaks.get(peak_idx) {
-                                let bh = bounds.size.height.as_f32() * 0.8 * pv;
-                                if bh > 0.5 {
-                                    let x = cx0 + px(i as f32 * step);
-                                    let mut path = PathBuilder::fill();
-                                    path.move_to(point(x, cy - px(bh * 0.5)));
-                                    path.line_to(point(x + px(1.0), cy - px(bh * 0.5)));
-                                    path.line_to(point(x + px(1.0), cy + px(bh * 0.5)));
-                                    path.line_to(point(x, cy + px(bh * 0.5)));
-                                    path.close();
-                                    if let Ok(p) = path.build() {
-                                        window.paint_path(p, rgba(0xFFFFFFB3));
-                                    }
-                                }
-                            }
-                        }
+                        let start_ratio = (soff as f32 / ttot as f32).clamp(0.0, 1.0);
+                        let end_ratio =
+                            ((soff + clip_dur) as f32 / ttot as f32).clamp(start_ratio + 0.001, 1.0);
+                        let base_col: Hsla = rgb(track_stripe_col).into();
+                        let bright_col = Hsla {
+                            l: (base_col.l + 0.22).clamp(0.0, 0.95),
+                            ..base_col
+                        };
+                        crate::views::waveform::draw_waveform_peaks_bounds(
+                            window,
+                            bounds,
+                            &peaks,
+                            start_ratio,
+                            end_ratio,
+                            base_col,
+                            bright_col,
+                        );
                     },
                 )
                 .w_full()
                 .h(px(body_h)),
             );
-            // Handles de recorte en los dos bordes (encima del waveform).
             let clip_el = clip_el
                 .child(clip_edge_handle(
                     format!("pl_trim_left_{}", clip_id),
@@ -2488,11 +2532,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         if w <= 0.0 || h <= 0.0 {
                             return;
                         }
+                        let note_col: Hsla = rgb(track_stripe_col).into();
                         if is_pattern {
-                            // 16 pasos estilo step-sequencer como placeholder
-                            // de eventos MIDI hasta que el clip guarde notas.
                             let steps = 16usize;
-                            let bw = (w / steps as f32 * 0.6).max(2.0);
+                            let bw = (w / steps as f32 * 0.65).max(2.0);
                             for i in 0..steps {
                                 if i % 2 == 0 {
                                     continue;
@@ -2506,17 +2549,16 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 path.line_to(point(x, bounds.origin.y + px((h + bh) / 2.0)));
                                 path.close();
                                 if let Ok(p) = path.build() {
-                                    window.paint_path(p, rgba(0xFFFFFFB3));
+                                    window.paint_path(p, note_col);
                                 }
                             }
                         } else {
-                            // Automation: línea horizontal central.
-                            let mut path = PathBuilder::stroke(px(1.0));
+                            let mut path = PathBuilder::stroke(px(1.5));
                             let y = bounds.origin.y + bounds.size.height / 2.0;
                             path.move_to(point(bounds.origin.x, y));
                             path.line_to(point(bounds.origin.x + bounds.size.width, y));
                             if let Ok(p) = path.build() {
-                                window.paint_path(p, rgba(0xFFFFFFB3));
+                                window.paint_path(p, note_col);
                             }
                         }
                     },
@@ -2524,7 +2566,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .w_full()
                 .h(px(body_h)),
             );
-            // Handles de recorte en los dos bordes (encima del waveform).
             let clip_el = clip_el
                 .child(clip_edge_handle(
                     format!("pl_trim_left_{}", clip_id),
@@ -2543,15 +2584,25 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     }
 
     let playhead_x = ticks_to_px(display_tick, zoom_x);
-    // Playhead fantasma: x del tick bajo el puntero, o `None` si el puntero no
-    // está sobre la zona temporal. Se calcula acá (y no en el paint) para que
-    // el closure del canvas capture un `Option<f32>` plano.
     let hover_x = pl.hover_tick.map(|t| ticks_to_px(t, zoom_x));
-    // Grilla según quantize actual (1/4, 1/8, 1/16): subdivisión de la redonda.
-    // Las líneas principales caen cada compás SIG (`ticks_per_bar_val`).
-    // Ticks del snap actual, una vez por frame (la usa el drop y el marquee).
     let snap_ticks_val = snap_step_ticks(ppqn, grid_den).max(1);
     let mut grid_lines: Vec<AnyElement> = Vec::new();
+
+    // Líneas horizontales divisorias de carriles de pista (alta densidad Bitwig)
+    for r in 1..=row_count {
+        let ry = ruler_h + r as f32 * track_height;
+        grid_lines.push(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .top(px(ry - 1.0))
+                .w(px(grid_w))
+                .h(px(1.0))
+                .bg(rgb(0x161616))
+                .into_any_element(),
+        );
+    }
+
     let mut step = 0u64;
     let mut bar_num = 1u32;
     while step <= total_ticks {
@@ -2559,15 +2610,17 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         if x > grid_w {
             break;
         }
-        // El compás 1 (x=0) es el origen del panel temporal: los headers
-        // fijos viven en su propia columna y nunca quedan debajo.
         let gx = x;
         let is_main = step % ticks_per_bar_val == 0;
         grid_lines.push(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    let col = if is_main { rgb(0x323232) } else { rgb(0x1C1C1C) };
+                    let col = if is_main {
+                        rgb(0x333333)
+                    } else {
+                        rgb(0x232323)
+                    };
                     let mut path = PathBuilder::stroke(px(1.0));
                     path.move_to(point(bounds.origin.x, bounds.origin.y));
                     path.line_to(point(
@@ -2589,10 +2642,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         if is_main {
             grid_lines.push(
                 Label::new(bar_num.to_string())
-                    .text_xs()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xB8B8B8))
                     .absolute()
                     .left(px(gx + 4.0))
-                    .top(px(2.0))
+                    .top(px(3.0))
                     .into_any_element(),
             );
             bar_num += 1;
@@ -2620,8 +2675,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .absolute()
                 .left(px(10.0))
                 .top(px(ruler_h + 10.0))
-                .bg(rgba(0x0096BE80))
-                .rounded(px(4.0))
+                .bg(rgba(0xE8782A99))
+                .rounded(px(3.0))
                 .p(px(4.0))
                 .child(Label::new(format!("🎵 {}", file_name)).text_xs())
                 .into_any_element(),
@@ -2629,7 +2684,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     }
 
     let drop_handler = if dragged_sample.is_some() {
-        let audio_proxy = audio_proxy.clone();
+        let _audio_proxy = audio_proxy.clone();
         let track_ids: Vec<usize> = non_master.iter().map(|(tid, _)| *tid).collect();
         Some(
             div()
@@ -2660,7 +2715,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     .to_string_lossy()
                                     .to_string();
                                 let pstr = path.to_string_lossy().to_string();
-                                let (dur, peaks) = load_sample_info(path, ppqn, bpm);
+                                let (dur, _peaks) = load_sample_info(path, ppqn, bpm);
                                 let clip = build_audio_clip(
                                     state.playlist_state.next_clip_id,
                                     name,
@@ -2668,7 +2723,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     drop_tick,
                                     ppqn,
                                     bpm,
-                                    rgb(0x205F91).into(),
+                                    rgb(theme::track_stripe_hex(track_idx)).into(),
                                 );
                                 let cid = state.playlist_state.next_clip_id;
                                 state.playlist_state.next_clip_id += 1;
@@ -2694,9 +2749,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         None
     };
 
-    // Geometría de cada clip en px de VENTANA (para el marquee, que se dibuja
-    // en el mismo espacio): `(track_key, clip_id, x, y, w, h)`. Se calcula una
-    // sola vez por frame y se la lleva el cierre del gesto.
     let clip_rects: Vec<(usize, usize, f32, f32, f32, f32)> = pl
         .clips
         .iter()
@@ -2716,16 +2768,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         })
         .collect();
 
-    // Capa más alta del lienzo: el rectángulo de marquee. Se registra al FINAL
-    // de los hijos del panel temporal (después de clips, seek y playhead) para
-    // que quede por encima de todo lo demás al pintarse.
     let marquee_overlay = match pl.marquee {
         Some(m) if m.is_drag() => {
             let (x0, y0, x1, y1) = m.normalized();
-            // El estado ya está en coords LOCALES de la grilla (se convierten
-            // en el handler del mouse, donde los bounds medidos ya están
-            // frescos), así que acá el rect se posiciona directo: sin restar
-            // offsets a mano y sin depender de un `Cell` leído en el render.
             Some(
                 div()
                     .id("pl_marquee_overlay")
@@ -2735,9 +2780,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .top(px(y0))
                     .w(px((x1 - x0).max(1.0)))
                     .h(px((y1 - y0).max(1.0)))
-                    .bg(rgba(0x0096BE59))
+                    .bg(rgba(0x3AA8E040))
                     .border_1()
-                    .border_color(rgb(0x00B4E4))
+                    .border_color(rgb(theme::DAW_PLAYHEAD_BLUE))
                     .rounded(px(1.0))
                     .into_any_element(),
             )
@@ -2745,14 +2790,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         _ => None,
     };
 
-    // Delegador del gesto a ventana completa: mientras la caja está viva, este
-    // overlay captura los `mouse_move`/`mouse_up` aunque el cursor pase por
-    // encima de un clip o salga del panel temporal hacia los headers. Así la
-    // selección la maneja SIEMPRE la caja global y nunca un clip individual
-    // (que además tiene su propio drag de botón izquierdo). Se monta más abajo,
-    // en `all`, cuando ya existe el vector.
-    // El catcher global necesita copias propias de los closures (dos handlers
-    // de mouse_up) y del rect de clips.
     let catcher_zone_right = zone_bounds.clone();
     let catcher_zone_left = zone_bounds.clone();
     let catcher_zone_move = zone_bounds.clone();
@@ -2801,21 +2838,30 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             });
         });
 
-    // Fondo de la regla: cubre el panel temporal (la esquina sobre los
-    // headers la pinta la columna fija, no este contenido scrolleable).
+    // Fondo de la regla + fondo del lienzo de carriles estilo Bitwig Arranger
     let children = vec![
+        div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(ruler_h))
+            .w(px(grid_w))
+            .h(px(canvas_h - ruler_h))
+            .bg(rgb(theme::DAW_GRID_BG))
+            .into_any_element(),
         div()
             .absolute()
             .left(px(0.0))
             .top(px(0.0))
             .w(px(grid_w))
             .h(px(ruler_h))
-            .bg(rgb(0x18181E))
+            .bg(rgb(theme::DAW_HEADER_DARK_BG))
+            .border_b_1()
+            .border_color(rgb(theme::DAW_BORDER_LIGHT))
             .into_any_element(),
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let col = rgb(0x1C1C1C);
+                let col = rgb(0x232323);
                 let mut path = PathBuilder::stroke(px(1.0));
                 path.move_to(point(bounds.origin.x, bounds.origin.y));
                 path.line_to(point(
@@ -2835,33 +2881,55 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .into_any_element(),
     ];
 
-    // Playhead y bordes de loop en coords del panel temporal (origen x=0):
-    // el canvas los pinta relativo a su propio origen, así siguen alineados
-    // con compases y clips haya scroll o no.
+    // Playhead sincronizado (cabezal triangular azul #3aa8e0 en la regla + línea vertical)
     let loop_win = loop_render;
     let playhead_canvas = canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            // Playhead: marcador de posición de reproducción actual.
-            let x = bounds.origin.x + px(playhead_x);
-            let mut playhead_path = PathBuilder::stroke(px(2.0));
-            playhead_path.move_to(point(x, bounds.origin.y));
-            playhead_path.line_to(point(x, bounds.origin.y + bounds.size.height));
-            if let Ok(p) = playhead_path.build() {
-                window.paint_path(p, rgb(0x00FFFF));
-            }
             if let Some((lx0, lx1)) = loop_win {
                 let top = bounds.origin.y;
                 let bot = bounds.origin.y + bounds.size.height;
+                let l_start = bounds.origin.x + px(lx0);
+                let l_w = px((lx1 - lx0).max(2.0));
+                window.paint_quad(PaintQuad {
+                    bounds: Bounds::new(point(l_start, top), size(l_w, px(4.0))),
+                    background: rgb(theme::DAW_PLAYHEAD_BLUE).into(),
+                    border_color: Hsla::default(),
+                    corner_radii: gpui_kit::Corners::default(),
+                    border_widths: gpui_kit::Edges::default(),
+                    border_style: BorderStyle::default(),
+                });
                 for lx in [lx0, lx1] {
-                    let mut loop_path = PathBuilder::stroke(px(2.0));
+                    let mut loop_path = PathBuilder::stroke(px(1.5));
                     let lx = bounds.origin.x + px(lx);
                     loop_path.move_to(point(lx, top));
                     loop_path.line_to(point(lx, bot));
                     if let Ok(p) = loop_path.build() {
-                        window.paint_path(p, rgb(0x00C8FF));
+                        window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
                     }
                 }
+            }
+
+            let x = bounds.origin.x + px(playhead_x);
+            let top = bounds.origin.y;
+            let bot = bounds.origin.y + bounds.size.height;
+
+            // Línea vertical principal del Playhead
+            let mut playhead_path = PathBuilder::stroke(px(1.5));
+            playhead_path.move_to(point(x, top));
+            playhead_path.line_to(point(x, bot));
+            if let Ok(p) = playhead_path.build() {
+                window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
+            }
+
+            // Cabezal triangular estilo Bitwig en el Ruler superior
+            let mut cap = PathBuilder::fill();
+            cap.move_to(point(x - px(5.0), top));
+            cap.line_to(point(x + px(5.0), top));
+            cap.line_to(point(x, top + px(9.0)));
+            cap.close();
+            if let Ok(p) = cap.build() {
+                window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
             }
         },
     )
@@ -2871,13 +2939,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .w(px(grid_w))
     .h(px(canvas_h));
 
-    // Guía del puntero (playhead fantasma). Va en un canvas PROPIO, después
-    // del playhead real, por dos razones: así se apaga con un `Option` sin
-    // tocar el canvas compartido, y queda explícito en el z-order que es la
-    // capa más alta (encima de clips y del playhead).
-    //
-    // Cubre regla + grilla: arranca en `y=0` (arriba de la regla) así se lee
-    // como una línea de tiempo completa y no como un adorno de los clips.
+    // Guía del puntero (playhead fantasma).
     let hover_zone = zone_bounds.clone();
     let hover_canvas = canvas(
         |_, _, _| {},
@@ -2885,11 +2947,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             let Some(x) = hover_x else {
                 return;
             };
-            // Guarda contra la posición REAL del puntero: el hover se borra
-            // cuando empieza un gesto, pero si el puntero se va de la grilla
-            // (por ejemplo a la columna de headers, que está a la izquierda y
-            // NO dispara `on_mouse_move` de la grilla) no hay evento que lo
-            // limpie. `window.mouse_position()` sí refleja la realidad.
             let m = window.mouse_position();
             let zx = hover_zone.get()[0];
             let zw = hover_zone.get()[2];
@@ -2899,15 +2956,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             let x = bounds.origin.x + px(x);
             let top = bounds.origin.y;
             let bot = bounds.origin.y + bounds.size.height;
-            // Cuerpo de la guía: tenue, de 1px.
             let mut body = PathBuilder::stroke(px(1.0));
             body.move_to(point(x, top));
             body.line_to(point(x, bot));
             if let Ok(p) = body.build() {
                 window.paint_path(p, rgb(0xFFFFFF).opacity(0.28));
             }
-            // Cabeza en la regla: un triángulo sólido para anclar la lectura
-            // al compás sin tener que seguir la línea hasta el pie.
             let mut head = PathBuilder::fill();
             head.move_to(point(x - px(4.0), top));
             head.line_to(point(x + px(4.0), top));
@@ -2925,16 +2979,51 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .h(px(canvas_h));
 
     let mut all: Vec<AnyElement> = Vec::new();
-    // Ruler / Timebar superior: título + compás SIG + quantize clicable.
-    // La numeración de compases (1, 2, 3…) se dibuja en `grid_lines` alineada
-    // a `ticks_per_bar_val` (SIG real), no a la subdivisión de snap.
+    // Barra de herramientas superior de la Playlist / Arranger View
     all.push(
         h_flex()
             .items_center()
-            .gap(px(6.0))
-            .child(Label::new("PLAYLIST / TIMELINE").text_sm().font_weight(FontWeight::BOLD))
-            .child(Label::new(format!("SIG {}/{} @ {:.1} BPM", beats_per_bar, beat_division, bpm)).text_xs())
-            .child(Label::new(format!("1/{}", grid_den)).text_xs())
+            .gap(px(8.0))
+            .px(px(8.0))
+            .py(px(2.0))
+            .bg(rgb(theme::DAW_HEADER_DARK_BG))
+            .border_b_1()
+            .border_color(rgb(theme::DAW_BORDER_SUBTLE))
+            .child(
+                Label::new("ARRANGER TIMELINE")
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
+            )
+            .child(
+                div()
+                    .w(px(1.0))
+                    .h(px(12.0))
+                    .bg(rgb(theme::DAW_BORDER_LIGHT)),
+            )
+            .child(
+                Label::new(format!(
+                    "SIG {}/{}  •  {:.1} BPM",
+                    beats_per_bar, beat_division, bpm
+                ))
+                .text_xs()
+                .text_color(rgb(0xC8C8C8)),
+            )
+            .child(
+                div()
+                    .px(px(6.0))
+                    .py(px(1.0))
+                    .bg(rgb(0x2F2F2F))
+                    .border_1()
+                    .border_color(rgb(theme::DAW_BORDER_LIGHT))
+                    .rounded(px(2.0))
+                    .child(
+                        Label::new(format!("SNAP 1/{}", grid_den))
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(theme::DAW_PLAYHEAD_BLUE)),
+                    ),
+            )
             .id("pl_grid_header")
             .on_click(move |_, _, cx| {
                 let st = state(cx);
@@ -2949,9 +3038,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 });
             })
             .child(
-                Button::new("pl_zoom_out").rounded(gpui_kit::component::button::ButtonRounded::None)
+                Button::new("pl_zoom_out")
+                    .rounded(gpui_kit::component::button::ButtonRounded::None)
                     .label("-")
                     .compact()
+                    .bg(rgb(0x2F2F2F))
+                    .text_color(rgb(0xE0E0E0))
                     .on_click(move |_, _, cx| {
                         let st = state(cx);
                         st.update(cx, |state, cx| {
@@ -2961,9 +3053,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     }),
             )
             .child(
-                Button::new("pl_zoom_in").rounded(gpui_kit::component::button::ButtonRounded::None)
+                Button::new("pl_zoom_in")
+                    .rounded(gpui_kit::component::button::ButtonRounded::None)
                     .label("+")
                     .compact()
+                    .bg(rgb(0x2F2F2F))
+                    .text_color(rgb(0xE0E0E0))
                     .on_click(move |_, _, cx| {
                         let st = state(cx);
                         st.update(cx, |state, cx| {
@@ -2978,9 +3073,25 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let corner = div()
         .w_full()
         .h(px(ruler_h))
-        .bg(rgb(0x141418))
+        .px(px(6.0))
+        .flex()
+        .items_center()
+        .justify_between()
+        .bg(rgb(theme::DAW_HEADER_DARK_BG))
         .border_r_1()
-        .border_color(rgb(0x2D2D37))
+        .border_b_1()
+        .border_color(rgb(theme::DAW_BORDER_LIGHT))
+        .child(
+            Label::new("TRACKS")
+                .text_size(px(9.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x9E9E9E)),
+        )
+        .child(
+            Label::new("BARS")
+                .text_size(px(9.0))
+                .text_color(rgb(0x787878)),
+        )
         .into_any_element();
     // Navegación: scroll vertical externo + horizontal interno (mismo patrón
     // anidado que el arranger). La fila interna tiene DOS columnas: headers
