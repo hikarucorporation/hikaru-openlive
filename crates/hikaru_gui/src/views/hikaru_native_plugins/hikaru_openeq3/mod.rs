@@ -40,7 +40,7 @@ pub fn render_module() -> AnyElement {
     v_flex()
         .w_full()
         .flex_1()
-        .min_h(px(100.0))
+        .min_h(px(0.0))
         .items_center()
         .justify_center()
         .gap(px(2.0))

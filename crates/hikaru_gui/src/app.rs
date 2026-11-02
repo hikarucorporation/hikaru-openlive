@@ -274,9 +274,11 @@ pub struct PanelLayout {
     /// `...complementary_panel.mixer.is_device_chain_visible` /
     /// `is_crossfade_visible`).
     pub show_mixer: bool,
-    /// Visibilidad del editor de notas (Bitwig:
-    /// `...complementary_panel.note_editor.Is Automation Section Visible`).
+    /// Visibilidad del editor de notas.
     pub show_note_editor: bool,
+    /// Visibilidad de la sección de automatización (Bitwig:
+    /// `...complementary_panel.note_editor.Is Automation Section Visible`).
+    pub show_automation: bool,
 }
 
 impl Default for PanelLayout {
@@ -294,6 +296,7 @@ impl Default for PanelLayout {
             show_clip_launcher: true,
             show_mixer: false,
             show_note_editor: false,
+            show_automation: false,
         }
     }
 }
@@ -368,6 +371,9 @@ pub struct AppState {
 
     pub selected_track_index: usize,
     pub selected_slot_index: usize,
+    /// Mensaje de ayuda contextual dinámico de la barra inferior (Bitwig Status Bar):
+    /// (Acción en cyan/blanco como "CLICK" o "DRAG", Descripción en gris como "Show Detail Editor Panel").
+    pub footer_context_help: Option<(String, String)>,
     pub add_slot_menu_open: bool,
     /// Texto del buscador del navegador de plugins del DSP rack.
     ///
@@ -438,6 +444,19 @@ pub struct AppState {
     pub matrix_pan_gesture: Option<(f32, f32)>,
     /// Bounds del riel congelados en `mouse_down` para mapear el overlay.
     pub matrix_mix_bounds: [f32; 4],
+
+    /// Alto del Mixer Panel inferior (Bitwig bottom Mix Panel).
+    pub bottom_mixer_height: f32,
+    /// Arrastre del splitter del Mixer Panel inferior: `(y_inicial, alto_inicial)`.
+    pub bottom_mixer_splitter_drag: Option<(f32, f32)>,
+    /// Visibilidad de la sección de Devices en el Mixer Panel inferior.
+    pub bottom_mixer_show_devices: bool,
+    /// Visibilidad de la sección de Sends en el Mixer Panel inferior.
+    pub bottom_mixer_show_sends: bool,
+    /// Visibilidad de la sección de I/O en el Mixer Panel inferior.
+    pub bottom_mixer_show_io: bool,
+    /// Scroll horizontal del panel de mezcla inferior.
+    pub bottom_mixer_scroll_h: ScrollHandle,
 
     pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
     pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
@@ -1197,6 +1216,7 @@ impl HikaruApp {
             fx_tracks,
             selected_track_index: 1,
             selected_slot_index: 0,
+            footer_context_help: None,
             add_slot_menu_open: false,
             plugin_browser_query: String::new(),
             plugin_browser_filter: dsp_rack::PluginBrowserFilter::default(),
@@ -1220,6 +1240,12 @@ impl HikaruApp {
             matrix_mix_drag: None,
             matrix_pan_gesture: None,
             matrix_mix_bounds: [0.0; 4],
+            bottom_mixer_height: 240.0,
+            bottom_mixer_splitter_drag: None,
+            bottom_mixer_show_devices: true,
+            bottom_mixer_show_sends: true,
+            bottom_mixer_show_io: true,
+            bottom_mixer_scroll_h: ScrollHandle::new(),
             active_external_plugins: Vec::new(),
             engine_handle,
             project_path: None,
@@ -1723,6 +1749,8 @@ impl Render for HikaruApp {
         let clip_editor_height = app_state.clip_editor.editor_height.max(120.0);
         let show_explorer = app_state.show_explorer;
         let panel_layout = app_state.panel_layout;
+        let show_mixer_panel = panel_layout.show_mixer;
+        let bottom_mixer_splitter_drag = app_state.bottom_mixer_splitter_drag;
         let show_about = app_state.show_about;
         let audio_settings_open = app_state.audio_settings_state.is_open;
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
@@ -1842,12 +1870,17 @@ impl Render for HikaruApp {
                                 this.child(
                                     div()
                                         .h(px(dsp_rack_height))
+                                        .max_h(px(220.0))
                                         .w_full()
                                         .flex_shrink_0()
                                         .border_t_1()
                                         .border_color(crate::theme::BORDER_COLOR)
                                         .child(dsp_rack::render(cx)),
                                 )
+                            })
+                            // PANEL INFERIOR PLEGABLE: MIX PANEL (Bitwig Bottom Mixer)
+                            .when(show_mixer_panel, |this| {
+                                this.child(mixer::render_bottom_panel(cx))
                             }),
                     ),
             )
@@ -1869,6 +1902,35 @@ impl Render for HikaruApp {
             })
             .when_some(dragged_sample, |this, sample_path| {
                 this.child(render_drag_preview(&sample_path))
+            })
+            // Capturador de arrastre del splitter del Mixer Panel inferior
+            .when(bottom_mixer_splitter_drag.is_some(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .cursor_ns_resize()
+                        .on_mouse_move(move |event, _, cx| {
+                            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                                update_state(cx, |s| s.bottom_mixer_splitter_drag = None);
+                                return;
+                            }
+                            let st = state(cx);
+                            let drag = st.read(cx).bottom_mixer_splitter_drag;
+                            if let Some((start_y, start_h)) = drag {
+                                let curr_y = event.position.y.as_f32();
+                                let delta = start_y - curr_y;
+                                let new_h = (start_h + delta).clamp(160.0, 500.0);
+                                st.update(cx, |s, cx| {
+                                    s.bottom_mixer_height = new_h;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                            update_state(cx, |s| s.bottom_mixer_splitter_drag = None);
+                        }),
+                )
             })
             
             // SHORTCUTS: el foco vive en el div raíz, por eso capture_key_down

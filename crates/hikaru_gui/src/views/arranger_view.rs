@@ -86,7 +86,7 @@ const VOLUME_RESET: f32 = 0.75;
 /// activo vía `tracks_mut()`, así vale para ambos modos. `Fx` resuelve a la pista
 /// de retorno auxiliar (FX 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StripTarget {
+pub(crate) enum StripTarget {
     Master,
     Live(usize),
     Studio(usize),
@@ -535,7 +535,7 @@ fn mixer_scrollbar_strip(scroll_h: &ScrollHandle, panning: bool, bar_dragging: b
         .into_any_element()
 }
 
-fn set_pan(cx: &mut App, target: FaderTarget, pan: f32) {
+pub(crate) fn set_pan(cx: &mut App, target: FaderTarget, pan: f32) {
     let pan = pan.clamp(-1.0, 1.0);
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -579,7 +579,7 @@ fn set_pan(cx: &mut App, target: FaderTarget, pan: f32) {
     });
 }
 
-fn set_volume(cx: &mut App, target: FaderTarget, volume: f32) {
+pub(crate) fn set_volume(cx: &mut App, target: FaderTarget, volume: f32) {
     let volume = volume.clamp(0.0, 1.0);
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -781,7 +781,7 @@ fn snapshot_fx(
 // HELPERS DE ESTADO (mute / solo / arm por destino)
 // =========================================================================
 
-fn strip_mute_state(cx: &mut App, target: StripTarget) -> bool {
+pub(crate) fn strip_mute_state(cx: &mut App, target: StripTarget) -> bool {
     let app = state(cx).read(cx);
     match target {
         StripTarget::Master => app.tracks().first().map(|t| t.mute).unwrap_or(false),
@@ -804,7 +804,7 @@ fn strip_mute_state(cx: &mut App, target: StripTarget) -> bool {
     }
 }
 
-fn strip_solo_state(cx: &mut App, target: StripTarget) -> bool {
+pub(crate) fn strip_solo_state(cx: &mut App, target: StripTarget) -> bool {
     let app = state(cx).read(cx);
     match target {
         StripTarget::Master => app.tracks().first().map(|t| t.solo).unwrap_or(false),
@@ -827,7 +827,7 @@ fn strip_solo_state(cx: &mut App, target: StripTarget) -> bool {
     }
 }
 
-fn strip_arm_state(cx: &mut App, target: StripTarget) -> bool {
+pub(crate) fn strip_arm_state(cx: &mut App, target: StripTarget) -> bool {
     let app = state(cx).read(cx);
     match target {
         StripTarget::Master | StripTarget::Fx(_) => false,
@@ -836,7 +836,7 @@ fn strip_arm_state(cx: &mut App, target: StripTarget) -> bool {
     }
 }
 
-fn toggle_mute_target(cx: &mut App, target: StripTarget) {
+pub(crate) fn toggle_mute_target(cx: &mut App, target: StripTarget) {
     let muted = strip_mute_state(cx, target);
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -878,7 +878,7 @@ fn toggle_mute_target(cx: &mut App, target: StripTarget) {
     });
 }
 
-fn toggle_solo_target(cx: &mut App, target: StripTarget) {
+pub(crate) fn toggle_solo_target(cx: &mut App, target: StripTarget) {
     let soloed = strip_solo_state(cx, target);
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -920,7 +920,7 @@ fn toggle_solo_target(cx: &mut App, target: StripTarget) {
     });
 }
 
-fn toggle_arm_target(cx: &mut App, target: StripTarget) {
+pub(crate) fn toggle_arm_target(cx: &mut App, target: StripTarget) {
     let armed = strip_arm_state(cx, target);
     let st = state(cx);
     st.update(cx, |s, cx| {
@@ -963,7 +963,7 @@ fn column_id(target: StripTarget) -> String {
 /// Deliberadamente NO toca `selected_slot_index` (a diferencia de
 /// [`select_device_slot`], que elige pista + slot al pulsar una fila del rack):
 /// cambiar de pista no debería arrastrar también el slot del rack.
-fn select_track_column(cx: &mut App, target: StripTarget) {
+pub(crate) fn select_track_column(cx: &mut App, target: StripTarget) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         s.selected_track_index = mixer_index_for_target(target);
@@ -971,7 +971,7 @@ fn select_track_column(cx: &mut App, target: StripTarget) {
     });
 }
 
-fn select_device_slot(cx: &mut App, target: StripTarget, slot: usize) {
+pub(crate) fn select_device_slot(cx: &mut App, target: StripTarget, slot: usize) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         s.selected_track_index = mixer_index_for_target(target);
@@ -980,7 +980,7 @@ fn select_device_slot(cx: &mut App, target: StripTarget, slot: usize) {
     });
 }
 
-fn toggle_device_active(cx: &mut App, target: StripTarget, slot: usize) {
+pub(crate) fn toggle_device_active(cx: &mut App, target: StripTarget, slot: usize) {
     let st = state(cx);
     st.update(cx, |s, cx| {
         let fx = match target {

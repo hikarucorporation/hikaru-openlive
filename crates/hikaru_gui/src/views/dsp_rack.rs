@@ -19,9 +19,13 @@ use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
 use crate::views::mixer::{DspSlot, ExternalParamsStatus};
 
-pub const RACK_HEIGHT: f32 = 340.0;
+pub const RACK_HEIGHT: f32 = 200.0;
 
 pub const CARD_WIDTH: f32 = 388.0;
+
+/// Ancho de la tarjeta del OpenWavetable: dos sub-tarjetas modulares
+/// (visualizador 3D | controles y parámetros).
+pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 580.0;
 
 /// Ancho de la tarjeta del OpenSpectral Phaser: dos columnas maestras
 /// (display FFT | controles) que no caben en el rack estándar de 388 px.
@@ -31,9 +35,9 @@ const CARD_PADDING: f32 = 6.0;
 
 const CARD_GAP: f32 = 6.0;
 
-const CARD_HEADER_HEIGHT: f32 = 24.0;
+const CARD_HEADER_HEIGHT: f32 = 20.0;
 
-const CARD_FOOTER_HEIGHT: f32 = 50.0;
+const CARD_FOOTER_HEIGHT: f32 = 20.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginEntry {
@@ -635,12 +639,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
     div()
         .id("dsp_rack")
         .w_full()
+        .h(px(RACK_HEIGHT))
+        .max_h(px(220.0))
         .flex()
         .flex_col()
         .child(
             div()
                 .w_full()
                 .h(px(RACK_HEIGHT))
+                .max_h(px(220.0))
                 .flex()
                 .flex_col()
                 .bg(rgb(0x14141A))
@@ -650,6 +657,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                     div()
                         .w_full()
                         .h(px(20.0))
+                        .flex_shrink_0()
                         .flex()
                         .items_center()
                         .px(px(8.0))
@@ -661,14 +669,16 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                         .id("dsp_strip")
                         .w_full()
                         .flex_1()
-                        .min_h(px(RACK_HEIGHT - 26.0))
+                        .min_h(px(0.0))
+                        .max_h(px(RACK_HEIGHT - 20.0))
                         .overflow_x_scrollbar()
                         .child(
                             h_flex()
                                 .h_full()
+                                .items_stretch()
                                 .gap(px(CARD_GAP))
                                 .px(px(8.0))
-                                .py(px(6.0))
+                                .py(px(4.0))
                                 .children(cards.iter().enumerate().map(|(idx, card)| {
                                     render_card(cx, track_idx, idx, card, idx == selected_slot)
                                 }))
@@ -726,6 +736,8 @@ fn card_width(name: &str) -> f32 {
         || name == "OpenSpectral"
     {
         PHASER_CARD_WIDTH
+    } else if name == "OpenWavetable" {
+        OPEN_WAVETABLE_CARD_WIDTH
     } else {
         CARD_WIDTH
     }
@@ -748,8 +760,9 @@ fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, slot_co
 
     div()
         .id(format!("dsp_add_slot_{track_idx}"))
-        .w(px(60.0))
+        .w(px(50.0))
         .h_full()
+        .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
@@ -798,6 +811,7 @@ fn render_card(
         .id(format!("dsp_card_{track_idx}_{idx}"))
         .w(px(card_width(&name)))
         .h_full()
+        .flex_shrink_0()
         .flex()
         .flex_col()
         .bg(if is_selected { rgb(0x252530) } else { rgb(0x1C1C22) })
@@ -844,6 +858,7 @@ fn render_card_header(
     h_flex()
         .w_full()
         .h(px(CARD_HEADER_HEIGHT))
+        .flex_shrink_0()
         .items_center()
         .gap(px(4.0))
         .px(px(CARD_PADDING))
@@ -928,7 +943,7 @@ fn render_card_body(
                 .id(format!("dsp_empty_{track_idx}_{idx}"))
                 .w_full()
                 .flex_1()
-                .min_h(px(100.0))
+                .min_h(px(0.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1513,7 +1528,7 @@ fn render_external_card(
         .test_support()
         .w_full()
         .flex_1()
-        .min_h(px(100.0))
+        .min_h(px(0.0))
         .flex()
         .flex_col()
         .items_center()

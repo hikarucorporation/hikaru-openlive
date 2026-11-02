@@ -95,42 +95,33 @@ use super::wavetable_io::{self, Wavetable};
 /// Cuadrado y con ancho fijo hace dos cosas: entra en la cadena de módulos del
 /// rack al lado de los demás sin empujar al que sigue, y el visor queda cerca de
 /// cuadrado, que es el aspecto que hace legible la pila de ciclos.
-pub const MODULE_SIZE: f32 = 220.0;
+pub const MODULE_SIZE: f32 = 200.0;
 
-/// Ancho del módulo. Igual a [`MODULE_SIZE`]; existe con nombre propio para que
-/// quien lo use se pregunte por qué un cuadrado tiene ancho.
-pub const EDITOR_WIDTH: f32 = MODULE_SIZE;
+/// Ancho del módulo horizontal modular: visualizador 3D + panel de parámetros.
+pub const EDITOR_WIDTH: f32 = 580.0;
 
 /// Alto del módulo. Lo lee `dsp_rack` para calcular el alto del rack, así que
 /// tiene que ser el valor real del `div`, no una estimación.
-pub const EDITOR_HEIGHT: f32 = MODULE_SIZE;
+pub const EDITOR_HEIGHT: f32 = 200.0;
 
 /// Padding interno del módulo.
-const MODULE_PADDING: f32 = 5.0;
+const MODULE_PADDING: f32 = 4.0;
 
 /// Separación entre las cuatro bandas verticales: header, selector, visor y pie.
-const MODULE_GAP: f32 = 5.0;
+const MODULE_GAP: f32 = 2.0;
 
 /// Alto de la fila del header con el nombre del plugin.
 const HEADER_HEIGHT: f32 = 14.0;
 
 /// Alto de la fila del selector de wavetable.
-const SELECTOR_HEIGHT: f32 = 22.0;
+const SELECTOR_HEIGHT: f32 = 20.0;
 
 /// Alto del pie: el knob, el contador de ciclos y los botones de paso.
-const FOOTER_HEIGHT: f32 = 44.0;
+const FOOTER_HEIGHT: f32 = 20.0;
 
 /// Lado del knob en pantalla. El target offscreen es de 96px y el `img` escala
 /// con `Contain`, así que el knob se ve con la resolución de la pantalla.
-///
-/// Va en el pie, no sobre el visor: como elemento de la cadena ocupa su lugar en
-/// el layout, y el visor queda libre entero para la pila de ciclos.
-///
-/// 48px es lo que se puede agarrar con un mouse sin que el click sea un tiro al
-/// blanco. Con 42 (el valor chico de la versión comprimida) el área efectiva de
-/// clickeo se vuelve veterinaria; el fine-tune no lo arregla porque depende de
-/// [`DRAG_RANGE_PX`], no del tamaño del disco.
-const KNOB_SIZE: f32 = 36.0;
+const KNOB_SIZE: f32 = 26.0;
 
 /// Caja de la malla 3D.
 ///
@@ -1133,6 +1124,7 @@ fn render_table_navigator(
     h_flex()
         .w_full()
         .h(px(SELECTOR_HEIGHT))
+        .flex_shrink_0()
         .items_center()
         .gap(px(2.0))
         .relative()
@@ -1178,9 +1170,9 @@ fn render_table_navigator(
                 v_flex()
                     .absolute()
                     .left(px(0.0))
-                    .bottom(px(SELECTOR_HEIGHT + 2.0))
+                    .top(px(SELECTOR_HEIGHT + 2.0))
                     .w_full()
-                    .h(px(150.0))
+                    .h(px(130.0))
                     .overflow_y_scrollbar()
                     .p(px(4.0))
                     .gap(px(2.0))
@@ -1545,11 +1537,9 @@ fn view_mode_controls(
 
 /// Una fila de slider del panel: título, barra arrastrable en horizontal y
 /// valor. El arrastre es relativo al agarre (igual que el knob pero en X) y
-/// con Shift va a un cuarto de velocidad.
-/// Ancho fijo de cada celda de la grilla (la mitad del interior del panel) y
-/// de su barra: sin fracciones ni flex inciertos, el relleno es `CELL_BAR`
-/// por la fracción del valor, en píxeles exactos.
-const SETTING_CELL_W: f32 = 65.0;
+/// Ancho de cada celda de la grilla de ajustes.
+const SETTING_CELL_W: f32 = 82.0;
+const SETTINGS_PANEL_W: f32 = 180.0;
 
 /// Una celda de slider para la grilla de 2 columnas: título + valor en una
 /// línea y barra arrastrable debajo. Las 8 celdas entran en 4 filas y el menú
@@ -1565,7 +1555,7 @@ fn setting_cell(
 
     v_flex()
         .w(px(SETTING_CELL_W))
-        .gap(px(1.0))
+        .gap(px(2.0))
         .child(
             h_flex()
                 .w_full()
@@ -1574,14 +1564,13 @@ fn setting_cell(
                 .child(
                     Label::new(param.title())
                         .text_xs()
-                        .text_color(rgb(0x8A90A0))
-                        .truncate(),
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x9AA0B0)),
                 )
                 .child(
                     Label::new(param.format(value))
                         .text_xs()
-                        .text_color(rgb(0xE8EAF0))
-                        .truncate(),
+                        .text_color(rgb(0xE8EAF0)),
                 ),
         )
         .child(
@@ -1655,17 +1644,17 @@ fn settings_panel(track_idx: usize, slot_idx: usize, editor: &WavetableEditor) -
     v_flex()
         .id("wt_settings_scroll")
         .absolute()
-        .right(px(right))
-        .top(px(top))
+        .right(px(right.max(0.0)))
+        .top(px(top.max(0.0)))
         .bottom(px(3.0))
-        .w(px(140.0))
+        .w(px(SETTINGS_PANEL_W))
         .overflow_y_scroll()
-        .p(px(3.0))
-        .gap(px(1.0))
+        .p(px(4.0))
+        .gap(px(3.0))
         .bg(rgb(0x181B22))
         .border_1()
         .border_color(rgb(0x3A4152))
-        .rounded(px(3.0))
+        .rounded(px(4.0))
         // Tira de agarre: arrastrarla mueve el panel como subventana. Es sólo
         // un `Label` (sin controles adentro) para que el `mouse down` no
         // compita con ningún slider o botón.
@@ -1674,10 +1663,12 @@ fn settings_panel(track_idx: usize, slot_idx: usize, editor: &WavetableEditor) -
                 .w_full()
                 .items_center()
                 .justify_center()
+                .py(px(2.0))
                 .child(
                     Label::new("⋮⋮ ajustes")
                         .text_xs()
-                        .text_color(rgb(0x6A7080)),
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x8A90A0)),
                 )
                 .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
                     with_editor(cx, track_idx, slot_idx, |editor| {
@@ -1730,11 +1721,7 @@ fn render_viewport(
         .into_any_element()
 }
 
-const KNOB_2D: f32 = 30.0;
-
-const KNOBS_HEIGHT: f32 = 70.0;
-
-const MODULE_FOOTER_HEIGHT: f32 = 26.0;
+const KNOB_2D: f32 = 24.0;
 
 fn with_editor_target(
     cx: &mut gpui_kit::App,
@@ -1785,14 +1772,14 @@ fn knob_2d(
                             let center_y =
                                 bounds.origin.y + px(bounds.size.height.as_f32() / 2.0);
                             let radius =
-                                px(bounds.size.width.as_f32() / 2.0 - 5.0);
+                                px(bounds.size.width.as_f32() / 2.0 - 3.0);
                             let angle =
                                 (-135.0 + 270.0 * value) * std::f32::consts::PI / 180.0;
                             let tip_x =
                                 center_x + px(angle.sin() * radius.as_f32());
                             let tip_y =
                                 center_y - px(angle.cos() * radius.as_f32());
-                            let mut needle = PathBuilder::stroke(px(2.0));
+                            let mut needle = PathBuilder::stroke(px(1.5));
                             needle.move_to(point(center_x, center_y));
                             needle.line_to(point(tip_x, tip_y));
                             window.paint_path(
@@ -1817,23 +1804,124 @@ fn knob_2d(
         .into_any_element()
 }
 
-fn render_knobs(
+fn render_card_visualizer(
+    track_idx: usize,
+    slot_idx: usize,
+    editor: &WavetableEditor,
+    view: &WavetableView,
+    frame: usize,
+    frames: usize,
+) -> AnyElement {
+    v_flex()
+        .w(px(210.0))
+        .h_full()
+        .flex_shrink_0()
+        .relative()
+        .bg(rgb(0x07080B))
+        .border_1()
+        .border_color(rgb(0x2A2E3A))
+        .rounded(px(4.0))
+        .overflow_hidden()
+        .child(viewport_size_reporter(track_idx, slot_idx))
+        .child(match &view.viewer {
+            Some(image) => img(image.clone())
+                .id("wt_viewport_3d")
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .w_full()
+                .h_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => viewport_placeholder(view.error.as_deref()),
+        })
+        .child(view_mode_controls(track_idx, slot_idx, editor))
+        .when(editor.settings_open, |this| {
+            this.child(settings_panel(track_idx, slot_idx, editor))
+        })
+        .child(
+            h_flex()
+                .absolute()
+                .right(px(4.0))
+                .bottom(px(4.0))
+                .items_center()
+                .gap(px(2.0))
+                .child(
+                    Button::new(format!("wt_frame_prev_{track_idx}_{slot_idx}"))
+                        .rounded(ButtonRounded::None)
+                        .compact()
+                        .label("<")
+                        .on_click(move |_, _, cx| {
+                            with_editor(cx, track_idx, slot_idx, |editor| {
+                                editor.step_frame(-1);
+                            });
+                        }),
+                )
+                .child(
+                    Label::new(format!("{}/{}", frame + 1, frames))
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x8A90A0)),
+                )
+                .child(
+                    Button::new(format!("wt_frame_next_{track_idx}_{slot_idx}"))
+                        .rounded(ButtonRounded::None)
+                        .compact()
+                        .label(">")
+                        .on_click(move |_, _, cx| {
+                            with_editor(cx, track_idx, slot_idx, |editor| {
+                                editor.step_frame(1);
+                            });
+                        }),
+                )
+                .into_any_element(),
+        )
+        .into_any_element()
+}
+
+fn render_card_controls(
     cx: &mut Context<HikaruApp>,
     track_idx: usize,
     slot_idx: usize,
     editor: &WavetableEditor,
     view: &WavetableView,
 ) -> AnyElement {
-    let _ = cx;
+    v_flex()
+        .flex_1()
+        .min_w(px(320.0))
+        .h_full()
+        .bg(rgb(0x13151A))
+        .border_1()
+        .border_color(rgb(0x2A2E3A))
+        .rounded(px(4.0))
+        .p(px(6.0))
+        .gap(px(4.0))
+        .justify_between()
+        .relative()
+        // 1. Selector de tablas de ondas
+        .child(render_table_navigator(cx, track_idx, slot_idx, editor))
+        // 2. Knobs de síntesis
+        .child(render_controls_knobs(track_idx, slot_idx, editor, view))
+        // 3. Parámetros de voces y pitch
+        .child(render_controls_pitch_voices(track_idx, slot_idx, editor))
+        .into_any_element()
+}
+
+fn render_controls_knobs(
+    track_idx: usize,
+    slot_idx: usize,
+    editor: &WavetableEditor,
+    view: &WavetableView,
+) -> AnyElement {
     let hot = editor.dragging;
     let target = editor.drag_target;
     let voices = editor.unison as usize;
 
     h_flex()
         .w_full()
-        .h(px(KNOBS_HEIGHT))
         .items_center()
-        .gap(px(4.0))
+        .justify_around()
+        .py(px(2.0))
         .child(knob_2d(
             track_idx,
             slot_idx,
@@ -1861,74 +1949,117 @@ fn render_knobs(
             format!("{:.0}°", editor.phase * 360.0),
             hot && target == KnobTarget::Phase,
         ))
-        .child(div().flex_1())
         .child(
             v_flex()
                 .items_center()
-                .justify_center()
-                .gap(px(1.0))
+                .gap(px(2.0))
                 .child(knob_image(track_idx, slot_idx, editor, view.knob.clone()))
                 .child(
                     Label::new("WT POS")
                         .text_xs()
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(0xFF6E00)),
+                )
+                .child(
+                    Label::new(format!("{:.0}%", editor.position() * 100.0))
+                        .text_xs()
+                        .text_color(rgb(0xE8EAF0)),
                 ),
         )
         .into_any_element()
 }
 
-fn render_viewport_card(
+fn render_controls_pitch_voices(
     track_idx: usize,
     slot_idx: usize,
     editor: &WavetableEditor,
-    view: &WavetableView,
-    frame: usize,
-    frames: usize,
 ) -> AnyElement {
-    div()
-        .flex_1()
-        .min_h(px(0.0))
+    h_flex()
         .w_full()
-        .relative()
-        .bg(rgb(0x07080B))
+        .h(px(24.0))
+        .items_center()
+        .justify_between()
+        .px(px(6.0))
+        .bg(rgb(0x0C0D11))
         .border_1()
-        .border_color(rgb(0x2A2E3A))
+        .border_color(rgb(0x222630))
         .rounded(px(3.0))
-        .overflow_hidden()
-        .child(viewport_size_reporter(track_idx, slot_idx))
-        .child(match &view.viewer {
-            Some(image) => img(image.clone())
-                .id("wt_viewport_3d")
-                .absolute()
-                .left(px(0.0))
-                .top(px(0.0))
-                .w_full()
-                .h_full()
-                .object_fit(ObjectFit::Contain)
-                .into_any_element(),
-            None => viewport_placeholder(view.error.as_deref()),
-        })
-        .child(view_mode_controls(track_idx, slot_idx, editor))
-        .when(editor.settings_open, |this| {
-            this.child(settings_panel(track_idx, slot_idx, editor))
-        })
         .child(
-            v_flex()
-                .absolute()
-                .left(px(0.0))
-                .top(px(0.0))
-                .w_full()
-                .h_full()
-                .justify_end()
-                .items_end()
-                .p(px(3.0))
+            h_flex()
+                .items_center()
+                .gap(px(2.0))
                 .child(
-                    Label::new(format!("< {}/{} >", frame + 1, frames))
+                    Button::new(format!("wt_pitch_down_{track_idx}_{slot_idx}"))
+                        .rounded(ButtonRounded::None)
+                        .label("<")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            with_editor(cx, track_idx, slot_idx, |editor| {
+                                editor.step_pitch(-1);
+                            });
+                        }),
+                )
+                .child(
+                    Label::new(format!("PITCH: {:+}st", editor.pitch))
                         .text_xs()
+                        .font_weight(FontWeight::BOLD)
                         .text_color(rgb(0x8A90A0)),
                 )
-                .into_any_element(),
+                .child(
+                    Button::new(format!("wt_pitch_up_{track_idx}_{slot_idx}"))
+                        .rounded(ButtonRounded::None)
+                        .label(">")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            with_editor(cx, track_idx, slot_idx, |editor| {
+                                editor.step_pitch(1);
+                            });
+                        }),
+                ),
+        )
+        .child(
+            Button::new(format!("wt_voices_{track_idx}_{slot_idx}"))
+                .rounded(ButtonRounded::None)
+                .label(format!("VOICES: {}", editor.voices.label()))
+                .compact()
+                .on_click(move |_, _, cx| {
+                    with_editor(cx, track_idx, slot_idx, |editor| {
+                        editor.cycle_voices();
+                    });
+                }),
+        )
+        .child(
+            h_flex()
+                .items_center()
+                .gap(px(2.0))
+                .child(
+                    Button::new(format!("wt_oct_down_{track_idx}_{slot_idx}"))
+                        .rounded(ButtonRounded::None)
+                        .label("<")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            with_editor(cx, track_idx, slot_idx, |editor| {
+                                editor.step_octave(-1);
+                            });
+                        }),
+                )
+                .child(
+                    Label::new(format!("OCT: {:+}", editor.octave))
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x8A90A0)),
+                )
+                .child(
+                    Button::new(format!("wt_oct_up_{track_idx}_{slot_idx}"))
+                        .rounded(ButtonRounded::None)
+                        .label(">")
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            with_editor(cx, track_idx, slot_idx, |editor| {
+                                editor.step_octave(1);
+                            });
+                        }),
+                ),
         )
         .into_any_element()
 }
@@ -2301,12 +2432,12 @@ pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: us
     let view = request_view(cx, &editor);
     let frames = editor.frame_count();
 
-    div()
+    h_flex()
         .w_full()
         .flex_1()
-        .flex()
-        .flex_col()
-        .gap(px(2.0))
+        .min_h(px(0.0))
+        .gap(px(6.0))
+        .p(px(4.0))
         .relative()
         .overflow_hidden()
         .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
@@ -2315,96 +2446,14 @@ pub fn render_module(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: us
         .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _, cx| {
             with_editor(cx, track_idx, slot_idx, WavetableEditor::end_drag);
         })
-        .child(render_viewport_card(track_idx, slot_idx, &editor, &view, editor.frame, frames))
-        .child(render_table_navigator(cx, track_idx, slot_idx, &editor))
-        .child(render_knobs(cx, track_idx, slot_idx, &editor, &view))
+        .child(render_card_visualizer(track_idx, slot_idx, &editor, &view, editor.frame, frames))
+        .child(render_card_controls(cx, track_idx, slot_idx, &editor, &view))
         .child(drag_keepalive(track_idx, slot_idx))
         .into_any_element()
 }
 
-pub fn render_module_footer(cx: &mut Context<HikaruApp>, track_idx: usize, slot_idx: usize) -> AnyElement {
-    let editor = {
-        let app = state(cx).read(cx);
-        match app.slot(track_idx, slot_idx) {
-            Some(slot) => slot.wavetable.clone(),
-            None => return div().w_full().h(px(MODULE_FOOTER_HEIGHT)).into_any_element(),
-        }
-    };
-    let _ = cx;
-
-    h_flex()
-        .w_full()
-        .h(px(MODULE_FOOTER_HEIGHT))
-        .items_center()
-        .gap(px(2.0))
-        .child(
-            Button::new(format!("wt_pitch_down_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label("<")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    with_editor(cx, track_idx, slot_idx, |editor| {
-                        editor.step_pitch(-1)
-                    });
-                }),
-        )
-        .child(
-            Label::new(format!("PITCH: {:+}st", editor.pitch))
-                .text_xs()
-                .text_color(rgb(0x8A90A0)),
-        )
-        .child(
-            Button::new(format!("wt_pitch_up_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label(">")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    with_editor(cx, track_idx, slot_idx, |editor| {
-                        editor.step_pitch(1)
-                    });
-                }),
-        )
-        .child(div().flex_1())
-        .child(
-            Button::new(format!("wt_voices_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label(format!("VOICES: {}", editor.voices.label()))
-                .compact()
-                .on_click(move |_, _, cx| {
-                    with_editor(cx, track_idx, slot_idx, |editor| {
-                        editor.cycle_voices()
-                    });
-                }),
-        )
-        .child(div().flex_1())
-        .child(
-            Button::new(format!("wt_oct_down_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label("<")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    with_editor(cx, track_idx, slot_idx, |editor| {
-                        editor.step_octave(-1)
-                    });
-                }),
-        )
-        .child(
-            Label::new(format!("OCT: {:+}", editor.octave))
-                .text_xs()
-                .text_color(rgb(0x8A90A0)),
-        )
-        .child(
-            Button::new(format!("wt_oct_up_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label(">")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    with_editor(cx, track_idx, slot_idx, |editor| {
-                        editor.step_octave(1)
-                    });
-                }),
-        )
-        .into_any_element()
+pub fn render_module_footer(_cx: &mut Context<HikaruApp>, _track_idx: usize, _slot_idx: usize) -> AnyElement {
+    div().w_full().h(px(0.0)).into_any_element()
 }
 
 
