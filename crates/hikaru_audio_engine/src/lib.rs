@@ -973,6 +973,53 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    /// Mueve un plugin externo de una pista/slot a otra pista/slot.
+    ///
+    /// Desvincula el nodo DSP de la fuente original, reubica los taps y lo
+    /// inserta en la cadena de audio de destino sin alocaciones peligrosas
+    /// ni excepciones de memoria.
+    pub fn move_external_plugin(
+        &mut self,
+        from_track: usize,
+        from_slot: usize,
+        to_track: usize,
+        to_slot: usize,
+    ) -> bool {
+        if from_track >= 16 || to_track >= 16 {
+            return false;
+        }
+        if from_slot >= self.track_effects[from_track].len() {
+            return false;
+        }
+
+        hikaru_plugin_host::tap::unregister((from_track, from_slot));
+        let node = self.track_effects[from_track].remove(from_slot);
+
+        // Re-registrar taps en la pista origen
+        hikaru_plugin_host::tap::unregister((from_track, self.track_effects[from_track].len()));
+        for (idx, n) in self.track_effects[from_track].iter().enumerate() {
+            if let Some(tap) = &n.tap {
+                hikaru_plugin_host::tap::register((from_track, idx), std::sync::Arc::clone(tap));
+            }
+        }
+
+        let dest_slot = to_slot.min(self.track_effects[to_track].len());
+        self.track_effects[to_track].insert(dest_slot, node);
+
+        // Re-registrar taps en la pista destino
+        for (idx, n) in self.track_effects[to_track].iter().enumerate() {
+            if let Some(tap) = &n.tap {
+                hikaru_plugin_host::tap::register((to_track, idx), std::sync::Arc::clone(tap));
+            }
+        }
+
+        println!(
+            "[AudioEngine] Plugin movido de pista {} slot {} a pista {} slot {}",
+            from_track, from_slot, to_track, dest_slot
+        );
+        true
+    }
+
     /// Actualiza un parámetro de un plugin externo en la cadena.
     ///
     /// `slot_idx` es el índice dentro de la cadena de efectos de la pista.

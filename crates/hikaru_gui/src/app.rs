@@ -762,6 +762,90 @@ impl AppState {
         self.tracks_mut().get_mut(track_idx)?.effects.get_mut(slot_idx)
     }
 
+    pub fn target_effects_mut(
+        &mut self,
+        target: arranger_view::StripTarget,
+    ) -> Option<&mut Vec<mixer::DspSlot>> {
+        use arranger_view::StripTarget;
+        match target {
+            StripTarget::Master => self.tracks_mut().first_mut().map(|t| &mut t.effects),
+            StripTarget::Live(idx) => self.live_tracks.get_mut(idx + 1).map(|t| &mut t.effects),
+            StripTarget::Studio(idx) => self.studio_tracks.get_mut(idx).map(|t| &mut t.effects),
+            StripTarget::Fx(idx) => self.fx_tracks.get_mut(idx).map(|t| &mut t.effects),
+        }
+    }
+
+    /// Mueve un dispositivo (DSP Slot) de una pista/slot a otra pista/slot.
+    ///
+    /// Mueve el `DspSlot` en el State Graph de la GUI, ajusta los índices de
+    /// selección y, si el slot contiene un plugin externo, envía el comando
+    /// `MoveExternalPlugin` al `AudioEngine` para reubicar el nodo y los taps
+    /// en la cadena de audio de forma atómica y segura.
+    pub fn move_device(
+        &mut self,
+        from_target: arranger_view::StripTarget,
+        from_slot: usize,
+        to_target: arranger_view::StripTarget,
+        to_slot: usize,
+    ) {
+        use arranger_view::StripTarget;
+
+        // 1. Extraer slot
+        let slot = {
+            let Some(effects) = self.target_effects_mut(from_target) else { return; };
+            if from_slot >= effects.len() { return; }
+            effects.remove(from_slot)
+        };
+
+        let has_external = slot.external.is_some();
+
+        // 2. Insertar en destino
+        let dest_inserted = {
+            let Some(effects) = self.target_effects_mut(to_target) else {
+                if let Some(orig) = self.target_effects_mut(from_target) {
+                    orig.insert(from_slot.min(orig.len()), slot);
+                }
+                return;
+            };
+            let dest = to_slot.min(effects.len());
+            effects.insert(dest, slot);
+            dest
+        };
+
+        // 3. Selección coherente
+        let from_mixer = match from_target {
+            StripTarget::Master | StripTarget::Fx(_) => 0,
+            StripTarget::Live(idx) => idx + 1,
+            StripTarget::Studio(idx) => idx,
+        };
+        let to_mixer = match to_target {
+            StripTarget::Master | StripTarget::Fx(_) => 0,
+            StripTarget::Live(idx) => idx + 1,
+            StripTarget::Studio(idx) => idx,
+        };
+        if self.selected_track_index == from_mixer && self.selected_slot_index == from_slot {
+            self.selected_track_index = to_mixer;
+            self.selected_slot_index = dest_inserted;
+        }
+
+        // 4. Si es externo, mover en el AudioEngine
+        if has_external {
+            let to_engine_track = |target: StripTarget| match target {
+                StripTarget::Live(idx) => Some(idx),
+                StripTarget::Studio(idx) => idx.checked_sub(1),
+                _ => None,
+            };
+            if let (Some(f_tr), Some(t_tr)) = (to_engine_track(from_target), to_engine_track(to_target)) {
+                self.audio_proxy.send(GuiCommand::MoveExternalPlugin {
+                    from_track: f_tr,
+                    from_slot,
+                    to_track: t_tr,
+                    to_slot: dest_inserted,
+                });
+            }
+        }
+    }
+
     /// Pide el sondeo de parámetros de un plugin externo.
     ///
     /// Marca el slot como `Probing` e instancia el plugin en un hilo aparte:

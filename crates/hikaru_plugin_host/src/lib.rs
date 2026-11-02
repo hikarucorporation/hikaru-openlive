@@ -332,18 +332,20 @@ pub trait PluginInstance: Send {
     /// Foto `(info, valor)` de todos los parámetros. La usa el sondeo de la
     /// GUI en su propia instancia temporal: leer no toca el audio.
     fn snapshot_params(&mut self) -> Vec<(PluginParamInfo, f32)> {
-        (0..self.param_count())
-            .filter_map(|i| {
-                let info = self.param_info(i)?;
-                if !info.can_automate {
-                    return None;
-                }
+        let count = self.param_count();
+        let mut list = Vec::with_capacity(count);
+        for i in 0..count {
+            if let Some(info) = self.param_info(i) {
                 let value = self
                     .get_param_normalized(info.id)
                     .unwrap_or(info.default_value);
-                Some((info, value))
-            })
-            .collect()
+                list.push((info, value));
+            }
+        }
+        if list.iter().any(|(info, _)| info.can_automate) {
+            list.retain(|(info, _)| info.can_automate);
+        }
+        list
     }
 }
 

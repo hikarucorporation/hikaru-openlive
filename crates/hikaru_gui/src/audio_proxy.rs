@@ -227,6 +227,13 @@ pub enum GuiCommand {
         track_idx: usize,
         slot_idx: usize,
     },
+    /// Mueve un plugin externo entre pistas o slots en el motor de audio.
+    MoveExternalPlugin {
+        from_track: usize,
+        from_slot: usize,
+        to_track: usize,
+        to_slot: usize,
+    },
     /// Actualiza un parámetro de un plugin externo.
     SetExternalPluginParam {
         track_idx: usize,

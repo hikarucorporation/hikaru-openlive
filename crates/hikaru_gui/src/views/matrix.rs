@@ -2271,6 +2271,22 @@ fn track_header_full(
         .rounded(px(2.0))
         .p(px(1.0))
         .gap(px(2.0))
+        .can_drop(|payload: &dyn std::any::Any, _, _| {
+            payload.is::<crate::views::mixer::MixerDeviceDrag>()
+        })
+        .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
+            let st = state(cx);
+            st.update(cx, |s, cx| {
+                s.move_device(
+                    payload.source_target,
+                    payload.source_slot,
+                    crate::views::arranger_view::StripTarget::Live(track_idx),
+                    usize::MAX,
+                );
+                select_matrix_track(s, track_idx);
+                cx.notify();
+            });
+        })
         .on_click(move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |state, cx| {

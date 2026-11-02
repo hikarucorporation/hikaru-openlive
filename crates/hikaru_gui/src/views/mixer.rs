@@ -34,6 +34,57 @@ pub const BOTTOM_MIXER_TRACK_WIDTH: f32 = 85.0;
 pub const BOTTOM_MIXER_SIDEBAR_WIDTH: f32 = 40.0;
 pub const BOTTOM_MIXER_PINNED_WIDTH: f32 = 172.0;
 
+/// Payload de arrastre de dispositivo DSP entre pistas del Mix Panel (o DSP Rack).
+#[derive(Clone, Debug)]
+pub struct MixerDeviceDrag {
+    pub source_target: StripTarget,
+    pub source_slot: usize,
+    pub device_name: String,
+}
+
+/// Fantasma visual flotante que sigue al cursor al arrastrar un dispositivo.
+pub struct MixerDeviceDragGhost {
+    pub device_name: String,
+}
+
+impl Render for MixerDeviceDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .bg(rgb(0x1E1F24))
+            .border_1()
+            .border_color(rgb(theme::DAW_ACCENT_ORANGE))
+            .rounded(px(3.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .shadow_lg()
+            .child(
+                div()
+                    .w(px(6.0))
+                    .h(px(6.0))
+                    .rounded_full()
+                    .bg(rgb(theme::DAW_ACCENT_ORANGE)),
+            )
+            .child(
+                Label::new(self.device_name.clone())
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xFFFFFF)),
+            )
+    }
+}
+
+/// Metadata del chip de un dispositivo para el Channel Strip del mixer.
+#[derive(Clone, Debug)]
+pub struct MixerDeviceChipData {
+    pub slot: usize,
+    pub name: String,
+    pub active: bool,
+    pub has_gui: bool,
+}
+
 /// Renderiza el Mix Panel inferior de Hikaru OpenLive con paridad visual y funcional absoluta a Bitwig Studio.
 pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let app = state(cx).read(cx);
@@ -46,7 +97,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let scroll_handle = app.bottom_mixer_scroll_h.clone();
 
     // Snapshot de las pistas de la sesión
-    let tracks_snapshot: Vec<(usize, String, f32, f32, bool, bool, bool, u32, f32, Vec<String>, f32)> = match mode {
+    let tracks_snapshot: Vec<(usize, String, f32, f32, bool, bool, bool, u32, f32, Vec<MixerDeviceChipData>, f32)> = match mode {
         AppMode::OpenLive => {
             app.matrix_state
                 .tracks
@@ -57,13 +108,24 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                     let armed = live_tr.map(|l| l.arm).unwrap_or(false);
                     let peak = app.smoothed_track_peaks.get(idx).copied().unwrap_or(0.0);
                     let stripe = theme::track_stripe_hex(idx);
-                    let dev_names = live_tr
-                        .map(|l| l.effects.iter().map(|e| e.name.clone()).collect())
+                    let dev_chips = live_tr
+                        .map(|l| {
+                            l.effects
+                                .iter()
+                                .enumerate()
+                                .map(|(s, e)| MixerDeviceChipData {
+                                    slot: s,
+                                    name: e.name.clone(),
+                                    active: e.active,
+                                    has_gui: e.has_editor(),
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let send_amt = live_tr
                         .and_then(|l| l.sends.first().map(|s| s.amount))
                         .unwrap_or(0.0);
-                    (idx, t.name.clone(), t.volume, t.pan, t.muted, t.soloed, armed, stripe, peak, dev_names, send_amt)
+                    (idx, t.name.clone(), t.volume, t.pan, t.muted, t.soloed, armed, stripe, peak, dev_chips, send_amt)
                 })
                 .collect()
         }
@@ -75,9 +137,19 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .map(|(idx, t)| {
                     let peak = app.smoothed_track_peaks.get(idx.saturating_sub(1)).copied().unwrap_or(0.0);
                     let stripe = theme::track_stripe_hex(idx.saturating_sub(1));
-                    let dev_names = t.effects.iter().map(|e| e.name.clone()).collect();
+                    let dev_chips = t
+                        .effects
+                        .iter()
+                        .enumerate()
+                        .map(|(s, e)| MixerDeviceChipData {
+                            slot: s,
+                            name: e.name.clone(),
+                            active: e.active,
+                            has_gui: e.has_editor(),
+                        })
+                        .collect();
                     let send_amt = t.sends.first().map(|s| s.amount).unwrap_or(0.0);
-                    (idx, t.name.clone(), t.volume, t.pan, t.mute, t.solo, t.arm, stripe, peak, dev_names, send_amt)
+                    (idx, t.name.clone(), t.volume, t.pan, t.mute, t.solo, t.arm, stripe, peak, dev_chips, send_amt)
                 })
                 .collect()
         }
@@ -90,6 +162,20 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let fx_pan = fx_tr.map(|t| t.pan).unwrap_or(0.0);
     let fx_muted = fx_tr.map(|t| t.mute).unwrap_or(false);
     let fx_soloed = fx_tr.map(|t| t.solo).unwrap_or(false);
+    let fx_devs = fx_tr
+        .map(|t| {
+            t.effects
+                .iter()
+                .enumerate()
+                .map(|(s, e)| MixerDeviceChipData {
+                    slot: s,
+                    name: e.name.clone(),
+                    active: e.active,
+                    has_gui: e.has_editor(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let master_peak = app.smoothed_master_peak;
     let master_tr = app.tracks().first();
@@ -97,6 +183,20 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let master_pan = master_tr.map(|t| t.pan).unwrap_or(0.0);
     let master_muted = master_tr.map(|t| t.mute).unwrap_or(false);
     let master_soloed = master_tr.map(|t| t.solo).unwrap_or(false);
+    let master_devs = master_tr
+        .map(|t| {
+            t.effects
+                .iter()
+                .enumerate()
+                .map(|(s, e)| MixerDeviceChipData {
+                    slot: s,
+                    name: e.name.clone(),
+                    active: e.active,
+                    has_gui: e.has_editor(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let selected_track = app.selected_track_index;
     let _ = app;
@@ -191,6 +291,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                             fx_muted,
                             fx_soloed,
                             fx_peak,
+                            fx_devs,
                             is_tall,
                             show_devices,
                             show_sends,
@@ -202,6 +303,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                             master_muted,
                             master_soloed,
                             master_peak,
+                            master_devs,
                             is_tall,
                             show_devices,
                             show_sends,
@@ -601,7 +703,7 @@ fn render_track_strip(
     armed: bool,
     stripe_color: u32,
     peak_level: f32,
-    devices: Vec<String>,
+    devices: Vec<MixerDeviceChipData>,
     send_amount: f32,
     target: StripTarget,
     is_selected: bool,
@@ -637,6 +739,13 @@ fn render_track_strip(
         })
         .rounded(px(2.0))
         .overflow_hidden()
+        // Drop target general para la pista entera: soltar un dispositivo aquí lo traslada a esta pista
+        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<MixerDeviceDrag>())
+        .on_drop(move |payload: &MixerDeviceDrag, _, cx| {
+            update_state(cx, |s| {
+                s.move_device(payload.source_target, payload.source_slot, target, usize::MAX);
+            });
+        })
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
             arranger_view::select_track_column(cx, target);
         })
@@ -716,10 +825,11 @@ fn render_strip_header(
         .into_any_element()
 }
 
-/// Pozo de dispositivos (Devices) compacto con botón [+] para insertar DSP.
-fn render_strip_devices(devices: Vec<String>, target: StripTarget) -> AnyElement {
+/// Pozo de dispositivos (Devices) compacto con soporte total de Drag & Drop y reordenamiento.
+fn render_strip_devices(devices: Vec<MixerDeviceChipData>, target: StripTarget) -> AnyElement {
     let dev_count = devices.len();
     h_flex()
+        .id(SharedString::from(format!("bstrip_dev_row_{:?}", target)))
         .w_full()
         .h(px(38.0))
         .flex_shrink_0()
@@ -730,6 +840,13 @@ fn render_strip_devices(devices: Vec<String>, target: StripTarget) -> AnyElement
         .gap(px(2.0))
         .items_center()
         .overflow_x_scrollbar()
+        // Drop target del contenedor: arrastrar y soltar un dispositivo aquí lo mueve al final de la cadena de esta pista
+        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<MixerDeviceDrag>())
+        .on_drop(move |payload: &MixerDeviceDrag, _, cx| {
+            update_state(cx, |s| {
+                s.move_device(payload.source_target, payload.source_slot, target, dev_count);
+            });
+        })
         // Botón [+] para añadir device
         .child(
             div()
@@ -765,7 +882,18 @@ fn render_strip_devices(devices: Vec<String>, target: StripTarget) -> AnyElement
                 ),
         )
         .children(
-            devices.into_iter().enumerate().map(|(slot, dname)| {
+            devices.into_iter().map(|dev| {
+                let slot = dev.slot;
+                let dname = dev.name;
+                let is_active = dev.active;
+                let has_gui = dev.has_gui;
+                let target_clone = target;
+                let drag_payload = MixerDeviceDrag {
+                    source_target: target,
+                    source_slot: slot,
+                    device_name: dname.clone(),
+                };
+
                 div()
                     .id(SharedString::from(format!("bstrip_dev_chip_{:?}_{}", target, slot)))
                     .h(px(28.0))
@@ -773,27 +901,73 @@ fn render_strip_devices(devices: Vec<String>, target: StripTarget) -> AnyElement
                     .flex_shrink_0()
                     .rounded(px(2.0))
                     .bg(rgb(0x24252A))
+                    .hover(|s| s.bg(rgb(0x2E3036)))
                     .border_1()
-                    .border_color(rgb(0x2E3036))
+                    .border_color(if is_active { rgb(0x3B3D44) } else { rgb(0x26272B) })
                     .flex()
                     .items_center()
                     .gap(px(3.0))
-                    .cursor_pointer()
+                    .cursor_grab()
+                    // Drag and drop: habilita arrastrar este dispositivo a cualquier otra pista
+                    .on_drag(drag_payload, |payload, _, _, cx| {
+                        let name = payload.device_name.clone();
+                        cx.new(|_| MixerDeviceDragGhost { device_name: name })
+                    })
+                    // Drop target: soltar sobre este chip inserta en este slot
+                    .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<MixerDeviceDrag>())
+                    .on_drop(move |payload: &MixerDeviceDrag, _, cx| {
+                        update_state(cx, |s| {
+                            s.move_device(payload.source_target, payload.source_slot, target_clone, slot);
+                        });
+                    })
+                    .on_mouse_move(move |_, _, cx| {
+                        update_state(cx, |s| {
+                            let cue = Some(("DRAG DEVICE".into(), "Drop on another track to move  ·  CLICK Select".into()));
+                            if s.footer_context_help != cue {
+                                s.footer_context_help = cue;
+                            }
+                        });
+                    })
                     .on_click(move |_, _, cx| {
                         arranger_view::select_device_slot(cx, target, slot);
                     })
+                    // Botón LED indicador de activación (●)
                     .child(
                         div()
-                            .w(px(4.0))
-                            .h(px(4.0))
+                            .w(px(5.0))
+                            .h(px(5.0))
                             .rounded_full()
-                            .bg(rgb(theme::DAW_ACCENT_ORANGE)),
+                            .bg(if is_active { rgb(theme::DAW_ACCENT_ORANGE) } else { rgb(0x555860) })
+                            .cursor_pointer()
+                            .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                                arranger_view::toggle_device_active(cx, target, slot);
+                            })
                     )
                     .child(
                         Label::new(if dname.is_empty() { "Empty".to_string() } else { dname })
-                            .text_size(px(7.5))
-                            .text_color(rgb(0xD0D4DC)),
+                            .text_size(px(8.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if is_active { rgb(0xDCE0E8) } else { rgb(0x767A84) }),
                     )
+                    .when(has_gui, |this| {
+                        this.child(
+                            div()
+                                .w(px(10.0))
+                                .h(px(10.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(1.0))
+                                .bg(rgb(0x32343B))
+                                .hover(|s| s.bg(rgb(0x42454F)))
+                                .cursor_pointer()
+                                .child(
+                                    Label::new("⧉")
+                                        .text_size(px(6.5))
+                                        .text_color(rgb(0xA0A4B0)),
+                                )
+                        )
+                    })
                     .into_any_element()
             })
         )
@@ -1410,6 +1584,7 @@ fn render_fx_strip(
     muted: bool,
     soloed: bool,
     peak_level: f32,
+    devices: Vec<MixerDeviceChipData>,
     is_tall: bool,
     show_devices: bool,
     show_sends: bool,
@@ -1430,6 +1605,13 @@ fn render_fx_strip(
         .border_color(rgb(0x1B1C1F))
         .rounded(px(2.0))
         .overflow_hidden()
+        // Drop target general para el canal FX 1
+        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<MixerDeviceDrag>())
+        .on_drop(move |payload: &MixerDeviceDrag, _, cx| {
+            update_state(cx, |s| {
+                s.move_device(payload.source_target, payload.source_slot, target, usize::MAX);
+            });
+        })
         // Header FX 1
         .child(
             v_flex()
@@ -1448,7 +1630,7 @@ fn render_fx_strip(
         )
         // Devices
         .when(is_tall && show_devices, |this| {
-            this.child(render_strip_devices(Vec::new(), target))
+            this.child(render_strip_devices(devices, target))
         })
         // Sends (vacío en FX)
         .when(is_tall && show_sends, |this| {
@@ -1497,6 +1679,7 @@ fn render_master_strip(
     muted: bool,
     soloed: bool,
     peak_level: f32,
+    devices: Vec<MixerDeviceChipData>,
     is_tall: bool,
     show_devices: bool,
     show_sends: bool,
@@ -1517,6 +1700,13 @@ fn render_master_strip(
         .border_color(rgb(0x1B1C1F))
         .rounded(px(2.0))
         .overflow_hidden()
+        // Drop target general para el canal Master
+        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<MixerDeviceDrag>())
+        .on_drop(move |payload: &MixerDeviceDrag, _, cx| {
+            update_state(cx, |s| {
+                s.move_device(payload.source_target, payload.source_slot, target, usize::MAX);
+            });
+        })
         // Header Master
         .child(
             v_flex()
@@ -1535,7 +1725,7 @@ fn render_master_strip(
         )
         // Devices
         .when(is_tall && show_devices, |this| {
-            this.child(render_strip_devices(Vec::new(), target))
+            this.child(render_strip_devices(devices, target))
         })
         // Sends (vacío en Master)
         .when(is_tall && show_sends, |this| {

@@ -807,6 +807,12 @@ fn render_card(
     let external = card.external.clone();
     let load_error = card.load_error.clone();
 
+    let target = if track_idx == 0 {
+        crate::views::arranger_view::StripTarget::Master
+    } else {
+        crate::views::arranger_view::StripTarget::Live(track_idx.saturating_sub(1))
+    };
+
     div()
         .id(format!("dsp_card_{track_idx}_{idx}"))
         .w(px(card_width(&name)))
@@ -819,6 +825,15 @@ fn render_card(
         .border_color(if is_selected { rgb(0xFF6E00) } else { rgb(0x2A2A30) })
         .rounded(px(4.0))
         .overflow_hidden()
+        // Drop target: soltar otro dispositivo en esta tarjeta lo reordena a esta posición
+        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<crate::views::mixer::MixerDeviceDrag>())
+        .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
+            let st = state(cx);
+            st.update(cx, |s, cx| {
+                s.move_device(payload.source_target, payload.source_slot, target, idx);
+                cx.notify();
+            });
+        })
         .on_click(move |_, _, cx| {
             state(cx).update(cx, |state, cx| {
                 state.selected_slot_index = idx;
@@ -833,7 +848,7 @@ fn render_card(
             eprintln!("[Hikaru] card AUX t{track_idx}s{idx}");
             open_plugin_menu(cx, track_idx, idx);
         })
-        .child(render_card_header(cx, track_idx, idx, &name, slot_active, options_open, is_selected))
+        .child(render_card_header(cx, track_idx, idx, &name, slot_active, options_open, is_selected, target))
         .child(render_card_body(
             cx,
             track_idx,
@@ -854,8 +869,16 @@ fn render_card_header(
     active: bool,
     options_open: bool,
     is_selected: bool,
+    target: crate::views::arranger_view::StripTarget,
 ) -> AnyElement {
+    let drag_payload = crate::views::mixer::MixerDeviceDrag {
+        source_target: target,
+        source_slot: idx,
+        device_name: name.to_string(),
+    };
+
     h_flex()
+        .id(format!("dsp_card_hdr_{track_idx}_{idx}"))
         .w_full()
         .h(px(CARD_HEADER_HEIGHT))
         .flex_shrink_0()
@@ -865,6 +888,11 @@ fn render_card_header(
         .bg(if is_selected { rgb(0x2A2A35) } else { rgb(0x222228) })
         .border_b_1()
         .border_color(rgb(0x2A2A30))
+        .cursor_grab()
+        .on_drag(drag_payload, |payload, _, _, cx| {
+            let name = payload.device_name.clone();
+            cx.new(|_| crate::views::mixer::MixerDeviceDragGhost { device_name: name })
+        })
         .child(
             rack_button(format!("dsp_card_toggle_{track_idx}_{idx}"))
                 .rounded(ButtonRounded::None)
@@ -1480,11 +1508,7 @@ fn render_external_card(
                     // frame para pintar 8 filas, y se pagaba en cada `notify`
                     // del drag del fader.
                     (
-                        slot.external_params
-                            .iter()
-                            .take(MAX_PARAM_ROWS)
-                            .cloned()
-                            .collect::<Vec<_>>(),
+                        slot.external_params.clone(),
                         slot.external_params.len(),
                     ),
                     slot.params_status.clone(),
@@ -1685,18 +1709,11 @@ fn render_external_params(
         .text_color(rgb(0x555555))
         .into_any_element(),
         ExternalParamsStatus::Ready => {
-            // `params` trae sólo las filas visibles; `params_total` es el
-            // conteo real del plugin, que es lo que va en el rótulo.
-            let extra = params_total.saturating_sub(MAX_PARAM_ROWS);
-            Label::new(if extra > 0 {
-                format!("PARÁMETROS ({params_total}) · +{extra} en el editor")
-            } else {
-                format!("PARÁMETROS ({params_total})")
-            })
-            .text_xs()
-            .font_weight(FontWeight::BOLD)
-            .text_color(rgb(0x6A7080))
-            .into_any_element()
+            Label::new(format!("PARÁMETROS ({params_total})"))
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x6A7080))
+                .into_any_element()
         }
         ExternalParamsStatus::Idle => Label::new("Preparando parámetros…")
             .text_xs()
@@ -1706,29 +1723,32 @@ fn render_external_params(
 
     v_flex()
         .w_full()
+        .flex_1()
+        .min_h(px(0.0))
         .gap(px(2.0))
         .child(header)
-        .children(
-            params
-                .iter()
-                .take(MAX_PARAM_ROWS)
-                .map(|param| external_param_row(track_idx, idx, param)),
+        .child(
+            div()
+                .id(SharedString::from(format!("dsp_param_scroll_{track_idx}_{idx}")))
+                .w_full()
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .p(px(1.0))
+                .gap(px(2.0))
+                .flex()
+                .flex_col()
+                .children(
+                    params
+                        .iter()
+                        .map(|param| external_param_row(track_idx, idx, param)),
+                ),
         )
         .into_any_element()
 }
 
-/// Filas visibles por tarjeta: el rack mide 340px y cada fila 20px.
-const MAX_PARAM_ROWS: usize = 8;
-
-/// Una fila de parámetro: stepper −, nombre, barra arrastrable, valor, stepper
-/// +.
-///
-/// La barra es el fader: `mouse_down` congela el agarre (`param_drag_begin`) y
-/// el seguimiento a nivel de ventana lo continúa (`param_drag_move`) hasta el
-/// `mouse_up`. El gesto va **en X** porque la barra es horizontal, con `Shift`
-/// para el mismo recorrido cuatro veces más fino. Los steppers usan el escalón
-/// del parámetro (discretos saltan de escalón en escalón; continuos, de 0.05 en
-/// 0.05).
+/// Una fila de parámetro: knob rotatorio con aguja estilo Bitwig, nombre y valor,
+/// stepper −, barra horizontal arrastrable y stepper +.
 fn external_param_row(
     track_idx: usize,
     idx: usize,
@@ -1738,6 +1758,7 @@ fn external_param_row(
     let value = param.value;
     let name = param.info.name.clone();
     let display = param.display();
+    let default_val = param.info.default_value;
     let step = if param.info.is_discrete() {
         1.0 / param.info.step_count.max(1) as f32
     } else {
@@ -1746,40 +1767,110 @@ fn external_param_row(
     let fill_w = (value.clamp(0.0, 1.0) * PARAM_BAR_WIDTH).max(2.0);
 
     h_flex()
+        .id(format!("dsp_card_hdr_{track_idx}_{idx}"))
         .w_full()
-        .h(px(20.0))
+        .h(px(26.0))
         .flex_shrink_0()
         .items_center()
         .gap(px(4.0))
+        .px(px(2.0))
+        .py(px(1.0))
+        .border_b_1()
+        .border_color(rgb(0x22242B))
+        .hover(|s| s.bg(rgb(0x22242C)))
+        // 1. Bitwig Rotary Knob con indicador de aguja y drag vertical
+        .child(
+            div()
+                .id(format!("dsp_paramknob_{track_idx}_{idx}_{id}"))
+                .w(px(20.0))
+                .h(px(20.0))
+                .flex_shrink_0()
+                .cursor_ns_resize()
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                    if event.click_count >= 2 {
+                        commit_external_param(cx, track_idx, idx, id, default_val);
+                        return;
+                    }
+                    param_drag_begin(
+                        cx,
+                        track_idx,
+                        idx,
+                        id,
+                        f32::from(event.position.x),
+                        f32::from(event.position.y),
+                    );
+                })
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let cx = bounds.origin.x + bounds.size.width / 2.0;
+                            let cy = bounds.origin.y + bounds.size.height / 2.0;
+                            let r = px(8.0);
+
+                            // Cuerpo circular
+                            window.paint_quad(PaintQuad {
+                                bounds: Bounds::new(point(cx - r, cy - r), size(r * 2.0, r * 2.0)),
+                                background: rgb(0x1B1B20).into(),
+                                border_color: rgb(0x353742).into(),
+                                corner_radii: gpui_kit::Corners::all(r),
+                                border_widths: gpui_kit::Edges::all(px(1.0)),
+                                border_style: BorderStyle::default(),
+                            });
+
+                            // Aguja indicadora estilo Bitwig (-135 deg a +135 deg)
+                            let norm = value.clamp(0.0, 1.0);
+                            let angle = -2.356 + norm * 4.712;
+                            let p_len = 6.0;
+                            let nx = cx.as_f32() + angle.cos() * p_len;
+                            let ny = cy.as_f32() + angle.sin() * p_len;
+
+                            let mut path = PathBuilder::stroke(px(1.5));
+                            path.move_to(point(cx, cy));
+                            path.line_to(point(px(nx), px(ny)));
+                            if let Ok(path) = path.build() {
+                                window.paint_path(path, rgb(0xFF6E00));
+                            }
+                        },
+                    )
+                    .size_full(),
+                ),
+        )
+        // 2. Nombre y valor display
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .justify_center()
+                .child(
+                    Label::new(name)
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .truncate()
+                        .text_color(rgb(0xDFE2E8)),
+                )
+                .child(
+                    Label::new(display)
+                        .text_size(px(8.0))
+                        .truncate()
+                        .text_color(rgb(0x8A8E99)),
+                ),
+        )
+        // 3. Stepper −
         .child(
             rack_button(format!("dsp_param_dec_{track_idx}_{idx}_{id}"))
                 .label("−")
                 .compact()
                 .flex_shrink_0()
-                .w(px(20.0))
+                .w(px(18.0))
                 .on_click(move |_, _, cx| {
                     commit_external_param(cx, track_idx, idx, id, value - step);
                 }),
         )
+        // 4. Barra compacta arrastrable
         .child(
-            Label::new(name)
-                .text_xs()
-                .truncate()
-                .flex_1()
-                .text_color(rgb(0xB8BCC8)),
-        )
-        .child(
-            // El hitbox es más alto que la barra dibujada: 10px de alto es
-            // casi imposible de agarrar y, además, el arrastre horizontal se
-            // cortaba al primer píxel de desviación vertical. El riel es lo
-            // único que se ve; el resto de la caja es transparente y sólo
-            // existe para que el `mouse_down` llegue.
             div()
                 .id(format!("dsp_parambar_{track_idx}_{idx}_{id}"))
-                // Registra la caja en el registro de observación de los tests.
-                // Va pegado al `.id` como en `matrix_vol_*`: sin esto
-                // `window.find("dsp_parambar_…")` no ve la barra y el gesto no
-                // se puede probar de punta a punta.
                 .test_support()
                 .flex_shrink_0()
                 .w(px(PARAM_BAR_WIDTH))
@@ -1819,20 +1910,13 @@ fn external_param_row(
                 })
                 .into_any_element(),
         )
-        .child(
-            Label::new(display)
-                .text_xs()
-                .truncate()
-                .flex_shrink_0()
-                .w(px(64.0))
-                .text_color(rgb(0x888888)),
-        )
+        // 5. Stepper +
         .child(
             rack_button(format!("dsp_param_inc_{track_idx}_{idx}_{id}"))
                 .label("+")
                 .compact()
                 .flex_shrink_0()
-                .w(px(20.0))
+                .w(px(18.0))
                 .on_click(move |_, _, cx| {
                     commit_external_param(cx, track_idx, idx, id, value + step);
                 }),

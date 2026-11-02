@@ -412,6 +412,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.remove_external_plugin(track_idx, slot_idx);
                     }
                 }
+                GuiCommand::MoveExternalPlugin { from_track, from_slot, to_track, to_slot } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.move_external_plugin(from_track, from_slot, to_track, to_slot);
+                    }
+                }
                 GuiCommand::SetExternalPluginParam { track_idx, slot_idx, param_id, value } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_external_plugin_param(track_idx, slot_idx, param_id, value);
