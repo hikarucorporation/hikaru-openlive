@@ -364,6 +364,7 @@ pub struct AppState {
 
     pub live_tracks: Vec<mixer::Track>,
     pub studio_tracks: Vec<mixer::Track>,
+    pub fx_tracks: Vec<mixer::Track>,
 
     pub selected_track_index: usize,
     pub selected_slot_index: usize,
@@ -1110,6 +1111,7 @@ impl HikaruApp {
         for t in &mut studio_tracks {
             t.volume = 0.70;
         }
+        let fx_tracks = vec![mixer::Track::new(0, "FX 1".to_string(), false)];
 
         let track_peak_bits: Vec<Arc<AtomicU32>> = if let Some(ref handle) = engine_handle {
             if let Ok(engine) = handle.try_lock() {
@@ -1192,6 +1194,7 @@ impl HikaruApp {
             pending_wavetable_slot: None,
             live_tracks,
             studio_tracks,
+            fx_tracks,
             selected_track_index: 1,
             selected_slot_index: 0,
             add_slot_menu_open: false,

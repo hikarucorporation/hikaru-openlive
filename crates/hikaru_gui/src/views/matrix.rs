@@ -2167,6 +2167,7 @@ pub fn compact_level_meter(level: f32, height: f32) -> AnyElement {
         .w(px(4.0))
         .h(px(h))
         .flex_shrink_0()
+        .overflow_hidden()
         .child(
             canvas(
                 |_, _, _| {},
@@ -2623,6 +2624,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .size_full()
         .bg(rgb(theme::DAW_GRID_BG))
         .gap(px(4.0))
+        .overflow_hidden()
+        .pb(px(4.0))
         .child(
             h_flex()
                 .items_center()

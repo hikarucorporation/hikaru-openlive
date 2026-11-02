@@ -176,7 +176,7 @@ impl Default for PlaylistState {
             playhead_tick: 0,
             ppqn: DEFAULT_PPQN,
             next_clip_id: 1,
-            header_width: 180.0,
+            header_width: 196.0,
             grid_numerator: 1,
             grid_denominator: 4,
             zoom_x: 0.04,
@@ -333,8 +333,8 @@ impl PlaylistState {
 /// y `MIN_ROW_H` mantiene el mínimo justo para que la caja siga entrando sin
 /// solaparse.
 pub const TRACK_ROW_H: f32 = 68.0;
-/// Alto de la regla de compases (ruler / timebar superior).
-pub const RULER_H: f32 = 24.0;
+/// Alto de la regla de compases (banda de compases + carril inferior de loop).
+pub const RULER_H: f32 = 26.0;
 /// Límites del zoom temporal (px por tick).
 pub const MIN_ZOOM_X: f32 = 0.005;
 pub const MAX_ZOOM_X: f32 = 2.0;
@@ -1742,7 +1742,7 @@ fn playlist_row_arm_and_peak(s: &AppState, row: usize) -> (bool, f32) {
     let armed = match s.mode {
         crate::app::AppMode::OpenLive => s
             .live_tracks
-            .get(engine_idx + 1)
+            .get(engine_idx)
             .map(|t| t.arm)
             .unwrap_or(false),
         crate::app::AppMode::OpenStudio => s
@@ -1753,7 +1753,7 @@ fn playlist_row_arm_and_peak(s: &AppState, row: usize) -> (bool, f32) {
     };
     let peak = s
         .smoothed_track_peaks
-        .get(row)
+        .get(engine_idx.saturating_sub(1))
         .copied()
         .unwrap_or(0.0);
     (armed, peak)
@@ -1765,7 +1765,7 @@ fn toggle_playlist_arm(cx: &mut App, row: usize) {
         let engine_idx = playlist_row_to_engine_idx(s, row);
         match s.mode {
             crate::app::AppMode::OpenLive => {
-                if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
+                if let Some(live) = s.live_tracks.get_mut(engine_idx) {
                     live.arm = !live.arm;
                 }
             }
@@ -1779,11 +1779,191 @@ fn toggle_playlist_arm(cx: &mut App, row: usize) {
     });
 }
 
-/// Header de pista de la Playlist con la MISMA jerarquía visual de Bitwig Studio
-/// que la Session Matrix: banda lateral de color, botón Arm (●), nombre (con ellipsis),
-/// [M] [S], knob de pan, fader horizontal naranja con dB y vúmetro vertical.
+/// Paso adaptativo de etiquetas de compás en la regla temporal para evitar
+/// colisiones visuales en zooms muy alejados (`MIN_ZOOM_X`).
+fn adaptive_bar_stride(ticks_per_bar_val: u64, zoom_x: f32) -> u64 {
+    let bar_px = ticks_to_px(ticks_per_bar_val.max(1), zoom_x);
+    for stride in [1u64, 2, 4, 8, 16, 32, 64, 128] {
+        if bar_px * stride as f32 >= 36.0 {
+            return stride;
+        }
+    }
+    128
+}
+
+/// Inserta un clip de audio desde el Explorer en la posición `(rel_x, rel_y)` de la grilla.
+fn drop_audio_at_grid_pos(
+    s: &mut AppState,
+    path: &PathBuf,
+    rel_x: f32,
+    rel_y: f32,
+    track_ids: &[usize],
+) {
+    let ppqn = s.playlist_state.ppqn.max(1);
+    let bpm = s.transport.bpm;
+    let zoom_x = s.playlist_state.zoom_x;
+    let track_height = s.playlist_state.track_height();
+    let snap_val = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
+    let raw = px_to_ticks(rel_x.max(0.0), zoom_x);
+    let drop_tick = snap_ticks(raw, snap_val);
+    let row = ((rel_y / track_height).floor() as isize)
+        .clamp(0, track_ids.len().saturating_sub(1) as isize) as usize;
+    let Some(&target_tid) = track_ids.get(row) else {
+        return;
+    };
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let pstr = path.to_string_lossy().to_string();
+    let (dur, _peaks) = load_sample_info(path, ppqn, bpm);
+    let clip = build_audio_clip(
+        s.playlist_state.next_clip_id,
+        name,
+        path,
+        drop_tick,
+        ppqn,
+        bpm,
+        rgb(theme::track_stripe_hex(row)).into(),
+    );
+    let cid = s.playlist_state.next_clip_id;
+    s.playlist_state.next_clip_id += 1;
+    s.playlist_state.clips.push((target_tid, clip));
+    s.playlist_state.selected_clips = vec![cid];
+    s.audio_proxy.send(GuiCommand::LoadClip {
+        clip_id: cid,
+        path: pstr,
+        position_secs: ticks_to_secs_precise(drop_tick, ppqn, bpm),
+        duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
+        offset_secs: 0.0,
+        track_index: target_tid,
+        scene_index: 0,
+    });
+}
+
+/// Inicio de interacción en la regla temporal fija superior:
+/// - Banda superior (`y < ruler_h - 9.0`): posiciona el cabezal (Seek).
+/// - Carril inferior (`y >= ruler_h - 9.0`): edición interactiva de región de Loop.
+fn ruler_mouse_down(
+    cx: &mut App,
+    cursor_win: (f32, f32),
+    ruler_bounds: [f32; 4],
+    ruler_h: f32,
+    click_count: usize,
+) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        let scroll_x = s.playlist_scroll_h.offset().x.as_f32();
+        let zoom_x = s.playlist_state.zoom_x;
+        let ppqn = s.playlist_state.ppqn.max(1);
+        let snap_val = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
+        let local_x = (cursor_win.0 - ruler_bounds[0] - scroll_x).max(0.0);
+        let local_y = cursor_win.1 - ruler_bounds[1];
+        let raw_tick = px_to_ticks(local_x, zoom_x);
+        let snapped_tick = snap_ticks(raw_tick, snap_val);
+
+        if local_y >= ruler_h - 9.0 {
+            if click_count >= 2 {
+                s.playlist_state.loop_region_active = !s.playlist_state.loop_region_active;
+                if s.playlist_state.loop_region_active {
+                    s.playlist_state.ensure_minimum_global_loop(true);
+                }
+                s.playlist_state.loop_dragging = false;
+                s.playlist_state.loop_drag_handle = LoopDragHandle::None;
+                cx.notify();
+                return;
+            }
+            let lx0 = ticks_to_px(s.playlist_state.loop_start_ticks, zoom_x);
+            let lx1 = ticks_to_px(s.playlist_state.loop_end_ticks, zoom_x);
+            let active = s.playlist_state.is_loop_region_valid();
+            if active && (local_x - lx0).abs() <= 7.0 {
+                s.playlist_state.loop_dragging = true;
+                s.playlist_state.loop_drag_handle = LoopDragHandle::Left;
+            } else if active && (local_x - lx1).abs() <= 7.0 {
+                s.playlist_state.loop_dragging = true;
+                s.playlist_state.loop_drag_handle = LoopDragHandle::Right;
+            } else if active && local_x > lx0 && local_x < lx1 {
+                s.playlist_state.loop_dragging = true;
+                s.playlist_state.loop_drag_handle = LoopDragHandle::Body;
+                s.playlist_state.loop_preview_start_ticks =
+                    raw_tick.saturating_sub(s.playlist_state.loop_start_ticks);
+                s.playlist_state.loop_preview_end_ticks = s.playlist_state.loop_length_ticks();
+            } else {
+                s.playlist_state.loop_start_ticks = snapped_tick;
+                s.playlist_state.loop_end_ticks = snapped_tick.saturating_add(snap_val.max(ppqn));
+                s.playlist_state.loop_region_active = true;
+                s.playlist_state.loop_dragging = true;
+                s.playlist_state.loop_drag_handle = LoopDragHandle::Right;
+            }
+            cx.notify();
+        } else {
+            let bpm = s.transport.bpm;
+            let sr = s.transport.sample_rate.get() as u32;
+            let target = ticks_to_samples_precise(raw_tick, ppqn, bpm, sr);
+            s.playlist_state.playhead_tick = raw_tick;
+            s.audio_proxy.send(GuiCommand::Seek { sample_count: target });
+            cx.notify();
+        }
+    });
+}
+
+fn ruler_mouse_move(cx: &mut App, cursor_win_x: f32, ruler_bounds: [f32; 4]) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if !s.playlist_state.loop_dragging {
+            return;
+        }
+        let scroll_x = s.playlist_scroll_h.offset().x.as_f32();
+        let zoom_x = s.playlist_state.zoom_x;
+        let ppqn = s.playlist_state.ppqn.max(1);
+        let snap_val = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
+        let min_len = snap_val.max(ppqn);
+        let local_x = (cursor_win_x - ruler_bounds[0] - scroll_x).max(0.0);
+        let raw_tick = px_to_ticks(local_x, zoom_x);
+        let snapped = snap_ticks(raw_tick, snap_val);
+
+        match s.playlist_state.loop_drag_handle {
+            LoopDragHandle::Left => {
+                let end = s.playlist_state.loop_end_ticks;
+                s.playlist_state.loop_start_ticks = snapped.min(end.saturating_sub(min_len));
+            }
+            LoopDragHandle::Right => {
+                let start = s.playlist_state.loop_start_ticks;
+                s.playlist_state.loop_end_ticks = snapped.max(start.saturating_add(min_len));
+            }
+            LoopDragHandle::Body => {
+                let grab_off = s.playlist_state.loop_preview_start_ticks;
+                let len = s.playlist_state.loop_preview_end_ticks.max(min_len);
+                let new_start = snap_ticks(raw_tick.saturating_sub(grab_off), snap_val);
+                s.playlist_state.loop_start_ticks = new_start;
+                s.playlist_state.loop_end_ticks = new_start.saturating_add(len);
+            }
+            LoopDragHandle::None => {}
+        }
+        cx.notify();
+    });
+}
+
+fn finish_ruler_drag(cx: &mut App) {
+    let st = state(cx);
+    st.update(cx, |s, cx| {
+        if s.playlist_state.loop_dragging {
+            s.playlist_state.loop_dragging = false;
+            s.playlist_state.loop_drag_handle = LoopDragHandle::None;
+            s.playlist_state.loop_drag_completed_this_frame = true;
+            cx.notify();
+        }
+    });
+}
+
+/// Header de pista del Arranger de alta densidad visual:
+/// banda cromática lateral de alto completo, indicador de pista, nombre truncado,
+/// botonera compacta `[●][S][M]`, knob rotativo de paneo, fader horizontal ámbar
+/// con lectura en dB y vúmetro vertical integrado a ras del carril temporal.
 #[allow(clippy::too_many_arguments)]
 fn playlist_track_header_with_selected(
+    lane_idx: usize,
     row: usize,
     vec_idx: usize,
     name: String,
@@ -1797,8 +1977,9 @@ fn playlist_track_header_with_selected(
     selected_row: bool,
     row_h: f32,
 ) -> AnyElement {
-    let stripe_hex = theme::track_stripe_hex(row);
-    let meter_h = (row_h - 6.0).max(16.0);
+    let stripe_hex = theme::track_stripe_hex(lane_idx);
+    let meter_h = (row_h - 4.0).max(16.0);
+    let track_glyph = if lane_idx % 2 == 0 { "🎹" } else { "∿" };
 
     h_flex()
         .w_full()
@@ -1806,19 +1987,19 @@ fn playlist_track_header_with_selected(
         .flex_shrink_0()
         .items_center()
         .bg(if selected_row {
-            rgb(0x343438)
+            rgb(theme::DAW_HEADER_SELECTED_BG)
         } else {
             rgb(theme::DAW_MAIN_BG)
         })
-        .border_1()
+        .border_b_1()
+        .border_r_1()
         .border_color(if selected_row {
             rgb(theme::DAW_PLAYHEAD_BLUE)
         } else {
-            rgb(0x161616)
+            rgb(theme::DAW_BORDER_SUBTLE)
         })
-        .rounded(px(2.0))
-        .p(px(1.0))
-        .gap(px(2.0))
+        .gap(px(3.0))
+        .pr(px(2.0))
         .overflow_hidden()
         .id(format!("pl_row_{}", vec_idx))
         .test_support()
@@ -1829,52 +2010,58 @@ fn playlist_track_header_with_selected(
                 cx.notify();
             });
         })
-        // Banda lateral de color de pista
+        // Banda lateral continua con el color asignado a la pista
         .child(
             div()
-                .w(px(4.0))
-                .h(px(meter_h))
+                .w(px(5.0))
+                .h_full()
                 .flex_shrink_0()
-                .rounded(px(1.0))
                 .bg(rgb(stripe_hex)),
         )
-        // Cuerpo central (Fila 1: Arm + Nombre + M/S | Fila 2: Pan + Fader + dB)
+        // Cuerpo central de dos niveles (Fila 1: Tipo + Nombre + [●][S][M] | Fila 2: Pan + Fader + dB)
         .child(
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap(px(1.0))
+                .h_full()
+                .justify_center()
+                .py(px(2.0))
+                .gap(px(2.0))
                 .overflow_hidden()
                 .child(
                     h_flex()
                         .items_center()
                         .justify_between()
-                        .gap(px(2.0))
+                        .gap(px(3.0))
                         .flex_shrink_0()
-                        .child(ms_button_sized(
-                            format!("pl_track_arm_{}", vec_idx),
-                            "●",
-                            14.0,
-                            18.0,
-                            armed,
-                            rgb(theme::DAW_ARM_RED),
-                            move |cx| toggle_playlist_arm(cx, row),
-                        ))
                         .child(
-                            div()
+                            h_flex()
                                 .flex_1()
                                 .min_w_0()
+                                .items_center()
+                                .gap(px(4.0))
                                 .overflow_hidden()
                                 .child(
-                                    Label::new(name)
-                                        .text_xs()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(if selected_row {
-                                            rgb(0xFFFFFF)
-                                        } else {
-                                            rgb(0xE0E0E0)
-                                        })
-                                        .text_ellipsis(),
+                                    Label::new(track_glyph)
+                                        .text_size(px(9.0))
+                                        .text_color(rgb(stripe_hex)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .child(
+                                            Label::new(name)
+                                                .text_size(px(10.5))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(if selected_row {
+                                                    rgb(0xFFFFFF)
+                                                } else {
+                                                    rgb(0xE4E4E8)
+                                                })
+                                                .text_ellipsis(),
+                                        ),
                                 ),
                         )
                         .child(
@@ -1882,22 +2069,31 @@ fn playlist_track_header_with_selected(
                                 .gap(px(1.0))
                                 .flex_shrink_0()
                                 .child(ms_button_sized(
-                                    format!("pl_track_mute_{}", vec_idx),
-                                    "M",
+                                    format!("pl_track_arm_{}", vec_idx),
+                                    "●",
                                     16.0,
-                                    18.0,
-                                    muted,
-                                    rgb(theme::DAW_MUTE_AMBER),
-                                    move |cx| toggle_playlist_mute(cx, row),
+                                    17.0,
+                                    armed,
+                                    rgb(theme::DAW_ARM_RED),
+                                    move |cx| toggle_playlist_arm(cx, row),
                                 ))
                                 .child(ms_button_sized(
                                     format!("pl_track_solo_{}", vec_idx),
                                     "S",
                                     16.0,
-                                    18.0,
+                                    17.0,
                                     soloed,
                                     rgb(theme::DAW_SOLO_GOLD),
                                     move |cx| toggle_playlist_solo(cx, row),
+                                ))
+                                .child(ms_button_sized(
+                                    format!("pl_track_mute_{}", vec_idx),
+                                    "M",
+                                    16.0,
+                                    17.0,
+                                    muted,
+                                    rgb(theme::DAW_MUTE_AMBER),
+                                    move |cx| toggle_playlist_mute(cx, row),
                                 )),
                         ),
                 )
@@ -1916,8 +2112,8 @@ fn playlist_track_header_with_selected(
                         ))
                         .child(
                             Label::new(matrix::pan_text(matrix::snap_center_pan(pan)))
-                                .text_size(px(9.0))
-                                .text_color(rgb(0xBDBDBD))
+                                .text_size(px(8.5))
+                                .text_color(rgb(0xAEAEB4))
                                 .w(px(18.0)),
                         )
                         .child(h_mix_slider_ex(
@@ -1930,13 +2126,13 @@ fn playlist_track_header_with_selected(
                         ))
                         .child(
                             Label::new(matrix::db_text(volume))
-                                .text_size(px(9.0))
-                                .text_color(rgb(0xBDBDBD))
+                                .text_size(px(8.5))
+                                .text_color(rgb(0xC8A882))
                                 .w(px(36.0)),
                         ),
                 ),
         )
-        // Vúmetro vertical lateral derecho
+        // Vúmetro vertical lateral derecho a ras de la grilla
         .child(compact_level_meter(peak_level, meter_h))
         .into_any_element()
 }
@@ -2179,7 +2375,7 @@ fn playlist_wheel_zoomed(
     ruler_h: f32,
     row_count: usize,
     cx: &mut App,
-) {
+) -> bool {
     let st = state(cx);
     let mut consumed = false;
     st.update(cx, |s, cx| {
@@ -2202,6 +2398,7 @@ fn playlist_wheel_zoomed(
     if consumed {
         cx.stop_propagation();
     }
+    consumed
 }
 
 pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
@@ -2216,11 +2413,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let loop_start = pl.loop_start_ticks;
     let loop_end = pl.loop_end_ticks;
     let loop_active = pl.loop_region_active;
+    let loop_dragging = pl.loop_dragging;
     let selected = pl.selected_clips.clone();
     // El clipboard de la playlist habilita/deshabilita "Pegar" en el menú.
     let clipboard_empty = pl.clipboard.is_empty();
     let is_looping = app.is_looping;
-    let audio_proxy = app.audio_proxy.clone();
+    let _audio_proxy = app.audio_proxy.clone();
     let bpm = app.transport.bpm;
     let sample_rate = app.transport.sample_rate.get() as u32;
     let beats_per_bar = app.transport.beats_per_bar;
@@ -2233,25 +2431,32 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let selected_track = app.selected_track_index;
     let playlist_scroll_h = app.playlist_scroll_h.clone();
     let playlist_scroll_v = app.playlist_scroll_v.clone();
-    // Pan con botón central en curso (cursor de puño cerrado mientras dura).
+    // Pan con botón central en curso (cursor oculto mientras dura).
     let playlist_panning = app.playlist_pan.is_some();
-    // Gesto de mezcla en curso (compartido con la Session Matrix: mismo tag
-    // global, así el drag no se corta al re-render de los headers).
+    // Gesto de mezcla en curso (compartido con la Session Matrix).
     let mix_drag = app.matrix_mix_drag;
 
     // Compás real según SIG (BPM sólo afecta a segundos, no a ticks).
     let ticks_per_bar_val = ticks_per_bar(ppqn, beats_per_bar);
-    let display_tick = loop_display_tick(playhead_tick, loop_start, loop_end, is_looping && loop_active);
+    let display_tick = loop_display_tick(
+        playhead_tick,
+        loop_start,
+        loop_end,
+        is_looping && loop_active,
+    );
 
     let non_master: Vec<(usize, &Track)> = tracks
         .iter()
         .enumerate()
         .filter(|(_, t)| !t.is_master)
         .collect();
+    let non_master_count = non_master.len();
+    let track_ids_all: Vec<usize> = non_master.iter().map(|(tid, _)| *tid).collect();
+    let selected_lane_row: Option<usize> = non_master
+        .iter()
+        .position(|(vec_idx, _)| *vec_idx == selected_track);
 
-    // Snapshot de mezcla por fila (nombre, M, S, arm, vol, pan, peak) para los headers:
-    // se copia acá porque el render no puede mantener el borrow de `app`
-    // mientras arma la UI.
+    // Snapshot de mezcla por fila (nombre, M, S, arm, vol, pan, peak) para los headers.
     let rows_mix: Vec<(usize, String, bool, bool, bool, f32, f32, f32)> = non_master
         .iter()
         .map(|(idx, _)| {
@@ -2264,17 +2469,22 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let track_height = clamped_row_h(pl.row_h);
     let ruler_h = RULER_H;
     let row_count = non_master.len().max(1);
-    let canvas_h = ruler_h + row_count as f32 * track_height;
+    let lanes_h = row_count as f32 * track_height;
+    let quick_add_h = 26.0_f32;
+    let canvas_h = lanes_h + quick_add_h;
     let total_ticks = (ticks_per_bar_val * 128).max(playhead_tick + ticks_per_bar_val * 16);
     let canvas_w = (header_width + total_ticks as f32 * zoom_x).max(800.0);
     let grid_w = (canvas_w - header_width).max(1.0);
 
     let mut track_headers: Vec<AnyElement> = Vec::new();
-    for (row, name, muted, soloed, armed, volume, pan, peak) in &rows_mix {
+    for (lane_idx, (row, name, muted, soloed, armed, volume, pan, peak)) in
+        rows_mix.iter().enumerate()
+    {
         let vec_idx = *row;
         let selected_border = selected_track == vec_idx;
         track_headers.push(
             playlist_track_header_with_selected(
+                lane_idx,
                 *row,
                 vec_idx,
                 name.clone(),
@@ -2291,12 +2501,46 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .into_any_element(),
         );
     }
+    // Fila rápida inferior `+` bajo el último TrackHeader (inserción directa de pista)
+    track_headers.push(
+        div()
+            .id("pl_quick_add_track")
+            .w_full()
+            .h(px(quick_add_h))
+            .flex_shrink_0()
+            .bg(rgb(theme::DAW_CANVAS_VOID))
+            .border_r_1()
+            .border_color(rgb(theme::DAW_BORDER_SUBTLE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|this| this.bg(rgb(0x1B1B1F)))
+            .on_click(move |_, _, cx| {
+                let st = state(cx);
+                st.update(cx, |state, cx| {
+                    let tracks = state.tracks_mut();
+                    let next_id = tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                    let n = tracks.iter().filter(|t| !t.is_master).count();
+                    tracks.push(Track::new(next_id, format!("TRACK {:02}", n + 1), false));
+                    cx.notify();
+                });
+            })
+            .child(
+                Label::new("+")
+                    .text_size(px(13.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0x8A8A92)),
+            )
+            .into_any_element(),
+    );
 
     let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
     let zone_bounds_clip = zone_bounds.clone();
     let zone_bounds_move = zone_bounds.clone();
     let zone_bounds_drop = zone_bounds.clone();
     let zone_bounds_rec = zone_bounds.clone();
+    let zone_bounds_dnd = zone_bounds.clone();
 
     let mut clip_elems: Vec<AnyElement> = Vec::new();
     for (track_id, clip) in &pl.clips {
@@ -2306,14 +2550,22 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let clip_dur = clip.duration_ticks;
         let clip_x = ticks_to_px(clip_start, zoom_x);
         let clip_w = ticks_to_px(clip_dur, zoom_x).max(12.0);
-        let track_row = non_master.iter().position(|(i, _)| *i == *track_id).unwrap_or(0);
-        let clip_y = ruler_h + track_row as f32 * track_height + 1.0;
+        let track_row = non_master
+            .iter()
+            .position(|(i, _)| *i == *track_id)
+            .unwrap_or(0);
+        // La regla temporal vive fija arriba de `playlist_vscroll`, así que
+        // la fila 0 empieza en `y = 0.0` alineada píxel a píxel con `pl_row_1`.
+        let clip_y = track_row as f32 * track_height + 1.0;
         let clip_h = track_height - 2.0;
         let clip_id = clip.id;
         let clip_x_for_edge = clip_x;
         let clip_w_for_edge = clip_w;
         let trim_state = pl.trim_drag.filter(|d| d.clip_id == clip_id);
-        let hover_edge = pl.trim_hover.filter(|(id, _)| *id == clip_id).map(|(_, e)| e);
+        let hover_edge = pl
+            .trim_hover
+            .filter(|(id, _)| *id == clip_id)
+            .map(|(_, e)| e);
         let edge_cursor = match trim_state {
             Some(d) => Some(d.edge.cursor()),
             None => hover_edge.map(|e| e.cursor()),
@@ -2323,14 +2575,19 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let body_h = (clip_h - title_h).max(8.0);
         let track_stripe_col = theme::track_stripe_hex(track_row);
         let clip_bg: Hsla = if is_sel {
-            rgb(0x233040).into()
+            rgb(theme::DAW_CLIP_SELECTED_BG).into()
         } else {
-            rgb(0x1B1E24).into()
+            rgb(theme::DAW_CLIP_BODY_BG).into()
         };
         let clip_border = if is_sel {
-            rgb(theme::DAW_PLAYHEAD_BLUE)
+            rgb(0xFFFFFF)
         } else {
-            rgb(track_stripe_col)
+            rgb(0x101012)
+        };
+        let type_badge = match &clip.clip_type {
+            ClipType::Audio { .. } => "∿",
+            ClipType::Pattern { .. } => "▤",
+            ClipType::Automation { .. } => "⟿",
         };
         let title_text = clip_name.clone();
         let dragging_this = pl
@@ -2450,7 +2707,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     cx.notify();
                 });
             })
-            // Barra de título del clip con color de la pista estilo Bitwig Arranger
+            // Barra superior cromática del contenedor de clip (estilo Arranger de alta densidad)
             .child(
                 div()
                     .w_full()
@@ -2461,10 +2718,17 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     } else {
                         rgb(track_stripe_col)
                     })
-                    .px(px(5.0))
+                    .px(px(4.0))
+                    .gap(px(3.0))
                     .flex()
                     .items_center()
                     .overflow_hidden()
+                    .child(
+                        Label::new(type_badge)
+                            .text_size(px(8.5))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x111111)),
+                    )
                     .child(
                         Label::new(title_text)
                             .text_size(px(9.5))
@@ -2473,7 +2737,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             .truncate(),
                     ),
             );
-        if let ClipType::Audio { peaks, sample_offset_ticks, total_sample_ticks, .. } = &clip.clip_type {
+        if let ClipType::Audio {
+            peaks,
+            sample_offset_ticks,
+            total_sample_ticks,
+            ..
+        } = &clip.clip_type
+        {
             let peaks = peaks.clone();
             let soff = *sample_offset_ticks;
             let ttot = (*sample_offset_ticks + *total_sample_ticks).max(1);
@@ -2481,15 +2751,28 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
+                        // Sutil cámara interior teñida con el color de pista
+                        let base_col: Hsla = rgb(track_stripe_col).into();
+                        window.paint_quad(PaintQuad {
+                            bounds,
+                            background: Hsla {
+                                a: 0.08,
+                                ..base_col
+                            }
+                            .into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
                         if peaks.is_empty() {
                             return;
                         }
                         let start_ratio = (soff as f32 / ttot as f32).clamp(0.0, 1.0);
-                        let end_ratio =
-                            ((soff + clip_dur) as f32 / ttot as f32).clamp(start_ratio + 0.001, 1.0);
-                        let base_col: Hsla = rgb(track_stripe_col).into();
+                        let end_ratio = ((soff + clip_dur) as f32 / ttot as f32)
+                            .clamp(start_ratio + 0.0005, 1.0);
                         let bright_col = Hsla {
-                            l: (base_col.l + 0.22).clamp(0.0, 0.95),
+                            l: (base_col.l + 0.20).clamp(0.0, 0.95),
                             ..base_col
                         };
                         crate::views::waveform::draw_waveform_peaks_bounds(
@@ -2521,7 +2804,14 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 ));
             clip_elems.push(clip_el.into_any_element());
         } else {
-            // Pattern / Automation / MIDI: bloques de eventos proporcionales.
+            // Pattern / Automation / MIDI: miniatura vectorial multi-altura o curva con nodos
+            let auto_points: Vec<(f64, f32)> = match &clip.clip_type {
+                ClipType::Automation { points, .. } => points
+                    .iter()
+                    .map(|p| (p.rel_tick as f64, p.value))
+                    .collect(),
+                _ => Vec::new(),
+            };
             let is_pattern = matches!(clip.clip_type, ClipType::Pattern { .. });
             let clip_el = base_clip.child(
                 canvas(
@@ -2529,28 +2819,66 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     move |bounds, _, window, _| {
                         let w = bounds.size.width.as_f32();
                         let h = bounds.size.height.as_f32();
-                        if w <= 0.0 || h <= 0.0 {
+                        if w <= 1.0 || h <= 1.0 {
                             return;
                         }
                         let note_col: Hsla = rgb(track_stripe_col).into();
+                        window.paint_quad(PaintQuad {
+                            bounds,
+                            background: Hsla {
+                                a: 0.07,
+                                ..note_col
+                            }
+                            .into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
                         if is_pattern {
+                            const PITCH_ROWS: [f32; 8] =
+                                [0.72, 0.35, 0.55, 0.22, 0.68, 0.42, 0.28, 0.58];
                             let steps = 16usize;
-                            let bw = (w / steps as f32 * 0.65).max(2.0);
+                            let step_w = w / steps as f32;
+                            let bw = (step_w * 0.76).max(2.0);
+                            let bh = (h * 0.16).clamp(2.5, 6.0);
                             for i in 0..steps {
-                                if i % 2 == 0 {
+                                if i % 2 == 1 && i % 3 != 0 {
                                     continue;
                                 }
-                                let x = bounds.origin.x + px(i as f32 * w / steps as f32 + 1.0);
-                                let bh = h * 0.55;
-                                let mut path = PathBuilder::fill();
-                                path.move_to(point(x, bounds.origin.y + px((h - bh) / 2.0)));
-                                path.line_to(point(x + px(bw), bounds.origin.y + px((h - bh) / 2.0)));
-                                path.line_to(point(x + px(bw), bounds.origin.y + px((h + bh) / 2.0)));
-                                path.line_to(point(x, bounds.origin.y + px((h + bh) / 2.0)));
-                                path.close();
-                                if let Ok(p) = path.build() {
-                                    window.paint_path(p, note_col);
+                                let x = bounds.origin.x + px(i as f32 * step_w + 1.0);
+                                let pitch = PITCH_ROWS[(i / 2) % PITCH_ROWS.len()];
+                                let y = bounds.origin.y + px((h - bh) * pitch);
+                                window.paint_quad(PaintQuad {
+                                    bounds: Bounds::new(point(x, y), size(px(bw), px(bh))),
+                                    background: note_col.into(),
+                                    border_color: Hsla::default(),
+                                    corner_radii: gpui_kit::Corners::all(px(1.0)),
+                                    border_widths: gpui_kit::Edges::default(),
+                                    border_style: BorderStyle::default(),
+                                });
+                            }
+                        } else if auto_points.len() >= 2 {
+                            let max_t = auto_points
+                                .iter()
+                                .map(|(t, _)| *t)
+                                .fold(clip_dur.max(1) as f64, f64::max);
+                            let mut curve = PathBuilder::stroke(px(1.5));
+                            for (idx, &(t, val)) in auto_points.iter().enumerate() {
+                                let nx = (t / max_t).clamp(0.0, 1.0) as f32;
+                                let ny = 1.0 - val.clamp(0.0, 1.0);
+                                let pt = point(
+                                    bounds.origin.x + px(nx * w),
+                                    bounds.origin.y + px(3.0 + ny * (h - 6.0).max(1.0)),
+                                );
+                                if idx == 0 {
+                                    curve.move_to(pt);
+                                } else {
+                                    curve.line_to(pt);
                                 }
+                            }
+                            if let Ok(p) = curve.build() {
+                                window.paint_path(p, note_col);
                             }
                         } else {
                             let mut path = PathBuilder::stroke(px(1.5));
@@ -2586,75 +2914,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let playhead_x = ticks_to_px(display_tick, zoom_x);
     let hover_x = pl.hover_tick.map(|t| ticks_to_px(t, zoom_x));
     let snap_ticks_val = snap_step_ticks(ppqn, grid_den).max(1);
-    let mut grid_lines: Vec<AnyElement> = Vec::new();
-
-    // Líneas horizontales divisorias de carriles de pista (alta densidad Bitwig)
-    for r in 1..=row_count {
-        let ry = ruler_h + r as f32 * track_height;
-        grid_lines.push(
-            div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(ry - 1.0))
-                .w(px(grid_w))
-                .h(px(1.0))
-                .bg(rgb(0x161616))
-                .into_any_element(),
-        );
-    }
-
-    let mut step = 0u64;
-    let mut bar_num = 1u32;
-    while step <= total_ticks {
-        let x = ticks_to_px(step, zoom_x);
-        if x > grid_w {
-            break;
-        }
-        let gx = x;
-        let is_main = step % ticks_per_bar_val == 0;
-        grid_lines.push(
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let col = if is_main {
-                        rgb(0x333333)
-                    } else {
-                        rgb(0x232323)
-                    };
-                    let mut path = PathBuilder::stroke(px(1.0));
-                    path.move_to(point(bounds.origin.x, bounds.origin.y));
-                    path.line_to(point(
-                        bounds.origin.x,
-                        bounds.origin.y + bounds.size.height,
-                    ));
-                    if let Ok(p) = path.build() {
-                        window.paint_path(p, col);
-                    }
-                },
-            )
-            .absolute()
-            .left(px(gx))
-            .top(px(ruler_h))
-            .w(px(1.0))
-            .h(px(canvas_h - ruler_h))
-            .into_any_element(),
-        );
-        if is_main {
-            grid_lines.push(
-                Label::new(bar_num.to_string())
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0xB8B8B8))
-                    .absolute()
-                    .left(px(gx + 4.0))
-                    .top(px(3.0))
-                    .into_any_element(),
-            );
-            bar_num += 1;
-        }
-        step += snap_ticks_val;
-    }
-
+    let beat_ticks_val = ppqn.max(1);
     let loop_render = if loop_active && loop_end > loop_start {
         let lx0 = ticks_to_px(loop_start, zoom_x);
         let lx1 = ticks_to_px(loop_end, zoom_x);
@@ -2662,6 +2922,166 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     } else {
         None
     };
+
+    // Lienzo vectorial único en GPU para los carriles de pistas + espacio vacío +
+    // líneas de compás/pulso/subdivisión con culling horizontal por viewport.
+    let scroll_h_for_grid = playlist_scroll_h.clone();
+    let loop_for_grid = loop_render;
+    let grid_backdrop_canvas = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let ox = bounds.origin.x.as_f32();
+            let oy = bounds.origin.y.as_f32();
+            let w = bounds.size.width.as_f32();
+            let h = bounds.size.height.as_f32();
+            if w <= 0.0 || h <= 0.0 {
+                return;
+            }
+
+            // 1. Vacío profundo bajo las pistas activas
+            window.paint_quad(PaintQuad {
+                bounds,
+                background: rgb(theme::DAW_CANVAS_VOID).into(),
+                border_color: Hsla::default(),
+                corner_radii: gpui_kit::Corners::default(),
+                border_widths: gpui_kit::Edges::default(),
+                border_style: BorderStyle::default(),
+            });
+
+            // 2. Carriles horizontales de pistas activas (contraste nítido par/impar/seleccionada)
+            let active_rows = non_master_count.max(1);
+            for r in 0..active_rows {
+                let ry = oy + r as f32 * track_height;
+                let lane_bg = if selected_lane_row == Some(r) {
+                    theme::DAW_LANE_SELECTED_BG
+                } else if r % 2 == 0 {
+                    theme::DAW_LANE_EVEN_BG
+                } else {
+                    theme::DAW_LANE_ODD_BG
+                };
+                window.paint_quad(PaintQuad {
+                    bounds: Bounds::new(
+                        point(px(ox), px(ry)),
+                        size(px(w), px((track_height - 1.0).max(1.0))),
+                    ),
+                    background: rgb(lane_bg).into(),
+                    border_color: Hsla::default(),
+                    corner_radii: gpui_kit::Corners::default(),
+                    border_widths: gpui_kit::Edges::default(),
+                    border_style: BorderStyle::default(),
+                });
+            }
+
+            // 3. Culling horizontal según el offset actual del ScrollHandle
+            let scroll_x = scroll_h_for_grid.offset().x.as_f32();
+            let vis_w = scroll_h_for_grid.bounds().size.width.as_f32().max(1400.0);
+            let vis_x0 = (-scroll_x - 32.0).max(0.0);
+            let vis_x1 = (vis_x0 + vis_w + 64.0).min(w);
+            let lanes_bottom = oy + lanes_h.min(h);
+
+            // Sutil realce de región de loop activa sobre los carriles
+            if let Some((lx0, lx1)) = loop_for_grid {
+                if is_looping {
+                    let cx0 = lx0.max(vis_x0);
+                    let cx1 = lx1.min(vis_x1);
+                    if cx1 > cx0 {
+                        window.paint_quad(PaintQuad {
+                            bounds: Bounds::new(
+                                point(px(ox + cx0), px(oy)),
+                                size(px(cx1 - cx0), px(lanes_h.min(h))),
+                            ),
+                            background: rgba(0xFFFFFF08).into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
+                    }
+                }
+            }
+
+            // 4. Líneas verticales agrupadas en lote (Subdivisión / Beat / Compás)
+            let bar_ticks = ticks_per_bar_val.max(1);
+            let snap_px = ticks_to_px(snap_ticks_val, zoom_x);
+            let beat_px = ticks_to_px(beat_ticks_val, zoom_x);
+
+            if snap_px >= 7.0 && snap_ticks_val < beat_ticks_val {
+                let first_tick =
+                    (px_to_ticks(vis_x0, zoom_x) / snap_ticks_val) * snap_ticks_val;
+                let last_tick = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
+                let mut minor_pb = PathBuilder::stroke(px(1.0));
+                let mut has_minor = false;
+                let mut t = first_tick;
+                while t <= last_tick {
+                    if t % beat_ticks_val != 0 && t % bar_ticks != 0 {
+                        let gx = ox + ticks_to_px(t, zoom_x);
+                        minor_pb.move_to(point(px(gx), px(oy)));
+                        minor_pb.line_to(point(px(gx), px(lanes_bottom)));
+                        has_minor = true;
+                    }
+                    t = t.saturating_add(snap_ticks_val);
+                }
+                if has_minor {
+                    if let Ok(path) = minor_pb.build() {
+                        window.paint_path(path, rgb(0x202023));
+                    }
+                }
+            }
+
+            if beat_px >= 7.0 {
+                let first_beat =
+                    (px_to_ticks(vis_x0, zoom_x) / beat_ticks_val) * beat_ticks_val;
+                let last_tick = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
+                let mut beat_pb = PathBuilder::stroke(px(1.0));
+                let mut has_beat = false;
+                let mut t = first_beat;
+                while t <= last_tick {
+                    if t % bar_ticks != 0 {
+                        let gx = ox + ticks_to_px(t, zoom_x);
+                        beat_pb.move_to(point(px(gx), px(oy)));
+                        beat_pb.line_to(point(px(gx), px(lanes_bottom)));
+                        has_beat = true;
+                    }
+                    t = t.saturating_add(beat_ticks_val);
+                }
+                if has_beat {
+                    if let Ok(path) = beat_pb.build() {
+                        window.paint_path(path, rgb(0x1B1B1E));
+                    }
+                }
+            }
+
+            let bar_stride = if ticks_to_px(bar_ticks, zoom_x) >= 6.0 {
+                1
+            } else {
+                adaptive_bar_stride(bar_ticks, zoom_x)
+            };
+            let major_step = bar_ticks.saturating_mul(bar_stride).max(1);
+            let first_bar_tick = (px_to_ticks(vis_x0, zoom_x) / major_step) * major_step;
+            let last_tick = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
+            let mut bar_pb = PathBuilder::stroke(px(1.0));
+            let mut has_bar = false;
+            let mut t = first_bar_tick;
+            while t <= last_tick {
+                let gx = ox + ticks_to_px(t, zoom_x);
+                bar_pb.move_to(point(px(gx), px(oy)));
+                bar_pb.line_to(point(px(gx), px(lanes_bottom)));
+                has_bar = true;
+                t = t.saturating_add(major_step);
+            }
+            if has_bar {
+                if let Ok(path) = bar_pb.build() {
+                    window.paint_path(path, rgb(0x141416));
+                }
+            }
+        },
+    )
+    .absolute()
+    .left(px(0.0))
+    .top(px(0.0))
+    .w(px(grid_w))
+    .h(px(canvas_h))
+    .into_any_element();
 
     let mut drop_zones: Vec<AnyElement> = Vec::new();
     if let Some(ref path) = dragged_sample {
@@ -2674,72 +3094,48 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             div()
                 .absolute()
                 .left(px(10.0))
-                .top(px(ruler_h + 10.0))
-                .bg(rgba(0xE8782A99))
-                .rounded(px(3.0))
-                .p(px(4.0))
-                .child(Label::new(format!("🎵 {}", file_name)).text_xs())
+                .top(px(8.0))
+                .bg(rgba(0xE8782AD8))
+                .border_1()
+                .border_color(rgb(0x111111))
+                .rounded(px(2.0))
+                .px(px(6.0))
+                .py(px(3.0))
+                .child(
+                    Label::new(format!("∿ Soltar clip: {}", file_name))
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x111111)),
+                )
                 .into_any_element(),
         );
     }
 
     let drop_handler = if dragged_sample.is_some() {
-        let _audio_proxy = audio_proxy.clone();
-        let track_ids: Vec<usize> = non_master.iter().map(|(tid, _)| *tid).collect();
+        let track_ids = track_ids_all.clone();
         Some(
             div()
                 .absolute()
                 .left(px(0.0))
-                .top(px(ruler_h))
+                .top(px(0.0))
                 .w(px(grid_w))
-                .h(px(canvas_h - ruler_h))
+                .h(px(lanes_h))
                 .id("pl_drop_handler")
                 .on_click(move |event, _, cx| {
                     let st = state(cx);
                     st.update(cx, |state, cx| {
-                        if let Some(ref path) = state.dragged_sample {
-                            let Some(pos) = event.mouse_position() else {
-                                return;
-                            };
-                            let zb = zone_bounds_drop.get();
-                            let rel_x = pos.x.as_f32() - zb[0];
-                            let raw = px_to_ticks(rel_x.max(0.0), zoom_x);
-                            let drop_tick = snap_ticks(raw, snap_ticks_val);
-                            let rel_y = pos.y.as_f32() - zb[1];
-                            let track_idx = (rel_y / track_height).floor() as usize;
-                            if track_idx < track_ids.len() {
-                                let target_tid = track_ids[track_idx];
-                                let name = path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                let pstr = path.to_string_lossy().to_string();
-                                let (dur, _peaks) = load_sample_info(path, ppqn, bpm);
-                                let clip = build_audio_clip(
-                                    state.playlist_state.next_clip_id,
-                                    name,
-                                    path,
-                                    drop_tick,
-                                    ppqn,
-                                    bpm,
-                                    rgb(theme::track_stripe_hex(track_idx)).into(),
+                        if let Some(path) = state.dragged_sample.take() {
+                            if let Some(pos) = event.mouse_position() {
+                                let zb = zone_bounds_drop.get();
+                                drop_audio_at_grid_pos(
+                                    state,
+                                    &path,
+                                    pos.x.as_f32() - zb[0],
+                                    pos.y.as_f32() - zb[1],
+                                    &track_ids,
                                 );
-                                let cid = state.playlist_state.next_clip_id;
-                                state.playlist_state.next_clip_id += 1;
-                                state.playlist_state.clips.push((target_tid, clip));
-                                state.audio_proxy.send(GuiCommand::LoadClip {
-                                    clip_id: cid,
-                                    path: pstr,
-                                    position_secs: ticks_to_secs_precise(drop_tick, ppqn, bpm),
-                                    duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
-                                    offset_secs: 0.0,
-                                    track_index: target_tid,
-                                    scene_index: 0,
-                                });
                             }
                         }
-                        state.dragged_sample = None;
                         cx.notify();
                     });
                 })
@@ -2761,7 +3157,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 *track_key,
                 clip.id,
                 ticks_to_px(clip.start_tick, zoom_x),
-                ruler_h + track_row as f32 * track_height + 1.0,
+                track_row as f32 * track_height + 1.0,
                 ticks_to_px(clip.duration_ticks, zoom_x).max(12.0),
                 track_height - 2.0,
             )
@@ -2780,7 +3176,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     .top(px(y0))
                     .w(px((x1 - x0).max(1.0)))
                     .h(px((y1 - y0).max(1.0)))
-                    .bg(rgba(0x3AA8E040))
+                    .bg(rgba(0x3AA8E038))
                     .border_1()
                     .border_color(rgb(theme::DAW_PLAYHEAD_BLUE))
                     .rounded(px(1.0))
@@ -2793,10 +3189,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let catcher_zone_right = zone_bounds.clone();
     let catcher_zone_left = zone_bounds.clone();
     let catcher_zone_move = zone_bounds.clone();
-    let catcher_rects_right: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> = Rc::new(clip_rects.clone());
+    let catcher_rects_right: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> =
+        Rc::new(clip_rects.clone());
     let catcher_rects_left = catcher_rects_right.clone();
-    let clip_rects_marquee_rc: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> =
-        Rc::new(clip_rects);
+    let clip_rects_marquee_rc: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> = Rc::new(clip_rects);
 
     let zone_bounds_seek = zone_bounds.clone();
     let zone_grid_move = zone_bounds.clone();
@@ -2805,9 +3201,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let seek_zone = div()
         .absolute()
         .left(px(0.0))
-        .top(px(ruler_h))
+        .top(px(0.0))
         .w(px(grid_w))
-        .h(px(canvas_h - ruler_h))
+        .h(px(lanes_h))
         .id("pl_seek_zone")
         .child(
             canvas(
@@ -2832,104 +3228,44 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             let rel_x = pos.x.as_f32() - zb[0];
             let clicked = px_to_ticks(rel_x.max(0.0), zoom_x);
             let st = state(cx);
-            st.update(cx, |state, _| {
+            st.update(cx, |state, cx| {
                 let target = ticks_to_samples_precise(clicked, ppqn, bpm, sample_rate);
+                state.playlist_state.playhead_tick = clicked;
                 state.audio_proxy.send(GuiCommand::Seek { sample_count: target });
+                cx.notify();
             });
         });
 
-    // Fondo de la regla + fondo del lienzo de carriles estilo Bitwig Arranger
-    let children = vec![
-        div()
-            .absolute()
-            .left(px(0.0))
-            .top(px(ruler_h))
-            .w(px(grid_w))
-            .h(px(canvas_h - ruler_h))
-            .bg(rgb(theme::DAW_GRID_BG))
-            .into_any_element(),
-        div()
-            .absolute()
-            .left(px(0.0))
-            .top(px(0.0))
-            .w(px(grid_w))
-            .h(px(ruler_h))
-            .bg(rgb(theme::DAW_HEADER_DARK_BG))
-            .border_b_1()
-            .border_color(rgb(theme::DAW_BORDER_LIGHT))
-            .into_any_element(),
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let col = rgb(0x232323);
-                let mut path = PathBuilder::stroke(px(1.0));
-                path.move_to(point(bounds.origin.x, bounds.origin.y));
-                path.line_to(point(
-                    bounds.origin.x,
-                    bounds.origin.y + bounds.size.height,
-                ));
-                if let Ok(p) = path.build() {
-                    window.paint_path(p, col);
-                }
-            },
-        )
-        .absolute()
-        .left(px(0.0))
-        .top(px(ruler_h))
-        .w(px(1.0))
-        .h(px(canvas_h - ruler_h))
-        .into_any_element(),
-    ];
-
-    // Playhead sincronizado (cabezal triangular azul #3aa8e0 en la regla + línea vertical)
+    // Líneas verticales del Playhead y bordes de Loop sobre los carriles de pistas
     let loop_win = loop_render;
     let playhead_canvas = canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
+            let top = bounds.origin.y;
+            let bot = bounds.origin.y + px(lanes_h.min(bounds.size.height.as_f32()));
             if let Some((lx0, lx1)) = loop_win {
-                let top = bounds.origin.y;
-                let bot = bounds.origin.y + bounds.size.height;
-                let l_start = bounds.origin.x + px(lx0);
-                let l_w = px((lx1 - lx0).max(2.0));
-                window.paint_quad(PaintQuad {
-                    bounds: Bounds::new(point(l_start, top), size(l_w, px(4.0))),
-                    background: rgb(theme::DAW_PLAYHEAD_BLUE).into(),
-                    border_color: Hsla::default(),
-                    corner_radii: gpui_kit::Corners::default(),
-                    border_widths: gpui_kit::Edges::default(),
-                    border_style: BorderStyle::default(),
-                });
+                let loop_line_col = if is_looping {
+                    rgba(0xE0E6EE70)
+                } else {
+                    rgba(0x78808A55)
+                };
                 for lx in [lx0, lx1] {
-                    let mut loop_path = PathBuilder::stroke(px(1.5));
+                    let mut loop_path = PathBuilder::stroke(px(1.0));
                     let lx = bounds.origin.x + px(lx);
                     loop_path.move_to(point(lx, top));
                     loop_path.line_to(point(lx, bot));
                     if let Ok(p) = loop_path.build() {
-                        window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
+                        window.paint_path(p, loop_line_col);
                     }
                 }
             }
 
             let x = bounds.origin.x + px(playhead_x);
-            let top = bounds.origin.y;
-            let bot = bounds.origin.y + bounds.size.height;
-
-            // Línea vertical principal del Playhead
             let mut playhead_path = PathBuilder::stroke(px(1.5));
             playhead_path.move_to(point(x, top));
-            playhead_path.line_to(point(x, bot));
+            playhead_path.line_to(point(x, bounds.origin.y + bounds.size.height));
             if let Ok(p) = playhead_path.build() {
-                window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
-            }
-
-            // Cabezal triangular estilo Bitwig en el Ruler superior
-            let mut cap = PathBuilder::fill();
-            cap.move_to(point(x - px(5.0), top));
-            cap.line_to(point(x + px(5.0), top));
-            cap.line_to(point(x, top + px(9.0)));
-            cap.close();
-            if let Ok(p) = cap.build() {
-                window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
+                window.paint_path(p, rgb(0xEBF4FF));
             }
         },
     )
@@ -2939,7 +3275,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .w(px(grid_w))
     .h(px(canvas_h));
 
-    // Guía del puntero (playhead fantasma).
+    // Guía vertical del puntero sobre los carriles (playhead fantasma)
     let hover_zone = zone_bounds.clone();
     let hover_canvas = canvas(
         |_, _, _| {},
@@ -2960,15 +3296,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             body.move_to(point(x, top));
             body.line_to(point(x, bot));
             if let Ok(p) = body.build() {
-                window.paint_path(p, rgb(0xFFFFFF).opacity(0.28));
-            }
-            let mut head = PathBuilder::fill();
-            head.move_to(point(x - px(4.0), top));
-            head.line_to(point(x + px(4.0), top));
-            head.line_to(point(x, top + px(7.0)));
-            head.close();
-            if let Ok(p) = head.build() {
-                window.paint_path(p, rgb(0xFFFFFF).opacity(0.55));
+                window.paint_path(p, rgb(0xFFFFFF).opacity(0.26));
             }
         },
     )
@@ -2979,142 +3307,466 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     .h(px(canvas_h));
 
     let mut all: Vec<AnyElement> = Vec::new();
-    // Barra de herramientas superior de la Playlist / Arranger View
-    all.push(
-        h_flex()
-            .items_center()
-            .gap(px(8.0))
-            .px(px(8.0))
-            .py(px(2.0))
-            .bg(rgb(theme::DAW_HEADER_DARK_BG))
-            .border_b_1()
-            .border_color(rgb(theme::DAW_BORDER_SUBTLE))
-            .child(
-                Label::new("ARRANGER TIMELINE")
-                    .text_xs()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
-            )
-            .child(
-                div()
-                    .w(px(1.0))
-                    .h(px(12.0))
-                    .bg(rgb(theme::DAW_BORDER_LIGHT)),
-            )
-            .child(
-                Label::new(format!(
-                    "SIG {}/{}  •  {:.1} BPM",
-                    beats_per_bar, beat_division, bpm
-                ))
-                .text_xs()
-                .text_color(rgb(0xC8C8C8)),
-            )
-            .child(
-                div()
-                    .px(px(6.0))
-                    .py(px(1.0))
-                    .bg(rgb(0x2F2F2F))
-                    .border_1()
-                    .border_color(rgb(theme::DAW_BORDER_LIGHT))
-                    .rounded(px(2.0))
-                    .child(
-                        Label::new(format!("SNAP 1/{}", grid_den))
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(theme::DAW_PLAYHEAD_BLUE)),
-                    ),
-            )
-            .id("pl_grid_header")
-            .on_click(move |_, _, cx| {
-                let st = state(cx);
-                st.update(cx, |state, cx| {
-                    state.playlist_state.grid_denominator = match state.playlist_state.grid_denominator {
-                        2 => 4,
-                        4 => 8,
-                        8 => 16,
-                        _ => 2,
-                    };
-                    cx.notify();
-                });
-            })
-            .child(
-                Button::new("pl_zoom_out")
-                    .rounded(gpui_kit::component::button::ButtonRounded::None)
-                    .label("-")
-                    .compact()
-                    .bg(rgb(0x2F2F2F))
-                    .text_color(rgb(0xE0E0E0))
-                    .on_click(move |_, _, cx| {
-                        let st = state(cx);
-                        st.update(cx, |state, cx| {
-                            state.playlist_state.zoom_x = step_zoom(state.playlist_state.zoom_x, false);
-                            cx.notify();
-                        });
-                    }),
-            )
-            .child(
-                Button::new("pl_zoom_in")
-                    .rounded(gpui_kit::component::button::ButtonRounded::None)
-                    .label("+")
-                    .compact()
-                    .bg(rgb(0x2F2F2F))
-                    .text_color(rgb(0xE0E0E0))
-                    .on_click(move |_, _, cx| {
-                        let st = state(cx);
-                        st.update(cx, |state, cx| {
-                            state.playlist_state.zoom_x = step_zoom(state.playlist_state.zoom_x, true);
-                            cx.notify();
-                        });
-                    }),
-            )
-            .into_any_element(),
-    );
-    // Esquina superior-izquierda fija (sobre la columna de headers).
-    let corner = div()
-        .w_full()
+
+    // =========================================================================
+    // FILA 1: CABECERA FIJA SUPERIOR (ESQUINA IZQUIERDA + REGLA DE TIEMPO GPU)
+    // =========================================================================
+    let ruler_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
+    let ruler_bounds_rec = ruler_bounds.clone();
+    let ruler_bounds_down = ruler_bounds.clone();
+    let ruler_bounds_move = ruler_bounds.clone();
+    let ruler_bounds_catcher = ruler_bounds.clone();
+
+    let corner = h_flex()
+        .w(px(header_width))
         .h(px(ruler_h))
+        .flex_none()
         .px(px(6.0))
-        .flex()
         .items_center()
         .justify_between()
         .bg(rgb(theme::DAW_HEADER_DARK_BG))
         .border_r_1()
         .border_b_1()
-        .border_color(rgb(theme::DAW_BORDER_LIGHT))
+        .border_color(rgb(theme::DAW_BORDER_SUBTLE))
         .child(
-            Label::new("TRACKS")
-                .text_size(px(9.5))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x9E9E9E)),
+            h_flex()
+                .items_center()
+                .gap(px(5.0))
+                .child(
+                    div()
+                        .w(px(14.0))
+                        .h(px(14.0))
+                        .rounded(px(2.0))
+                        .bg(rgb(theme::DAW_ACCENT_ORANGE))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Label::new("≡")
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x111111)),
+                        ),
+                )
+                .child(
+                    Label::new("ARRANGE")
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xDCDCE2)),
+                ),
         )
         .child(
-            Label::new("BARS")
-                .text_size(px(9.0))
-                .text_color(rgb(0x787878)),
+            div()
+                .id("pl_loop_toggle")
+                .px(px(5.0))
+                .py(px(1.5))
+                .rounded(px(2.0))
+                .cursor_pointer()
+                .bg(if loop_active && is_looping {
+                    rgb(theme::DAW_ACCENT_ORANGE)
+                } else if loop_active {
+                    rgb(0x36383E)
+                } else {
+                    rgb(0x27282C)
+                })
+                .border_1()
+                .border_color(rgb(theme::DAW_BORDER_LIGHT))
+                .on_click(move |_, _, cx| {
+                    let st = state(cx);
+                    st.update(cx, |s, cx| {
+                        s.playlist_state.loop_region_active = !s.playlist_state.loop_region_active;
+                        if s.playlist_state.loop_region_active {
+                            s.playlist_state.ensure_minimum_global_loop(true);
+                        }
+                        cx.notify();
+                    });
+                })
+                .child(
+                    Label::new("⟳ LOOP")
+                        .text_size(px(8.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if loop_active && is_looping {
+                            rgb(0x111111)
+                        } else if loop_active {
+                            rgb(0xE2E6EC)
+                        } else {
+                            rgb(0x888C94)
+                        }),
+                ),
         )
         .into_any_element();
-    // Navegación: scroll vertical externo + horizontal interno (mismo patrón
-    // anidado que el arranger). La fila interna tiene DOS columnas: headers
-    // fijos a la izquierda y panel temporal a la derecha. El scroll vertical
-    // mueve la fila entera (sincronía gratis entre headers y pistas) y el
-    // horizontal vive SÓLO en el panel derecho, así los headers nunca salen
-    // de vista en X. El panel derecho recorta (`overflow_x_scroll`) TODO lo
-    // temporal: clips y regla mueren en su borde, sin z-index ni overlaps
-    // sobre la columna fija.
-    // Los scrolls usan handles explícitos del estado (`playlist_scroll_h/v`,
-    // como el mixer) para que el zoom con rueda anclado al cursor pueda
-    // compensar el viewport; las scrollbars visibles las pinta el kit sobre
-    // esos mismos handles.
+
+    let scroll_h_for_ruler = playlist_scroll_h.clone();
+    let scroll_h_for_ruler_wheel = playlist_scroll_h.clone();
+    let hover_zone_for_ruler = zone_bounds.clone();
+    let ruler_bounds_for_hover = ruler_bounds.clone();
+    let ruler_bar = div()
+        .id("pl_ruler_bar")
+        .flex_1()
+        .min_w_0()
+        .h(px(ruler_h))
+        .relative()
+        .overflow_hidden()
+        .cursor_pointer()
+        .child(
+            canvas(
+                move |bounds, _, _| {
+                    ruler_bounds_rec.set([
+                        bounds.origin.x.as_f32(),
+                        bounds.origin.y.as_f32(),
+                        bounds.size.width.as_f32(),
+                        bounds.size.height.as_f32(),
+                    ]);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            ruler_mouse_down(
+                cx,
+                (event.position.x.as_f32(), event.position.y.as_f32()),
+                ruler_bounds_down.get(),
+                ruler_h,
+                event.click_count,
+            );
+        })
+        .on_mouse_move(move |event, _, cx| {
+            let rb = ruler_bounds_move.get();
+            if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
+                ruler_mouse_move(cx, event.position.x.as_f32(), rb);
+            } else {
+                finish_ruler_drag(cx);
+                let scroll_x = state(cx).read(cx).playlist_scroll_h.offset().x.as_f32();
+                let local_x = (event.position.x.as_f32() - rb[0] - scroll_x).max(0.0);
+                set_hover_tick(cx, Some(px_to_ticks(local_x, zoom_x)));
+            }
+        })
+        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            finish_ruler_drag(cx);
+        })
+        .on_scroll_wheel(move |event, _, cx| {
+            let consumed = playlist_wheel_zoomed(
+                event.delta,
+                event.modifiers.control || event.modifiers.platform,
+                event.modifiers.alt,
+                event.modifiers.shift,
+                (event.position.x.as_f32(), event.position.y.as_f32()),
+                total_ticks,
+                header_width,
+                0.0,
+                row_count,
+                cx,
+            );
+            if !consumed {
+                let raw_px = match event.delta {
+                    ScrollDelta::Pixels(p) => {
+                        if p.x.as_f32().abs() > 0.1 {
+                            p.x.as_f32()
+                        } else {
+                            p.y.as_f32()
+                        }
+                    }
+                    ScrollDelta::Lines(p) => {
+                        let d = if p.x.abs() > 0.01 { p.x } else { p.y };
+                        d * 24.0
+                    }
+                };
+                if raw_px.abs() > 0.01 {
+                    let cur = scroll_h_for_ruler_wheel.offset().x.as_f32();
+                    let max = scroll_h_for_ruler_wheel.max_offset().x.as_f32();
+                    let next = clamp_scroll_offset(cur + raw_px, max);
+                    scroll_h_for_ruler_wheel
+                        .set_offset(point(px(next), scroll_h_for_ruler_wheel.offset().y));
+                    state(cx).update(cx, |_, cx| cx.notify());
+                }
+            }
+        })
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    let ox = bounds.origin.x.as_f32();
+                    let oy = bounds.origin.y.as_f32();
+                    let w = bounds.size.width.as_f32();
+                    let h = bounds.size.height.as_f32();
+                    if w <= 0.0 || h <= 0.0 {
+                        return;
+                    }
+                    let loop_strip_h = 9.0_f32;
+                    let top_band_h = (h - loop_strip_h).max(1.0);
+
+                    // Banda superior de compases
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(point(px(ox), px(oy)), size(px(w), px(top_band_h))),
+                        background: rgb(theme::DAW_RULER_BG).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                    // Carril inferior para la barra de Loop
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(px(ox), px(oy + top_band_h)),
+                            size(px(w), px(loop_strip_h)),
+                        ),
+                        background: rgb(theme::DAW_LOOP_STRIP_BG).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                    // Divisor sutil entre regla y carril de loop + borde inferior
+                    for line_y in [oy + top_band_h, oy + h - 1.0] {
+                        window.paint_quad(PaintQuad {
+                            bounds: Bounds::new(point(px(ox), px(line_y)), size(px(w), px(1.0))),
+                            background: rgb(theme::DAW_BORDER_SUBTLE).into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
+                    }
+
+                    let scroll_x = scroll_h_for_ruler.offset().x.as_f32();
+                    let vis_x0 = (-scroll_x - 32.0).max(0.0);
+                    let vis_x1 = (vis_x0 + w + 64.0).min(grid_w);
+                    let bar_ticks = ticks_per_bar_val.max(1);
+                    let beat_px = ticks_to_px(beat_ticks_val, zoom_x);
+                    let snap_px = ticks_to_px(snap_ticks_val, zoom_x);
+
+                    // Ticks de subdivisión
+                    if snap_px >= 9.0 && snap_ticks_val < beat_ticks_val {
+                        let first_t =
+                            (px_to_ticks(vis_x0, zoom_x) / snap_ticks_val) * snap_ticks_val;
+                        let last_t = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
+                        let mut pb = PathBuilder::stroke(px(1.0));
+                        let mut any = false;
+                        let mut t = first_t;
+                        while t <= last_t {
+                            if t % beat_ticks_val != 0 && t % bar_ticks != 0 {
+                                let sx = ox + ticks_to_px(t, zoom_x) + scroll_x;
+                                if sx >= ox && sx <= ox + w {
+                                    pb.move_to(point(px(sx), px(oy + top_band_h - 3.0)));
+                                    pb.line_to(point(px(sx), px(oy + top_band_h)));
+                                    any = true;
+                                }
+                            }
+                            t = t.saturating_add(snap_ticks_val);
+                        }
+                        if any {
+                            if let Ok(p) = pb.build() {
+                                window.paint_path(p, rgb(0x3E4046));
+                            }
+                        }
+                    }
+
+                    // Ticks de pulso (beat)
+                    if beat_px >= 7.0 {
+                        let first_t =
+                            (px_to_ticks(vis_x0, zoom_x) / beat_ticks_val) * beat_ticks_val;
+                        let last_t = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
+                        let mut pb = PathBuilder::stroke(px(1.0));
+                        let mut any = false;
+                        let mut t = first_t;
+                        while t <= last_t {
+                            if t % bar_ticks != 0 {
+                                let sx = ox + ticks_to_px(t, zoom_x) + scroll_x;
+                                if sx >= ox && sx <= ox + w {
+                                    pb.move_to(point(px(sx), px(oy + top_band_h - 5.0)));
+                                    pb.line_to(point(px(sx), px(oy + top_band_h)));
+                                    any = true;
+                                }
+                            }
+                            t = t.saturating_add(beat_ticks_val);
+                        }
+                        if any {
+                            if let Ok(p) = pb.build() {
+                                window.paint_path(p, rgb(0x52555E));
+                            }
+                        }
+                    }
+
+                    // Ticks y numeración vectorial de compás sincronizados al sub-píxel
+                    let stride = adaptive_bar_stride(bar_ticks, zoom_x);
+                    let major_step = bar_ticks.saturating_mul(stride).max(1);
+                    let first_bar_t = (px_to_ticks(vis_x0, zoom_x) / major_step) * major_step;
+                    let last_bar_t = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
+                    let mut bar_pb = PathBuilder::stroke(px(1.0));
+                    let mut has_bar = false;
+                    let mut font = window.text_style().font();
+                    font.weight = FontWeight::SEMIBOLD;
+
+                    let mut t = first_bar_t;
+                    while t <= last_bar_t {
+                        let sx = ox + ticks_to_px(t, zoom_x) + scroll_x;
+                        if sx >= ox - 1.0 && sx <= ox + w + 1.0 {
+                            bar_pb.move_to(point(px(sx), px(oy + 2.0)));
+                            bar_pb.line_to(point(px(sx), px(oy + top_band_h)));
+                            has_bar = true;
+                        }
+                        if sx + 4.0 >= ox - 20.0 && sx + 4.0 <= ox + w - 4.0 {
+                            let bar_num = bar_number_at_tick(t, bar_ticks);
+                            let label = SharedString::from(bar_num.to_string());
+                            let run = TextRun {
+                                len: label.len(),
+                                font: font.clone(),
+                                color: rgb(0xDADEE6).into(),
+                                ..Default::default()
+                            };
+                            let shaped =
+                                window.text_system().shape_line(label, px(9.5), &[run], None);
+                            let _ = shaped.paint(
+                                point(px(sx + 4.0), px(oy + 1.5)),
+                                px(13.0),
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
+                        t = t.saturating_add(major_step);
+                    }
+                    if has_bar {
+                        if let Ok(p) = bar_pb.build() {
+                            window.paint_path(p, rgb(0x767A84));
+                        }
+                    }
+
+                    // Barra horizontal de región de Loop en el carril inferior
+                    if let Some((lx0_raw, lx1_raw)) = loop_render {
+                        let lx0 = lx0_raw + scroll_x;
+                        let lx1 = lx1_raw + scroll_x;
+                        if lx1 > 0.0 && lx0 < w {
+                            let bx0 = lx0.max(0.0);
+                            let bx1 = lx1.min(w);
+                            let bar_col = if is_looping {
+                                theme::DAW_LOOP_ACTIVE_BAR
+                            } else {
+                                theme::DAW_LOOP_INACTIVE_BAR
+                            };
+                            let cap_col = if is_looping { 0xF0F4FA } else { 0x7A8088 };
+                            let ly = oy + top_band_h + 1.5;
+                            let lh = (loop_strip_h - 3.0).max(3.0);
+                            window.paint_quad(PaintQuad {
+                                bounds: Bounds::new(
+                                    point(px(ox + bx0), px(ly)),
+                                    size(px((bx1 - bx0).max(2.0)), px(lh)),
+                                ),
+                                background: rgb(bar_col).into(),
+                                border_color: Hsla::default(),
+                                corner_radii: gpui_kit::Corners::all(px(1.0)),
+                                border_widths: gpui_kit::Edges::default(),
+                                border_style: BorderStyle::default(),
+                            });
+                            if lx0 >= 0.0 && lx0 <= w - 2.0 {
+                                window.paint_quad(PaintQuad {
+                                    bounds: Bounds::new(
+                                        point(px(ox + lx0), px(ly)),
+                                        size(px(2.0), px(lh)),
+                                    ),
+                                    background: rgb(cap_col).into(),
+                                    border_color: Hsla::default(),
+                                    corner_radii: gpui_kit::Corners::default(),
+                                    border_widths: gpui_kit::Edges::default(),
+                                    border_style: BorderStyle::default(),
+                                });
+                            }
+                            if lx1 >= 2.0 && lx1 <= w {
+                                window.paint_quad(PaintQuad {
+                                    bounds: Bounds::new(
+                                        point(px(ox + lx1 - 2.0), px(ly)),
+                                        size(px(2.0), px(lh)),
+                                    ),
+                                    background: rgb(cap_col).into(),
+                                    border_color: Hsla::default(),
+                                    corner_radii: gpui_kit::Corners::default(),
+                                    border_widths: gpui_kit::Edges::default(),
+                                    border_style: BorderStyle::default(),
+                                });
+                            }
+                        }
+                    }
+
+                    // Bandera fantasma en hover
+                    if let Some(hx_raw) = hover_x {
+                        let m = window.mouse_position();
+                        let zb = hover_zone_for_ruler.get();
+                        let rb = ruler_bounds_for_hover.get();
+                        let in_x =
+                            (m.x.as_f32() >= zb[0] && m.x.as_f32() <= zb[0] + zb[2])
+                            || (m.x.as_f32() >= rb[0] && m.x.as_f32() <= rb[0] + rb[2]);
+                        let hx = hx_raw + scroll_x;
+                        if in_x && hx >= -6.0 && hx <= w + 6.0 {
+                            let cx_pt = ox + hx;
+                            let mut ghost = PathBuilder::fill();
+                            ghost.move_to(point(px(cx_pt - 3.5), px(oy + 1.0)));
+                            ghost.line_to(point(px(cx_pt + 3.5), px(oy + 1.0)));
+                            ghost.line_to(point(px(cx_pt), px(oy + 7.5)));
+                            ghost.close();
+                            if let Ok(p) = ghost.build() {
+                                window.paint_path(p, rgb(0xFFFFFF).opacity(0.32));
+                            }
+                        }
+                    }
+
+                    // Cabezal triangular azul de reproducción (Playhead Flag)
+                    let ph_sx = playhead_x + scroll_x;
+                    if ph_sx >= -8.0 && ph_sx <= w + 8.0 {
+                        let cx_pt = ox + ph_sx;
+                        let mut stem = PathBuilder::stroke(px(1.5));
+                        stem.move_to(point(px(cx_pt), px(oy + 6.0)));
+                        stem.line_to(point(px(cx_pt), px(oy + h)));
+                        if let Ok(p) = stem.build() {
+                            window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
+                        }
+                        let mut flag = PathBuilder::fill();
+                        flag.move_to(point(px(cx_pt - 4.5), px(oy + 1.0)));
+                        flag.line_to(point(px(cx_pt + 4.5), px(oy + 1.0)));
+                        flag.line_to(point(px(cx_pt + 4.5), px(oy + 5.5)));
+                        flag.line_to(point(px(cx_pt), px(oy + 10.5)));
+                        flag.line_to(point(px(cx_pt - 4.5), px(oy + 5.5)));
+                        flag.close();
+                        if let Ok(p) = flag.build() {
+                            window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .into_any_element();
+
+    all.push(
+        h_flex()
+            .w_full()
+            .h(px(ruler_h))
+            .flex_shrink_0()
+            .bg(rgb(theme::DAW_RULER_BG))
+            .child(corner)
+            .child(ruler_bar)
+            .into_any_element(),
+    );
+
+    // =========================================================================
+    // FILA 2: CUERPO DE PISTAS Y CARRILES SINCRONIZADOS (V-SCROLL + H-SCROLL)
+    // =========================================================================
+    let dnd_track_ids = track_ids_all.clone();
     all.push(
         div()
             .flex_1()
             .min_h_0()
             .relative()
+            .bg(rgb(theme::DAW_CANVAS_VOID))
             .vertical_scrollbar(&playlist_scroll_v)
             .child(
                 div()
                     .id("playlist_vscroll")
                     .size_full()
+                    .bg(rgb(theme::DAW_CANVAS_VOID))
                     .overflow_y_scroll()
                     .track_scroll(&playlist_scroll_v)
                     .child(
@@ -3123,20 +3775,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             .flex_row()
                             .w_full()
                             .child(
-                                // Columna FIJA de headers: fuera del scroll
-                                // horizontal, una cabecera de `track_height`
-                                // por fila. Comparte el zoom de rueda de la
-                                // grilla para que `Ctrl`/`Alt` + rueda
-                                // funcionen también con el cursor acá.
                                 v_flex()
                                     .flex_none()
                                     .w(px(header_width))
+                                    .bg(rgb(theme::DAW_CANVAS_VOID))
                                     .id("playlist_headers")
                                     .on_scroll_wheel(move |event, _, cx| {
                                         playlist_wheel_zoomed(
                                             event.delta,
-                                            event.modifiers.control
-                                                || event.modifiers.platform,
+                                            event.modifiers.control || event.modifiers.platform,
                                             event.modifiers.alt,
                                             event.modifiers.shift,
                                             (
@@ -3145,121 +3792,107 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             ),
                                             total_ticks,
                                             header_width,
-                                            ruler_h,
+                                            0.0,
                                             row_count,
                                             cx,
                                         );
                                     })
-                                    .child(corner)
-                                            // Menú contextual de la Playlist: se
-                                            // abre con click DERECHO simple (sin
-                                            // arrastre). El marquee consume el
-                                            // gesto largo en `mouse_up`, así que
-                                            // acá sólo llegan los toques.
-                                            .context_menu(move |menu: PopupMenu, _window, _cx| {
-                                                let has_sel = !selected.is_empty();
-                                                let has_clip = !clipboard_empty;
-                                                menu.item(
-                                                    PopupMenuItem::new("Copiar")
-                                                        .disabled(!has_sel)
-                                                        .on_click(move |_, _, cx| {
-                                                            let st = state(cx);
-                                                            st.update(cx, |s, cx| {
-                                                                copy_selected_clips(
-                                                                    &mut s.playlist_state,
-                                                                );
-                                                                cx.notify();
-                                                            });
-                                                        }),
-                                                )
-                                                .item(
-                                                    PopupMenuItem::new("Cortar")
-                                                        .disabled(!has_sel)
-                                                        .on_click(move |_, _, cx| {
-                                                            let st = state(cx);
-                                                            st.update(cx, |s, cx| {
-                                                                if cut_selected_clips(
-                                                                    &mut s.playlist_state,
-                                                                ) > 0
-                                                                {
-                                                                    sync_clips_to_engine(s, cx);
-                                                                }
-                                                                cx.notify();
-                                                            });
-                                                        }),
-                                                )
-                                                .item(
-                                                    PopupMenuItem::new("Pegar")
-                                                        .disabled(!has_clip)
-                                                        .on_click(move |_, _, cx| {
-                                                            let st = state(cx);
-                                                            st.update(cx, |s, cx| {
-                                                                let grid =
-                                                                    snap_step_ticks(
-                                                                        s.playlist_state.ppqn,
-                                                                        s.playlist_state
-                                                                            .grid_denominator,
-                                                                    )
-                                                                    .max(1);
-                                                                let at =
-                                                                    s.playlist_state.paste_tick();
-                                                                let keys = playlist_row_keys(s);
-                                                                let ids = paste_clips(
-                                                                    &mut s.playlist_state,
-                                                                    at,
-                                                                    grid,
-                                                                    &keys,
-                                                                );
-                                                                if !ids.is_empty() {
-                                                                    sync_clips_to_engine(s, cx);
-                                                                }
-                                                                cx.notify();
-                                                            });
-                                                        }),
-                                                )
-                                                .item(
-                                                    PopupMenuItem::new("Duplicar")
-                                                        .disabled(!has_sel)
-                                                        .on_click(move |_, _, cx| {
-                                                            let st = state(cx);
-                                                            st.update(cx, |s, cx| {
-                                                                let grid =
-                                                                    snap_step_ticks(
-                                                                        s.playlist_state.ppqn,
-                                                                        s.playlist_state
-                                                                            .grid_denominator,
-                                                                    )
-                                                                    .max(1);
-                                                                let ids = duplicate_selected_clips(
-                                                                    &mut s.playlist_state,
-                                                                    grid,
-                                                                );
-                                                                if !ids.is_empty() {
-                                                                    sync_clips_to_engine(s, cx);
-                                                                }
-                                                                cx.notify();
-                                                            });
-                                                        }),
-                                                )
-                                                .item(PopupMenuItem::new("Deseleccionar").on_click(
-                                                    move |_, _, cx| {
-                                                        let st = state(cx);
-                                                        st.update(cx, |s, cx| {
-                                                            s.playlist_state
-                                                                .selected_clips
-                                                                .clear();
-                                                            cx.notify();
-                                                        });
-                                                    },
-                                                ))
-                                            })
-                                            .children(track_headers),
-                                    )
+                                    .context_menu(move |menu: PopupMenu, _window, _cx| {
+                                        let has_sel = !selected.is_empty();
+                                        let has_clip = !clipboard_empty;
+                                        menu.item(
+                                            PopupMenuItem::new("Copiar")
+                                                .disabled(!has_sel)
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |s, cx| {
+                                                        copy_selected_clips(&mut s.playlist_state);
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("Cortar")
+                                                .disabled(!has_sel)
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |s, cx| {
+                                                        if cut_selected_clips(
+                                                            &mut s.playlist_state,
+                                                        ) > 0
+                                                        {
+                                                            sync_clips_to_engine(s, cx);
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("Pegar")
+                                                .disabled(!has_clip)
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |s, cx| {
+                                                        let grid = snap_step_ticks(
+                                                            s.playlist_state.ppqn,
+                                                            s.playlist_state.grid_denominator,
+                                                        )
+                                                        .max(1);
+                                                        let at = s.playlist_state.paste_tick();
+                                                        let keys = playlist_row_keys(s);
+                                                        let ids = paste_clips(
+                                                            &mut s.playlist_state,
+                                                            at,
+                                                            grid,
+                                                            &keys,
+                                                        );
+                                                        if !ids.is_empty() {
+                                                            sync_clips_to_engine(s, cx);
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("Duplicar")
+                                                .disabled(!has_sel)
+                                                .on_click(move |_, _, cx| {
+                                                    let st = state(cx);
+                                                    st.update(cx, |s, cx| {
+                                                        let grid = snap_step_ticks(
+                                                            s.playlist_state.ppqn,
+                                                            s.playlist_state.grid_denominator,
+                                                        )
+                                                        .max(1);
+                                                        let ids = duplicate_selected_clips(
+                                                            &mut s.playlist_state,
+                                                            grid,
+                                                        );
+                                                        if !ids.is_empty() {
+                                                            sync_clips_to_engine(s, cx);
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .item(PopupMenuItem::new("Deseleccionar").on_click(
+                                            move |_, _, cx| {
+                                                let st = state(cx);
+                                                st.update(cx, |s, cx| {
+                                                    s.playlist_state.selected_clips.clear();
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ))
+                                    })
+                                    .children(track_headers),
+                            )
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .relative()
+                                    .bg(rgb(theme::DAW_CANVAS_VOID))
                                     .horizontal_scrollbar(&playlist_scroll_h)
                                     .child(
                                         div()
@@ -3274,343 +3907,430 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                                     .w(px(grid_w))
                                                     .h(px(canvas_h))
                                                     .relative()
-                                                    // Puño cerrado mientras se
-                                                    // navega con el botón
-                                                    // central (GPUI 0.3.x no
-                                                    // tiene `Grabbing`: es el
-                                                    // equivalente CSS).
-                                                    //
-                                                    // Fuera de la grilla no hay
-                                                    // cursor seteado, así que se
-                                                    // ve la flecha normal del
-                                                    // sistema (lo pedido: la cruz
-                                                    // es SÓLO de la zona
-                                                    // temporal). Los clips y
-                                                    // sus bordes pisan este valor
-                                                    // con el suyo, que es lo
-                                                    // correcto: sobre un borde de
-                                                    // trim tiene que verse la
-                                                    // flecha de redimensionado.
-                                                    //
-                                                    // Durante la navegación con
-                                                    // botón central el puntero se
-                                                    // OCULTA por completo.
-                                                    //
-                                                    // `CursorStyle::Hidden` no
-                                                    // existe upstream: lo agrega el
-                                                    // parche local de `gpui-pre`
-                                                    // (`gpui-pre-patched/`), que
-                                                    // lo implementa con
-                                                    // `wl_pointer.set_cursor(serial,
-                                                    // None, ..)` en Wayland y con
-                                                    // un cursor X11 vacío.
-                                                    //
-                                                    // La alternativa "pura" sería
-                                                    // `Platform::hide_cursor_until_mouse_moves`,
-                                                    // pero no sirve: no es
-                                                    // accesible desde la app
-                                                    // (`App::platform` es
-                                                    // `pub(crate)`) y además
-                                                    // RESTAURA el cursor en cada
-                                                    // evento `Motion`, o sea justo
-                                                    // al revés de lo que hace
-                                                    // falta mientras se arrastra.
+                                                    .can_drop(|payload: &dyn std::any::Any, _, _| {
+                                                        payload.is::<crate::views::explorer::ExplorerAudioDrag>()
+                                                    })
+                                                    .on_drop(
+                                                        move |payload: &crate::views::explorer::ExplorerAudioDrag,
+                                                              window,
+                                                              cx| {
+                                                            let path = payload.0.clone();
+                                                            let pos = window.mouse_position();
+                                                            let zb = zone_bounds_dnd.get();
+                                                            let rel_x = pos.x.as_f32() - zb[0];
+                                                            let rel_y = pos.y.as_f32() - zb[1];
+                                                            let tids = dnd_track_ids.clone();
+                                                            let st = state(cx);
+                                                            st.update(cx, |s, cx| {
+                                                                s.dragged_sample = None;
+                                                                drop_audio_at_grid_pos(
+                                                                    s, &path, rel_x, rel_y, &tids,
+                                                                );
+                                                                cx.notify();
+                                                            });
+                                                        },
+                                                    )
                                                     .cursor(if playlist_panning {
                                                         CursorStyle::Hidden
                                                     } else {
                                                         CursorStyle::Crosshair
                                                     })
-                                            // Move/Up del drag de clips a nivel de grilla (no
-                                            // del clip): el cursor sale del clip al arrastrar
-                                            // y los handlers del propio clip dejarían de
-                                            // disparar. Acá cubren toda la zona.
-                                            .on_mouse_move(move |event, _, cx| {
-                                                // Playhead fantasma: se actualiza
-                                                // PRIMERO y sin `return`, para
-                                                // que todos los gestos de abajo
-                                                // (trim / pan / drag) partan de
-                                                // un hover fresco. Durante un
-                                                // gesto se borra: con el botón
-                                                // apretado la guía no aporta
-                                                // nada y compite con el
-                                                // feedback del gesto.
-                                                {
-                                                    let st = state(cx).read(cx);
-                                                    let ps = &st.playlist_state;
-                                                    let gesturing = ps.trim_drag.is_some()
-                                                        || ps.clip_drag.is_some()
-                                                        || ps.marquee.is_some()
-                                                        || st.playlist_pan.is_some();
-                                                    if gesturing {
-                                                        clear_hover_tick(cx);
-                                                    } else {
+                                                    .on_mouse_move(move |event, _, cx| {
+                                                        {
+                                                            let st = state(cx).read(cx);
+                                                            let ps = &st.playlist_state;
+                                                            let gesturing = ps.trim_drag.is_some()
+                                                                || ps.clip_drag.is_some()
+                                                                || ps.marquee.is_some()
+                                                                || ps.loop_dragging
+                                                                || st.playlist_pan.is_some();
+                                                            if gesturing {
+                                                                clear_hover_tick(cx);
+                                                            } else {
+                                                                let zb = zone_grid_move.get();
+                                                                let rel_x =
+                                                                    event.position.x.as_f32()
+                                                                        - zb[0];
+                                                                set_hover_tick(
+                                                                    cx,
+                                                                    Some(px_to_ticks(
+                                                                        rel_x.max(0.0),
+                                                                        zoom_x,
+                                                                    )),
+                                                                );
+                                                            }
+                                                        }
+                                                        if state(cx)
+                                                            .read(cx)
+                                                            .playlist_state
+                                                            .trim_drag
+                                                            .is_some()
+                                                        {
+                                                            let zb = zone_grid_move.get();
+                                                            update_clip_trim(
+                                                                cx,
+                                                                event.position.x.as_f32(),
+                                                                zb,
+                                                            );
+                                                            return;
+                                                        }
+                                                        if event.pressed_button
+                                                            == Some(gpui_kit::MouseButton::Middle)
+                                                        {
+                                                            if is_playlist_panning(cx) {
+                                                                update_playlist_pan(
+                                                                    cx,
+                                                                    event.position,
+                                                                );
+                                                            }
+                                                            return;
+                                                        }
+                                                        if event.pressed_button
+                                                            != Some(gpui_kit::MouseButton::Left)
+                                                        {
+                                                            finish_clip_drag(cx);
+                                                            finish_clip_trim(cx);
+                                                            stop_playlist_pan(cx);
+                                                            return;
+                                                        }
+                                                        if state(cx)
+                                                            .read(cx)
+                                                            .playlist_state
+                                                            .clip_drag
+                                                            .is_none()
+                                                        {
+                                                            return;
+                                                        }
                                                         let zb = zone_grid_move.get();
-                                                        let rel_x = event.position.x.as_f32() - zb[0];
-                                                        set_hover_tick(
+                                                        update_clip_drag(
                                                             cx,
-                                                            Some(px_to_ticks(rel_x.max(0.0), zoom_x)),
+                                                            (
+                                                                event.position.x.as_f32(),
+                                                                event.position.y.as_f32(),
+                                                            ),
+                                                            zb,
                                                         );
-                                                    }
-                                                }
-                                                // Un gesto de recorte tiene
-                                                // prioridad: el borde arrastrado
-                                                // manda sobre el drag de clip.
-                                                if state(cx).read(cx).playlist_state.trim_drag.is_some() {
-                                                    let zb = zone_grid_move.get();
-                                                    update_clip_trim(
-                                                        cx,
-                                                        event.position.x.as_f32(),
-                                                        zb,
-                                                    );
-                                                    return;
-                                                }
-                                                // Botón central: el pan manda sobre
-                                                // cualquier otro gesto.
-                                                if event.pressed_button
-                                                    == Some(gpui_kit::MouseButton::Middle)
-                                                {
-                                                    if is_playlist_panning(cx) {
-                                                        update_playlist_pan(cx, event.position);
-                                                    }
-                                                    return;
-                                                }
-                                                if event.pressed_button
-                                                    != Some(gpui_kit::MouseButton::Left)
-                                                {
-                                                    // Botón soltado fuera: se consolida.
-                                                    finish_clip_drag(cx);
-                                                    finish_clip_trim(cx);
-                                                    stop_playlist_pan(cx);
-                                                    return;
-                                                }
-                                                if state(cx).read(cx).playlist_state.clip_drag.is_none() {
-                                                    return;
-                                                }
-                                                let zb = zone_grid_move.get();
-                                                update_clip_drag(
-                                                    cx,
-                                                    (
-                                                        event.position.x.as_f32(),
-                                                        event.position.y.as_f32(),
-                                                    ),
-                                                    zb,
-                                                );
-                                            })
-                                            .on_mouse_up(
-                                                gpui_kit::MouseButton::Left,
-                                                move |_, _, cx| {
-                                                    finish_clip_drag(cx);
-                                                    finish_clip_trim(cx);
-                                                },
-                                            )
-                                            // Navegación con botón central
-                                            // (ruedita), al estilo Bitwig:
-                                            // `MMB` + arrastrar en X mueve el
-                                            // viewport en el tiempo y en Y hace
-                                            // zoom continuo anclado al cursor.
-                                            // El cursor pasa a puño cerrado
-                                            // mientras dura el gesto (el
-                                            // `cursor` se lee en el render).
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Middle,
-                                                move |event, _, cx| {
-                                                    start_playlist_pan(
-                                                        cx,
-                                                        event.position,
-                                                        PlaylistNavGeometry {
-                                                            header_width,
-                                                            ruler_h,
-                                                            total_ticks,
-                                                            row_count,
+                                                    })
+                                                    .on_mouse_up(
+                                                        gpui_kit::MouseButton::Left,
+                                                        move |_, _, cx| {
+                                                            finish_clip_drag(cx);
+                                                            finish_clip_trim(cx);
                                                         },
-                                                    );
-                                                },
-                                            )
-                                            .on_mouse_up(
-                                                gpui_kit::MouseButton::Middle,
-                                                move |_, _, cx| stop_playlist_pan(cx),
-                                            )
-                                            // Marquee: click DERECHO + arrastrar dibuja
-                                            // el rectángulo de selección. El
-                                            // `mousemove`/`mouseup` viven en la
-                                            // grilla (no en el clip) porque el
-                                            // cursor sale del control al arrastrar.
-                                            // Sólo se registra el gesto; la
-                                            // resolución (seleccionar vs abrir
-                                            // menú) ocurre en el `mouseup`.
-                                            .on_mouse_down(
-                                                gpui_kit::MouseButton::Right,
-                                                move |event, _, cx| {
-                                                    // El ancla se fija en coords
-                                                    // LOCALES de la grilla: se
-                                                    // resta el origen medido del
-                                                    // panel (y no el de la zona
-                                                    // de seek, que está +
-                                                    // `ruler_h` más abajo).
-                                                    let (gx, gy) =
-                                                        grid_origin_from_zone(
-                                                            zone_bounds_marquee.get(),
-                                                            ruler_h,
-                                                        );
-                                                    let st = state(cx);
-                                                    st.update(cx, |s, cx| {
-                                                        let px =
-                                                            event.position.x.as_f32() - gx;
-                                                        let py =
-                                                            event.position.y.as_f32() - gy;
-                                                        s.playlist_state.marquee = Some(MarqueeState {
-                                                            start_x: px,
-                                                            start_y: py,
-                                                            cur_x: px,
-                                                            cur_y: py,
+                                                    )
+                                                    .on_mouse_down(
+                                                        gpui_kit::MouseButton::Middle,
+                                                        move |event, _, cx| {
+                                                            start_playlist_pan(
+                                                                cx,
+                                                                event.position,
+                                                                PlaylistNavGeometry {
+                                                                    header_width,
+                                                                    ruler_h: 0.0,
+                                                                    total_ticks,
+                                                                    row_count,
+                                                                },
+                                                            );
+                                                        },
+                                                    )
+                                                    .on_mouse_up(
+                                                        gpui_kit::MouseButton::Middle,
+                                                        move |_, _, cx| stop_playlist_pan(cx),
+                                                    )
+                                                    .on_mouse_down(
+                                                        gpui_kit::MouseButton::Right,
+                                                        move |event, _, cx| {
+                                                            let (gx, gy) = grid_origin_from_zone(
+                                                                zone_bounds_marquee.get(),
+                                                                0.0,
+                                                            );
+                                                            let st = state(cx);
+                                                            st.update(cx, |s, cx| {
+                                                                let px = event.position.x.as_f32()
+                                                                    - gx;
+                                                                let py = event.position.y.as_f32()
+                                                                    - gy;
+                                                                s.playlist_state.marquee =
+                                                                    Some(MarqueeState {
+                                                                        start_x: px,
+                                                                        start_y: py,
+                                                                        cur_x: px,
+                                                                        cur_y: py,
+                                                                    });
+                                                                cx.notify();
+                                                            });
+                                                        },
+                                                    )
+                                                    .on_mouse_move(move |event, _, cx| {
+                                                        if state(cx)
+                                                            .read(cx)
+                                                            .playlist_state
+                                                            .marquee
+                                                            .is_some()
+                                                        {
+                                                            return;
+                                                        }
+                                                        let st = state(cx);
+                                                        st.update(cx, |s, cx| {
+                                                            if s.playlist_state.marquee.is_none() {
+                                                                return;
+                                                            }
+                                                            if event.pressed_button.is_none() {
+                                                                s.playlist_state.marquee = None;
+                                                                cx.notify();
+                                                            }
                                                         });
-                                                        cx.notify();
-                                                    });
-                                                },
-                                            )
-                                            .on_mouse_move(move |event, _, cx| {
-                                                // Durante el marquee manda el
-                                                // catcher global: el clip no
-                                                // debe interceptar el gesto.
-                                                if state(cx).read(cx).playlist_state.marquee.is_some() {
-                                                    return;
-                                                }
-                                                let st = state(cx);
-                                                st.update(cx, |s, cx| {
-                                                    if s.playlist_state.marquee.is_none() {
-                                                        return;
-                                                    }
-                                                    // Botón soltado fuera: el
-                                                    // `mouse_up` no llega, así que
-                                                    // se cierra el gesto acá.
-                                                    if event.pressed_button.is_none() {
-                                                        s.playlist_state.marquee = None;
-                                                        cx.notify();
-                                                    }
-                                                });
-                                            })
-                                            .on_mouse_up(
-                                                gpui_kit::MouseButton::Right,
-                                                move |event, _, cx| {
-                                                    finish_marquee(
-                                                        (
-                                                            event.position.x.as_f32(),
-                                                            event.position.y.as_f32(),
-                                                        ),
-                                                        zone_bounds_marquee_up.get(),
-                                                        ruler_h,
-                                                        &clip_rects_marquee_rc.as_ref(),
-                                                        event.modifiers.shift,
-                                                        cx,
-                                                    );
-                                                },
-                                            )
-                                            // Zoom con rueda + modificadores, anclado al cursor:
-                                            // `Ctrl` + rueda = horizontal, `Alt` + rueda (o
-                                            // `Ctrl` + `Shift` + rueda) = altura de filas. Sin
-                                            // modificadores se deja pasar (scroll normal).
-                                            .on_scroll_wheel(move |event, _, cx| {
-                                                playlist_wheel_zoomed(
-                                                    event.delta,
-                                                    event.modifiers.control
-                                                        || event.modifiers.platform,
-                                                    event.modifiers.alt,
-                                                    event.modifiers.shift,
-                                                    (
-                                                        event.position.x.as_f32(),
-                                                        event.position.y.as_f32(),
-                                                    ),
-                                                    total_ticks,
-                                                    header_width,
-                                                    ruler_h,
-                                                    row_count,
-                                                    cx,
-                                                );
-                                            })
-                                    .children(children)
-                                    // Orden de capas (z-ordering):
-                                    //   1. Fondo + líneas verticales de grilla (detrás).
-                                    //   2. Clips de audio/MIDI con fondo opaco (tapan la grilla).
-                                    //   3. Overlays de drop/seek + playhead (encima de todo).
-                                    // Antes `grid_lines` iba DESPUÉS de `clip_elems` y las
-                                    // líneas atravesaban la forma de onda del clip.
-                                    .children(grid_lines)
-                                    .children(clip_elems)
-                                    // Marquee por encima de los clips (es el
-                                    // feedback del gesto en curso).
-                                    .children(drop_zones)
-                                    .when_some(drop_handler, |v, h| v.child(h))
-                                    .child(seek_zone.into_any_element())
-                                    .child(playhead_canvas.into_any_element())
-                                    .child(hover_canvas.into_any_element())
-                                    // El overlay del marquee va AL FINAL: al
-                                    // pintarse de atrás hacia adelante, queda
-                                    // por encima de clips, grilla y playhead.
-                                    .when_some(marquee_overlay, |v, h| v.child(h)),
-                                )
-                            )
-                        )
-                    )
-                )
-            .into_any_element(),
-    );
-    all.push(
-        h_flex()
-            .gap(px(4.0))
-            .child(
-                Button::new("pl_add_track").rounded(gpui_kit::component::button::ButtonRounded::None)
-                    .label("[ + ]")
-                    .compact()
-                    .on_click(move |_, _, cx| {
-                        let st = state(cx);
-                        st.update(cx, |state, cx| {
-                            // Las filas de la playlist pertenecen al set de
-                            // pistas del modo activo: nunca se toca el otro.
-                            let tracks = state.tracks_mut();
-                            let next_id =
-                                tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-                            let n = tracks.iter().filter(|t| !t.is_master).count();
-                            tracks.push(Track::new(
-                                next_id,
-                                format!("TRACK {:02}", n + 1),
-                                false,
-                            ));
-                            cx.notify();
-                        });
-                    }),
+                                                    })
+                                                    .on_mouse_up(
+                                                        gpui_kit::MouseButton::Right,
+                                                        move |event, _, cx| {
+                                                            finish_marquee(
+                                                                (
+                                                                    event.position.x.as_f32(),
+                                                                    event.position.y.as_f32(),
+                                                                ),
+                                                                zone_bounds_marquee_up.get(),
+                                                                0.0,
+                                                                clip_rects_marquee_rc.as_ref(),
+                                                                event.modifiers.shift,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )
+                                                    .on_scroll_wheel(move |event, _, cx| {
+                                                        playlist_wheel_zoomed(
+                                                            event.delta,
+                                                            event.modifiers.control
+                                                                || event.modifiers.platform,
+                                                            event.modifiers.alt,
+                                                            event.modifiers.shift,
+                                                            (
+                                                                event.position.x.as_f32(),
+                                                                event.position.y.as_f32(),
+                                                            ),
+                                                            total_ticks,
+                                                            header_width,
+                                                            0.0,
+                                                            row_count,
+                                                            cx,
+                                                        );
+                                                    })
+                                                    // Orden de capas (z-ordering):
+                                                    //   1. Carriles + líneas verticales agrupadas en GPU.
+                                                    //   2. Contenedores vectoriales de clips (tapan la grilla).
+                                                    //   3. Overlays de drop/seek, playhead, guía hover y marquee.
+                                                    .child(grid_backdrop_canvas)
+                                                    .children(clip_elems)
+                                                    .children(drop_zones)
+                                                    .when_some(drop_handler, |v, h| v.child(h))
+                                                    .child(seek_zone.into_any_element())
+                                                    .child(playhead_canvas.into_any_element())
+                                                    .child(hover_canvas.into_any_element())
+                                                    .when_some(marquee_overlay, |v, h| v.child(h)),
+                                            ),
+                                    ),
+                            ),
+                    ),
             )
-            .child(
-                Button::new("pl_remove_track").rounded(gpui_kit::component::button::ButtonRounded::None)
-                    .label("[ - ]")
-                    .compact()
-                    .on_click(move |_, _, cx| {
-                        let st = state(cx);
-                        st.update(cx, |state, cx| {
-                            let tracks = state.tracks_mut();
-                            if let Some(pos) =
-                                tracks.iter().rposition(|t| !t.is_master)
-                            {
-                                tracks.remove(pos);
-                            }
-                            cx.notify();
-                        });
-                    }),
-            )
-            .child(Label::new(format!("PPQN {}", ppqn)).text_xs())
-            .child(Label::new(format!("{:.2} bars", playhead_tick as f64 / ticks_per_bar_val.max(1) as f64)).text_xs())
-            .child(Label::new(format!("Bar {} | Tick {}", bar_number_at_tick(playhead_tick, ticks_per_bar_val), playhead_tick)).text_xs())
             .into_any_element(),
     );
 
-    // Capturador de drag de mezcla a ventana completa: mientras haya un gesto
-    // de volumen/pan vivo en los headers, este overlay recibe TODOS los
-    // mouse_move/mouse_up aunque el cursor salga del control (mismo patrón que
-    // `matrix_mix_drag_catcher`). Se monta sólo durante el gesto y lee el
-    // tag global compartido, así sirve igual para Matrix y Playlist.
-    // Delegador del pan a ventana completa: mientras el botón central está
-    // presionado, este overlay recibe TODOS los mouse_move aunque el cursor
-    // salga del panel (o del clip que lo empezó). Es lo que hace el gesto
-    // continuo en vez de cortarse al cruzar el borde. Se desmonta al soltar.
+    // =========================================================================
+    // FILA 3: BARRA INFERIOR COMPACTA DEL ARRANGER (PISTAS • TELEMETRÍA • SNAP/ZOOM)
+    // =========================================================================
+    let current_bar = bar_number_at_tick(playhead_tick, ticks_per_bar_val);
+    all.push(
+        h_flex()
+            .w_full()
+            .h(px(24.0))
+            .flex_shrink_0()
+            .items_center()
+            .bg(rgb(theme::DAW_STATUS_BG))
+            .border_t_1()
+            .border_color(rgb(theme::DAW_BORDER_SUBTLE))
+            .child(
+                h_flex()
+                    .w(px(header_width))
+                    .h_full()
+                    .flex_none()
+                    .px(px(6.0))
+                    .gap(px(4.0))
+                    .items_center()
+                    .justify_between()
+                    .border_r_1()
+                    .border_color(rgb(theme::DAW_BORDER_SUBTLE))
+                    .child(
+                        h_flex()
+                            .gap(px(3.0))
+                            .items_center()
+                            .child(
+                                Button::new("pl_add_track")
+                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
+                                    .label("+")
+                                    .compact()
+                                    .bg(rgb(0x28292E))
+                                    .text_color(rgb(0xE0E0E4))
+                                    .on_click(move |_, _, cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            let tracks = state.tracks_mut();
+                                            let next_id = tracks
+                                                .iter()
+                                                .map(|t| t.id)
+                                                .max()
+                                                .unwrap_or(0)
+                                                + 1;
+                                            let n = tracks.iter().filter(|t| !t.is_master).count();
+                                            tracks.push(Track::new(
+                                                next_id,
+                                                format!("TRACK {:02}", n + 1),
+                                                false,
+                                            ));
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("pl_remove_track")
+                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
+                                    .label("-")
+                                    .compact()
+                                    .bg(rgb(0x28292E))
+                                    .text_color(rgb(0xB8BAC0))
+                                    .on_click(move |_, _, cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            let tracks = state.tracks_mut();
+                                            if let Some(pos) =
+                                                tracks.iter().rposition(|t| !t.is_master)
+                                            {
+                                                tracks.remove(pos);
+                                            }
+                                            cx.notify();
+                                        });
+                                    }),
+                            ),
+                    )
+                    .child(
+                        Label::new(format!("{} TRK", non_master_count))
+                            .text_size(px(9.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x8E929A)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .px(px(8.0))
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .overflow_hidden()
+                            .child(
+                                Label::new(format!(
+                                    "BAR {}  •  TICK {}",
+                                    current_bar, playhead_tick
+                                ))
+                                .text_size(px(9.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(0xD2D6DE)),
+                            )
+                            .child(
+                                Label::new(format!(
+                                    "{}/{}  •  {:.1} BPM  •  {} PPQN",
+                                    beats_per_bar, beat_division, bpm, ppqn
+                                ))
+                                .text_size(px(9.0))
+                                .text_color(rgb(0x888C94)),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .flex_shrink_0()
+                            .child(
+                                h_flex()
+                                    .id("pl_grid_header")
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .px(px(6.0))
+                                    .py(px(1.5))
+                                    .bg(rgb(0x26282E))
+                                    .border_1()
+                                    .border_color(rgb(theme::DAW_BORDER_LIGHT))
+                                    .rounded(px(2.0))
+                                    .cursor_pointer()
+                                    .on_click(move |_, _, cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            state.playlist_state.grid_denominator =
+                                                match state.playlist_state.grid_denominator {
+                                                    2 => 4,
+                                                    4 => 8,
+                                                    8 => 16,
+                                                    _ => 2,
+                                                };
+                                            cx.notify();
+                                        });
+                                    })
+                                    .child(
+                                        Label::new("⊞")
+                                            .text_size(px(9.5))
+                                            .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
+                                    )
+                                    .child(
+                                        Label::new(format!("1/{}", grid_den))
+                                            .text_size(px(9.5))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(0xE8ECEF)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("pl_zoom_out")
+                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
+                                    .label("-")
+                                    .compact()
+                                    .bg(rgb(0x28292E))
+                                    .text_color(rgb(0xE0E0E4))
+                                    .on_click(move |_, _, cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            state.playlist_state.zoom_x =
+                                                step_zoom(state.playlist_state.zoom_x, false);
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("pl_zoom_in")
+                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
+                                    .label("+")
+                                    .compact()
+                                    .bg(rgb(0x28292E))
+                                    .text_color(rgb(0xE0E0E4))
+                                    .on_click(move |_, _, cx| {
+                                        let st = state(cx);
+                                        st.update(cx, |state, cx| {
+                                            state.playlist_state.zoom_x =
+                                                step_zoom(state.playlist_state.zoom_x, true);
+                                            cx.notify();
+                                        });
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element(),
+    );
+
+    // =========================================================================
+    // OVERLAYS GLOBALES DE CAPTURA DE GESTOS (PAN / MARQUEE / MIX / LOOP)
+    // =========================================================================
     if playlist_panning {
         all.push(
             div()
@@ -3618,15 +4338,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .test_support()
                 .absolute()
                 .inset_0()
-                // Cursor de la navegación: OCULTO. Este overlay sólo existe
-                // mientras dura el gesto y tapa la grilla, así que lo que ponga
-                // acá gana al de abajo: tiene que coincidir con lo que la
-                // grilla elige cuando `playlist_panning` es true, o habría un
-                // parpadeo del puntero justo en el `mousedown`.
                 .cursor(CursorStyle::Hidden)
                 .on_mouse_move(move |event, _, cx| {
-                    // Botón soltado fuera de la ventana: el `mouse_up` no
-                    // llega, así que se cierra el gesto acá.
                     if event.pressed_button != Some(gpui_kit::MouseButton::Middle) {
                         stop_playlist_pan(cx);
                         return;
@@ -3642,9 +4355,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
-    // Delegador del marquee a ventana completa: captura el gesto aunque el
-    // cursor esté sobre un clip o fuera del panel temporal, así la caja global
-    // manda y ningún control la intercepta.
     if pl.marquee.is_some() {
         all.push(
             div()
@@ -3658,7 +4368,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         event.position.x.as_f32(),
                         event.position.y.as_f32(),
                         zone,
-                        ruler_h,
+                        0.0,
                         cx,
                     );
                 })
@@ -3668,7 +4378,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     finish_marquee(
                         (event.position.x.as_f32(), event.position.y.as_f32()),
                         zone,
-                        ruler_h,
+                        0.0,
                         &rects,
                         event.modifiers.shift,
                         cx,
@@ -3680,7 +4390,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     finish_marquee(
                         (event.position.x.as_f32(), event.position.y.as_f32()),
                         zone,
-                        ruler_h,
+                        0.0,
                         &rects,
                         event.modifiers.shift,
                         cx,
@@ -3726,12 +4436,34 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         );
     }
 
+    if loop_dragging {
+        all.push(
+            div()
+                .absolute()
+                .inset_0()
+                .id("playlist_loop_drag_catcher")
+                .cursor(CursorStyle::ResizeLeftRight)
+                .on_mouse_move(move |event, _, cx| {
+                    if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                        finish_ruler_drag(cx);
+                        return;
+                    }
+                    ruler_mouse_move(cx, event.position.x.as_f32(), ruler_bounds_catcher.get());
+                })
+                .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    finish_ruler_drag(cx);
+                })
+                .into_any_element(),
+        );
+    }
+
     v_flex()
         .id("playlist")
         .test_support()
         .relative()
         .size_full()
-        .gap(px(4.0))
+        .gap(px(0.0))
+        .bg(rgb(theme::DAW_CANVAS_VOID))
         .children(all)
         .into_any_element()
 }

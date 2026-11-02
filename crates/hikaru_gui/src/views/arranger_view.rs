@@ -1,4 +1,4 @@
-.// Copyright (C) Hikaru Corporation - 2026
+// Copyright (C) Hikaru Corporation - 2026
 // Hikaru OpenLive / OpenStudio - Arranger View (columnas unificadas)
 // GNU Affero General Public License v3
 // crates/hikaru_gui/src/views/arranger_view.rs
@@ -48,29 +48,29 @@ use crate::views::playlist::{self, ClipType};
 // GEOMETRÍA
 // =========================================================================
 
-const SCENE_LABEL_WIDTH: f32 = 124.0;
-const TRACK_WIDTH: f32 = 140.0;
+const SCENE_LABEL_WIDTH: f32 = 116.0;
+const TRACK_WIDTH: f32 = 132.0;
 /// Alto de pads y launchers: 22px para que 8 escenas + strip quepan en 720p.
 const PAD_HEIGHT: f32 = 22.0;
-const PAD_GAP: f32 = 2.0;
+const PAD_GAP: f32 = 1.0;
 const HEADER_HEIGHT: f32 = 32.0;
 
 /// Alto del contenedor vertical de waveform (modo OpenStudio).
-const WAVEFORM_HEIGHT: f32 = 192.0;
+const WAVEFORM_HEIGHT: f32 = 184.0;
 /// Alto fijo de la lista de devices: mantiene PAN / STATE / FADER alineados
 /// entre columnas aunque las pistas tengan distinto número de plugins.
 const DEVICES_HEIGHT: f32 = 28.0;
 
-const PAN_WIDTH: f32 = 90.0;
-const PAN_HEIGHT: f32 = 20.0;
-const PAN_THUMB_W: f32 = 12.0;
+const PAN_WIDTH: f32 = 116.0;
+const PAN_HEIGHT: f32 = 18.0;
+const PAN_THUMB_W: f32 = 4.0;
 
-const FADER_WIDTH: f32 = 30.0;
+const FADER_WIDTH: f32 = 34.0;
 /// Mantener igual a `mixer::VU_HEIGHT` para lectura paralela VU <-> fader.
-/// 68px para margen en viewports reales (ver `VU_HEIGHT`).
-const FADER_HEIGHT: f32 = 68.0;
-const FADER_THUMB_H: f32 = 12.0;
-const FADER_RAIL_W: f32 = 24.0;
+/// 84px calibrado para dar 12px por cada una de las 7 marcas de dB (0..∞).
+const FADER_HEIGHT: f32 = 84.0;
+const FADER_THUMB_H: f32 = 6.0;
+const FADER_RAIL_W: f32 = 28.0;
 /// Volumen unity del reset con doble-clic: 0.75 lineal = 0.0 dB.
 const VOLUME_RESET: f32 = 0.75;
 
@@ -83,12 +83,14 @@ const VOLUME_RESET: f32 = 0.75;
 /// `Live` guarda el índice de matriz (los faders/pads hablan el idioma de la
 /// matriz y el índice +1 es la posición en `live_tracks`). `Studio` guarda el
 /// índice directo en `studio_tracks`. `Master` resuelve al track 0 del modo
-/// activo vía `tracks_mut()`, así vale para ambos modos.
+/// activo vía `tracks_mut()`, así vale para ambos modos. `Fx` resuelve a la pista
+/// de retorno auxiliar (FX 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StripTarget {
     Master,
     Live(usize),
     Studio(usize),
+    Fx(usize),
 }
 
 // =========================================================================
@@ -103,6 +105,8 @@ pub enum FaderTarget {
     TrackVolume(usize),
     StudioPan(usize),
     StudioVolume(usize),
+    FxPan(usize),
+    FxVolume(usize),
 }
 
 fn start_fader_drag(cx: &mut App, target: FaderTarget) {
@@ -273,7 +277,12 @@ fn with_mixer_pan(div: Stateful<Div>, panning: bool) -> Stateful<Div> {
 /// La scrollbar horizontal es una tira explícita propia
 /// (`mixer_scrollbar_strip`), no el overlay del kit: así el thumb responde a
 /// la fórmula exacta sobre el mismo handle.
-fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, panning: bool) -> Stateful<Div> {
+fn mixer_hscroll(
+    content_columns: Vec<AnyElement>,
+    right_columns: Vec<AnyElement>,
+    scroll_h: &ScrollHandle,
+    panning: bool,
+) -> Stateful<Div> {
     with_mixer_pan(
         div()
             .id("arranger_mixer_hscroll")
@@ -282,7 +291,8 @@ fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, pann
             .flex_none()
             .h_auto()
             .min_h_full()
-            .w_full(),
+            .w_full()
+            .bg(rgb(theme::DAW_CANVAS_VOID)),
         panning,
     )
     .overflow_x_scroll()
@@ -293,13 +303,20 @@ fn mixer_hscroll(content_columns: Vec<AnyElement>, scroll_h: &ScrollHandle, pann
             .flex_none()
             .w_auto()
             .min_w_full()
-            .p(px(6.0))
+            .bg(rgb(theme::DAW_CANVAS_VOID))
+            .p(px(2.0))
+            .pb(px(4.0))
             .child(
                 h_flex()
+                    .min_w_full()
                     .gap(px(PAD_GAP))
                     .items_start()
                     .flex_shrink_0()
-                    .children(content_columns),
+                    .children(content_columns)
+                    .when(!right_columns.is_empty(), |this| {
+                        this.child(div().flex_1().min_w(px(24.0)))
+                            .children(right_columns)
+                    }),
             ),
     )
 }
@@ -462,6 +479,7 @@ fn mixer_scrollbar_strip(scroll_h: &ScrollHandle, panning: bool, bar_dragging: b
         .w_full()
         .h(px(MIXER_BAR_HEIGHT))
         .flex_shrink_0()
+        .mb(px(2.0))
         .bg(rgb(0x141416))
         .border_t_1()
         .border_color(rgb(0x2D2D37))
@@ -508,9 +526,9 @@ fn mixer_scrollbar_strip(scroll_h: &ScrollHandle, panning: bool, bar_dragging: b
                 .w(px(geom.thumb_w))
                 .rounded(px(2.0))
                 .bg(if bar_dragging {
-                    rgb(0x7AC8FF)
+                    rgb(theme::DAW_ACCENT_ORANGE)
                 } else {
-                    rgb(0x3E6E8E)
+                    rgb(0x525660)
                 }),
         )
         .into_any_element()
@@ -548,6 +566,11 @@ fn set_pan(cx: &mut App, target: FaderTarget, pan: f32) {
                     track_idx: idx,
                     pan,
                 });
+            }
+            FaderTarget::FxPan(idx) => {
+                if let Some(t) = s.fx_tracks.get_mut(idx) {
+                    t.pan = pan;
+                }
             }
             _ => return,
         }
@@ -587,6 +610,11 @@ fn set_volume(cx: &mut App, target: FaderTarget, volume: f32) {
                     track_idx: idx,
                     volume_db: volume,
                 });
+            }
+            FaderTarget::FxVolume(idx) => {
+                if let Some(t) = s.fx_tracks.get_mut(idx) {
+                    t.volume = volume;
+                }
             }
             _ => return,
         }
@@ -703,6 +731,51 @@ fn snapshot_master(
     }
 }
 
+fn snapshot_fx(
+    fx: Option<&Track>,
+    vu: f32,
+    selected_slot: usize,
+) -> StripSnapshot {
+    let (name, volume, pan, muted, soloed, devices) = match fx {
+        Some(t) => (
+            t.name.clone(),
+            t.volume,
+            t.pan,
+            t.mute,
+            t.solo,
+            t.effects
+                .iter()
+                .map(|s| (s.id, s.name.clone(), s.active))
+                .collect(),
+        ),
+        None => (
+            "FX 1".to_string(),
+            0.75,
+            0.0,
+            false,
+            false,
+            Vec::new(),
+        ),
+    };
+    StripSnapshot {
+        header: "FX 1".to_string(),
+        name,
+        volume,
+        pan,
+        muted,
+        soloed,
+        armed: false,
+        is_master: false,
+        devices,
+        route_dest: "Master".to_string(),
+        sends: Vec::new(),
+        vu,
+        selected_slot,
+        is_selected_track: false,
+        target: StripTarget::Fx(0),
+    }
+}
+
 // =========================================================================
 // HELPERS DE ESTADO (mute / solo / arm por destino)
 // =========================================================================
@@ -719,6 +792,11 @@ fn strip_mute_state(cx: &mut App, target: StripTarget) -> bool {
             .unwrap_or(false),
         StripTarget::Studio(idx) => app
             .studio_tracks
+            .get(idx)
+            .map(|t| t.mute)
+            .unwrap_or(false),
+        StripTarget::Fx(idx) => app
+            .fx_tracks
             .get(idx)
             .map(|t| t.mute)
             .unwrap_or(false),
@@ -740,13 +818,18 @@ fn strip_solo_state(cx: &mut App, target: StripTarget) -> bool {
             .get(idx)
             .map(|t| t.solo)
             .unwrap_or(false),
+        StripTarget::Fx(idx) => app
+            .fx_tracks
+            .get(idx)
+            .map(|t| t.solo)
+            .unwrap_or(false),
     }
 }
 
 fn strip_arm_state(cx: &mut App, target: StripTarget) -> bool {
     let app = state(cx).read(cx);
     match target {
-        StripTarget::Master => false,
+        StripTarget::Master | StripTarget::Fx(_) => false,
         StripTarget::Live(idx) => app.live_tracks.get(idx + 1).map(|t| t.arm).unwrap_or(false),
         StripTarget::Studio(idx) => app.studio_tracks.get(idx).map(|t| t.arm).unwrap_or(false),
     }
@@ -782,6 +865,11 @@ fn toggle_mute_target(cx: &mut App, target: StripTarget) {
                         track_idx: idx,
                         mute,
                     });
+                }
+            }
+            StripTarget::Fx(idx) => {
+                if let Some(t) = s.fx_tracks.get_mut(idx) {
+                    t.mute = !t.mute;
                 }
             }
         }
@@ -821,19 +909,22 @@ fn toggle_solo_target(cx: &mut App, target: StripTarget) {
                     });
                 }
             }
+            StripTarget::Fx(idx) => {
+                if let Some(t) = s.fx_tracks.get_mut(idx) {
+                    t.solo = !t.solo;
+                }
+            }
         }
         cx.notify();
     });
 }
 
 fn toggle_arm_target(cx: &mut App, target: StripTarget) {
-    // El armado es estado puro de GUI (no hay GuiCommand de arm en el motor):
-    // decide qué pista recibe la próxima grabación.
     let armed = strip_arm_state(cx, target);
     let st = state(cx);
     st.update(cx, |s, cx| {
         match target {
-            StripTarget::Master => {}
+            StripTarget::Master | StripTarget::Fx(_) => {}
             StripTarget::Live(idx) => {
                 if let Some(live) = s.live_tracks.get_mut(idx + 1) {
                     live.arm = !armed;
@@ -849,27 +940,20 @@ fn toggle_arm_target(cx: &mut App, target: StripTarget) {
     });
 }
 
-/// Índice en `tracks()` (`live_tracks` en OpenLive, `studio_tracks` en OpenStudio)
-/// al que apunta una columna del Arranger.
-///
-/// Es el único lugar donde se traduce `StripTarget` → `selected_track_index`.
-/// El `+1` de `Live` vive en `matrix::mixer_index_of_matrix_track` para que no
-/// se desincronice del que usa la Session Matrix.
 fn mixer_index_for_target(target: StripTarget) -> usize {
     match target {
-        StripTarget::Master => 0,
+        StripTarget::Master | StripTarget::Fx(_) => 0,
         StripTarget::Live(idx) => matrix::mixer_index_of_matrix_track(idx),
         StripTarget::Studio(idx) => idx,
     }
 }
 
-/// Id estable de una columna, para el harness de tests y para el hit-testing.
 fn column_id(target: StripTarget) -> String {
     match target {
-        // La columna de SCENES comparte sitio con el strip del master.
-        StripTarget::Master => "arr_col_scenes".to_string(),
+        StripTarget::Master => "arr_col_master".to_string(),
         StripTarget::Live(idx) => format!("arr_col_live_{idx}"),
         StripTarget::Studio(idx) => format!("arr_col_studio_{idx}"),
+        StripTarget::Fx(idx) => format!("arr_col_fx_{idx}"),
     }
 }
 
@@ -902,6 +986,7 @@ fn toggle_device_active(cx: &mut App, target: StripTarget, slot: usize) {
             StripTarget::Master => s.tracks_mut().first_mut().map(|t| &mut t.effects),
             StripTarget::Live(idx) => s.live_tracks.get_mut(idx + 1).map(|t| &mut t.effects),
             StripTarget::Studio(idx) => s.studio_tracks.get_mut(idx).map(|t| &mut t.effects),
+            StripTarget::Fx(idx) => s.fx_tracks.get_mut(idx).map(|t| &mut t.effects),
         };
         if let Some(fx) = fx {
             if let Some(dev) = fx.get_mut(slot) {
@@ -938,6 +1023,15 @@ fn cycle_route_destination(cx: &mut App, target: StripTarget) {
                         .map(|t| &mut t.route_destination_id),
                 )
             }
+            StripTarget::Fx(idx) => {
+                let len = s.fx_tracks.len().max(1);
+                (
+                    len,
+                    s.fx_tracks
+                        .get_mut(idx)
+                        .map(|t| &mut t.route_destination_id),
+                )
+            }
         };
         if let Some(slot) = slot {
             *slot = (*slot + 1) % len;
@@ -969,6 +1063,11 @@ fn pan_slider(target: FaderTarget, pan: f32) -> AnyElement {
         .w(px(PAN_WIDTH))
         .h(px(PAN_HEIGHT))
         .flex_shrink_0()
+        .bg(rgb(theme::DAW_FADER_WELL_BG))
+        .border_1()
+        .border_color(rgb(0x222328))
+        .rounded(px(2.0))
+        .cursor_ew_resize()
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
                 // Doble-clic: pan de vuelta al centro (C).
@@ -981,9 +1080,6 @@ fn pan_slider(target: FaderTarget, pan: f32) -> AnyElement {
             set_pan(cx, target, pan_from_pointer(b, event.position.x.as_f32()));
         })
         .on_mouse_move(move |event, _, cx| {
-            // Si el botón se soltó fuera del slider, el `mouse_up` nunca
-            // llega y el drag quedaría colgado siguiendo al cursor: ante un
-            // move sin botón presionado se cierra el gesto.
             if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
                 stop_fader_drag(cx, target);
                 return;
@@ -1005,68 +1101,59 @@ fn pan_slider(target: FaderTarget, pan: f32) -> AnyElement {
             .absolute()
             .inset_0(),
         )
-        // Riel
-        .child(
-            div()
-                .absolute()
-                .left(px(4.0))
-                .top(px(7.0))
-                .w(px(PAN_WIDTH - 8.0))
-                .h(px(6.0))
-                .bg(rgb(0x2D2D2D))
-                .rounded(px(1.0)),
-        )
-        // Relleno centro -> thumb
-        .child(
-            div()
-                .absolute()
-                .left(px(fill_left))
-                .top(px(7.0))
-                .w(px(fill_w))
-                .h(px(6.0))
-                .bg(rgb(0x0096BE)),
-        )
-        // Tick central
+        // Relleno bipolar ámbar desde el centro hacia el indicador
+        .when(fill_w > 0.5, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left(px(fill_left))
+                    .top(px(2.0))
+                    .w(px(fill_w))
+                    .h(px(PAN_HEIGHT - 4.0))
+                    .bg(rgb(theme::DAW_FADER_FILL)),
+            )
+        })
+        // Línea central de referencia (C)
         .child(
             div()
                 .absolute()
                 .left(px(center_x - 0.5))
-                .top(px(5.0))
+                .top(px(2.0))
                 .w(px(1.0))
-                .h(px(10.0))
-                .bg(rgb(0x808080)),
+                .h(px(PAN_HEIGHT - 4.0))
+                .bg(rgb(0x4E5058)),
         )
-        // Thumb
+        // Aguja brillante naranja
         .child(
             div()
                 .absolute()
-                .left(px(thumb_x - PAN_THUMB_W / 2.0))
+                .left(px((thumb_x - 1.0).max(1.0)))
                 .top(px(1.0))
-                .w(px(PAN_THUMB_W))
-                .h(px(18.0))
-                .bg(rgb(0x00A2E8))
-                .border_1()
-                .border_color(rgb(0x000000)),
+                .w(px(2.0))
+                .h(px(PAN_HEIGHT - 2.0))
+                .bg(rgb(theme::DAW_FADER_CAP_ORANGE)),
         )
-        // Texto C / Lxx / Rxx
+        // Lectura C / Lxx / Rxx alineada a la derecha
         .child(
             div()
                 .absolute()
-                .inset_0()
+                .right(px(4.0))
+                .top_0()
+                .bottom_0()
                 .flex()
                 .items_center()
-                .justify_center()
                 .child(
                     Label::new(label)
-                        .text_size(px(9.0))
-                        .text_color(rgb(0xFFFFFF)),
+                        .text_size(px(8.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0xC8CCD4)),
                 ),
         )
         .into_any_element()
 }
 
-/// Fader vertical de capuchón ANCHO (2.5x el alto del thumb, según blueprint).
-fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
+/// Fader vertical empotrado de alta densidad con relleno ámbar cálido y capuchón del color de la pista.
+fn volume_fader(target: FaderTarget, volume: f32, accent_color: u32) -> AnyElement {
     let slot: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
     let b_down = slot.clone();
     let b_move = slot.clone();
@@ -1076,8 +1163,7 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
     let travel = FADER_HEIGHT - FADER_THUMB_H;
     let thumb_y = half_thumb + (1.0 - volume.clamp(0.0, 1.0)) * travel;
     let rail_left = (FADER_WIDTH - FADER_RAIL_W) / 2.0;
-    // Capuchón ancho del blueprint: ocupa casi todo el ancho de la columna.
-    let cap_w = FADER_THUMB_H * 2.5;
+    let fill_h = (FADER_HEIGHT - 2.0 - thumb_y).max(0.0);
 
     div()
         .id(SharedString::from(format!("arr_vol_{:?}", target)))
@@ -1085,6 +1171,8 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
         .w(px(FADER_WIDTH))
         .h(px(FADER_HEIGHT))
         .flex_shrink_0()
+        .overflow_hidden()
+        .cursor_ns_resize()
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             if event.click_count >= 2 {
                 // Doble-clic: volumen de vuelta a unity (0.0 dB).
@@ -1097,8 +1185,6 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
             set_volume(cx, target, volume_from_pointer(b, event.position.y.as_f32()));
         })
         .on_mouse_move(move |event, _, cx| {
-            // Igual que en el pan: move sin botón = el `mouse_up` se perdió
-            // fuera del fader, se cierra el gesto colgado.
             if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
                 stop_fader_drag(cx, target);
                 return;
@@ -1120,103 +1206,156 @@ fn volume_fader(target: FaderTarget, volume: f32) -> AnyElement {
             .absolute()
             .inset_0(),
         )
-        // Riel
+        // Pozo oscuro del fader
         .child(
             div()
                 .absolute()
                 .left(px(rail_left))
-                .top(px(-2.0))
+                .top(px(0.0))
                 .w(px(FADER_RAIL_W))
-                .h(px(FADER_HEIGHT + 4.0))
-                .bg(rgb(0x2D2D2D))
-                .rounded(px(1.0)),
-        )
-        // Relleno thumb -> base
-        .child(
-            div()
-                .absolute()
-                .left(px(rail_left))
-                .top(px(thumb_y))
-                .w(px(FADER_RAIL_W))
-                .h(px((FADER_HEIGHT + 2.0 - thumb_y).max(0.0)))
-                .bg(rgb(0x0096BE)),
-        )
-        // Capuchón ancho
-        .child(
-            div()
-                .absolute()
-                .left(px((FADER_WIDTH - cap_w) / 2.0))
-                .top(px(thumb_y - half_thumb))
-                .w(px(cap_w))
-                .h(px(FADER_THUMB_H))
-                .bg(rgb(0x00A2E8))
+                .h(px(FADER_HEIGHT))
+                .bg(rgb(0x111214))
                 .border_1()
-                .border_color(rgb(0x000000)),
+                .border_color(rgb(0x26282E))
+                .rounded(px(1.5)),
+        )
+        // Marca sutil de 0.0 dB (unity = 0.75)
+        .child(
+            div()
+                .absolute()
+                .left(px(rail_left + 1.0))
+                .top(px(half_thumb + (1.0 - VOLUME_RESET) * travel))
+                .w(px(FADER_RAIL_W - 2.0))
+                .h(px(1.0))
+                .bg(rgb(0x363840)),
+        )
+        // Columna ámbar de nivel de ganancia
+        .when(fill_h > 0.5, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left(px(rail_left + 1.0))
+                    .top(px(thumb_y))
+                    .w(px(FADER_RAIL_W - 2.0))
+                    .h(px(fill_h))
+                    .bg(rgb(theme::DAW_FADER_FILL)),
+            )
+        })
+        // Línea luminosa del capuchón activo
+        .child(
+            div()
+                .absolute()
+                .left(px(rail_left))
+                .top(px((thumb_y - 1.5).clamp(0.0, FADER_HEIGHT - 3.0)))
+                .w(px(FADER_RAIL_W))
+                .h(px(3.0))
+                .bg(rgb(accent_color))
+                .rounded(px(1.0)),
         )
         .into_any_element()
 }
 
-/// Botones [S] Solo, [M] Mute, [R] Record-arm del blueprint.
+/// Botonera compacta [●] Record-arm, [S] Solo, [M] Mute con paridad visual a Bitwig.
 fn smr_buttons(id_prefix: &str, target: StripTarget, soloed: bool, muted: bool, armed: bool) -> AnyElement {
-    // Mini-toggles 22×18 como los M/S de los headers (el `Button` del kit no
-    // baja de ~24px y empujaba el pie del canal fuera de pantalla).
-    h_flex()
-        .gap(px(4.0))
-        .flex_shrink_0()
-        .justify_center()
-        .child(matrix::ms_button(
-            format!("{}_solo", id_prefix),
-            "S",
-            soloed,
-            rgb(0xE6C84C),
-            move |cx| toggle_solo_target(cx, target),
-        ))
-        .child(matrix::ms_button(
-            format!("{}_mute", id_prefix),
-            "M",
-            muted,
-            rgb(0xE06060),
-            move |cx| toggle_mute_target(cx, target),
-        ))
-        .child(matrix::ms_button(
-            format!("{}_rec", id_prefix),
-            "R",
-            armed,
-            rgb(0xFF3C3C),
-            move |cx| toggle_arm_target(cx, target),
-        ))
-        .into_any_element()
+    let is_master = target == StripTarget::Master;
+    let is_fx = matches!(target, StripTarget::Fx(_));
+
+    if is_master || is_fx {
+        h_flex()
+            .w_full()
+            .gap(px(3.0))
+            .flex_shrink_0()
+            .justify_center()
+            .child(matrix::ms_button_sized(
+                format!("{}_solo", id_prefix),
+                "S",
+                52.0,
+                18.0,
+                soloed,
+                rgb(theme::DAW_SOLO_GOLD),
+                move |cx| toggle_solo_target(cx, target),
+            ))
+            .child(matrix::ms_button_sized(
+                format!("{}_mute", id_prefix),
+                "M",
+                52.0,
+                18.0,
+                muted,
+                rgb(theme::DAW_MUTE_AMBER),
+                move |cx| toggle_mute_target(cx, target),
+            ))
+            .into_any_element()
+    } else {
+        h_flex()
+            .w_full()
+            .gap(px(3.0))
+            .flex_shrink_0()
+            .justify_center()
+            .child(matrix::ms_button_sized(
+                format!("{}_rec", id_prefix),
+                "●",
+                32.0,
+                18.0,
+                armed,
+                rgb(theme::DAW_ARM_RED),
+                move |cx| toggle_arm_target(cx, target),
+            ))
+            .child(matrix::ms_button_sized(
+                format!("{}_solo", id_prefix),
+                "S",
+                32.0,
+                18.0,
+                soloed,
+                rgb(theme::DAW_SOLO_GOLD),
+                move |cx| toggle_solo_target(cx, target),
+            ))
+            .child(matrix::ms_button_sized(
+                format!("{}_mute", id_prefix),
+                "M",
+                32.0,
+                18.0,
+                muted,
+                rgb(theme::DAW_MUTE_AMBER),
+                move |cx| toggle_mute_target(cx, target),
+            ))
+            .into_any_element()
+    }
 }
 
 // =========================================================================
 // SECCIONES DEL CHANNEL STRIP (idénticas en OpenLive y OpenStudio)
 // =========================================================================
 
-fn section_label(text: &str) -> AnyElement {
-    Label::new(text.to_string())
-        .text_size(px(8.0))
-        .font_weight(FontWeight::BOLD)
-        .text_color(theme::TEXT_MUTED)
-        .into_any_element()
-}
-
 fn strip_separator() -> AnyElement {
     div()
         .w_full()
         .h(px(1.0))
         .flex_shrink_0()
-        .bg(theme::BORDER_COLOR)
+        .bg(rgb(0x18191D))
         .into_any_element()
 }
 
-/// DEVICES: rack compacto de la pista. Click = seleccionar slot (lo muestra el
-/// DSP rack); el punto conmuta el bypass del slot.
+/// DEVICES: pozo compacto de dispositivos por canal.
 fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     let rows: Vec<AnyElement> = if snap.devices.is_empty() {
         vec![
-            Label::new("— vacío —")
-                .text_size(px(9.0))
-                .text_color(theme::TEXT_DISABLED)
+            h_flex()
+                .w_full()
+                .h(px(14.0))
+                .px(px(4.0))
+                .items_center()
+                .gap(px(4.0))
+                .child(
+                    Label::new("+")
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x787C86)),
+                )
+                .child(
+                    Label::new("Devices")
+                        .text_size(px(8.5))
+                        .text_color(rgb(0x646870)),
+                )
                 .into_any_element(),
         ]
     } else {
@@ -1230,26 +1369,34 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                 let is_sel = snap.is_selected_track && snap.selected_slot == slot;
                 h_flex()
                     .w_full()
-                    .h(px(14.0))
+                    .h(px(13.0))
                     .flex_shrink_0()
                     .items_center()
                     .gap(px(4.0))
                     .px(px(4.0))
                     .rounded(px(2.0))
-                    .bg(if is_sel { rgb(0x2D3A4A) } else { rgb(0x1A1A1E) })
+                    .bg(if is_sel { rgb(0x2A3544) } else { rgb(0x1D1E22) })
                     .border_1()
-                    .border_color(if is_sel { rgb(0x5AB4FF) } else { rgb(0x282828) })
+                    .border_color(if is_sel {
+                        rgb(theme::DAW_PLAYHEAD_BLUE)
+                    } else {
+                        rgb(0x282A30)
+                    })
                     .on_mouse_down(
                         gpui_kit::MouseButton::Left,
                         move |_, _, cx| select_device_slot(cx, target, slot),
                     )
                     .child(
                         div()
-                            .w(px(8.0))
-                            .h(px(8.0))
+                            .w(px(6.0))
+                            .h(px(6.0))
                             .flex_shrink_0()
-                            .rounded(px(4.0))
-                            .bg(if active { rgb(0x00FF64) } else { rgb(0x505055) })
+                            .rounded(px(3.0))
+                            .bg(if active {
+                                rgb(theme::DAW_ACCENT_ORANGE)
+                            } else {
+                                rgb(0x4E5058)
+                            })
                             .id(SharedString::from(format!("{}_devpw_{}", id_prefix, slot)))
                             .on_mouse_down(
                                 gpui_kit::MouseButton::Left,
@@ -1264,49 +1411,58 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                         })
                         .text_size(px(8.0))
                         .text_color(if active {
-                            rgb(0xE0E0E0)
+                            rgb(0xE4E6EC)
                         } else {
-                            rgb(0x808080)
-                        }),
+                            rgb(0x7C8088)
+                        })
+                        .text_ellipsis(),
                     )
                     .into_any_element()
             })
             .collect()
     };
 
-    v_flex()
+    div()
         .w_full()
+        .h(px(DEVICES_HEIGHT))
         .flex_shrink_0()
-        .gap(px(1.0))
-        .child(section_label("DEVICES:"))
-        .child(
-            div()
-                .w_full()
-                .h(px(DEVICES_HEIGHT))
-                .overflow_y_scrollbar()
-                .child(v_flex().w_full().gap(px(1.0)).children(rows)),
-        )
+        .bg(rgb(0x17181B))
+        .border_1()
+        .border_color(rgb(0x121316))
+        .rounded(px(2.0))
+        .p(px(2.0))
+        .overflow_y_scrollbar()
+        .child(v_flex().w_full().gap(px(1.0)).children(rows))
         .into_any_element()
 }
 
-/// ROUTING / SENDS: destino R/S + lista de envíos con cantidad.
+/// ROUTING / SENDS: barra compacta de destino I/O + envíos activos.
 fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     let target = snap.target;
     let dest = snap.route_dest.clone();
     let mut rows: Vec<AnyElement> = vec![
         h_flex()
             .w_full()
+            .px(px(3.0))
+            .py(px(1.0))
+            .bg(rgb(0x232428))
+            .border_1()
+            .border_color(rgb(0x18191D))
+            .rounded(px(2.0))
             .items_center()
             .justify_between()
             .child(
-                Label::new(format!("R/S: {}", dest))
-                    .text_size(px(9.0))
-                    .text_color(rgb(0xE0E0E0)),
+                Label::new(format!("▸ {}", dest))
+                    .text_size(px(8.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0xD4D8E0)),
             )
             .child(
                 Button::new(SharedString::from(format!("{}_route", id_prefix)))
-                    .label(">")
+                    .label("▾")
                     .compact()
+                    .bg(rgb(0x2E3036))
+                    .text_color(rgb(0xD0D4DC))
                     .rounded(ButtonRounded::None)
                     .on_click(move |_, _, cx| cycle_route_destination(cx, target)),
             )
@@ -1316,17 +1472,18 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         rows.push(
             h_flex()
                 .w_full()
+                .px(px(3.0))
                 .items_center()
                 .justify_between()
                 .child(
-                    Label::new(format!("Snd>{}", name))
-                        .text_size(px(9.0))
-                        .text_color(theme::TEXT_MUTED),
+                    Label::new(format!("↗ {}", name))
+                        .text_size(px(8.0))
+                        .text_color(rgb(0x989CA4)),
                 )
                 .child(
                     Label::new(format!("{:.0}%", amount.clamp(0.0, 1.0) * 100.0))
-                        .text_size(px(9.0))
-                        .text_color(theme::TEXT_MUTED),
+                        .text_size(px(8.0))
+                        .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
                 )
                 .into_any_element(),
         );
@@ -1336,18 +1493,49 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         .w_full()
         .flex_shrink_0()
         .gap(px(1.0))
-        .child(section_label("ROUTING / SENDS:"))
         .children(rows)
         .into_any_element()
 }
 
-/// FADER & VU: VU vertical a la izquierda (canvas fijo, sin relayout) + fader
-/// de capuchón ancho a la derecha, cada uno con su lectura en dB debajo.
-fn fader_vu_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
+/// Escala calibrada de dB junto al vúmetro vertical (0, 6, 12, 18, 24, 36, ∞).
+fn calibrated_db_scale() -> AnyElement {
+    v_flex()
+        .h(px(FADER_HEIGHT))
+        .w(px(20.0))
+        .flex_shrink_0()
+        .justify_between()
+        .items_end()
+        .py(px(1.0))
+        .overflow_hidden()
+        .children(
+            ["0 -", "6 -", "12 -", "18 -", "24 -", "36 -", "∞ -"]
+                .into_iter()
+                .map(|mark| {
+                    div()
+                        .h(px(FADER_HEIGHT / 7.0))
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .overflow_hidden()
+                        .child(
+                            Label::new(mark)
+                                .text_size(px(7.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(0x888C94)),
+                        )
+                        .into_any_element()
+                }),
+        )
+        .into_any_element()
+}
+
+/// FADER & VU: cámara empotrada de medición + escala dB + fader ámbar/color + lecturas de nivel.
+fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -> AnyElement {
     let vol_target = match snap.target {
         StripTarget::Master => FaderTarget::MasterVolume,
         StripTarget::Live(idx) => FaderTarget::TrackVolume(idx),
         StripTarget::Studio(idx) => FaderTarget::StudioVolume(idx),
+        StripTarget::Fx(idx) => FaderTarget::FxVolume(idx),
     };
     let vu = snap.vu;
     let vu_db = mixer::level_db_text(vu);
@@ -1357,78 +1545,87 @@ fn fader_vu_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         .w_full()
         .flex_shrink_0()
         .items_center()
-        .gap(px(1.0))
-        .child(section_label("FADER & VU METER"))
+        .gap(px(3.0))
+        .overflow_hidden()
+        // Cámara empotrada oscura (lectura superior en dB + escala + VU + fader)
         .child(
-            h_flex()
+            v_flex()
                 .w_full()
-                .justify_center()
-                .items_start()
-                .gap(px(6.0))
+                .bg(rgb(theme::DAW_FADER_WELL_BG))
+                .border_1()
+                .border_color(rgb(0x111214))
+                .rounded(px(2.0))
+                .px(px(4.0))
+                .py(px(3.0))
+                .gap(px(2.0))
+                .overflow_hidden()
                 .child(
-                    v_flex()
+                    h_flex()
+                        .w_full()
                         .items_center()
-                        .gap(px(1.0))
-                        .child(
-                            Label::new("VU")
-                                .text_size(px(8.0))
-                                .text_color(theme::TEXT_MUTED),
-                        )
-                        .child(mixer::vertical_vu_meter(vu))
+                        .justify_between()
+                        .border_b_1()
+                        .border_color(rgb(0x23252B))
+                        .pb(px(1.0))
                         .child(
                             Label::new(vu_db)
-                                .text_size(px(8.0))
-                                .text_color(theme::TEXT_MUTED),
+                                .text_size(px(7.5))
+                                .text_color(rgb(0x7C8088)),
+                        )
+                        .child(
+                            Label::new(vol_db)
+                                .text_size(px(8.5))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(accent_color)),
                         ),
                 )
                 .child(
-                    v_flex()
+                    h_flex()
+                        .w_full()
+                        .h(px(FADER_HEIGHT))
+                        .justify_between()
                         .items_center()
-                        .gap(px(1.0))
+                        .px(px(2.0))
+                        .overflow_hidden()
                         .child(
-                            Label::new("Vol")
-                                .text_size(px(8.0))
-                                .text_color(theme::TEXT_MUTED),
+                            h_flex()
+                                .items_center()
+                                .gap(px(2.0))
+                                .h(px(FADER_HEIGHT))
+                                .overflow_hidden()
+                                .child(calibrated_db_scale())
+                                .child(mixer::vertical_vu_meter(vu)),
                         )
-                        .child(volume_fader(vol_target, snap.volume))
-                        .child(
-                            Label::new(vol_db)
-                                .text_size(px(8.0))
-                                .text_color(theme::TEXT_MUTED),
-                        ),
+                        .child(volume_fader(vol_target, snap.volume, accent_color)),
                 ),
         )
-        .child(smr_buttons(id_prefix, snap.target, snap.soloed, snap.muted, snap.armed))
         .into_any_element()
 }
 
-/// Channel Strip completo: el MISMO en OpenLive y OpenStudio.
-fn channel_strip(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
+/// Channel Strip completo: el MISMO en OpenLive y OpenStudio con paridad visual a Bitwig.
+fn channel_strip(snap: &StripSnapshot, id_prefix: &str, accent_color: u32) -> AnyElement {
     let (pan_target, _) = match snap.target {
         StripTarget::Master => (FaderTarget::MasterPan, FaderTarget::MasterVolume),
         StripTarget::Live(idx) => (FaderTarget::TrackPan(idx), FaderTarget::TrackVolume(idx)),
         StripTarget::Studio(idx) => (FaderTarget::StudioPan(idx), FaderTarget::StudioVolume(idx)),
+        StripTarget::Fx(idx) => (FaderTarget::FxPan(idx), FaderTarget::FxVolume(idx)),
     };
     v_flex()
         .w_full()
         .flex_shrink_0()
-        .gap(px(1.0))
+        .overflow_hidden()
+        .gap(px(3.0))
         .child(strip_separator())
         .child(devices_section(snap, id_prefix))
-        .child(strip_separator())
         .child(routing_section(snap, id_prefix))
-        .child(strip_separator())
+        .child(smr_buttons(id_prefix, snap.target, snap.soloed, snap.muted, snap.armed))
         .child(
-            v_flex()
+            h_flex()
                 .w_full()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(1.0))
-                .child(section_label("PAN / BALANCE"))
+                .justify_center()
                 .child(pan_slider(pan_target, snap.pan)),
         )
-        .child(strip_separator())
-        .child(fader_vu_section(snap, id_prefix))
+        .child(fader_vu_section(snap, id_prefix, accent_color))
         .into_any_element()
 }
 
@@ -1443,6 +1640,7 @@ fn render_pad(
     slot_state: SlotState,
     has_clip: bool,
     clip_name: String,
+    track_armed: bool,
     is_selected: bool,
     clipboard_ready: bool,
     drop_sample_ready: bool,
@@ -1451,6 +1649,7 @@ fn render_pad(
     let (bg, border) = slot_colors(&slot_state, has_clip);
     let display_text = slot_display_text(&slot_state, has_clip, &clip_name);
     let is_playing = slot_state == SlotState::Playing;
+    let stripe_col = theme::track_stripe_hex(track_idx);
 
     let pad = div()
         .id(SharedString::from(format!("arr_pad_{}_{}", track_idx, scene_idx)))
@@ -1461,10 +1660,17 @@ fn render_pad(
         .bg(bg)
         .border_1()
         .border_color(border)
-        .when(is_selected, |d| d.border_2().border_color(rgb(0xE0E0E0)))
-        .when(drop_sample_ready, |d| d.border_color(rgb(0x0096BE)))
-        .rounded(px(2.0))
+        .when(is_selected, |d| d.border_color(rgb(0xEAECEF)))
+        .when(drop_sample_ready, |d| d.border_color(rgb(theme::DAW_ACCENT_ORANGE)))
+        .rounded(px(1.5))
         .overflow_hidden()
+        .hover(|this| {
+            if !has_clip && !is_selected {
+                this.bg(rgb(theme::DAW_CELL_HOVER_BG))
+            } else {
+                this
+            }
+        })
         // Drop target del Drag & Drop desde el Explorer (línea de tiempo).
         .can_drop(|payload: &dyn std::any::Any, _, _| {
             payload.is::<crate::views::explorer::ExplorerAudioDrag>()
@@ -1517,6 +1723,18 @@ fn render_pad(
                 cx.notify();
             });
         })
+        // Banda lateral cromática cuando el slot contiene un clip
+        .when(has_clip, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(3.5))
+                    .bg(rgb(stripe_col)),
+            )
+        })
         // Mini playhead del clip en reproducción
         .child(
             canvas(
@@ -1541,31 +1759,29 @@ fn render_pad(
                     let progress = (frame as f32 / total as f32).clamp(0.0, 1.0);
                     let x = bounds.origin.x + bounds.size.width * progress;
                     let mut path = PathBuilder::stroke(px(1.5));
-                    path.move_to(point(x, bounds.origin.y + px(2.0)));
-                    path.line_to(point(x, bounds.origin.y + bounds.size.height - px(2.0)));
+                    path.move_to(point(x, bounds.origin.y + px(1.0)));
+                    path.line_to(point(x, bounds.origin.y + bounds.size.height - px(1.0)));
                     if let Ok(path) = path.build() {
-                        window.paint_path(path, rgb(0xFFFFFF));
+                        window.paint_path(path, rgb(theme::DAW_PLAYHEAD_BLUE));
                     }
                 },
             )
             .absolute()
             .inset_0(),
         )
-        // Botón central Play / Stop
+        // Trigger izquierdo Play / Stop / Record-arm
         .child(
             div()
                 .absolute()
-                .left(px(4.0))
+                .left(px(if has_clip { 6.0 } else { 5.0 }))
                 .top(px(4.0))
-                .w(px(14.0))
-                .h(px(14.0))
-                .rounded(px(2.0))
-                .bg(if has_clip { rgb(0x1B6FB5) } else { rgb(0x32323C) })
-                .border_1()
-                .border_color(rgb(0x5A5A5A))
+                .w(px(13.0))
+                .h(px(13.0))
+                .rounded(px(1.5))
                 .flex()
                 .items_center()
                 .justify_center()
+                .cursor_pointer()
                 .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
                     let st = state(cx);
                     st.update(cx, |s, cx| {
@@ -1593,30 +1809,49 @@ fn render_pad(
                 })
                 .child(if has_clip {
                     Label::new("▶")
-                        .text_size(px(8.0))
-                        .text_color(rgb(0xFFFFFF))
+                        .text_size(px(8.5))
+                        .text_color(if is_playing {
+                            rgb(0x1FEB54)
+                        } else {
+                            rgb(stripe_col)
+                        })
+                        .into_any_element()
+                } else if track_armed {
+                    div()
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded(px(3.0))
+                        .bg(rgb(0x883232))
                         .into_any_element()
                 } else {
-                    div().w(px(5.0)).h(px(5.0)).bg(rgb(0xFFFFFF)).into_any_element()
+                    div()
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .bg(rgb(0x52555E))
+                        .into_any_element()
                 }),
         )
         // Nombre del clip (recortado al pad)
-        .child(
-            div()
-                .absolute()
-                .left(px(22.0))
-                .right(px(4.0))
-                .top_0()
-                .bottom_0()
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .child(
-                    Label::new(display_text)
-                        .text_size(px(8.0))
-                        .text_color(rgb(0xFFFFFF)),
-                ),
-        );
+        .when(has_clip, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left(px(21.0))
+                    .right(px(4.0))
+                    .top_0()
+                    .bottom_0()
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .child(
+                        Label::new(display_text)
+                            .text_size(px(8.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xEAECEF))
+                            .text_ellipsis(),
+                    ),
+            )
+        });
 
     pad.context_menu(move |menu: PopupMenu, _window, _cx| {
         menu.item(
@@ -1694,14 +1929,14 @@ fn render_pad(
 
 fn slot_colors(slot_state: &SlotState, has_clip: bool) -> (Hsla, Hsla) {
     if !has_clip {
-        return (rgb(0x191919).into(), rgb(0x282828).into());
+        return (rgb(theme::DAW_CELL_EMPTY_BG).into(), rgb(0x18191C).into());
     }
     match slot_state {
-        SlotState::Playing => (rgb(0x1E6ED2).into(), rgb(0x5AB4FF).into()),
-        SlotState::QueuedToPlay => (rgb(0x78641E).into(), rgb(0xE6C84C).into()),
-        SlotState::Stopped => (rgb(0x2D374B).into(), rgb(0x5A82BE).into()),
-        SlotState::QueuedToStop => (rgb(0x822D2D).into(), rgb(0xE06060).into()),
-        SlotState::Empty => (rgb(0x191919).into(), rgb(0x282828).into()),
+        SlotState::Playing => (rgb(0x1B2B3A).into(), rgb(theme::DAW_PLAYHEAD_BLUE).into()),
+        SlotState::QueuedToPlay => (rgb(0x362E18).into(), rgb(theme::DAW_SOLO_GOLD).into()),
+        SlotState::Stopped => (rgb(0x1C1E24).into(), rgb(0x30343E).into()),
+        SlotState::QueuedToStop => (rgb(0x361C1C).into(), rgb(theme::DAW_ARM_RED).into()),
+        SlotState::Empty => (rgb(theme::DAW_CELL_EMPTY_BG).into(), rgb(0x18191C).into()),
     }
 }
 
@@ -1827,21 +2062,21 @@ pub fn waveform_peak_at_tick(
     peaks.get(idx).copied().unwrap_or(0.0).clamp(0.0, 1.0)
 }
 
-fn waveform_container(view: &WaveformView) -> AnyElement {
+fn waveform_container(view: &WaveformView, accent_hex: u32) -> AnyElement {
     let has_wave = view.has_audio;
     let label = if has_wave {
         view.label.clone()
     } else {
-        "INSERTAR WAVEFORM VERTICAL".to_string()
+        "—".to_string()
     };
     let view = view.clone();
     div()
         .w_full()
         .h(px(WAVEFORM_HEIGHT))
         .flex_shrink_0()
-        .bg(rgb(0x141619))
+        .bg(rgb(theme::DAW_CLIP_BODY_BG))
         .border_1()
-        .border_color(rgb(theme::DAW_BORDER_LIGHT))
+        .border_color(rgb(0x111214))
         .rounded(px(2.0))
         .relative()
         .overflow_hidden()
@@ -1849,23 +2084,28 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
+                    let ox = bounds.origin.x.as_f32();
+                    let oy = bounds.origin.y.as_f32();
                     let w = bounds.size.width.as_f32();
                     let h = bounds.size.height.as_f32();
                     if w <= 0.0 || h <= 0.0 {
                         return;
                     }
-                    let cx0 = bounds.origin.x + px(w / 2.0);
-                    // Eje central de referencia (silencio): siempre visible.
+                    let cx0 = ox + w * 0.5;
+                    // Eje central de referencia (silencio)
                     let mut axis = PathBuilder::stroke(px(1.0));
-                    axis.move_to(point(cx0, bounds.origin.y));
-                    axis.line_to(point(cx0, bounds.origin.y + bounds.size.height));
+                    axis.move_to(point(px(cx0), px(oy)));
+                    axis.line_to(point(px(cx0), px(oy + h)));
                     if let Ok(axis) = axis.build() {
-                        window.paint_path(axis, rgb(0x2E3138));
+                        window.paint_path(axis, rgb(0x282A30));
                     }
+
+                    // Polígono envolvente agrupado en GPU (1 draw de relleno + 2 trazos de contorno)
                     let n = view.peaks.len();
-                    let step = 2.0_f32;
-                    let steps = (h / step) as usize;
-                    if n > 0 && view.window_ticks > 0 && steps > 0 {
+                    let steps = (h as usize).max(2);
+                    if n > 0 && view.window_ticks > 0 {
+                        let mut widths: Vec<(f32, f32)> = Vec::with_capacity(steps);
+                        let mut any_signal = false;
                         for i in 0..steps {
                             let tick = waveform_window_tick(
                                 view.playhead_tick,
@@ -1881,30 +2121,48 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
                                 view.total_sample_ticks,
                                 tick,
                             );
-                            let bw = (w * 0.86 * pv).max(1.0);
-                            if bw < 0.75 {
-                                continue;
+                            if pv > 0.004 {
+                                any_signal = true;
                             }
-                            let y = bounds.origin.y + px(i as f32 * step);
-                            let mut path = PathBuilder::fill();
-                            path.move_to(point(cx0 - px(bw * 0.5), y));
-                            path.line_to(point(cx0 + px(bw * 0.5), y));
-                            path.line_to(point(cx0 + px(bw * 0.5), y + px(1.0)));
-                            path.line_to(point(cx0 - px(bw * 0.5), y + px(1.0)));
-                            path.close();
-                            if let Ok(path) = path.build() {
-                                window.paint_path(path, rgba(0xE8782ACC));
+                            let half_w = (w * 0.44 * pv).max(0.4);
+                            let y = oy + (i as f32 / (steps - 1).max(1) as f32) * h;
+                            widths.push((y, half_w));
+                        }
+                        if any_signal && widths.len() >= 2 {
+                            let mut poly = PathBuilder::fill();
+                            poly.move_to(point(px(cx0 + widths[0].1), px(widths[0].0)));
+                            for &(y, hw) in &widths[1..] {
+                                poly.line_to(point(px(cx0 + hw), px(y)));
+                            }
+                            for &(y, hw) in widths.iter().rev() {
+                                poly.line_to(point(px(cx0 - hw), px(y)));
+                            }
+                            poly.close();
+                            let fill_col: Hsla = rgb(accent_hex).into();
+                            if let Ok(path) = poly.build() {
+                                window.paint_path(path, fill_col.opacity(0.46));
+                            }
+
+                            let mut contour = PathBuilder::stroke(px(1.0));
+                            contour.move_to(point(px(cx0 + widths[0].1), px(widths[0].0)));
+                            for &(y, hw) in &widths[1..] {
+                                contour.line_to(point(px(cx0 + hw), px(y)));
+                            }
+                            contour.move_to(point(px(cx0 - widths[0].1), px(widths[0].0)));
+                            for &(y, hw) in &widths[1..] {
+                                contour.line_to(point(px(cx0 - hw), px(y)));
+                            }
+                            if let Ok(path) = contour.build() {
+                                window.paint_path(path, fill_col.opacity(0.92));
                             }
                         }
                     }
-                    // Playhead: línea brillante al centro = instante actual.
-                    let cy = bounds.origin.y + bounds.size.height / 2.0;
-                    let mut play = PathBuilder::stroke(px(2.0));
-                    play.move_to(point(bounds.origin.x + px(2.0), cy));
-                    play.line_to(point(
-                        bounds.origin.x + bounds.size.width - px(2.0),
-                        cy,
-                    ));
+
+                    // Playhead horizontal brillante al centro = instante actual
+                    let cy = oy + h * 0.5;
+                    let mut play = PathBuilder::stroke(px(1.5));
+                    play.move_to(point(px(ox + 2.0), px(cy)));
+                    play.line_to(point(px(ox + w - 2.0), px(cy)));
                     if let Ok(play) = play.build() {
                         window.paint_path(play, rgb(theme::DAW_PLAYHEAD_BLUE));
                     }
@@ -1917,16 +2175,18 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
             div()
                 .absolute()
                 .left(px(4.0))
-                .top(px(4.0))
+                .top(px(3.0))
                 .right(px(4.0))
                 .child(
                     Label::new(label)
-                        .text_size(px(9.0))
+                        .text_size(px(8.5))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(if has_wave {
-                            rgb(theme::DAW_ACCENT_ORANGE)
+                            rgb(accent_hex)
                         } else {
-                            rgb(0x808080)
-                        }),
+                            rgb(0x5E626A)
+                        })
+                        .text_ellipsis(),
                 ),
         )
         .into_any_element()
@@ -1936,47 +2196,238 @@ fn waveform_container(view: &WaveformView) -> AnyElement {
 // COLUMNAS
 // =========================================================================
 
+#[derive(Clone, Copy)]
+enum HeaderCapKind {
+    Scenes,
+    Master,
+    Fx,
+    Track(usize),
+}
+
 fn track_header_cell(
-    width: f32,
     header: &str,
     name: &str,
-    accent: Rgba,
+    kind: HeaderCapKind,
     selected: bool,
 ) -> AnyElement {
+    let (bg_hex, primary_hex, secondary_hex) = match kind {
+        HeaderCapKind::Track(idx) => (theme::track_stripe_hex(idx), 0x111113, 0x1E1F22),
+        HeaderCapKind::Master => (0x32353C, 0xF0F2F6, 0x90949E),
+        HeaderCapKind::Fx => (0x2C2E34, 0xE4E6EC, 0x848892),
+        HeaderCapKind::Scenes => (0x2E3036, 0xDCDFE6, 0x90949E),
+    };
+    let border_col = if selected {
+        rgb(0xFFFFFF)
+    } else {
+        rgb(0x141518)
+    };
+
     div()
-        .w(px(width))
+        .w_full()
         .h(px(HEADER_HEIGHT))
         .flex_shrink_0()
-        .bg(if selected {
-            rgb(0x343438)
-        } else {
-            rgb(theme::DAW_HEADER_DARK_BG)
-        })
+        .bg(rgb(bg_hex))
         .border_1()
-        .border_color(if selected {
-            rgb(theme::DAW_PLAYHEAD_BLUE).into()
-        } else {
-            theme::BORDER_COLOR
-        })
-        .rounded(px(2.0))
+        .border_color(border_col)
+        .rounded(px(1.5))
+        .px(px(4.0))
+        .overflow_hidden()
         .flex()
         .flex_col()
         .items_center()
         .justify_center()
         .child(
-            Label::new(header.to_string())
+            Label::new(name.to_string())
                 .text_size(px(10.0))
                 .font_weight(FontWeight::BOLD)
-                .text_color(accent),
+                .text_color(rgb(primary_hex))
+                .text_ellipsis(),
         )
         .child(
-            Label::new(name.to_string())
-                .text_size(px(9.0))
-                .text_color(if selected {
-                    theme::TEXT_PRIMARY
-                } else {
-                    theme::TEXT_MUTED
-                }),
+            Label::new(header.to_string())
+                .text_size(px(8.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(secondary_hex)),
+        )
+        .into_any_element()
+}
+
+fn empty_scene_slot(prefix: &str, scene_idx: usize) -> AnyElement {
+    div()
+        .id(SharedString::from(format!("arr_{prefix}_empty_slot_{scene_idx}")))
+        .w_full()
+        .h(px(PAD_HEIGHT))
+        .flex_shrink_0()
+        .bg(rgb(0x191A1D))
+        .border_1()
+        .border_color(rgb(0x131417))
+        .rounded(px(1.5))
+        .into_any_element()
+}
+
+fn scene_and_inspector_column(
+    scene_names: &[String],
+    master_selected: bool,
+) -> AnyElement {
+    let scene_cells: Vec<AnyElement> = scene_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| scene_launcher_cell(i, name))
+        .collect();
+
+    v_flex()
+        .id("arr_col_scenes")
+        .test_support()
+        .w(px(SCENE_LABEL_WIDTH))
+        .flex_shrink_0()
+        .overflow_hidden()
+        .bg(if master_selected {
+            rgb(theme::DAW_HEADER_SELECTED_BG)
+        } else {
+            rgb(theme::DAW_MAIN_BG)
+        })
+        .border_1()
+        .border_color(if master_selected {
+            rgb(theme::DAW_PLAYHEAD_BLUE)
+        } else {
+            rgb(0x141518)
+        })
+        .rounded(px(2.0))
+        .p(px(3.0))
+        .gap(px(2.0))
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+            select_track_column(cx, StripTarget::Master)
+        })
+        .child(track_header_cell(
+            "Master Launch",
+            "SCENES",
+            HeaderCapKind::Scenes,
+            master_selected,
+        ))
+        .child(
+            v_flex()
+                .w_full()
+                .gap(px(PAD_GAP))
+                .children(scene_cells)
+                .into_any_element(),
+        )
+        .child(strip_separator())
+        .child(
+            v_flex()
+                .w_full()
+                .flex_shrink_0()
+                .overflow_hidden()
+                .gap(px(3.0))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h(px(DEVICES_HEIGHT))
+                        .items_center()
+                        .px(px(6.0))
+                        .bg(rgb(0x18191D))
+                        .border_1()
+                        .border_color(rgb(0x131417))
+                        .rounded(px(2.0))
+                        .child(
+                            Label::new("Devices")
+                                .text_size(px(8.5))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x848892)),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h(px(31.0))
+                        .items_center()
+                        .px(px(6.0))
+                        .bg(rgb(0x18191D))
+                        .border_1()
+                        .border_color(rgb(0x131417))
+                        .rounded(px(2.0))
+                        .child(
+                            Label::new("Sends / I/O")
+                                .text_size(px(8.5))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x848892)),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h(px(18.0))
+                        .items_center()
+                        .px(px(6.0))
+                        .bg(rgb(0x18191D))
+                        .border_1()
+                        .border_color(rgb(0x131417))
+                        .rounded(px(2.0))
+                        .child(
+                            Label::new("Controls")
+                                .text_size(px(8.5))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x848892)),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h(px(PAN_HEIGHT))
+                        .items_center()
+                        .px(px(6.0))
+                        .bg(rgb(0x18191D))
+                        .border_1()
+                        .border_color(rgb(0x131417))
+                        .rounded(px(2.0))
+                        .child(
+                            Label::new("Pan / Bal")
+                                .text_size(px(8.5))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x848892)),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .w_full()
+                        .h(px(FADER_HEIGHT + 24.0))
+                        .bg(rgb(theme::DAW_FADER_WELL_BG))
+                        .border_1()
+                        .border_color(rgb(0x111214))
+                        .rounded(px(2.0))
+                        .px(px(4.0))
+                        .py(px(4.0))
+                        .justify_between()
+                        .overflow_hidden()
+                        .child(
+                            Label::new("Fader / VU")
+                                .text_size(px(8.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x7C8088)),
+                        )
+                        .child(
+                            v_flex()
+                                .gap(px(2.0))
+                                .items_center()
+                                .child(
+                                    Label::new("dB Scale")
+                                        .text_size(px(7.5))
+                                        .text_color(rgb(0x60646D)),
+                                )
+                                .child(
+                                    Label::new("Meters")
+                                        .text_size(px(7.5))
+                                        .text_color(rgb(0x60646D)),
+                                ),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(px(2.5))
+                .flex_shrink_0()
+                .rounded(px(1.0))
+                .bg(rgb(0x2E3036)),
         )
         .into_any_element()
 }
@@ -1987,14 +2438,17 @@ fn scene_launcher_cell(scene_idx: usize, name: &str) -> AnyElement {
         .w_full()
         .h(px(PAD_HEIGHT))
         .flex_shrink_0()
-        .bg(rgb(theme::DAW_HEADER_DARK_BG))
+        .bg(rgb(0x313338))
         .border_1()
-        .border_color(rgb(theme::DAW_ACCENT_ORANGE))
-        .rounded(px(2.0))
+        .border_color(rgb(0x18191C))
+        .rounded(px(1.5))
+        .px(px(6.0))
         .flex()
         .items_center()
-        .justify_center()
+        .gap(px(5.0))
         .overflow_hidden()
+        .cursor_pointer()
+        .hover(|this| this.bg(rgb(0x3B3E45)))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |s, cx| {
@@ -2004,21 +2458,28 @@ fn scene_launcher_cell(scene_idx: usize, name: &str) -> AnyElement {
             });
         })
         .child(
-            Label::new(format!("▶ {}", name))
+            Label::new("▶")
+                .text_size(px(8.0))
+                .text_color(rgb(0xB8BCC6)),
+        )
+        .child(
+            Label::new(name.to_string())
                 .text_size(px(9.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0xE6E6E6)),
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(0xE4E6EC))
+                .text_ellipsis(),
         )
         .into_any_element()
 }
 
-/// Columna unificada: cabecera + contenido superior + channel strip.
+/// Columna unificada: cabecera sólida + contenido superior + channel strip + barra inferior cromática.
 fn track_column(
     width: f32,
     header: AnyElement,
     top: AnyElement,
     strip: AnyElement,
     target: StripTarget,
+    footer_stripe_hex: u32,
     selected: bool,
 ) -> AnyElement {
     v_flex()
@@ -2026,8 +2487,9 @@ fn track_column(
         .test_support()
         .w(px(width))
         .flex_shrink_0()
+        .overflow_hidden()
         .bg(if selected {
-            rgb(0x32343A)
+            rgb(theme::DAW_HEADER_SELECTED_BG)
         } else {
             rgb(theme::DAW_MAIN_BG)
         })
@@ -2035,9 +2497,9 @@ fn track_column(
         .border_color(if selected {
             rgb(theme::DAW_PLAYHEAD_BLUE)
         } else {
-            rgb(0x161616)
+            rgb(0x141518)
         })
-        .rounded(px(3.0))
+        .rounded(px(2.0))
         .p(px(3.0))
         .gap(px(2.0))
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
@@ -2046,6 +2508,72 @@ fn track_column(
         .child(header)
         .child(top)
         .child(strip)
+        .child(
+            div()
+                .w_full()
+                .h(px(2.5))
+                .flex_shrink_0()
+                .rounded(px(1.0))
+                .bg(rgb(footer_stripe_hex)),
+        )
+        .into_any_element()
+}
+
+/// Celda compacta `+` a la derecha de la última pista sobre el vacío oscuro del mixer.
+fn quick_add_track_cell() -> AnyElement {
+    div()
+        .id("arr_quick_add_track")
+        .w(px(24.0))
+        .h(px(HEADER_HEIGHT))
+        .mt(px(3.0))
+        .flex_shrink_0()
+        .rounded(px(2.0))
+        .bg(rgb(0x1A1B1F))
+        .border_1()
+        .border_color(rgb(0x282A30))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|this| this.bg(rgb(0x26282F)))
+        .on_click(move |_, _, cx| {
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                if state.mode == AppMode::OpenLive {
+                    state.matrix_state.add_track();
+                    let n = state.matrix_state.tracks.len();
+                    let name = state
+                        .matrix_state
+                        .tracks
+                        .last()
+                        .map(|t| t.name.clone())
+                        .unwrap_or(format!("Track {}", n));
+                    let mut t = Track::new(n, name, false);
+                    if let Some(mx) = state.matrix_state.tracks.last() {
+                        t.volume = mx.volume;
+                        t.pan = mx.pan;
+                    }
+                    t.matrix_idx = Some(n.saturating_sub(1));
+                    state.live_tracks.push(t);
+                } else {
+                    let next_id =
+                        state.studio_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                    let n = state.studio_tracks.iter().filter(|t| !t.is_master).count();
+                    state.studio_tracks.push(Track::new(
+                        next_id,
+                        format!("TRACK {:02}", n + 1),
+                        false,
+                    ));
+                }
+                cx.notify();
+            });
+        })
+        .child(
+            Label::new("+")
+                .text_size(px(12.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x9A9EA8)),
+        )
         .into_any_element()
 }
 
@@ -2066,6 +2594,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         engine_handle,
         master_live,
         _master_studio,
+        fx_live,
         live_devices,
         studio_strips,
         studio_waves,
@@ -2112,6 +2641,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .collect();
         let master_live = app.live_tracks.first().cloned();
         let master_studio = app.studio_tracks.first().cloned();
+        let fx_live = app.fx_tracks.first().cloned();
         // Devices / routing / arm viven en `live_tracks[idx+1]` (matriz) o en
         // `studio_tracks[idx]` (estudio): se congelan acá para no leer el
         // estado desde los closures del layout.
@@ -2202,7 +2732,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .get(idx)
                         .map(|t| t.name.clone())
                         .unwrap_or_default();
-                    let mut audio_here = app.playlist_state.clips.iter().filter(|(tid, c)| {
+                    let audio_here = app.playlist_state.clips.iter().filter(|(tid, c)| {
                         *tid == idx && matches!(c.clip_type, ClipType::Audio { .. })
                     });
                     let has_audio = audio_here.clone().next().is_some();
@@ -2258,6 +2788,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             app.engine_handle.clone(),
             master_live,
             master_studio,
+            fx_live,
             live_devices,
             studio_strips,
             studio_waves,
@@ -2276,123 +2807,141 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     // controles propios del área: [+], [-], TOTAL y la vista activa).
     // -------------------------------------------------------------
     let is_live = mode == AppMode::OpenLive;
+    let active_mode_tracks = if is_live {
+        track_names.len() + 2
+    } else {
+        studio_strips.len()
+    };
+    let _ = track_count;
     let toolbar = h_flex()
         .w_full()
+        .h(px(24.0))
         .flex_shrink_0()
         .items_center()
-        .gap(px(6.0))
-        .px(px(4.0))
-        .py(px(2.0))
+        .justify_between()
+        .px(px(6.0))
+        .bg(rgb(theme::DAW_HEADER_DARK_BG))
+        .border_b_1()
+        .border_color(rgb(theme::DAW_BORDER_SUBTLE))
         .child(
-            Button::new("arr_add_track")
-                .rounded(ButtonRounded::None)
-                .label(" [ + ] ")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        if state.mode == AppMode::OpenLive {
-                            state.matrix_state.add_track();
-                            let n = state.matrix_state.tracks.len();
-                            let name = state
-                                .matrix_state
-                                .tracks
-                                .last()
-                                .map(|t| t.name.clone())
-                                .unwrap_or(format!("Track {}", n));
-                            let mut t = Track::new(n, name, false);
-                            if let Some(mx) = state.matrix_state.tracks.last() {
-                                t.volume = mx.volume;
-                                t.pan = mx.pan;
-                            }
-                            t.matrix_idx = Some(n.saturating_sub(1));
-                            state.live_tracks.push(t);
-                        } else {
-                            let next_id = state
-                                .studio_tracks
-                                .iter()
-                                .map(|t| t.id)
-                                .max()
-                                .unwrap_or(0)
-                                + 1;
-                            let n = state.studio_tracks.iter().filter(|t| !t.is_master).count();
-                            state.studio_tracks.push(Track::new(
-                                next_id,
-                                format!("TRACK {:02}", n + 1),
-                                false,
-                            ));
-                        }
-                        cx.notify();
-                    });
-                }),
+            h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(
+                    Button::new("arr_add_track")
+                        .rounded(ButtonRounded::None)
+                        .label("+")
+                        .compact()
+                        .bg(rgb(0x2C2E34))
+                        .text_color(rgb(0xE6E8EE))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                if state.mode == AppMode::OpenLive {
+                                    state.matrix_state.add_track();
+                                    let n = state.matrix_state.tracks.len();
+                                    let name = state
+                                        .matrix_state
+                                        .tracks
+                                        .last()
+                                        .map(|t| t.name.clone())
+                                        .unwrap_or(format!("Track {}", n));
+                                    let mut t = Track::new(n, name, false);
+                                    if let Some(mx) = state.matrix_state.tracks.last() {
+                                        t.volume = mx.volume;
+                                        t.pan = mx.pan;
+                                    }
+                                    t.matrix_idx = Some(n.saturating_sub(1));
+                                    state.live_tracks.push(t);
+                                } else {
+                                    let next_id = state
+                                        .studio_tracks
+                                        .iter()
+                                        .map(|t| t.id)
+                                        .max()
+                                        .unwrap_or(0)
+                                        + 1;
+                                    let n = state
+                                        .studio_tracks
+                                        .iter()
+                                        .filter(|t| !t.is_master)
+                                        .count();
+                                    state.studio_tracks.push(Track::new(
+                                        next_id,
+                                        format!("TRACK {:02}", n + 1),
+                                        false,
+                                    ));
+                                }
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("arr_remove_track")
+                        .rounded(ButtonRounded::None)
+                        .label("-")
+                        .compact()
+                        .bg(rgb(0x2C2E34))
+                        .text_color(rgb(0xC0C4CC))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                if state.mode == AppMode::OpenLive {
+                                    state.matrix_state.remove_track();
+                                    if state.live_tracks.len() > 2 {
+                                        state.live_tracks.pop();
+                                    }
+                                } else if let Some(pos) =
+                                    state.studio_tracks.iter().rposition(|t| !t.is_master)
+                                {
+                                    state.studio_tracks.remove(pos);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    Label::new(format!("{} CHANNELS", active_mode_tracks))
+                        .text_size(px(9.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0x989CA6)),
+                ),
         )
         .child(
-            Button::new("arr_remove_track")
-                .rounded(ButtonRounded::None)
-                .label(" [ - ] ")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        if state.mode == AppMode::OpenLive {
-                            state.matrix_state.remove_track();
-                            if state.live_tracks.len() > 2 {
-                                state.live_tracks.pop();
-                            }
-                        } else if let Some(pos) =
-                            state.studio_tracks.iter().rposition(|t| !t.is_master)
-                        {
-                            state.studio_tracks.remove(pos);
-                        }
-                        cx.notify();
-                    });
-                }),
+            Label::new(if is_live {
+                "CLIP LAUNCHER & MIXER"
+            } else {
+                match openstudio_view {
+                    crate::app::OpenStudioView::Playlist => "ARRANGER TIMELINE",
+                    crate::app::OpenStudioView::ArrangerMixer => "STUDIO MIX CONSOLE",
+                }
+            })
+            .text_size(px(9.0))
+            .font_weight(FontWeight::BOLD)
+            .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
         )
-        .child(Label::new(format!("TOTAL: {}", track_count)).text_xs())
-        // OpenStudio: la vista central conmuta con `Tab` / `F9`
-        // (`OpenStudioView::Playlist` ↔ `OpenStudioView::ArrangerMixer`);
-        // este rótulo sólo indica cuál está activa.
-        .when(!is_live, |t| {
-            t.child(
-                Label::new(match openstudio_view {
-                    crate::app::OpenStudioView::Playlist => "VIEW: PLAYLIST",
-                    crate::app::OpenStudioView::ArrangerMixer => "VIEW: MIXER",
-                })
-                .text_xs(),
-            )
-        })
         .into_any_element();
 
     // -------------------------------------------------------------
     // Columnas según modo (misma strip abajo en ambos)
     // -------------------------------------------------------------
-    let columns: Vec<AnyElement> = if is_live {
+    let (columns, right_columns): (Vec<AnyElement>, Vec<AnyElement>) = if is_live {
         let mut cols: Vec<AnyElement> = Vec::new();
-        // Columna SCENES + strip del master.
+        // Columna SCENES + inspector de filas (Devices / Sends / Controls / Fader).
         let master_snap =
             snapshot_master(master_live.as_ref(), vu_master_live, selected_track, selected_slot);
-        let scene_cells: Vec<AnyElement> = scene_names
-            .iter()
-            .enumerate()
-            .map(|(i, name)| scene_launcher_cell(i, name))
-            .collect();
-        cols.push(track_column(
-            SCENE_LABEL_WIDTH,
-            track_header_cell(
-                SCENE_LABEL_WIDTH,
-                "SCENES",
-                "Master Launch",
-                rgb(0x5AB4FF),
-                master_snap.is_selected_track,
-            ),
-            v_flex().w_full().gap(px(PAD_GAP)).children(scene_cells).into_any_element(),
-            channel_strip(&master_snap, "arr_master"),
-            StripTarget::Master,
+        cols.push(scene_and_inspector_column(
+            &scene_names,
             master_snap.is_selected_track,
         ));
-        // Una columna por pista: launchers arriba + mismo strip abajo.
-        let tracks_len = track_names.len();
+        // Una columna por pista: launchers arriba + channel strip abajo.
         for (idx, name) in track_names.iter().enumerate() {
+            let (volume, pan, muted, soloed) =
+                track_mix.get(idx).copied().unwrap_or((0.75, 0.0, false, false));
+            let (armed, devices, route_dest, sends) = live_devices
+                .get(idx)
+                .cloned()
+                .unwrap_or((false, Vec::new(), "Bus 0".to_string(), Vec::new()));
             let mut pads: Vec<AnyElement> = Vec::new();
             for scene_idx in 0..scene_names.len() {
                 let (slot_state, clip_name) = slots
@@ -2408,18 +2957,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     slot_state,
                     has_clip,
                     clip_name,
+                    armed,
                     selected == Some((idx, scene_idx)),
                     clipboard_ready,
                     drop_sample_ready,
                     engine_handle.clone(),
                 ));
             }
-            let (volume, pan, muted, soloed) =
-                track_mix.get(idx).copied().unwrap_or((0.75, 0.0, false, false));
-            let (armed, devices, route_dest, sends) = live_devices
-                .get(idx)
-                .cloned()
-                .unwrap_or((false, Vec::new(), "Bus 0".to_string(), Vec::new()));
             let snap = StripSnapshot {
                 name: name.clone(),
                 header: format!("TRK {:02}", idx + 1),
@@ -2437,75 +2981,110 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 is_selected_track: selected_track == idx + 1,
                 target: StripTarget::Live(idx),
             };
-            let _ = tracks_len;
+            let stripe_hex = theme::track_stripe_hex(idx);
             cols.push(track_column(
                 TRACK_WIDTH,
                 track_header_cell(
-                    TRACK_WIDTH,
                     &format!("TRK {:02}", idx + 1),
                     name,
-                    rgb(0xE0E0E0),
+                    HeaderCapKind::Track(idx),
                     snap.is_selected_track,
                 ),
                 v_flex().w_full().gap(px(PAD_GAP)).children(pads).into_any_element(),
-                channel_strip(&snap, &format!("arr_track_{}", idx)),
+                channel_strip(&snap, &format!("arr_track_{}", idx), stripe_hex),
                 StripTarget::Live(idx),
+                stripe_hex,
                 snap.is_selected_track,
             ));
         }
-        cols
+        cols.push(quick_add_track_cell());
+
+        // Canales FX y Master a la derecha
+        let mut right_cols: Vec<AnyElement> = Vec::new();
+
+        // 1. Bus de Retorno (FX 1)
+        let fx_snap = snapshot_fx(fx_live.as_ref(), 0.0, selected_slot);
+        let fx_empty_slots: Vec<AnyElement> = (0..scene_names.len())
+            .map(|i| empty_scene_slot("fx", i))
+            .collect();
+        right_cols.push(track_column(
+            TRACK_WIDTH,
+            track_header_cell("Return", "FX 1", HeaderCapKind::Fx, false),
+            v_flex().w_full().gap(px(PAD_GAP)).children(fx_empty_slots).into_any_element(),
+            channel_strip(&fx_snap, "arr_fx_0", 0x88909A),
+            StripTarget::Fx(0),
+            0x606570,
+            false,
+        ));
+
+        // 2. Pista Master
+        let master_empty_slots: Vec<AnyElement> = (0..scene_names.len())
+            .map(|i| empty_scene_slot("master", i))
+            .collect();
+        right_cols.push(track_column(
+            TRACK_WIDTH,
+            track_header_cell(
+                "Master",
+                "Master",
+                HeaderCapKind::Master,
+                master_snap.is_selected_track,
+            ),
+            v_flex().w_full().gap(px(PAD_GAP)).children(master_empty_slots).into_any_element(),
+            channel_strip(&master_snap, "arr_master", theme::DAW_FADER_CAP_ORANGE),
+            StripTarget::Master,
+            theme::DAW_MASTER_SLATE,
+            master_snap.is_selected_track,
+        ));
+
+        (cols, right_cols)
     } else {
-        // Modo OpenStudio: mixer lateral (columnas con waveform + strip).
-        // El Timeline horizontal vive en `playlist::render` y se coloca a la
-        // derecha ocupando todo el espacio flexible (ver layout de abajo).
-        studio_strips
-            .iter()
-            .enumerate()
-            .map(|(idx, snap)| {
-                let wave = studio_waves.get(idx).cloned().unwrap_or_else(|| {
-                    WaveformView::silent(snap.name.clone(), 0, 0)
-                });
-                let header = track_header_cell(
-                    TRACK_WIDTH,
-                    &snap.header,
-                    &snap.name,
-                    if snap.is_master {
-                        rgb(0x5AB4FF)
-                    } else {
-                        rgb(0xE0E0E0)
-                    },
-                    snap.is_selected_track,
-                );
-                track_column(
-                    TRACK_WIDTH,
-                    header,
-                    waveform_container(&wave),
-                    channel_strip(snap, &format!("arr_studio_{}", idx)),
-                    snap.target,
-                    snap.is_selected_track,
+        // Modo OpenStudio: consola de canales (columnas con waveform en cascada + strip).
+        let mut content_cols: Vec<AnyElement> = Vec::new();
+        let mut right_cols: Vec<AnyElement> = Vec::new();
+
+        for (idx, snap) in studio_strips.iter().enumerate() {
+            let wave = studio_waves.get(idx).cloned().unwrap_or_else(|| {
+                WaveformView::silent(snap.name.clone(), 0, 0)
+            });
+            let color_idx = idx.saturating_sub(1);
+            let (cap_kind, accent_hex, fader_accent) = if snap.is_master {
+                (
+                    HeaderCapKind::Master,
+                    theme::DAW_MASTER_SLATE,
+                    theme::DAW_FADER_CAP_ORANGE,
                 )
-            })
-            .collect()
+            } else {
+                let stripe = theme::track_stripe_hex(color_idx);
+                (HeaderCapKind::Track(color_idx), stripe, stripe)
+            };
+            let header = track_header_cell(
+                &snap.header,
+                &snap.name,
+                cap_kind,
+                snap.is_selected_track,
+            );
+            let col = track_column(
+                TRACK_WIDTH,
+                header,
+                waveform_container(&wave, accent_hex),
+                channel_strip(snap, &format!("arr_studio_{}", idx), fader_accent),
+                snap.target,
+                accent_hex,
+                snap.is_selected_track,
+            );
+            if snap.is_master {
+                right_cols.push(col);
+            } else {
+                content_cols.push(col);
+            }
+        }
+        content_cols.push(quick_add_track_cell());
+        (content_cols, right_cols)
     };
 
     // -------------------------------------------------------------
     // Layout OpenStudio: vistas EXCLUSIVAS (`Tab` / `F9` conmutan).
     // -------------------------------------------------------------
-    // Jerarquía (`OpenStudioView`):
-    //   - Playlist: lienzo temporal a todo el ancho (`studio_playlist_panel`
-    //     → `playlist::render`): ruler, filas limpias, grilla, clips,
-    //     playhead. No contiene ningún control de mezcla.
-    //   - ArrangerMixer: consola de channel strips (`studio_mixer_panel`):
-    //     faders, pan, S/M/R, devices, routing, waveform. No contiene grilla.
-    // Ambas leen el mismo `studio_tracks`: la selección y los DEVICES se
-    // comparten. Los flex-items son `div` planos y cada scroll vive en un
-    // hijo interno con handles explícitos del estado (el pan con botón
-    // central los mueve directo, ver `with_mixer_pan`).
-    //
-    // Los scrolls son `div` con `overflow_*_scroll` + `track_scroll` +
-    // scrollbar del kit en vez del `Scrollable` implícito: el handle lo posee
-    // `AppState` (`mixer_scroll_h/v`) para que el gesto MMB pueda fijar el
-    // offset sin pasar por el keyed-state interno de la ventana.
     let (mixer_panning, mixer_bar_dragging, mixer_scroll_h, mixer_scroll_v) = {
         let app = state(cx).read(cx);
         (
@@ -2516,10 +3095,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         )
     };
     if !is_live {
-        let mixer_columns = columns;
-        // Wrapper observable del área (mismo `id` que en OpenLive para el
-        // harness `arranger_columns_fit`): la medición vive acá porque el
-        // `Scrollable` interno sobrescribe el id de su contenido.
         let area = div()
             .id("arranger_columns")
             .test_support()
@@ -2529,11 +3104,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .flex()
             .flex_col();
         if openstudio_view == crate::app::OpenStudioView::Playlist {
+            // Vista Arranger Timeline de borde a borde: sin barra redundante ni
+            // paddings exteriores para máxima densidad visual.
             return v_flex()
                 .id("arranger_view")
                 .size_full()
-                .bg(theme::WINDOW_BG)
-                .child(toolbar)
+                .bg(rgb(theme::DAW_CANVAS_VOID))
                 .child(
                     area.child(
                         div()
@@ -2544,7 +3120,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             .min_h_0()
                             .min_w_0()
                             .overflow_hidden()
-                            .p(px(6.0))
                             .child(playlist::render(cx)),
                     ),
                 )
@@ -2553,7 +3128,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         return v_flex()
             .id("arranger_view")
             .size_full()
-            .bg(theme::WINDOW_BG)
+            .bg(rgb(theme::DAW_CANVAS_VOID))
             .child(toolbar)
             .child(
                 area.child(
@@ -2566,13 +3141,25 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .min_w_0()
                         .flex()
                         .flex_col()
+                        .bg(rgb(theme::DAW_CANVAS_VOID))
                         .child(
-                            with_mixer_pan(div().id("arranger_mixer_vscroll").flex().flex_col().flex_1().min_h_0().w_full(), mixer_panning)
-                                .overflow_y_scroll()
-                                .restrict_scroll_to_axis()
-                                .track_scroll(&mixer_scroll_v)
-                                .vertical_scrollbar(&mixer_scroll_v)
-                                .child(mixer_hscroll(mixer_columns, &mixer_scroll_h, mixer_panning)),
+                            with_mixer_pan(
+                                div()
+                                    .id("arranger_mixer_vscroll")
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .pb(px(4.0))
+                                    .bg(rgb(theme::DAW_CANVAS_VOID)),
+                                mixer_panning,
+                            )
+                            .overflow_y_scroll()
+                            .restrict_scroll_to_axis()
+                            .track_scroll(&mixer_scroll_v)
+                            .vertical_scrollbar(&mixer_scroll_v)
+                            .child(mixer_hscroll(columns, right_columns, &mixer_scroll_h, mixer_panning)),
                         )
                         .child(mixer_scrollbar_strip(
                             &mixer_scroll_h,
@@ -2587,11 +3174,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     v_flex()
         .id("arranger_view")
         .size_full()
-        .bg(theme::WINDOW_BG)
+        .bg(rgb(theme::DAW_CANVAS_VOID))
         .child(toolbar)
-        // Wrapper observable del área de columnas (para el test de encaje):
-        // los scrolls internos usan handles explícitos del estado, así que la
-        // medición sigue viviendo en este `div` externo.
         .child(
             div()
                 .id("arranger_columns")
@@ -2601,13 +3185,26 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .min_h_0()
                 .flex()
                 .flex_col()
+                .pb(px(4.0))
+                .bg(rgb(theme::DAW_CANVAS_VOID))
                 .child(
-                    with_mixer_pan(div().id("arranger_mixer_vscroll").flex().flex_col().flex_1().w_full().min_h_0(), mixer_panning)
-                        .overflow_y_scroll()
-                        .restrict_scroll_to_axis()
-                        .track_scroll(&mixer_scroll_v)
-                        .vertical_scrollbar(&mixer_scroll_v)
-                        .child(mixer_hscroll(columns, &mixer_scroll_h, mixer_panning)),
+                    with_mixer_pan(
+                        div()
+                            .id("arranger_mixer_vscroll")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .w_full()
+                            .min_h_0()
+                            .pb(px(4.0))
+                            .bg(rgb(theme::DAW_CANVAS_VOID)),
+                        mixer_panning,
+                    )
+                    .overflow_y_scroll()
+                    .restrict_scroll_to_axis()
+                    .track_scroll(&mixer_scroll_v)
+                    .vertical_scrollbar(&mixer_scroll_v)
+                    .child(mixer_hscroll(columns, right_columns, &mixer_scroll_h, mixer_panning)),
                 )
                 .child(mixer_scrollbar_strip(
                     &mixer_scroll_h,

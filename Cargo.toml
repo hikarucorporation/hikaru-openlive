@@ -49,7 +49,7 @@ exclude = ["vst3-host-patched"]
 # Versión del producto. Es la ÚNICA fuente de verdad: la cabecera de
 # `created_by` de los formatos `.oplf`/`.opsf` y la pantalla About la toman de
 # acá vía `env!("CARGO_PKG_VERSION")`. No hardcodear `2.22.2` en el código.
-version = "2.22.2"
+version = "2.24.0"
 
 [workspace.dependencies]
 clack-host = "0.2"
