@@ -288,9 +288,9 @@ fn mixer_hscroll(
             .id("arranger_mixer_hscroll")
             .flex()
             .flex_row()
-            .flex_none()
-            .h_auto()
+            .flex_1()
             .min_h_full()
+            .h_full()
             .w_full()
             .bg(rgb(theme::DAW_CANVAS_VOID)),
         panning,
@@ -300,18 +300,19 @@ fn mixer_hscroll(
     .track_scroll(scroll_h)
     .child(
         div()
-            .flex_none()
+            .flex_1()
             .w_auto()
             .min_w_full()
+            .h_full()
             .bg(rgb(theme::DAW_CANVAS_VOID))
             .p(px(2.0))
-            .pb(px(4.0))
+            .pb(px(2.0))
             .child(
                 h_flex()
                     .min_w_full()
+                    .h_full()
                     .gap(px(PAD_GAP))
-                    .items_start()
-                    .flex_shrink_0()
+                    .items_stretch()
                     .children(content_columns)
                     .when(!right_columns.is_empty(), |this| {
                         this.child(div().flex_1().min_w(px(24.0)))
@@ -1159,17 +1160,11 @@ fn volume_fader(target: FaderTarget, volume: f32, accent_color: u32) -> AnyEleme
     let b_move = slot.clone();
     let b_paint = slot.clone();
 
-    let half_thumb = FADER_THUMB_H / 2.0;
-    let travel = FADER_HEIGHT - FADER_THUMB_H;
-    let thumb_y = half_thumb + (1.0 - volume.clamp(0.0, 1.0)) * travel;
-    let rail_left = (FADER_WIDTH - FADER_RAIL_W) / 2.0;
-    let fill_h = (FADER_HEIGHT - 2.0 - thumb_y).max(0.0);
-
     div()
         .id(SharedString::from(format!("arr_vol_{:?}", target)))
         .relative()
         .w(px(FADER_WIDTH))
-        .h(px(FADER_HEIGHT))
+        .h_full()
         .flex_shrink_0()
         .overflow_hidden()
         .cursor_ns_resize()
@@ -1201,56 +1196,76 @@ fn volume_fader(target: FaderTarget, volume: f32, accent_color: u32) -> AnyEleme
         .child(
             canvas(
                 move |bounds, _, _| record_bounds(&b_paint, bounds),
-                |_, _, _, _| {},
+                move |bounds, _, window, _| {
+                    let total_h = bounds.size.height.as_f32();
+                    let total_w = bounds.size.width.as_f32();
+                    if total_h <= 10.0 {
+                        return;
+                    }
+                    let half_thumb = FADER_THUMB_H / 2.0;
+                    let travel = (total_h - FADER_THUMB_H).max(1.0);
+                    let thumb_y = half_thumb + (1.0 - volume.clamp(0.0, 1.0)) * travel;
+                    let rail_left = bounds.origin.x + px((total_w - FADER_RAIL_W) / 2.0);
+                    let fill_h = (total_h - 2.0 - thumb_y).max(0.0);
+
+                    // 1. Pozo oscuro del fader
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(rail_left, bounds.origin.y),
+                            size(px(FADER_RAIL_W), px(total_h)),
+                        ),
+                        background: rgb(0x111214).into(),
+                        border_color: rgb(0x26282E).into(),
+                        corner_radii: gpui_kit::Corners::all(px(1.5)),
+                        border_widths: gpui_kit::Edges::all(px(1.0)),
+                        border_style: BorderStyle::default(),
+                    });
+
+                    // 2. Marca sutil de 0.0 dB (unity = 0.75)
+                    let unity_y = bounds.origin.y + px(half_thumb + (1.0 - VOLUME_RESET) * travel);
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(rail_left + px(1.0), unity_y),
+                            size(px(FADER_RAIL_W - 2.0), px(1.0)),
+                        ),
+                        background: rgb(0x363840).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::default(),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+
+                    // 3. Columna ámbar de nivel de ganancia
+                    if fill_h > 0.5 {
+                        window.paint_quad(PaintQuad {
+                            bounds: Bounds::new(
+                                point(rail_left + px(1.0), bounds.origin.y + px(thumb_y)),
+                                size(px(FADER_RAIL_W - 2.0), px(fill_h)),
+                            ),
+                            background: rgb(theme::DAW_FADER_FILL).into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
+                    }
+
+                    // 4. Línea luminosa del capuchón activo
+                    let cap_y = bounds.origin.y + px((thumb_y - 1.5).clamp(0.0, total_h - 3.0));
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::new(
+                            point(rail_left, cap_y),
+                            size(px(FADER_RAIL_W), px(3.0)),
+                        ),
+                        background: rgb(accent_color).into(),
+                        border_color: Hsla::default(),
+                        corner_radii: gpui_kit::Corners::all(px(1.0)),
+                        border_widths: gpui_kit::Edges::default(),
+                        border_style: BorderStyle::default(),
+                    });
+                },
             )
-            .absolute()
-            .inset_0(),
-        )
-        // Pozo oscuro del fader
-        .child(
-            div()
-                .absolute()
-                .left(px(rail_left))
-                .top(px(0.0))
-                .w(px(FADER_RAIL_W))
-                .h(px(FADER_HEIGHT))
-                .bg(rgb(0x111214))
-                .border_1()
-                .border_color(rgb(0x26282E))
-                .rounded(px(1.5)),
-        )
-        // Marca sutil de 0.0 dB (unity = 0.75)
-        .child(
-            div()
-                .absolute()
-                .left(px(rail_left + 1.0))
-                .top(px(half_thumb + (1.0 - VOLUME_RESET) * travel))
-                .w(px(FADER_RAIL_W - 2.0))
-                .h(px(1.0))
-                .bg(rgb(0x363840)),
-        )
-        // Columna ámbar de nivel de ganancia
-        .when(fill_h > 0.5, |d| {
-            d.child(
-                div()
-                    .absolute()
-                    .left(px(rail_left + 1.0))
-                    .top(px(thumb_y))
-                    .w(px(FADER_RAIL_W - 2.0))
-                    .h(px(fill_h))
-                    .bg(rgb(theme::DAW_FADER_FILL)),
-            )
-        })
-        // Línea luminosa del capuchón activo
-        .child(
-            div()
-                .absolute()
-                .left(px(rail_left))
-                .top(px((thumb_y - 1.5).clamp(0.0, FADER_HEIGHT - 3.0)))
-                .w(px(FADER_RAIL_W))
-                .h(px(3.0))
-                .bg(rgb(accent_color))
-                .rounded(px(1.0)),
+            .size_full(),
         )
         .into_any_element()
 }
@@ -1497,10 +1512,10 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         .into_any_element()
 }
 
-/// Escala calibrada de dB junto al vúmetro vertical (0, 6, 12, 18, 24, 36, ∞).
+/// Escala calibrada de dB junto al vúmetro vertical (0, 6, 12, 18, 24, 30, 36, ∞).
 fn calibrated_db_scale() -> AnyElement {
     v_flex()
-        .h(px(FADER_HEIGHT))
+        .h_full()
         .w(px(20.0))
         .flex_shrink_0()
         .justify_between()
@@ -1508,11 +1523,12 @@ fn calibrated_db_scale() -> AnyElement {
         .py(px(1.0))
         .overflow_hidden()
         .children(
-            ["0 -", "6 -", "12 -", "18 -", "24 -", "36 -", "∞ -"]
+            ["0 -", "6 -", "12 -", "18 -", "24 -", "30 -", "36 -", "∞ -"]
                 .into_iter()
                 .map(|mark| {
                     div()
-                        .h(px(FADER_HEIGHT / 7.0))
+                        .flex_1()
+                        .min_h_0()
                         .flex()
                         .items_center()
                         .justify_end()
@@ -1543,7 +1559,8 @@ fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -
 
     v_flex()
         .w_full()
-        .flex_shrink_0()
+        .flex_1()
+        .min_h_0()
         .items_center()
         .gap(px(3.0))
         .overflow_hidden()
@@ -1551,6 +1568,8 @@ fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -
         .child(
             v_flex()
                 .w_full()
+                .flex_1()
+                .min_h_0()
                 .bg(rgb(theme::DAW_FADER_WELL_BG))
                 .border_1()
                 .border_color(rgb(0x111214))
@@ -1567,6 +1586,7 @@ fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -
                         .border_b_1()
                         .border_color(rgb(0x23252B))
                         .pb(px(1.0))
+                        .flex_shrink_0()
                         .child(
                             Label::new(vu_db)
                                 .text_size(px(7.5))
@@ -1582,16 +1602,17 @@ fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -
                 .child(
                     h_flex()
                         .w_full()
-                        .h(px(FADER_HEIGHT))
+                        .flex_1()
+                        .min_h(px(50.0))
                         .justify_between()
-                        .items_center()
+                        .items_stretch()
                         .px(px(2.0))
                         .overflow_hidden()
                         .child(
                             h_flex()
-                                .items_center()
+                                .items_stretch()
                                 .gap(px(2.0))
-                                .h(px(FADER_HEIGHT))
+                                .h_full()
                                 .overflow_hidden()
                                 .child(calibrated_db_scale())
                                 .child(mixer::vertical_vu_meter(vu)),
@@ -1612,7 +1633,8 @@ fn channel_strip(snap: &StripSnapshot, id_prefix: &str, accent_color: u32) -> An
     };
     v_flex()
         .w_full()
-        .flex_shrink_0()
+        .flex_1()
+        .min_h_0()
         .overflow_hidden()
         .gap(px(3.0))
         .child(strip_separator())
@@ -2279,6 +2301,7 @@ fn scene_and_inspector_column(
         .id("arr_col_scenes")
         .test_support()
         .w(px(SCENE_LABEL_WIDTH))
+        .h_full()
         .flex_shrink_0()
         .overflow_hidden()
         .bg(if master_selected {
@@ -2307,6 +2330,7 @@ fn scene_and_inspector_column(
         .child(
             v_flex()
                 .w_full()
+                .flex_shrink_0()
                 .gap(px(PAD_GAP))
                 .children(scene_cells)
                 .into_any_element(),
@@ -2315,7 +2339,8 @@ fn scene_and_inspector_column(
         .child(
             v_flex()
                 .w_full()
-                .flex_shrink_0()
+                .flex_1()
+                .min_h_0()
                 .overflow_hidden()
                 .gap(px(3.0))
                 .child(
@@ -2389,7 +2414,8 @@ fn scene_and_inspector_column(
                 .child(
                     v_flex()
                         .w_full()
-                        .h(px(FADER_HEIGHT + 24.0))
+                        .flex_1()
+                        .min_h(px(50.0))
                         .bg(rgb(theme::DAW_FADER_WELL_BG))
                         .border_1()
                         .border_color(rgb(0x111214))
@@ -2486,6 +2512,7 @@ fn track_column(
         .id(SharedString::from(column_id(target)))
         .test_support()
         .w(px(width))
+        .h_full()
         .flex_shrink_0()
         .overflow_hidden()
         .bg(if selected {
@@ -2525,6 +2552,7 @@ fn quick_add_track_cell() -> AnyElement {
         .id("arr_quick_add_track")
         .w(px(24.0))
         .h(px(HEADER_HEIGHT))
+        .self_start()
         .mt(px(3.0))
         .flex_shrink_0()
         .rounded(px(2.0))
@@ -2990,7 +3018,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     HeaderCapKind::Track(idx),
                     snap.is_selected_track,
                 ),
-                v_flex().w_full().gap(px(PAD_GAP)).children(pads).into_any_element(),
+                v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(pads).into_any_element(),
                 channel_strip(&snap, &format!("arr_track_{}", idx), stripe_hex),
                 StripTarget::Live(idx),
                 stripe_hex,
@@ -3010,7 +3038,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         right_cols.push(track_column(
             TRACK_WIDTH,
             track_header_cell("Return", "FX 1", HeaderCapKind::Fx, false),
-            v_flex().w_full().gap(px(PAD_GAP)).children(fx_empty_slots).into_any_element(),
+            v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(fx_empty_slots).into_any_element(),
             channel_strip(&fx_snap, "arr_fx_0", 0x88909A),
             StripTarget::Fx(0),
             0x606570,
@@ -3029,7 +3057,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 HeaderCapKind::Master,
                 master_snap.is_selected_track,
             ),
-            v_flex().w_full().gap(px(PAD_GAP)).children(master_empty_slots).into_any_element(),
+            v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(master_empty_slots).into_any_element(),
             channel_strip(&master_snap, "arr_master", theme::DAW_FADER_CAP_ORANGE),
             StripTarget::Master,
             theme::DAW_MASTER_SLATE,
@@ -3151,7 +3179,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                     .flex_1()
                                     .min_h_0()
                                     .w_full()
-                                    .pb(px(4.0))
                                     .bg(rgb(theme::DAW_CANVAS_VOID)),
                                 mixer_panning,
                             )
@@ -3185,7 +3212,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .min_h_0()
                 .flex()
                 .flex_col()
-                .pb(px(4.0))
                 .bg(rgb(theme::DAW_CANVAS_VOID))
                 .child(
                     with_mixer_pan(
@@ -3196,7 +3222,6 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                             .flex_1()
                             .w_full()
                             .min_h_0()
-                            .pb(px(4.0))
                             .bg(rgb(theme::DAW_CANVAS_VOID)),
                         mixer_panning,
                     )

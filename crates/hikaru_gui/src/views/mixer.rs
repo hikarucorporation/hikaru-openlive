@@ -359,7 +359,7 @@ pub fn vertical_vu_meter(level: f32) -> AnyElement {
     };
     div()
         .w(px(VU_WIDTH))
-        .h(px(VU_HEIGHT))
+        .h_full()
         .flex_shrink_0()
         .child(
             canvas(
@@ -407,7 +407,7 @@ pub fn vertical_vu_meter(level: f32) -> AnyElement {
                 },
             )
             .w(px(VU_WIDTH))
-            .h(px(VU_HEIGHT)),
+            .h_full(),
         )
         .into_any_element()
 }
