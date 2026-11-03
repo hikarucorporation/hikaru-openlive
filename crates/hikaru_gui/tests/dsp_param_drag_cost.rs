@@ -14,7 +14,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 
-use gpui_kit::test::TestWindowExt;
 use gpui_kit::{px, size, AppContext, Context, TestAppContext, Window};
 
 use hikaru_gui::app::HikaruApp;
@@ -55,7 +54,6 @@ fn continuous(id: u32, name: &str) -> ExternalParamState {
             can_automate: true,
         },
         value: 0.0,
-        dirty: false,
     }
 }
 

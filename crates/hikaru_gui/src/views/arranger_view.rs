@@ -29,7 +29,7 @@ use hikaru_audio_engine::AudioEngine;
 use gpui_kit::component::*;
 use gpui_kit::component::button::{Button, ButtonRounded};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::{FluentBuilder as _, InteractiveElement as _, Styled as _};
 // Registro para el harness de tests headless (`tests/arranger_columns_fit`):
@@ -37,7 +37,7 @@ use gpui_kit::prelude::{FluentBuilder as _, InteractiveElement as _, Styled as _
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 
-use crate::app::{state, AppMode, HikaruApp};
+use crate::app::{set_footer_cues, state, update_state, AppMode, HikaruApp};
 use crate::audio_proxy::GuiCommand;
 use crate::theme;
 use crate::views::matrix::{self, SessionMatrixState, SlotState};
@@ -49,7 +49,6 @@ use crate::views::playlist::{self, ClipType};
 // =========================================================================
 
 const SCENE_LABEL_WIDTH: f32 = 116.0;
-const TRACK_WIDTH: f32 = 132.0;
 /// Alto de pads y launchers: 22px para que 8 escenas + strip quepan en 720p.
 const PAD_HEIGHT: f32 = 22.0;
 const PAD_GAP: f32 = 1.0;
@@ -66,9 +65,6 @@ const PAN_HEIGHT: f32 = 18.0;
 const PAN_THUMB_W: f32 = 4.0;
 
 const FADER_WIDTH: f32 = 34.0;
-/// Mantener igual a `mixer::VU_HEIGHT` para lectura paralela VU <-> fader.
-/// 84px calibrado para dar 12px por cada una de las 7 marcas de dB (0..∞).
-const FADER_HEIGHT: f32 = 84.0;
 const FADER_THUMB_H: f32 = 6.0;
 const FADER_RAIL_W: f32 = 28.0;
 /// Volumen unity del reset con doble-clic: 0.75 lineal = 0.0 dB.
@@ -85,8 +81,8 @@ const VOLUME_RESET: f32 = 0.75;
 /// índice directo en `studio_tracks`. `Master` resuelve al track 0 del modo
 /// activo vía `tracks_mut()`, así vale para ambos modos. `Fx` resuelve a la pista
 /// de retorno auxiliar (FX 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StripTarget {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StripTarget {
     Master,
     Live(usize),
     Studio(usize),
@@ -695,10 +691,10 @@ fn snapshot_master(
                 .iter()
                 .map(|s| (s.id, s.name.clone(), s.active))
                 .collect(),
-            format!("Bus {}", t.route_destination_id),
+            mixer::route_dest_label(t.route_destination_id, true, &[]),
             t.sends
                 .iter()
-                .map(|s| (format!("Bus {}", s.target_id), s.amount))
+                .map(|s| (mixer::route_dest_label(s.target_id, false, &[]), s.amount))
                 .collect(),
         ),
         None => (
@@ -709,7 +705,7 @@ fn snapshot_master(
             false,
             false,
             Vec::new(),
-            "Bus 0".to_string(),
+            mixer::route_dest_label(0, true, &[]),
             Vec::new(),
         ),
     };
@@ -998,47 +994,76 @@ pub(crate) fn toggle_device_active(cx: &mut App, target: StripTarget, slot: usiz
     });
 }
 
-fn cycle_route_destination(cx: &mut App, target: StripTarget) {
+/// Clic rápido sobre la etiqueta de salida: avanza al siguiente destino de
+/// la misma lista que muestra el menú desplegable (Master → FX n → pistas).
+pub(crate) fn cycle_route_destination(cx: &mut App, target: StripTarget) {
+    let next = {
+        let app = state(cx).read(cx);
+        let options = mixer::route_options(app, target);
+        let current = route_destination_of(app, target).unwrap_or(0);
+        let pos = options.iter().position(|(id, _)| *id == current);
+        match pos {
+            Some(p) => options.get((p + 1) % options.len().max(1)).map(|(id, _)| *id),
+            None => options.first().map(|(id, _)| *id),
+        }
+    };
+    if let Some(next) = next {
+        set_route_destination(cx, target, next);
+    }
+}
+
+/// Destino de ruteo actual de `target` (o `None` si la pista no existe).
+pub(crate) fn route_destination_of(app: &crate::app::AppState, target: StripTarget) -> Option<usize> {
+    match target {
+        StripTarget::Master => app.tracks().first().map(|t| t.route_destination_id),
+        StripTarget::Live(idx) => app.live_tracks.get(idx + 1).map(|t| t.route_destination_id),
+        StripTarget::Studio(idx) => app.studio_tracks.get(idx).map(|t| t.route_destination_id),
+        StripTarget::Fx(idx) => app.fx_tracks.get(idx).map(|t| t.route_destination_id),
+    }
+}
+
+/// Fija el destino de salida elegido en el menú I/O.
+///
+/// Sólo notifica si el valor cambia: elegir la opción ya marcada no
+/// reconstruye la ventana.
+pub(crate) fn set_route_destination(cx: &mut App, target: StripTarget, dest: usize) {
     let st = state(cx);
     st.update(cx, |s, cx| {
-        let (len, slot) = match target {
-            StripTarget::Master => {
-                let len = s.tracks().len().max(1);
-                (len, s.tracks_mut().first_mut().map(|t| &mut t.route_destination_id))
-            }
-            StripTarget::Live(idx) => {
-                let len = s.live_tracks.len().max(1);
-                (
-                    len,
-                    s.live_tracks
-                        .get_mut(idx + 1)
-                        .map(|t| &mut t.route_destination_id),
-                )
-            }
-            StripTarget::Studio(idx) => {
-                let len = s.studio_tracks.len().max(1);
-                (
-                    len,
-                    s.studio_tracks
-                        .get_mut(idx)
-                        .map(|t| &mut t.route_destination_id),
-                )
-            }
-            StripTarget::Fx(idx) => {
-                let len = s.fx_tracks.len().max(1);
-                (
-                    len,
-                    s.fx_tracks
-                        .get_mut(idx)
-                        .map(|t| &mut t.route_destination_id),
-                )
-            }
+        let slot = match target {
+            StripTarget::Master => s.tracks_mut().first_mut().map(|t| &mut t.route_destination_id),
+            StripTarget::Live(idx) => s.live_tracks.get_mut(idx + 1).map(|t| &mut t.route_destination_id),
+            StripTarget::Studio(idx) => s.studio_tracks.get_mut(idx).map(|t| &mut t.route_destination_id),
+            StripTarget::Fx(idx) => s.fx_tracks.get_mut(idx).map(|t| &mut t.route_destination_id),
         };
         if let Some(slot) = slot {
-            *slot = (*slot + 1) % len;
+            if *slot != dest {
+                *slot = dest;
+                s.project_dirty = true;
+                cx.notify();
+            }
         }
-        cx.notify();
     });
+}
+
+/// Menú desplegable oscuro de salida (Master / FX n / pistas), armado al
+/// abrir para reflejar las pistas vigentes. Compartido por el strip del
+/// Arranger y por la sección I/O del Mix Panel inferior.
+pub(crate) fn build_route_menu(menu: PopupMenu, target: StripTarget, cx: &mut App) -> PopupMenu {
+    let (options, current) = {
+        let app = state(cx).read(cx);
+        (mixer::route_options(app, target), route_destination_of(app, target))
+    };
+    options
+        .into_iter()
+        .fold(menu.label("Output"), |menu, (id, label)| {
+            menu.item(
+                PopupMenuItem::new(label)
+                    .checked(current == Some(id))
+                    .on_click(move |_, _, cx| set_route_destination(cx, target, id)),
+            )
+        })
+        .max_h(px(260.0))
+        .scrollable(true)
 }
 
 // =========================================================================
@@ -1350,16 +1375,24 @@ fn strip_separator() -> AnyElement {
         .into_any_element()
 }
 
-/// DEVICES: pozo compacto de dispositivos por canal.
+/// DEVICES: pozo compacto de dispositivos por canal con soporte Drag & Drop entre pistas.
 fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
+    let target = snap.target;
+    let dev_count = snap.devices.len();
     let rows: Vec<AnyElement> = if snap.devices.is_empty() {
         vec![
             h_flex()
+                .id(SharedString::from(format!("{}_devices_empty", id_prefix)))
                 .w_full()
                 .h(px(14.0))
                 .px(px(4.0))
                 .items_center()
                 .gap(px(4.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(0x22242A)))
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                    update_state(cx, |s| s.show_dsp_rack = true);
+                })
                 .child(
                     Label::new("+")
                         .text_size(px(10.0))
@@ -1377,25 +1410,55 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         snap.devices
             .iter()
             .map(|(slot, name, active)| {
-                let target = snap.target;
                 let slot = *slot;
                 let active = *active;
                 let name = name.clone();
                 let is_sel = snap.is_selected_track && snap.selected_slot == slot;
+                let drag_payload = crate::views::mixer::MixerDeviceDrag {
+                    source_target: target,
+                    source_slot: slot,
+                    device_name: name.clone(),
+                };
                 h_flex()
+                    .id(SharedString::from(format!("{}_dev_chip_{}", id_prefix, slot)))
                     .w_full()
-                    .h(px(13.0))
+                    .h(px(14.0))
                     .flex_shrink_0()
                     .items_center()
                     .gap(px(4.0))
                     .px(px(4.0))
                     .rounded(px(2.0))
                     .bg(if is_sel { rgb(0x2A3544) } else { rgb(0x1D1E22) })
+                    .hover(|s| s.bg(rgb(0x2E3038)))
                     .border_1()
                     .border_color(if is_sel {
                         rgb(theme::DAW_PLAYHEAD_BLUE)
                     } else {
                         rgb(0x282A30)
+                    })
+                    .cursor_grab()
+                    // Drag and drop: habilita arrastrar este dispositivo a cualquier otra pista
+                    .on_drag(drag_payload, |payload, _, _, cx| {
+                        let name = payload.device_name.clone();
+                        cx.new(|_| crate::views::mixer::MixerDeviceDragGhost { device_name: name })
+                    })
+                    // Drop target: soltar sobre este chip inserta en este slot
+                    .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<crate::views::mixer::MixerDeviceDrag>())
+                    .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
+                        update_state(cx, |s| {
+                            s.move_device(payload.source_target, payload.source_slot, target, slot);
+                        });
+                    })
+                    .on_mouse_move(move |e, _, cx| {
+                        set_footer_cues(
+                            cx,
+                            Some(e.modifiers),
+                            &[
+                                ("CLICK", "Select device"),
+                                ("DRAG", "Move device to another track"),
+                                ("CLICK ●", "Toggle device on/off"),
+                            ],
+                        );
                     })
                     .on_mouse_down(
                         gpui_kit::MouseButton::Left,
@@ -1438,6 +1501,7 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     };
 
     div()
+        .id(SharedString::from(format!("{}_devices_well", id_prefix)))
         .w_full()
         .h(px(DEVICES_HEIGHT))
         .flex_shrink_0()
@@ -1447,11 +1511,23 @@ fn devices_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
         .rounded(px(2.0))
         .p(px(2.0))
         .overflow_y_scrollbar()
+        // Drop target del contenedor: arrastrar y soltar un dispositivo aquí lo mueve al final de la cadena de esta pista
+        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<crate::views::mixer::MixerDeviceDrag>())
+        .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
+            update_state(cx, |s| {
+                s.move_device(payload.source_target, payload.source_slot, target, dev_count);
+            });
+        })
         .child(v_flex().w_full().gap(px(1.0)).children(rows))
         .into_any_element()
 }
 
 /// ROUTING / SENDS: barra compacta de destino I/O + envíos activos.
+///
+/// Clic en la etiqueta = avanza al siguiente destino; clic en `▾` = menú
+/// desplegable oscuro con todos los destinos (Master, FX n, pistas). La
+/// altura es idéntica a la versión anterior para no romper el presupuesto
+/// vertical de `tests/arranger_columns_fit.rs`.
 fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
     let target = snap.target;
     let dest = snap.route_dest.clone();
@@ -1467,10 +1543,30 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
             .items_center()
             .justify_between()
             .child(
-                Label::new(format!("▸ {}", dest))
-                    .text_size(px(8.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(0xD4D8E0)),
+                div()
+                    .id(SharedString::from(format!("{}_route_label", id_prefix)))
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .on_mouse_move(|e, _, cx| {
+                        set_footer_cues(
+                            cx,
+                            Some(e.modifiers),
+                            &[
+                                ("CLICK", "Next output"),
+                                ("▾", "Choose output destination"),
+                            ],
+                        );
+                    })
+                    .on_click(move |_, _, cx| cycle_route_destination(cx, target))
+                    .child(
+                        Label::new(format!("▸ {}", dest))
+                            .text_size(px(8.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xD4D8E0))
+                            .text_ellipsis(),
+                    ),
             )
             .child(
                 Button::new(SharedString::from(format!("{}_route", id_prefix)))
@@ -1479,7 +1575,7 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
                     .bg(rgb(0x2E3036))
                     .text_color(rgb(0xD0D4DC))
                     .rounded(ButtonRounded::None)
-                    .on_click(move |_, _, cx| cycle_route_destination(cx, target)),
+                    .dropdown_menu(move |menu, _window, cx| build_route_menu(menu, target, cx)),
             )
             .into_any_element(),
     ];
@@ -1513,9 +1609,14 @@ fn routing_section(snap: &StripSnapshot, id_prefix: &str) -> AnyElement {
 }
 
 /// Escala calibrada de dB junto al vúmetro vertical (0, 6, 12, 18, 24, 30, 36, ∞).
+///
+/// Cada marca es `flex_1 + min_h_0 + overflow_hidden` dentro de un contenedor
+/// también recortado: si el pozo se achica, las marcas se comprimen en vez
+/// de empujar `36` / `∞` por debajo del margen inferior de la tarjeta.
 fn calibrated_db_scale() -> AnyElement {
     v_flex()
         .h_full()
+        .min_h_0()
         .w(px(20.0))
         .flex_shrink_0()
         .justify_between()
@@ -1535,8 +1636,9 @@ fn calibrated_db_scale() -> AnyElement {
                         .overflow_hidden()
                         .child(
                             Label::new(mark)
-                                .text_size(px(7.5))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(7.0))
+                                .line_height(px(8.0))
+                                .font_family("monospace")
                                 .text_color(rgb(0x888C94)),
                         )
                         .into_any_element()
@@ -1554,7 +1656,7 @@ fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -
         StripTarget::Fx(idx) => FaderTarget::FxVolume(idx),
     };
     let vu = snap.vu;
-    let vu_db = mixer::level_db_text(vu);
+    let (vu_db, vu_clip) = mixer::peak_db_readout(vu);
     let vol_db = mixer::db_text(snap.volume);
 
     v_flex()
@@ -1587,16 +1689,24 @@ fn fader_vu_section(snap: &StripSnapshot, _id_prefix: &str, accent_color: u32) -
                         .border_color(rgb(0x23252B))
                         .pb(px(1.0))
                         .flex_shrink_0()
+                        .overflow_hidden()
                         .child(
                             Label::new(vu_db)
                                 .text_size(px(7.5))
-                                .text_color(rgb(0x7C8088)),
+                                .font_family("monospace")
+                                .when(vu_clip, |l| l.font_weight(FontWeight::BOLD))
+                                .text_color(if vu_clip {
+                                    rgb(mixer::VU_CLIP_RED)
+                                } else {
+                                    rgb(0x7C8088)
+                                }),
                         )
                         .child(
                             Label::new(vol_db)
                                 .text_size(px(8.5))
+                                .font_family("monospace")
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(accent_color)),
+                                .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
                         ),
                 )
                 .child(
@@ -2231,6 +2341,7 @@ fn track_header_cell(
     name: &str,
     kind: HeaderCapKind,
     selected: bool,
+    target: Option<StripTarget>,
 ) -> AnyElement {
     let (bg_hex, primary_hex, secondary_hex) = match kind {
         HeaderCapKind::Track(idx) => (theme::track_stripe_hex(idx), 0x111113, 0x1E1F22),
@@ -2244,13 +2355,16 @@ fn track_header_cell(
         rgb(0x141518)
     };
 
+    let target_copy = target;
     div()
+        .relative()
         .w_full()
         .h(px(HEADER_HEIGHT))
         .flex_shrink_0()
         .bg(rgb(bg_hex))
         .border_1()
         .border_color(border_col)
+        .when(selected, |s| s.border_t_2().border_color(rgb(0xFFFFFF)))
         .rounded(px(1.5))
         .px(px(4.0))
         .overflow_hidden()
@@ -2258,6 +2372,38 @@ fn track_header_cell(
         .flex_col()
         .items_center()
         .justify_center()
+        .cursor_pointer()
+        .on_mouse_move(move |e, _, cx| {
+            if target_copy.is_some() {
+                set_footer_cues(
+                    cx,
+                    Some(e.modifiers),
+                    &[
+                        ("CLICK", "Select Track"),
+                        ("DRAG", "Drag Track"),
+                        ("CTRL+CLICK", "Remove from selection"),
+                        ("ALT+CLICK", "Rename"),
+                        ("DOUBLE-CLICK", "Show devices"),
+                    ],
+                );
+            } else {
+                set_footer_cues(
+                    cx,
+                    Some(e.modifiers),
+                    &[("CLICK", "Select Master Launch"), ("DOUBLE-CLICK", "Show devices")],
+                );
+            }
+        })
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            if event.click_count >= 2 {
+                update_state(cx, |s| {
+                    s.show_dsp_rack = true;
+                });
+            }
+            if let Some(tgt) = target_copy {
+                select_track_column(cx, tgt);
+            }
+        })
         .child(
             Label::new(name.to_string())
                 .text_size(px(10.0))
@@ -2271,6 +2417,34 @@ fn track_header_cell(
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(secondary_hex)),
         )
+        .when_some(target, |this, tgt| {
+            this.child(
+                div()
+                    .id(SharedString::from(format!("hdr_col_resize_{:?}", tgt)))
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(5.0))
+                    .cursor_col_resize()
+                    .hover(|s| s.bg(rgb(theme::DAW_ACCENT_ORANGE)))
+                    .on_mouse_move(|e, _, cx| {
+                        cx.stop_propagation();
+                        set_footer_cues(
+                            cx,
+                            Some(e.modifiers),
+                            &[("DRAG", "Resize track width")],
+                        );
+                    })
+                    .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                        let start_x = event.position.x.as_f32();
+                        update_state(cx, |s| {
+                            let curr_w = s.arranger_track_width;
+                            s.arranger_track_width_drag = Some((start_x, curr_w));
+                        });
+                    }),
+            )
+        })
         .into_any_element()
 }
 
@@ -2326,6 +2500,7 @@ fn scene_and_inspector_column(
             "SCENES",
             HeaderCapKind::Scenes,
             master_selected,
+            None,
         ))
         .child(
             v_flex()
@@ -2529,6 +2704,14 @@ fn track_column(
         .rounded(px(2.0))
         .p(px(3.0))
         .gap(px(2.0))
+        .can_drop(|payload: &dyn std::any::Any, _, _| {
+            payload.is::<crate::views::mixer::MixerDeviceDrag>()
+        })
+        .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
+            update_state(cx, |s| {
+                s.move_device(payload.source_target, payload.source_slot, target, usize::MAX);
+            });
+        })
         .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
             select_track_column(cx, target)
         })
@@ -2564,6 +2747,47 @@ fn quick_add_track_cell() -> AnyElement {
         .justify_center()
         .cursor_pointer()
         .hover(|this| this.bg(rgb(0x26282F)))
+        .can_drop(|payload: &dyn std::any::Any, _, _| {
+            payload.is::<crate::views::mixer::MixerDeviceDrag>()
+        })
+        .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
+            let from_target = payload.source_target;
+            let from_slot = payload.source_slot;
+            let st = state(cx);
+            st.update(cx, |state, cx| {
+                let dest_target = if state.mode == AppMode::OpenLive {
+                    state.matrix_state.add_track();
+                    let n = state.matrix_state.tracks.len();
+                    let name = state
+                        .matrix_state
+                        .tracks
+                        .last()
+                        .map(|t| t.name.clone())
+                        .unwrap_or(format!("Track {}", n));
+                    let mut t = Track::new(n, name, false);
+                    if let Some(mx) = state.matrix_state.tracks.last() {
+                        t.volume = mx.volume;
+                        t.pan = mx.pan;
+                    }
+                    t.matrix_idx = Some(n.saturating_sub(1));
+                    state.live_tracks.push(t);
+                    StripTarget::Live(n.saturating_sub(1))
+                } else {
+                    let next_id =
+                        state.studio_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                    let n = state.studio_tracks.iter().filter(|t| !t.is_master).count();
+                    let idx = state.studio_tracks.len();
+                    state.studio_tracks.push(Track::new(
+                        next_id,
+                        format!("TRACK {:02}", n + 1),
+                        false,
+                    ));
+                    StripTarget::Studio(idx)
+                };
+                state.move_device(from_target, from_slot, dest_target, 0);
+                cx.notify();
+            });
+        })
         .on_click(move |_, _, cx| {
             let st = state(cx);
             st.update(cx, |state, cx| {
@@ -2632,6 +2856,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         selected_slot,
         track_count,
         openstudio_view,
+        track_width,
     ) = {
         let app = state(cx).read(cx);
         let track_names: Vec<String> = app
@@ -2673,6 +2898,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         // Devices / routing / arm viven en `live_tracks[idx+1]` (matriz) o en
         // `studio_tracks[idx]` (estudio): se congelan acá para no leer el
         // estado desde los closures del layout.
+        // Nombres para traducir `route_destination_id` a etiquetas legibles
+        // (Master / FX n / nombre de pista) en el selector I/O.
+        let live_names: Vec<String> = app.live_tracks.iter().map(|t| t.name.clone()).collect();
+        let studio_names: Vec<String> =
+            app.studio_tracks.iter().map(|t| t.name.clone()).collect();
         let live_devices: Vec<(bool, Vec<(usize, String, bool)>, String, Vec<(String, f32)>)> =
             app.matrix_state
                 .tracks
@@ -2686,13 +2916,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 .iter()
                                 .map(|s| (s.id, s.name.clone(), s.active))
                                 .collect(),
-                            format!("Bus {}", t.route_destination_id),
+                            mixer::route_dest_label(t.route_destination_id, false, &live_names),
                             t.sends
                                 .iter()
-                                .map(|s| (format!("Bus {}", s.target_id), s.amount))
+                                .map(|s| {
+                                    (mixer::route_dest_label(s.target_id, false, &live_names), s.amount)
+                                })
                                 .collect(),
                         )
-                    }).unwrap_or((false, Vec::new(), "Bus 0".to_string(), Vec::new()))
+                    }).unwrap_or((false, Vec::new(), "Master".to_string(), Vec::new()))
                 })
                 .collect();
         let studio_strips: Vec<StripSnapshot> = app
@@ -2726,11 +2958,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                         .iter()
                         .map(|s| (s.id, s.name.clone(), s.active))
                         .collect(),
-                    route_dest: format!("Bus {}", t.route_destination_id),
+                    route_dest: mixer::route_dest_label(
+                        t.route_destination_id,
+                        t.is_master,
+                        &studio_names,
+                    ),
                     sends: t
                         .sends
                         .iter()
-                        .map(|s| (format!("Bus {}", s.target_id), s.amount))
+                        .map(|s| (mixer::route_dest_label(s.target_id, false, &studio_names), s.amount))
                         .collect(),
                     vu,
                     selected_slot: app.selected_slot_index,
@@ -2826,6 +3062,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             app.selected_slot_index,
             app.matrix_state.tracks.len() + app.studio_tracks.len(),
             app.openstudio_view,
+            app.arranger_track_width.clamp(80.0, 340.0),
         )
     };
 
@@ -2969,7 +3206,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             let (armed, devices, route_dest, sends) = live_devices
                 .get(idx)
                 .cloned()
-                .unwrap_or((false, Vec::new(), "Bus 0".to_string(), Vec::new()));
+                .unwrap_or((false, Vec::new(), "Master".to_string(), Vec::new()));
             let mut pads: Vec<AnyElement> = Vec::new();
             for scene_idx in 0..scene_names.len() {
                 let (slot_state, clip_name) = slots
@@ -3011,12 +3248,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             };
             let stripe_hex = theme::track_stripe_hex(idx);
             cols.push(track_column(
-                TRACK_WIDTH,
+                track_width,
                 track_header_cell(
                     &format!("TRK {:02}", idx + 1),
                     name,
                     HeaderCapKind::Track(idx),
                     snap.is_selected_track,
+                    Some(StripTarget::Live(idx)),
                 ),
                 v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(pads).into_any_element(),
                 channel_strip(&snap, &format!("arr_track_{}", idx), stripe_hex),
@@ -3036,8 +3274,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .map(|i| empty_scene_slot("fx", i))
             .collect();
         right_cols.push(track_column(
-            TRACK_WIDTH,
-            track_header_cell("Return", "FX 1", HeaderCapKind::Fx, false),
+            track_width,
+            track_header_cell("Return", "FX 1", HeaderCapKind::Fx, false, Some(StripTarget::Fx(0))),
             v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(fx_empty_slots).into_any_element(),
             channel_strip(&fx_snap, "arr_fx_0", 0x88909A),
             StripTarget::Fx(0),
@@ -3050,12 +3288,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .map(|i| empty_scene_slot("master", i))
             .collect();
         right_cols.push(track_column(
-            TRACK_WIDTH,
+            track_width,
             track_header_cell(
                 "Master",
                 "Master",
                 HeaderCapKind::Master,
                 master_snap.is_selected_track,
+                Some(StripTarget::Master),
             ),
             v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(master_empty_slots).into_any_element(),
             channel_strip(&master_snap, "arr_master", theme::DAW_FADER_CAP_ORANGE),
@@ -3090,9 +3329,10 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 &snap.name,
                 cap_kind,
                 snap.is_selected_track,
+                Some(snap.target),
             );
             let col = track_column(
-                TRACK_WIDTH,
+                track_width,
                 header,
                 waveform_container(&wave, accent_hex),
                 channel_strip(snap, &format!("arr_studio_{}", idx), fader_accent),

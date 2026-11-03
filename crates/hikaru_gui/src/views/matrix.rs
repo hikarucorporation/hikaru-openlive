@@ -976,6 +976,7 @@ impl ClipCell {
     }
 }
 
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn render_pad(
     track_idx: usize,
@@ -1450,6 +1451,7 @@ impl SceneHeader {
     }
 }
 
+#[allow(dead_code)]
 fn render_scene_launcher(scene_idx: usize, name: String, has_any_clip: bool) -> AnyElement {
     render_scene_launcher_ex(scene_idx, name, has_any_clip, false)
 }
@@ -2543,7 +2545,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let clipboard_ready = app.matrix_clipboard.has_content();
     let drop_sample_ready = app.dragged_sample.is_some();
     let engine_handle = app.engine_handle.clone();
-    drop(app);
+    let _ = app;
 
     let tracks_len = tracks_meta.len();
     let scenes_len = scene_names.len();
@@ -2763,6 +2765,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         .into_any_element()
 }
 
+#[allow(dead_code)]
 fn pitch_to_note_name(pitch: u8) -> &'static str {
     let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
     names[(pitch % 12) as usize]

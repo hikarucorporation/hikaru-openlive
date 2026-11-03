@@ -10,7 +10,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
-use crate::app::{state, HikaruApp, ParamDragState};
+use crate::app::{set_footer_cues, state, HikaruApp, ParamDragState};
+use crate::theme;
 use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::external_plugins_settings::capture_host_parent;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
@@ -30,6 +31,12 @@ pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 580.0;
 /// Ancho de la tarjeta del OpenSpectral Phaser: dos columnas maestras
 /// (display FFT | controles) que no caben en el rack estándar de 388 px.
 pub const PHASER_CARD_WIDTH: f32 = 840.0;
+
+/// Ancho de la tarjeta modular de un plugin externo VST3/CLAP/UZU:
+/// dos sub-bloques horizontales adyacentes (`flex_row`: identidad/estado/editor
+/// a la izquierda | lista desplazable `overflow_y_scroll` de perillas/parámetros
+/// a la derecha), acotada estrictamente a `max_h(220px)`.
+const EXTERNAL_CARD_WIDTH: f32 = 468.0;
 
 const CARD_PADDING: f32 = 6.0;
 
@@ -444,11 +451,12 @@ fn param_drag_end(cx: &mut gpui_kit::App) {
 /// movimiento. Cuando no hay gesto, el listener vuelve en su primera guarda.
 fn register_param_drag_tracking(window: &mut gpui_kit::Window) {
     window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+        let fine = event.modifiers.shift || event.modifiers.control;
         param_drag_move(
             cx,
             f32::from(event.position.x),
             f32::from(event.position.y),
-            event.modifiers.shift,
+            fine,
         );
     });
     window.on_mouse_event(move |event: &MouseUpEvent, _phase, _window, cx| {
@@ -567,32 +575,6 @@ fn remove_selected_slot(cx: &mut gpui_kit::App, track_idx: usize) {
                 } else {
                     selected.min(track.effects.len() - 1)
                 };
-            }
-        }
-        cx.notify();
-    });
-}
-
-fn insert_slot_at(cx: &mut gpui_kit::App, track_idx: usize, at_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            let new_id = track.effects.len();
-            let insert_pos = at_idx.min(track.effects.len());
-            track.effects.insert(insert_pos, DspSlot::new(new_id, "Empty Slot".to_string()));
-            open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
-            state.selected_slot_index = insert_pos;
-        }
-        cx.notify();
-    });
-}
-
-fn move_slot(cx: &mut gpui_kit::App, track_idx: usize, from: usize, to: usize) {
-    state(cx).update(cx, |state, cx| {
-        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            if from < track.effects.len() && to < track.effects.len() {
-                let slot = track.effects.remove(from);
-                track.effects.insert(to, slot);
-                state.selected_slot_index = to;
             }
         }
         cx.notify();
@@ -727,16 +709,19 @@ impl CardSnapshot {
 }
 
 /// X de la tarjeta `idx` dentro de la tira. Las tarjetas pueden tener anchos
-/// distintos (el phaser es más ancho), así que se suma el ancho real de cada
+/// distintos (el phaser, la wavetable y los plugins externos VST3/CLAP usan
+/// diseño horizontal de dos columnas), así que se suma el ancho real de cada
 /// una en vez de asumir un ancho fijo.
-fn card_width(name: &str) -> f32 {
-    if name == "OpenSpectral Phaser"
-        || name == "OpenSpectralPhaser"
-        || name == "OpenSpectralFX"
-        || name == "OpenSpectral"
+fn card_width(card: &CardSnapshot) -> f32 {
+    if card.external.is_some() {
+        EXTERNAL_CARD_WIDTH
+    } else if card.name == "OpenSpectral Phaser"
+        || card.name == "OpenSpectralPhaser"
+        || card.name == "OpenSpectralFX"
+        || card.name == "OpenSpectral"
     {
         PHASER_CARD_WIDTH
-    } else if name == "OpenWavetable" {
+    } else if card.name == "OpenWavetable" {
         OPEN_WAVETABLE_CARD_WIDTH
     } else {
         CARD_WIDTH
@@ -747,12 +732,12 @@ fn card_x_offset(cards: &[CardSnapshot], idx: usize) -> f32 {
     let before = cards
         .iter()
         .take(idx)
-        .map(|c| card_width(&c.name) + CARD_GAP)
+        .map(|c| card_width(c) + CARD_GAP)
         .sum::<f32>();
     8.0 + before
 }
 
-fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, slot_count: usize) -> AnyElement {
+fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, _slot_count: usize) -> AnyElement {
     let menu_open = {
         let app = state(cx).read(cx);
         app.add_slot_menu_open
@@ -768,8 +753,16 @@ fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, slot_co
         .justify_center()
         .bg(if menu_open { rgb(0x252530) } else { rgb(0x1C1C22) })
         .border_1()
-        .border_color(if menu_open { rgb(0xFF6E00) } else { rgb(0x2A2A30) })
+        .border_color(if menu_open { rgb(theme::BITWIG_ORANGE) } else { rgb(0x2A2A30) })
         .rounded(px(4.0))
+        .cursor_pointer()
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(
+                cx,
+                Some(e.modifiers),
+                &[("CLICK:", "Insert New Device / VST3 / CLAP Plugin in Chain")],
+            );
+        })
         .on_click(move |_, _, cx| {
             state(cx).update(cx, |state, cx| {
                 if let Some(track) = state.tracks_mut().get_mut(track_idx) {
@@ -813,16 +806,19 @@ fn render_card(
         crate::views::arranger_view::StripTarget::Live(track_idx.saturating_sub(1))
     };
 
+    let card_w = card_width(card);
+    let is_external = external.is_some();
+
     div()
         .id(format!("dsp_card_{track_idx}_{idx}"))
-        .w(px(card_width(&name)))
+        .w(px(card_w))
         .h_full()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .bg(if is_selected { rgb(0x252530) } else { rgb(0x1C1C22) })
+        .bg(if is_selected { rgb(0x23252E) } else { rgb(0x1A1B20) })
         .border_1()
-        .border_color(if is_selected { rgb(0xFF6E00) } else { rgb(0x2A2A30) })
+        .border_color(if is_selected { rgb(theme::BITWIG_ORANGE) } else { rgb(0x2A2C34) })
         .rounded(px(4.0))
         .overflow_hidden()
         // Drop target: soltar otro dispositivo en esta tarjeta lo reordena a esta posición
@@ -848,7 +844,7 @@ fn render_card(
             eprintln!("[Hikaru] card AUX t{track_idx}s{idx}");
             open_plugin_menu(cx, track_idx, idx);
         })
-        .child(render_card_header(cx, track_idx, idx, &name, slot_active, options_open, is_selected, target))
+        .child(render_card_header(track_idx, idx, &name, slot_active, options_open, is_selected, target))
         .child(render_card_body(
             cx,
             track_idx,
@@ -857,12 +853,11 @@ fn render_card(
             external.as_ref(),
             load_error.as_deref(),
         ))
-        .child(render_card_footer(cx, track_idx, idx, &name))
+        .child(render_card_footer(cx, track_idx, idx, &name, is_external))
         .into_any_element()
 }
 
 fn render_card_header(
-    cx: &mut Context<HikaruApp>,
     track_idx: usize,
     idx: usize,
     name: &str,
@@ -885,10 +880,22 @@ fn render_card_header(
         .items_center()
         .gap(px(4.0))
         .px(px(CARD_PADDING))
-        .bg(if is_selected { rgb(0x2A2A35) } else { rgb(0x222228) })
+        .bg(if is_selected { rgb(0x292B34) } else { rgb(0x212329) })
         .border_b_1()
-        .border_color(rgb(0x2A2A30))
+        .border_color(rgb(0x2C2F38))
         .cursor_grab()
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(
+                cx,
+                Some(e.modifiers),
+                &[
+                    ("CLICK:", "Select Device"),
+                    ("DRAG:", "Move Device to Track / Reorder"),
+                    ("RIGHT-CLICK:", "Replace Device"),
+                    ("DEL:", "Remove Device"),
+                ],
+            );
+        })
         .on_drag(drag_payload, |payload, _, _, cx| {
             let name = payload.device_name.clone();
             cx.new(|_| crate::views::mixer::MixerDeviceDragGhost { device_name: name })
@@ -999,7 +1006,11 @@ fn render_card_footer(
     track_idx: usize,
     idx: usize,
     name: &str,
+    is_external: bool,
 ) -> AnyElement {
+    if is_external {
+        return div().w_full().h(px(0.0)).into_any_element();
+    }
     match name {
         "OpenWavetable" => open_wavetable::render_module_footer(cx, track_idx, idx),
         "OpenSpectral Phaser" | "OpenSpectralPhaser" | "OpenSpectralFX" | "OpenSpectral" => {
@@ -1394,7 +1405,7 @@ fn browser_external_row(
 }
 
 fn render_options_menu(
-    cx: &mut Context<HikaruApp>,
+    _cx: &mut Context<HikaruApp>,
     track_idx: usize,
     slot_idx: usize,
     left: f32,
@@ -1547,19 +1558,28 @@ fn render_external_card(
         });
     }
 
-    div()
+    let kind_label = match descriptor.kind {
+        hikaru_plugin_host::PluginKind::Instrument => "INST",
+        hikaru_plugin_host::PluginKind::Effect => "FX",
+    };
+    let vendor_label = if descriptor.vendor.trim().is_empty() {
+        kind_label.to_string()
+    } else {
+        descriptor.vendor.clone()
+    };
+
+    // Diseño Horizontal Modular (`h_flex` / `flex_row`) estilo Bitwig Studio 5.1.7:
+    //   [Sub-bloque Izquierdo: Identidad / Estado / Editor GUI] | [Sub-bloque Derecho: Lista Desplazable de Parámetros]
+    h_flex()
         .id(format!("dsp_external_{track_idx}_{idx}"))
         .test_support()
         .w_full()
         .flex_1()
         .min_h(px(0.0))
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(4.0))
-        .px(px(6.0))
-        .py(px(4.0))
+        .items_stretch()
+        .gap(px(6.0))
+        .p(px(5.0))
+        .overflow_hidden()
         .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
             open_plugin_menu(cx, track_idx, idx);
         })
@@ -1567,71 +1587,153 @@ fn render_external_card(
         // `on_mouse_move` de elemento sólo se despacha mientras el hitbox está
         // bajo el cursor, así que el gesto moría en cuanto el cursor salía de
         // la tarjeta. Vive a nivel de ventana, en `param_drag_keepalive`.
+        // ── 1. SUB-BLOQUE IZQUIERDO: IDENTIDAD, ESTADO Y BOTÓN DE EDITOR NATIVO ──
         .child(
-            Label::new(badge)
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(badge_color),
+            v_flex()
+                .w(px(142.0))
+                .h_full()
+                .min_h(px(0.0))
+                .flex_shrink_0()
+                .justify_between()
+                .p(px(6.0))
+                .bg(rgb(0x13151B))
+                .border_1()
+                .border_color(rgb(0x262A36))
+                .rounded(px(3.0))
+                .overflow_hidden()
+                .child(
+                    v_flex()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .gap(px(3.0))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .px(px(4.0))
+                                        .py(px(1.0))
+                                        .rounded(px(2.0))
+                                        .bg(rgb(0x1D212B))
+                                        .border_1()
+                                        .border_color(badge_color)
+                                        .font_family("monospace")
+                                        .text_size(px(9.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(badge_color)
+                                        .child(badge),
+                                )
+                                .child(
+                                    Label::new(kind_label)
+                                        .text_size(px(9.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0x7C8392)),
+                                ),
+                        )
+                        .child(
+                            Label::new(descriptor.name.clone())
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .truncate()
+                                .text_color(rgb(0xECEFF4)),
+                        )
+                        .child(
+                            Label::new(vendor_label)
+                                .text_size(px(9.5))
+                                .truncate()
+                                .text_color(rgb(0x9097A6)),
+                        )
+                        .child(
+                            div()
+                                .font_family("monospace")
+                                .text_size(px(8.5))
+                                .text_color(rgb(0x5F6574))
+                                .truncate()
+                                .child(file_name),
+                        )
+                        .when_some(load_error.map(|e| e.to_string()), |this, message| {
+                            this.child(
+                                Label::new(format!("⚠ {message}"))
+                                    .text_size(px(9.0))
+                                    .text_color(rgb(theme::BITWIG_ORANGE))
+                                    .truncate(),
+                            )
+                        })
+                        .when_some(gui_error, |this, message| {
+                            this.child(
+                                Label::new(format!("⚠ {message}"))
+                                    .text_size(px(9.0))
+                                    .text_color(rgb(0xFF7A5C))
+                                    .truncate(),
+                            )
+                        }),
+                )
+                // Toggle de editor nativo. Es un botón porque abrir la GUI del plugin es
+                // costoso (dlopen + creación de ventana nativa en un hilo aparte) y no
+                // tiene sentido mantenerlo cargado si el usuario no lo está mirando.
+                //
+                // `editor_open` refleja el estado real que devuelve
+                // `plugin_settings_state`, no un bool local: la ventana se puede cerrar
+                // desde el WM y el toggle tiene que enterarse.
+                .when(can_open_editor && !blocked_by_gui_error, |this| {
+                    let (label, active) = if editor_open {
+                        ("■  Editor", true)
+                    } else if editor_opening {
+                        ("…  Abriendo", false)
+                    } else {
+                        ("▸  Editor", false)
+                    };
+                    // El nombre se clona para que el closure lo tenga por valor: el
+                    // toggle necesita poder cerrar por nombre, no reabrir por slot.
+                    let plugin_name = descriptor.name.clone();
+                    this.child(
+                        div()
+                            .w_full()
+                            .on_mouse_move(move |e, _, cx| {
+                                set_footer_cues(
+                                    cx,
+                                    Some(e.modifiers),
+                                    &[(
+                                        "CLICK:",
+                                        if active {
+                                            "Close Native Plugin Editor Window"
+                                        } else {
+                                            "Open Native Plugin Editor Window"
+                                        },
+                                    )],
+                                );
+                            })
+                            .child(
+                                rack_button(format!("dsp_editor_{track_idx}_{idx}"))
+                                    .rounded(ButtonRounded::None)
+                                    .label(label)
+                                    .compact()
+                                    .w_full()
+                                    .bg(if active {
+                                        rgb(theme::BITWIG_ORANGE)
+                                    } else {
+                                        rgb(0x282C36)
+                                    })
+                                    .text_color(if active {
+                                        rgb(0x121212)
+                                    } else {
+                                        rgb(0xE6E8EC)
+                                    })
+                                    .on_click(move |_, window, cx| {
+                                        if active {
+                                            close_external_editor(cx, &plugin_name);
+                                        } else {
+                                            open_external_editor(window, cx, track_idx, idx);
+                                        }
+                                    }),
+                            ),
+                    )
+                }),
         )
-        .child(
-            Label::new(descriptor.name.clone())
-                .text_sm()
-                .text_color(rgb(0xE8EAF0)),
-        )
-        .child(
-            Label::new(file_name)
-                .text_xs()
-                .truncate()
-                .text_color(rgb(0x666666)),
-        )
-        .when_some(load_error.map(|e| e.to_string()), |this, message| {
-            this.child(
-                Label::new(format!("⚠ {message}"))
-                    .text_xs()
-                    .text_color(rgb(0xFF6E00))
-                    .truncate(),
-            )
-        })
-        .when_some(gui_error, |this, message| {
-            this.child(
-                Label::new(format!("⚠ No abrió su ventana: {message}"))
-                    .text_xs()
-                    .text_color(rgb(0xFF7A5C))
-                    .truncate(),
-            )
-        })
-        // Toggle de editor nativo. Es un botón porque abrir la GUI del plugin es
-        // costoso (dlopen + creación de ventana nativa en un hilo aparte) y no
-        // tiene sentido mantenerlo cargado si el usuario no lo está mirando.
-        //
-        // `editor_open` refleja el estado real que devuelve
-        // `plugin_settings_state`, no un bool local: la ventana se puede cerrar
-        // desde el WM y el toggle tiene que enterarse.
-        .when(can_open_editor && !blocked_by_gui_error, |this| {
-            let (label, active) = if editor_open {
-                ("■  Editor", true)
-            } else if editor_opening {
-                ("…  Abriendo", false)
-            } else {
-                ("▸  Editor", false)
-            };
-            // El nombre se clona para que el closure lo tenga por valor: el
-            // toggle necesita poder cerrar por nombre, no reabrir por slot.
-            let plugin_name = descriptor.name.clone();
-            this.child(
-                rack_button(format!("dsp_editor_{track_idx}_{idx}"))
-                    .rounded(ButtonRounded::None)
-                    .label(label)
-                    .compact()
-                    .on_click(move |_, window, cx| {
-                        if active {
-                            close_external_editor(cx, &plugin_name);
-                        } else {
-                            open_external_editor(window, cx, track_idx, idx);
-                        }
-                    }),
-            )
-        })
+        // ── 2. SUB-BLOQUE DERECHO: LISTA DESPLAZABLE (`overflow_y_scroll`) DE PARÁMETROS ──
         .child(render_external_params(
             cx,
             track_idx,
@@ -1708,13 +1810,25 @@ fn render_external_params(
         .text_xs()
         .text_color(rgb(0x555555))
         .into_any_element(),
-        ExternalParamsStatus::Ready => {
-            Label::new(format!("PARÁMETROS ({params_total})"))
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x6A7080))
-                .into_any_element()
-        }
+        ExternalParamsStatus::Ready => h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap(px(4.0))
+            .child(
+                Label::new(format!("PARÁMETROS ({params_total})"))
+                    .text_size(px(9.5))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0x8D95A5)),
+            )
+            .child(
+                div()
+                    .font_family("monospace")
+                    .text_size(px(8.5))
+                    .text_color(rgb(0x5E6575))
+                    .child("SHIFT: Fine · 2×CLICK: Reset"),
+            )
+            .into_any_element(),
         ExternalParamsStatus::Idle => Label::new("Preparando parámetros…")
             .text_xs()
             .text_color(rgb(0x555555))
@@ -1722,10 +1836,17 @@ fn render_external_params(
     };
 
     v_flex()
-        .w_full()
         .flex_1()
+        .min_w(px(0.0))
+        .h_full()
         .min_h(px(0.0))
-        .gap(px(2.0))
+        .p(px(5.0))
+        .gap(px(3.0))
+        .bg(rgb(0x14161D))
+        .border_1()
+        .border_color(rgb(0x252834))
+        .rounded(px(3.0))
+        .overflow_hidden()
         .child(header)
         .child(
             div()
@@ -1734,7 +1855,7 @@ fn render_external_params(
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_y_scroll()
-                .p(px(1.0))
+                .pr(px(2.0))
                 .gap(px(2.0))
                 .flex()
                 .flex_col()
@@ -1767,17 +1888,29 @@ fn external_param_row(
     let fill_w = (value.clamp(0.0, 1.0) * PARAM_BAR_WIDTH).max(2.0);
 
     h_flex()
-        .id(format!("dsp_card_hdr_{track_idx}_{idx}"))
+        .id(format!("dsp_param_row_{track_idx}_{idx}_{id}"))
         .w_full()
-        .h(px(26.0))
+        .h(px(24.0))
         .flex_shrink_0()
         .items_center()
-        .gap(px(4.0))
-        .px(px(2.0))
+        .gap(px(5.0))
+        .px(px(3.0))
         .py(px(1.0))
         .border_b_1()
-        .border_color(rgb(0x22242B))
-        .hover(|s| s.bg(rgb(0x22242C)))
+        .border_color(rgb(0x1F222A))
+        .hover(|s| s.bg(rgb(0x1F222C)))
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(
+                cx,
+                Some(e.modifiers),
+                &[
+                    ("DRAG:", "Adjust Parameter"),
+                    ("SHIFT+DRAG:", "Fine Adjust"),
+                    ("CTRL+DRAG:", "Fine Adjust"),
+                    ("DOUBLE-CLICK:", "Reset to Default"),
+                ],
+            );
+        })
         // 1. Bitwig Rotary Knob con indicador de aguja y drag vertical
         .child(
             div()
@@ -1829,19 +1962,25 @@ fn external_param_row(
                             path.move_to(point(cx, cy));
                             path.line_to(point(px(nx), px(ny)));
                             if let Ok(path) = path.build() {
-                                window.paint_path(path, rgb(0xFF6E00));
+                                window.paint_path(path, rgb(crate::theme::DAW_ACCENT_ORANGE));
                             }
                         },
                     )
                     .size_full(),
                 ),
         )
-        // 2. Nombre y valor display
+        // 2. Nombre y valor display (con doble clic para resetear)
         .child(
             v_flex()
                 .flex_1()
                 .min_w_0()
                 .justify_center()
+                .cursor_pointer()
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                    if event.click_count >= 2 {
+                        commit_external_param(cx, track_idx, idx, id, default_val);
+                    }
+                })
                 .child(
                     Label::new(name)
                         .text_size(px(9.5))
@@ -1850,10 +1989,13 @@ fn external_param_row(
                         .text_color(rgb(0xDFE2E8)),
                 )
                 .child(
-                    Label::new(display)
-                        .text_size(px(8.0))
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(9.0))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .truncate()
-                        .text_color(rgb(0x8A8E99)),
+                        .text_color(rgb(crate::theme::DAW_ACCENT_ORANGE))
+                        .child(display),
                 ),
         )
         // 3. Stepper −
@@ -1893,12 +2035,16 @@ fn external_param_row(
                             div()
                                 .w(px(fill_w))
                                 .h_full()
-                                .bg(rgb(0xFF6E00))
+                                .bg(rgb(crate::theme::DAW_ACCENT_ORANGE))
                                 .into_any_element(),
                         )
                         .into_any_element(),
                 )
                 .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                    if event.click_count >= 2 {
+                        commit_external_param(cx, track_idx, idx, id, default_val);
+                        return;
+                    }
                     param_drag_begin(
                         cx,
                         track_idx,

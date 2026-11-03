@@ -9,7 +9,7 @@ use gpui_kit::Hsla;
 // =========================================================================
 
 // Fondos y Superficies
-pub const WINDOW_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.08, a: 1.0 };    // #141414 (Fondo principal)
+pub const WINDOW_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.07, a: 1.0 };    // #121212 (Fondo principal Bitwig)
 pub const PANEL_BG: Hsla  = Hsla { h: 0.0, s: 0.0, l: 0.12, a: 1.0 };    // #1f1f1f (Contenedores)
 pub const HEADER_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.10, a: 1.0 };    // #1a1a1a (Barra superior)
 pub const SURFACE_BG: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.16, a: 1.0 };   // #292929 (Tarjetas y elementos)
@@ -21,7 +21,7 @@ pub const SELECTED_BG: Hsla = Hsla { h: 0.60, s: 0.35, l: 0.25, a: 1.0 }; // Sel
 
 // Bordes y Divisores
 pub const BORDER_COLOR: Hsla = Hsla { h: 0.0, s: 0.0, l: 0.18, a: 1.0 }; // Separadores sutiles
-pub const BORDER_FOCUS: Hsla = Hsla { h: 0.12, s: 1.0, l: 0.50, a: 1.0 }; // Borde activo al seleccionar
+pub const BORDER_FOCUS: Hsla = Hsla { h: 0.08, s: 1.0, l: 0.50, a: 1.0 }; // Borde activo al seleccionar (#ff7a00)
 
 // Texto
 pub const TEXT_PRIMARY: Hsla   = Hsla { h: 0.0, s: 0.0, l: 0.88, a: 1.0 }; // Blanco/Gris claro (#e0e0e0)
@@ -31,10 +31,10 @@ pub const TEXT_DISABLED: Hsla  = Hsla { h: 0.0, s: 0.0, l: 0.35, a: 1.0 }; // El
 // Acentos de DAW (Play, Record, Solo, Mute, Metrónomo)
 pub const PLAY_GREEN: Hsla  = Hsla { h: 0.38, s: 0.85, l: 0.50, a: 1.0 }; // Play / Activo (#1feb54)
 pub const REC_RED: Hsla     = Hsla { h: 0.00, s: 0.85, l: 0.55, a: 1.0 }; // Grabación (#f02a2a)
-pub const ACCENT_ORANGE: Hsla = Hsla { h: 0.08, s: 0.95, l: 0.55, a: 1.0 }; // Ableton Orange (#f26c0d)
+pub const ACCENT_ORANGE: Hsla = Hsla { h: 0.08, s: 1.0, l: 0.50, a: 1.0 }; // Bitwig Orange (#ff7a00)
 pub const SOLO_YELLOW: Hsla = Hsla { h: 0.14, s: 0.90, l: 0.50, a: 1.0 }; // Solo track
 pub const MUTE_BLUE: Hsla   = Hsla { h: 0.55, s: 0.80, l: 0.45, a: 1.0 }; // Mute track
-pub const ACCENT_COLOR: Hsla = Hsla { h: 0.08, s: 0.95, l: 0.55, a: 1.0 }; // Acento primario (naranja)
+pub const ACCENT_COLOR: Hsla = Hsla { h: 0.08, s: 1.0, l: 0.50, a: 1.0 }; // Acento primario (naranja #ff7a00)
 pub const ACCENT_STUDIO: Hsla = Hsla { h: 0.55, s: 0.80, l: 0.50, a: 1.0 }; // Acento studio (azul)
 pub const SLOT_ACTIVE_BG: Hsla = Hsla { h: 0.60, s: 0.35, l: 0.25, a: 1.0 }; // Fondo de slot activo
 
@@ -42,9 +42,11 @@ pub const SLOT_ACTIVE_BG: Hsla = Hsla { h: 0.60, s: 0.35, l: 0.25, a: 1.0 }; // 
 // TOKENS DE ALTA DENSIDAD (SESSION MATRIX & ARRANGER)
 // =========================================================================
 
+pub const BITWIG_BG_DARK: u32     = 0x121212; // #121212 - Bitwig Canvas Void / Dark base
+pub const BITWIG_ORANGE: u32      = 0xFF7A00; // #ff7a00 - Bitwig Signature Orange
 pub const DAW_MAIN_BG: u32        = 0x2B2B2B; // #2b2b2b - Panel / TrackHeader base
 pub const DAW_GRID_BG: u32        = 0x1E1E1E; // #1e1e1e - Fondo de grilla oscura
-pub const DAW_CANVAS_VOID: u32    = 0x111112; // #111112 - Vacío profundo bajo pistas / derecha del mixer
+pub const DAW_CANVAS_VOID: u32    = 0x121212; // #121212 - Vacío profundo bajo pistas / derecha del mixer
 pub const DAW_LANE_EVEN_BG: u32   = 0x28282A; // #28282a - Carril horizontal par en Arranger
 pub const DAW_LANE_ODD_BG: u32    = 0x242426; // #242426 - Carril horizontal impar en Arranger
 pub const DAW_LANE_SELECTED_BG: u32 = 0x2F333B; // #2f333b - Carril horizontal seleccionado
@@ -59,10 +61,10 @@ pub const DAW_HEADER_DARK_BG: u32 = 0x222222; // #222222 - Cabeceras de escena /
 pub const DAW_STATUS_BG: u32      = 0x1A1A1A; // #1a1a1a - Barra de estado inferior
 pub const DAW_BORDER_SUBTLE: u32  = 0x141414; // #141414 - Líneas divisorias de 1px
 pub const DAW_BORDER_LIGHT: u32   = 0x3A3A3A; // #3a3a3a - Contorno de controles
-pub const DAW_ACCENT_ORANGE: u32  = 0xE8782A; // #e8782a - Acento primario (Inst / Activo)
+pub const DAW_ACCENT_ORANGE: u32  = 0xFF7A00; // #ff7a00 - Acento primario Bitwig (Inst / Activo)
 pub const DAW_FADER_WELL_BG: u32  = 0x161618; // #161618 - Pozo empotrado de fader y vúmetro
 pub const DAW_FADER_FILL: u32     = 0x8A5A2A; // #8a5a2a - Relleno ámbar de fader
-pub const DAW_FADER_CAP_ORANGE: u32 = 0xF28228; // #f28228 - Indicador brillante de fader
+pub const DAW_FADER_CAP_ORANGE: u32 = 0xFF7A00; // #ff7a00 - Indicador brillante de fader Bitwig
 pub const DAW_MASTER_SLATE: u32   = 0x8A8E94; // #8a8e94 - Cabezal neutro anodizado (Master / FX)
 pub const DAW_CLIP_BODY_BG: u32   = 0x15171B; // #15171b - Cámara oscura de waveform en clip
 pub const DAW_CLIP_SELECTED_BG: u32 = 0x1C2530; // #1c2530 - Cámara oscura de clip seleccionado

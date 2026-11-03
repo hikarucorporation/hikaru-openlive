@@ -8,8 +8,35 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
-use crate::app::{state, update_state, AppMode, HikaruApp, OpenLiveView, OpenStudioView};
+use crate::app::{
+    clear_footer_help, set_footer_cues, state, update_state, AppMode, HikaruApp, OpenLiveView,
+    OpenStudioView,
+};
 use crate::theme;
+
+/// Determina si una etiqueta de acción (`CTRL+CLICK:`, `SHIFT+DRAG:`, `ALT+CLICK:`)
+/// coincide con un modificador de teclado activo actualmente.
+fn cue_matches_modifiers(action: &str, mods: gpui_kit::Modifiers) -> bool {
+    let upper = action.to_ascii_uppercase();
+    let has_shift = upper.contains("SHIFT");
+    let has_ctrl = upper.contains("CTRL") || upper.contains("CMD");
+    let has_alt = upper.contains("ALT");
+    if !has_shift && !has_ctrl && !has_alt {
+        return false;
+    }
+    let ctrl_down = mods.control || mods.platform;
+    (!has_shift || mods.shift) && (!has_ctrl || ctrl_down) && (!has_alt || mods.alt)
+}
+
+/// Normaliza la clave de acción asegurando el sufijo `:` estilo Bitwig (`CLICK:`).
+fn normalize_action_key(action: &str) -> String {
+    let trimmed = action.trim();
+    if trimmed.ends_with(':') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}:")
+    }
+}
 
 /// Pestañas de vista principales (`ARRANGE`, `MIX`, `EDIT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +541,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
     let show_explorer = app.show_explorer;
     let show_keyboard = app.panel_layout.show_keyboard;
     let show_mixer_panel = app.panel_layout.show_mixer;
+    let show_automation = app.panel_layout.show_automation;
     let control_panel_open = app.control_panel_state.is_open;
     let mcp_port_settings_open = app.mcp_port_settings_state.is_open;
     let show_about = app.show_about;
@@ -526,6 +554,8 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
     let buffer_size = app.audio_settings_state.buffer_size;
     let cpu_usage = app.cpu_usage.clamp(0.0, 1.0);
     let context_help = app.footer_context_help.clone();
+    let context_cues = app.footer_context_cues.clone();
+    let active_mods = app.active_modifiers;
 
     // Determinación de la pestaña activa inferior
     let active_tab = if show_clip_editor || show_piano_roll {
@@ -545,16 +575,41 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
 
     let _ = app;
 
-    // Colores de acento y neutros estilo Bitwig Studio
+    // Colores de acento y neutros estilo Bitwig Studio 5.1.7
     let accent_orange = rgb(theme::DAW_ACCENT_ORANGE);
     let normal_fg = rgb(0x8F969E);
-    let border_col = rgb(0x383838);
+    let border_col = rgb(0x121212);
+
+    // Pistas efectivas a mostrar en la franja central del Footer
+    let display_cues: Vec<(String, String)> = if !context_cues.is_empty() {
+        context_cues
+    } else if let Some((act, desc)) = context_help {
+        vec![(act, desc)]
+    } else {
+        vec![
+            ("CLICK:".into(), "Select Track".into()),
+            ("DOUBLE-CLICK:".into(), "Show Devices".into()),
+            ("ALT+CLICK:".into(), "Rename".into()),
+            ("SHIFT+DRAG:".into(), "Fine Adjust".into()),
+        ]
+    };
+
+    let mut active_mod_badges: Vec<&'static str> = Vec::new();
+    if active_mods.control || active_mods.platform {
+        active_mod_badges.push("CTRL");
+    }
+    if active_mods.shift {
+        active_mod_badges.push("SHIFT");
+    }
+    if active_mods.alt {
+        active_mod_badges.push("ALT");
+    }
 
     h_flex()
         .id("footer_bar")
         .h(px(26.0))
         .w_full()
-        .bg(rgb(0x242424))
+        .bg(rgb(0x1E1F23))
         .border_t_1()
         .border_color(border_col)
         .items_center()
@@ -563,11 +618,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         .overflow_hidden()
         // Reset de ayuda contextual al mover el mouse en el fondo neutro del footer
         .on_mouse_move(|_, _, cx| {
-            update_state(cx, |s| {
-                if s.footer_context_help.is_some() {
-                    s.footer_context_help = None;
-                }
-            });
+            clear_footer_help(cx);
         })
 
         // ─────────────────────────────────────────────────────────────────
@@ -582,13 +633,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(2.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Toggle Context Help".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Toggle Inspector & Context Help (F11)")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -608,13 +659,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(2.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x2D2D2D)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Arrange View".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Show Arrange View"), ("TAB / F9:", "Toggle Mix View")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -646,13 +697,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(2.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x2D2D2D)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Mix View".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Show Mix View"), ("TAB / F9:", "Toggle Arrange View")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -686,13 +737,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(2.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x2D2D2D)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Detail Edit View".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Show Detail Edit View")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -729,20 +780,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(move |_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some((
-                            "CLICK".into(),
+                .on_mouse_move(move |e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
                             if is_active {
-                                "Hide Detail Editor Panel".into()
+                                "Hide Detail Editor Panel"
                             } else {
-                                "Show Detail Editor Panel".into()
+                                "Show Detail Editor Panel"
                             },
-                        ));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                        )],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -764,27 +815,27 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
 
         // 2. Automation Editor Panel
         .child({
-            let is_active = app.panel_layout.show_automation;
+            let is_active = show_automation;
             div()
                 .id("footer_panel_automation")
                 .px(px(5.0))
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(move |_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some((
-                            "CLICK".into(),
+                .on_mouse_move(move |e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
                             if is_active {
-                                "Hide Automation Editor Panel".into()
+                                "Hide Automation Editor Panel"
                             } else {
-                                "Show Automation Editor Panel".into()
+                                "Show Automation Editor Panel"
                             },
-                        ));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                        )],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -807,20 +858,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(move |_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some((
-                            "CLICK".into(),
+                .on_mouse_move(move |e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
                             if is_active {
-                                "Hide Device Panel".into()
+                                "Hide Device Panel (F10)"
                             } else {
-                                "Show Device Panel".into()
+                                "Show Device Panel (F10)"
                             },
-                        ));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                        )],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -847,20 +898,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(move |_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some((
-                            "CLICK".into(),
+                .on_mouse_move(move |e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
                             if is_active {
-                                "Hide Mixer Panel".into()
+                                "Hide Mixer Panel"
                             } else {
-                                "Show Mixer Panel".into()
+                                "Show Mixer Panel"
                             },
-                        ));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                        )],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -875,59 +926,67 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
         })
 
         // ─────────────────────────────────────────────────────────────────
-        // 2. GRUPO CENTRAL: AYUDA CONTEXTUAL DINÁMICA (STATUS TEXT)
+        // 2. GRUPO CENTRAL: AYUDA CONTEXTUAL DINÁMICA (MULTI-CUE BITWIG 5.1.7)
         // ─────────────────────────────────────────────────────────────────
         .child(
             h_flex()
                 .items_center()
                 .ml(px(8.0))
-                .gap(px(6.0))
+                .gap(px(12.0))
+                .min_w(px(0.0))
                 .overflow_hidden()
-                .when_some(context_help.clone(), |this, (action, desc)| {
+                .when(!active_mod_badges.is_empty(), |this| {
                     this.child(
-                        Label::new(action)
-                            .text_xs()
+                        div()
+                            .px(px(4.0))
+                            .py(px(0.5))
+                            .rounded(px(2.0))
+                            .bg(rgb(0x2F2216))
+                            .border_1()
+                            .border_color(accent_orange)
+                            .font_family("monospace")
+                            .text_size(px(9.5))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x7EB8D4)),
-                    )
-                    .child(
-                        Label::new(desc)
-                            .text_xs()
-                            .text_color(rgb(0x9E9E9E)),
+                            .text_color(accent_orange)
+                            .flex_shrink_0()
+                            .child(active_mod_badges.join("+")),
                     )
                 })
-                .when(context_help.is_none(), |this| {
-                    this.child(
-                        Label::new("DOUBLE-CLICK")
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x7EB8D4)),
-                    )
-                    .child(
-                        Label::new("Insert content")
-                            .text_xs()
-                            .text_color(rgb(0x9E9E9E)),
-                    )
-                    .child(div().w(px(12.0)))
-                    .child(
-                        Label::new("SHIFT+DOUBLE-CLICK")
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x7EB8D4)),
-                    )
-                    .child(
-                        Label::new("Insert favorites")
-                            .text_xs()
-                            .text_color(rgb(0x9E9E9E)),
-                    )
-                }),
+                .children(display_cues.into_iter().map(move |(action, desc)| {
+                    let mod_active = cue_matches_modifiers(&action, active_mods);
+                    let action_key = normalize_action_key(&action);
+                    h_flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .flex_shrink_0()
+                        .child(
+                            Label::new(action_key)
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(if mod_active {
+                                    accent_orange
+                                } else {
+                                    rgb(0x7EB8D4)
+                                }),
+                        )
+                        .child(
+                            Label::new(desc)
+                                .text_xs()
+                                .text_color(if mod_active {
+                                    rgb(0xEAECEF)
+                                } else {
+                                    rgb(0xA4AAB2)
+                                }),
+                        )
+                })),
         )
 
         // Espaciador elástico que divide izquierda/contexto de telemetría/derecha
         .child(div().flex_1())
 
         // ─────────────────────────────────────────────────────────────────
-        // 3. TELEMETRÍA Y MOTOR DE AUDIO: [DSP LED] | CPU xx% | [SR | BUF]
+        // 3. TELEMETRÍA Y MOTOR DE AUDIO MONOESPACIADA:
+        //    [DSP LED] | CPU: 12% | 48 kHz | 128 spl
         // ─────────────────────────────────────────────────────────────────
 
         // Indicador de Motor de Audio (DSP Engine)
@@ -940,13 +999,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(2.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x2D2D2D)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Open Audio Engine Settings".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Open Audio Engine Settings")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -962,32 +1021,34 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                         .bg(rgb(0x1FEB54)),
                 )
                 .child(
-                    Label::new("DSP")
-                        .text_xs()
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(10.5))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0xCCCCCC)),
+                        .text_color(rgb(0xD0D4DC))
+                        .child("DSP"),
                 ),
         )
 
         .child(separator_v())
 
-        // Indicador de Carga de CPU con micro-medidor horizontal
+        // Indicador de Carga de CPU monoespaciado (`CPU: 12%`) con micro-medidor horizontal
         .child(
             h_flex()
                 .id("footer_cpu_meter")
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(5.0))
                 .px(px(6.0))
                 .py(px(2.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x2D2D2D)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Engine Performance".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Show Engine Performance & DSP Load")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -995,60 +1056,58 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                     });
                 })
                 .child(
-                    Label::new("CPU")
-                        .text_xs()
-                        .text_color(rgb(0x888888)),
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(10.5))
+                        .text_color(rgb(0xD0D4DC))
+                        .child(format!("CPU: {:.0}%", cpu_usage * 100.0)),
                 )
                 // Barra medidora horizontal compacta
                 .child(
                     div()
                         .w(px(26.0))
                         .h(px(4.0))
-                        .bg(rgb(0x1A1A1A))
+                        .bg(rgb(0x121212))
                         .rounded(px(1.0))
                         .border_1()
-                        .border_color(rgb(0x383838))
+                        .border_color(rgb(0x34363C))
                         .overflow_hidden()
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(cpu_usage))
                                 .bg(if cpu_usage > 0.85 {
-                                    rgb(0xD93838)
+                                    rgb(0xFF3B30)
                                 } else {
-                                    rgb(0x1FEB54)
+                                    rgb(0x2CE64B)
                                 }),
                         ),
-                )
-                .child(
-                    Label::new(format!("{:.0}%", cpu_usage * 100.0))
-                        .text_xs()
-                        .text_color(rgb(0xCCCCCC)),
                 ),
         )
 
         .child(separator_v())
 
-        // Selector / Indicador de Frecuencia y Buffer (ej: 48 kHz | 128 spl)
+        // Indicadores monoespaciados de Frecuencia (`48 kHz`) y Buffer (`128 spl`)
         .child(
             h_flex()
                 .id("footer_buffer_status")
                 .items_center()
+                .gap(px(6.0))
                 .px(px(6.0))
                 .py(px(2.0))
-                .bg(rgb(0x1E1E20))
+                .bg(rgb(0x141518))
                 .border_1()
-                .border_color(rgb(0x343438))
+                .border_color(rgb(0x2E3138))
                 .rounded(px(2.0))
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(0x28282C)).border_color(rgb(0x4C4C54)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Configure Audio Buffer & Latency".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .hover(|s| s.bg(rgb(0x26282E)).border_color(rgb(0x484C56)))
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Configure Audio Sample Rate & Buffer Size")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -1056,9 +1115,19 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                     });
                 })
                 .child(
-                    Label::new(format!("{} kHz | {} spl", sr / 1000, buffer_size))
-                        .text_xs()
-                        .text_color(rgb(0xBBBBBB)),
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(10.5))
+                        .text_color(rgb(0xD0D4DC))
+                        .child(format!("{} kHz", sr / 1000)),
+                )
+                .child(div().w(px(1.0)).h(px(10.0)).bg(rgb(0x32353E)))
+                .child(
+                    div()
+                        .font_family("monospace")
+                        .text_size(px(10.5))
+                        .text_color(rgb(0xD0D4DC))
+                        .child(format!("{} spl", buffer_size)),
                 ),
         )
 
@@ -1078,20 +1147,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(move |_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some((
-                            "CLICK".into(),
+                .on_mouse_move(move |e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
                             if is_active {
-                                "Hide Browser Panel".into()
+                                "Hide Browser Panel (F11)"
                             } else {
-                                "Show Browser Panel".into()
+                                "Show Browser Panel (F11)"
                             },
-                        ));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                        )],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -1115,13 +1184,9 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Project Panel".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(cx, Some(e.modifiers), &[("CLICK:", "Show Project Panel")]);
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -1144,13 +1209,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Studio & Monitor Settings".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Show Studio & Monitor Settings")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -1173,13 +1238,13 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Show Controller & MCP Mappings".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Show Controller & MCP Mappings")],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -1204,20 +1269,20 @@ pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
                 .py(px(3.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(0x303030)).rounded(px(2.0)))
-                .on_mouse_move(move |_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some((
-                            "CLICK".into(),
+                .on_mouse_move(move |e, _, cx| {
+                    cx.stop_propagation();
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
                             if is_active {
-                                "Hide Keyboard".into()
+                                "Hide Virtual Keyboard"
                             } else {
-                                "Show Keyboard".into()
+                                "Show Virtual Keyboard"
                             },
-                        ));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                        )],
+                    );
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {

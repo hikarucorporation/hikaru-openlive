@@ -44,7 +44,7 @@
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
-use crate::app::{state, update_state, AppState};
+use crate::app::{state, update_state};
 
 /// Los botones del mouse que una modal tiene que tragarse.
 ///

@@ -20,7 +20,7 @@ use hikaru_gui::app::{AppMode, HikaruApp};
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
 use hikaru_gui::views::mixer::Track;
 use hikaru_gui::views::playlist::{
-    self, audio_span, min_clip_ticks, trim_apply, trim_edge_at, ClipType, PlaylistClip,
+    audio_span, min_clip_ticks, trim_apply, trim_edge_at, ClipType, PlaylistClip,
     PlaylistState, TrimEdge, TRIM_EDGE_PX,
 };
 
@@ -378,7 +378,7 @@ fn trimming_snaps_to_grid(cx: &mut TestAppContext) {
     let handle = open_studio(cx);
     // Grid 1/16 ⇒ según `snap_step_ticks`, ppqn/4 = 240 ticks.
     const SNAP: u64 = 240;
-    cx.update_window(handle.into(), |view, _, cx| {
+    let _ = cx.update_window(handle.into(), |view, _, cx| {
         let app = view.downcast::<HikaruApp>().expect("raíz");
         app.update(cx, |app, cx| {
             app.state.update(cx, |s, cx| {

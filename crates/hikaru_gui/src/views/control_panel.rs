@@ -6,7 +6,6 @@
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
 use gpui_kit::*;
 

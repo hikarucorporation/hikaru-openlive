@@ -125,10 +125,10 @@ fn pad_color(pad: &DmsPad, is_selected: bool) -> (Hsla, Hsla) {
 }
 
 pub fn render_dms_compact(
-    cx: &mut Context<HikaruApp>,
+    _cx: &mut Context<HikaruApp>,
     dms: &OpenDms,
-    dragged_sample: &Option<PathBuf>,
-    audio_proxy: &AudioProxy,
+    _dragged_sample: &Option<PathBuf>,
+    _audio_proxy: &AudioProxy,
 ) -> AnyElement {
     let pad_count = dms.pad_count;
     let selected = dms.selected_pad;
@@ -157,8 +157,6 @@ pub fn render_dms_compact(
             } else {
                 note.clone()
             };
-            let audio_proxy = audio_proxy.clone();
-            let dragged = dragged_sample.clone();
 
             pad_elems.push(
                 div()

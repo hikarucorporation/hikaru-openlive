@@ -374,6 +374,12 @@ pub struct AppState {
     /// Mensaje de ayuda contextual dinámico de la barra inferior (Bitwig Status Bar):
     /// (Acción en cyan/blanco como "CLICK" o "DRAG", Descripción en gris como "Show Detail Editor Panel").
     pub footer_context_help: Option<(String, String)>,
+    /// Lista completa de pistas de interacción contextual estilo Bitwig 5.1.7
+    /// (ej: `[("CLICK:", "Select Audio Track"), ("DRAG:", "Drag Audio Track"), ...]`).
+    pub footer_context_cues: Vec<(String, String)>,
+    /// Modificadores de teclado activos actualmente (`Shift`, `Ctrl`, `Alt`)
+    /// para resaltar en tiempo real las acciones disponibles en el Footer.
+    pub active_modifiers: gpui_kit::Modifiers,
     pub add_slot_menu_open: bool,
     /// Texto del buscador del navegador de plugins del DSP rack.
     ///
@@ -457,6 +463,13 @@ pub struct AppState {
     pub bottom_mixer_show_io: bool,
     /// Scroll horizontal del panel de mezcla inferior.
     pub bottom_mixer_scroll_h: ScrollHandle,
+
+    /// Ancho dinámico de las columnas de pista en el Arranger View (Bitwig parity).
+    pub arranger_track_width: f32,
+    /// Arrastre del separador horizontal de columnas de pista: `(x_inicial, ancho_inicial)`.
+    pub arranger_track_width_drag: Option<(f32, f32)>,
+    /// Dispositivo arrastrado actualmente entre pistas (para feedback visual de drop targets).
+    pub dragging_device: Option<crate::views::mixer::MixerDeviceDrag>,
 
     pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
     pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
@@ -790,6 +803,14 @@ impl AppState {
     ) {
         use arranger_view::StripTarget;
 
+        self.dragging_device = None;
+
+        // No-op si el origen y destino coinciden exactamente en la misma posición
+        let current_len = self.target_effects_mut(from_target).map(|e| e.len()).unwrap_or(0);
+        if from_target == to_target && (from_slot == to_slot || (to_slot == usize::MAX && from_slot + 1 >= current_len)) {
+            return;
+        }
+
         // 1. Extraer slot
         let slot = {
             let Some(effects) = self.target_effects_mut(from_target) else { return; };
@@ -833,6 +854,7 @@ impl AppState {
             let to_engine_track = |target: StripTarget| match target {
                 StripTarget::Live(idx) => Some(idx),
                 StripTarget::Studio(idx) => idx.checked_sub(1),
+                StripTarget::Fx(_) => Some(15),
                 _ => None,
             };
             if let (Some(f_tr), Some(t_tr)) = (to_engine_track(from_target), to_engine_track(to_target)) {
@@ -1081,6 +1103,67 @@ pub fn update_state(cx: &mut App, f: impl FnOnce(&mut AppState)) {
     cx.notify(id);
 }
 
+/// Actualiza una pista simple `(acción, descripción)` en la barra de estado
+/// inferior **solo si cambió**, evitando disparar `cx.notify` en cada píxel de
+/// movimiento del puntero.
+pub fn set_footer_help(cx: &mut App, action: &str, desc: &str) {
+    set_footer_cues(cx, None, &[(action, desc)]);
+}
+
+/// Actualiza múltiples pistas contextuales estilo Bitwig Studio 5.1.7 en el
+/// Footer junto con los modificadores de teclado activos (`Shift`, `Ctrl`, `Alt`),
+/// notificando únicamente cuando hay un cambio real.
+pub fn set_footer_cues(
+    cx: &mut App,
+    mods: Option<gpui_kit::Modifiers>,
+    cues: &[(&str, &str)],
+) {
+    let st = state(cx);
+    let needs_update = {
+        let s = st.read(cx);
+        let mods_changed = mods.map(|m| m != s.active_modifiers).unwrap_or(false);
+        let cues_same = s.footer_context_cues.len() == cues.len()
+            && s.footer_context_cues
+                .iter()
+                .zip(cues.iter())
+                .all(|((a1, d1), (a2, d2))| a1 == a2 && d1 == d2);
+        mods_changed || !cues_same
+    };
+    if needs_update {
+        let id = st.entity_id();
+        st.update(cx, |s, _| {
+            if let Some(m) = mods {
+                s.active_modifiers = m;
+            }
+            s.footer_context_cues = cues
+                .iter()
+                .map(|(a, d)| ((*a).to_string(), (*d).to_string()))
+                .collect();
+            s.footer_context_help = cues
+                .first()
+                .map(|(a, d)| ((*a).to_string(), (*d).to_string()));
+        });
+        cx.notify(id);
+    }
+}
+
+/// Limpia la ayuda contextual del Footer solo cuando había contenido activo.
+pub fn clear_footer_help(cx: &mut App) {
+    let st = state(cx);
+    let has_any = {
+        let s = st.read(cx);
+        s.footer_context_help.is_some() || !s.footer_context_cues.is_empty()
+    };
+    if has_any {
+        let id = st.entity_id();
+        st.update(cx, |s, _| {
+            s.footer_context_help = None;
+            s.footer_context_cues.clear();
+        });
+        cx.notify(id);
+    }
+}
+
 pub struct HikaruApp {
     pub state: Entity<AppState>,
     pub focus_handle: FocusHandle,
@@ -1301,6 +1384,8 @@ impl HikaruApp {
             selected_track_index: 1,
             selected_slot_index: 0,
             footer_context_help: None,
+            footer_context_cues: Vec::new(),
+            active_modifiers: gpui_kit::Modifiers::default(),
             add_slot_menu_open: false,
             plugin_browser_query: String::new(),
             plugin_browser_filter: dsp_rack::PluginBrowserFilter::default(),
@@ -1330,6 +1415,9 @@ impl HikaruApp {
             bottom_mixer_show_sends: true,
             bottom_mixer_show_io: true,
             bottom_mixer_scroll_h: ScrollHandle::new(),
+            arranger_track_width: 132.0,
+            arranger_track_width_drag: None,
+            dragging_device: None,
             active_external_plugins: Vec::new(),
             engine_handle,
             project_path: None,
@@ -1338,7 +1426,7 @@ impl HikaruApp {
         });
 
         cx.set_global(AppStateHandle(state.clone()));
-        cx.observe(&state, |_, _, cx| {
+        let _ = cx.observe(&state, |_, _, cx| {
             cx.notify();
         });
 
@@ -1835,6 +1923,7 @@ impl Render for HikaruApp {
         let panel_layout = app_state.panel_layout;
         let show_mixer_panel = panel_layout.show_mixer;
         let bottom_mixer_splitter_drag = app_state.bottom_mixer_splitter_drag;
+        let arranger_track_width_drag = app_state.arranger_track_width_drag;
         let show_about = app_state.show_about;
         let audio_settings_open = app_state.audio_settings_state.is_open;
         let plugin_settings_open = app_state.plugin_settings_state.is_open;
@@ -1845,7 +1934,7 @@ impl Render for HikaruApp {
         // insertar o abrir dispositivos. Todas las tarjetas ocupan el 100% de
         // esta altura.
         let dsp_rack_height = crate::views::dsp_rack::RACK_HEIGHT;
-        drop(app_state);
+        let _ = app_state;
 
         div()
             .id("app_root")
@@ -2016,7 +2105,47 @@ impl Render for HikaruApp {
                         }),
                 )
             })
+            // Capturador de arrastre del ancho de columnas en Arranger View (Bitwig parity)
+            .when(arranger_track_width_drag.is_some(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .cursor_col_resize()
+                        .on_mouse_move(move |event, _, cx| {
+                            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                                update_state(cx, |s| s.arranger_track_width_drag = None);
+                                return;
+                            }
+                            let st = state(cx);
+                            let drag = st.read(cx).arranger_track_width_drag;
+                            if let Some((start_x, start_w)) = drag {
+                                let curr_x = event.position.x.as_f32();
+                                let delta = curr_x - start_x;
+                                let new_w = (start_w + delta).clamp(80.0, 340.0);
+                                st.update(cx, |s, cx| {
+                                    s.arranger_track_width = new_w;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                            update_state(cx, |s| s.arranger_track_width_drag = None);
+                        }),
+                )
+            })
             
+            .on_modifiers_changed(move |event, _, cx| {
+                let st = state(cx);
+                let changed = st.read(cx).active_modifiers != event.modifiers;
+                if changed {
+                    let id = st.entity_id();
+                    st.update(cx, |s, _| {
+                        s.active_modifiers = event.modifiers;
+                    });
+                    cx.notify(id);
+                }
+            })
             // SHORTCUTS: el foco vive en el div raíz, por eso capture_key_down
             // los recibe sin importar qué control interno esté enfocado.
             .capture_key_down(move |event, window, cx| {
@@ -2026,12 +2155,18 @@ impl Render for HikaruApp {
                 let app = state(cx).read(cx);
                 let bpm_input = app.bpm_input.clone();
                 let show_dsp_rack = app.show_dsp_rack;
-                drop(app);
+                let _ = app;
                 if bpm_input.read(cx).focus_handle(cx).is_focused(window) {
                     return;
                 }
                 let key = event.keystroke.key.as_str().to_lowercase();
                 let mods = event.keystroke.modifiers;
+                {
+                    let st = state(cx);
+                    if st.read(cx).active_modifiers != mods {
+                        st.update(cx, |s, _| s.active_modifiers = mods);
+                    }
+                }
                 // La tecla Delete elimina la tarjeta seleccionada del DSP Rack
                 if show_dsp_rack && key == "delete" {
                     dsp_rack::handle_delete_key(cx);

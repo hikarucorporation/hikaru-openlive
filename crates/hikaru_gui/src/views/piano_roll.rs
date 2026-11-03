@@ -51,6 +51,7 @@ pub struct PianoRollState {
     pub drum_map: HashMap<u8, String>,
     pub playhead_tick: u64,
     pub prev_playhead_tick: u64,
+    #[allow(dead_code)]
     triggered_notes: HashSet<(u8, u64)>,
     pub selection_start_tick: u64,
     pub selection_end_tick: u64,
@@ -204,6 +205,7 @@ pub const TICKS_PER_BEAT: u64 = 960;
 pub const TICKS_PER_BAR: u64 = 3840;
 pub const RULER_HEIGHT: f32 = 24.0;
 const NOTE_INSERT_VELOCITY: u8 = 100;
+#[allow(dead_code)]
 const NOTE_EDGE_HIT_W: f32 = 8.0;
 const MIN_NOTE_DURATION_TICKS: u64 = QUANTIZE_TICKS;
 
@@ -282,6 +284,7 @@ fn quantize_tick(tick: u64, step: u64) -> u64 {
     (tick / step) * step
 }
 
+#[allow(dead_code)]
 fn resize_note_left(orig_start: u64, orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
     let end = orig_start.saturating_add(orig_duration);
     let min_dur = MIN_NOTE_DURATION_TICKS;
@@ -293,6 +296,7 @@ fn resize_note_left(orig_start: u64, orig_duration: u64, pointer_tick: u64) -> (
     (new_start, new_duration)
 }
 
+#[allow(dead_code)]
 fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
     let min_dur = MIN_NOTE_DURATION_TICKS;
     let new_end = quantize_tick(pointer_tick, QUANTIZE_TICKS).max(orig_start + min_dur);
@@ -316,6 +320,7 @@ fn apply_resize_right_delta(orig_start: u64, orig_duration: u64, delta_duration:
     (orig_start, new_dur)
 }
 
+#[allow(dead_code)]
 fn compute_resize_left_delta(
     targets: &[(usize, u64, u64)],
     grab_index: usize,
@@ -329,6 +334,7 @@ fn compute_resize_left_delta(
     (new_start as i64) - (orig_start as i64)
 }
 
+#[allow(dead_code)]
 fn compute_resize_right_delta(
     targets: &[(usize, u64, u64)],
     grab_index: usize,
@@ -342,6 +348,7 @@ fn compute_resize_right_delta(
     (new_dur as i64) - (orig_duration as i64)
 }
 
+#[allow(dead_code)]
 fn build_resize_targets(
     notes: &[MidiNote],
     grab_index: usize,
@@ -372,6 +379,7 @@ fn apply_move_delta(start_tick: u64, pitch: u8, delta_ticks: i64, delta_rows: i3
     (new_start, new_pitch)
 }
 
+#[allow(dead_code)]
 fn compute_note_move_deltas(
     orig: &[(usize, u64, u8)],
     grab_index: usize,
@@ -415,6 +423,7 @@ fn select_note_set(selected: &mut HashSet<usize>, index: usize, additive: bool) 
     }
 }
 
+#[allow(dead_code)]
 fn hit_test_note_body(
     notes: &[MidiNote],
     pos: Point<Pixels>,
@@ -442,6 +451,7 @@ fn hit_test_note_body(
     None
 }
 
+#[allow(dead_code)]
 fn hit_test_note_full(
     notes: &[MidiNote],
     pos: Point<Pixels>,
@@ -458,6 +468,7 @@ fn hit_test_note_full(
     None
 }
 
+#[allow(dead_code)]
 fn notes_in_marquee(
     notes: &[MidiNote],
     marquee: Bounds<Pixels>,
@@ -475,6 +486,7 @@ fn notes_in_marquee(
     out
 }
 
+#[allow(dead_code)]
 fn remove_selected_notes(notes: &mut Vec<MidiNote>, selected: &mut HashSet<usize>) -> usize {
     let sel = std::mem::take(selected);
     let before = notes.len();
@@ -487,6 +499,7 @@ fn remove_selected_notes(notes: &mut Vec<MidiNote>, selected: &mut HashSet<usize
     before - notes.len()
 }
 
+#[allow(dead_code)]
 fn duplicate_selected_notes(
     notes: &mut Vec<MidiNote>,
     selected: &HashSet<usize>,
@@ -559,6 +572,7 @@ fn note_just_crossed(prev_tick: u64, current_tick: u64, start_tick: u64) -> bool
         && current_tick < start_tick + 240
 }
 
+#[allow(dead_code)]
 fn note_rect(grid_rect: Bounds<Pixels>, note: &MidiNote, zoom_x: f32, key_height: f32) -> Bounds<Pixels> {
     let x = grid_rect.origin.x + px(note.start_tick as f32 * zoom_x);
     let y = grid_rect.origin.y + px((127 - note.pitch) as f32 * key_height);

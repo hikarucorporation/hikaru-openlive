@@ -1,5 +1,3 @@
-use crate::events::MidiMessage;
-
 pub struct GeneralKeyboard {
     pub octaves: u8,
 }

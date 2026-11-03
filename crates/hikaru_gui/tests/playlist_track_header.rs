@@ -315,7 +315,7 @@ fn playlist_volume_drag_updates_track(cx: &mut TestAppContext) {
 fn playlist_volume_double_click_resets(cx: &mut TestAppContext) {
     let handle = open_studio(cx);
     // Se baja el volumen primero y después se hace doble-clic (reset a 0.0dB).
-    let (x0, y0, x1) = cx
+    let (x0, y0, _x1) = cx
         .update_window(handle.into(), |_, window, cx| {
             window.draw(cx).clear(cx);
             let b = window.find("pl_vol_1").bounds();
@@ -385,7 +385,7 @@ fn header_height_matches_track_row_and_does_not_drift(cx: &mut TestAppContext) {
         cx: &mut TestAppContext,
         row_h: f32,
     ) -> Vec<(f32, f32)> {
-        cx.update_window(handle.into(), |view, _, cx| {
+        let _ = cx.update_window(handle.into(), |view, _, cx| {
             let app = view.downcast::<HikaruApp>().expect("vista raíz HikaruApp");
             app.update(cx, |app, cx| {
                 app.state.update(cx, |s, _| s.playlist_state.row_h = row_h);

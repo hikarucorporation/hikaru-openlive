@@ -18,7 +18,6 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
-use gpui_kit::prelude::StatefulInteractiveElement as _;
 use gpui_kit::*;
 
 use crate::app::{state, AppState, HikaruApp};
@@ -38,6 +37,7 @@ pub enum ViewMode<'a> {
     ClipEditor { title: &'a str },
 }
 
+#[allow(dead_code)]
 impl<'a> ViewMode<'a> {
     #[inline]
     fn drives_engine(&self) -> bool {
@@ -1402,6 +1402,7 @@ pub fn snap_ticks(ticks: u64, grid_ticks: u64) -> u64 {
     ((ticks as f64 / grid_ticks as f64).round() as u64).saturating_mul(grid_ticks)
 }
 
+#[allow(dead_code)]
 fn ticks_to_pixel_x(ticks: u64, ppqn: u64, zoom_x: f32, playlist_offset_x: f32) -> f32 {
     let ppqn = ppqn.max(1) as f32;
     let pixels_per_beat = ppqn * zoom_x;
@@ -1430,6 +1431,7 @@ pub fn loop_display_tick(
     current_tick
 }
 
+#[allow(dead_code)]
 fn samples_to_ticks_precise(sample_count: u64, ppqn: u64, bpm: f64, sample_rate: u32) -> u64 {
     let ppqn = ppqn.max(1);
     if bpm <= 0.0 || sample_rate == 0 {

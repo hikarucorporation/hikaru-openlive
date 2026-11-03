@@ -7,7 +7,7 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
 use crate::app::{state, HikaruApp};
@@ -68,6 +68,7 @@ pub struct ParamFeedbackEvent {
 
 enum ScanMessage {
     /// Progreso del escaneo, sólo para la etiqueta de estado.
+    #[allow(dead_code)]
     Progress(String),
     Found(hikaru_plugin_host::PluginDescriptor),
     Finished {
@@ -449,7 +450,7 @@ fn run_plugin_window(
         tap_key,
     );
 
-    let mut wrapper = match open_result {
+    let wrapper = match open_result {
         Ok(wrapper) => wrapper,
         Err(e) => {
             let message = e.to_string();
@@ -523,7 +524,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let drag = app.modal_drags.get(ModalId::PluginSettings);
     let offset = drag.offset();
     let dragging = drag.is_dragging();
-    drop(app);
+    let _ = app;
 
     if !is_open {
         return div().into_any_element();

@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui_kit::{App, Global, RenderImage};
 use hikaru_render::{
-    terrain_view_proj, terrain_view_proj_angled, upload_knob, Camera, GpuContext, GpuMesh,
+    terrain_view_proj_angled, upload_knob, Camera, GpuContext, GpuMesh,
     KnobMesh, KnobRenderer, KnobUniforms, MeshRenderer, MeshUniforms, QuadInstance, QuadRenderer,
     ReadbackError, RenderMode, RenderSettings, RenderTarget, SpriteLayout, SpriteSheet,
     SpriteSheetResources, WavetableMesh, WavetableMeshParams, TERRAIN_LINE_WIDTH,

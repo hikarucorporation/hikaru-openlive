@@ -281,7 +281,7 @@ fn the_envelope_keeps_every_stage_inside_the_box() {
     // Con el attack al máximo, los tramos siguientes tienen que seguir teniendo
     // lugar: es el motivo de la escala fija de tiempo.
     const SUSTAIN_SHARE: f32 = 0.4;
-    let attack_end = (1.0 - SUSTAIN_SHARE);
+    let attack_end = 1.0 - SUSTAIN_SHARE;
     let decay_end = attack_end + (1.0 - SUSTAIN_SHARE);
     let release_end = decay_end + SUSTAIN_SHARE + (1.0 - SUSTAIN_SHARE) * 0.5;
     assert!(release_end > 1.0, "la curva tiene que llegar al final del ancho");

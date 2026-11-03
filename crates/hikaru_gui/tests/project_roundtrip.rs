@@ -14,8 +14,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
 
-use gpui_kit::test::TestWindowExt;
-use gpui_kit::{App, AppContext, Context, Entity, TestAppContext, Window};
+use gpui_kit::{AppContext, Context, Entity, TestAppContext, Window};
 
 use hikaru_gui::app::{AppMode, AppState, HikaruApp, OpenLiveView, OpenStudioView, PanMode};
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};

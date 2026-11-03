@@ -12,11 +12,11 @@ use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::Styled as _;
 use gpui_kit::*;
 
 use crate::app::{state, HikaruApp};
-use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::audio_proxy::GuiCommand;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdsrEnvelope {
@@ -65,11 +65,11 @@ impl Default for DmsSampler {
 }
 
 pub fn render_sampler_ui(
-    cx: &mut Context<HikaruApp>,
+    _cx: &mut Context<HikaruApp>,
     sampler: &mut DmsSampler,
-    project_bpm: f32,
-    dragged_sample: &mut Option<std::path::PathBuf>,
-    peaks: &[f32],
+    _project_bpm: f32,
+    _dragged_sample: &mut Option<std::path::PathBuf>,
+    _peaks: &[f32],
 ) -> AnyElement {
     h_flex()
         .gap(px(4.0))

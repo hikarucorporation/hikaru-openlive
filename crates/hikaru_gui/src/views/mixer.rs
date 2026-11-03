@@ -15,13 +15,15 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::component::button::{Button, ButtonRounded};
 use gpui_kit::component::label::Label;
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::*;
 use gpui_kit::prelude::{FluentBuilder, InteractiveElement, StatefulInteractiveElement, Styled};
 use gpui_kit::*;
 
-use crate::app::{state, update_state, AppMode, HikaruApp};
+use crate::app::{set_footer_cues, state, update_state, AppMode, HikaruApp};
 use crate::theme;
 use crate::views::arranger_view::{self, FaderTarget, StripTarget};
 use crate::views::matrix;
@@ -97,7 +99,10 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let scroll_handle = app.bottom_mixer_scroll_h.clone();
 
     // Snapshot de las pistas de la sesión
-    let tracks_snapshot: Vec<(usize, String, f32, f32, bool, bool, bool, u32, f32, Vec<MixerDeviceChipData>, f32)> = match mode {
+    let live_names: Vec<String> = app.live_tracks.iter().map(|t| t.name.clone()).collect();
+    let studio_names: Vec<String> = app.studio_tracks.iter().map(|t| t.name.clone()).collect();
+
+    let tracks_snapshot: Vec<(usize, String, f32, f32, bool, bool, bool, u32, f32, Vec<MixerDeviceChipData>, f32, String)> = match mode {
         AppMode::OpenLive => {
             app.matrix_state
                 .tracks
@@ -125,7 +130,10 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                     let send_amt = live_tr
                         .and_then(|l| l.sends.first().map(|s| s.amount))
                         .unwrap_or(0.0);
-                    (idx, t.name.clone(), t.volume, t.pan, t.muted, t.soloed, armed, stripe, peak, dev_chips, send_amt)
+                    let r_dest = live_tr
+                        .map(|l| route_dest_label(l.route_destination_id, false, &live_names))
+                        .unwrap_or_else(|| "Master".to_string());
+                    (idx, t.name.clone(), t.volume, t.pan, t.muted, t.soloed, armed, stripe, peak, dev_chips, send_amt, r_dest)
                 })
                 .collect()
         }
@@ -149,7 +157,8 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                         })
                         .collect();
                     let send_amt = t.sends.first().map(|s| s.amount).unwrap_or(0.0);
-                    (idx, t.name.clone(), t.volume, t.pan, t.mute, t.solo, t.arm, stripe, peak, dev_chips, send_amt)
+                    let r_dest = route_dest_label(t.route_destination_id, t.is_master, &studio_names);
+                    (idx, t.name.clone(), t.volume, t.pan, t.mute, t.solo, t.arm, stripe, peak, dev_chips, send_amt, r_dest)
                 })
                 .collect()
         }
@@ -162,6 +171,9 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let fx_pan = fx_tr.map(|t| t.pan).unwrap_or(0.0);
     let fx_muted = fx_tr.map(|t| t.mute).unwrap_or(false);
     let fx_soloed = fx_tr.map(|t| t.solo).unwrap_or(false);
+    let fx_route = fx_tr
+        .map(|t| route_dest_label(t.route_destination_id, false, &live_names))
+        .unwrap_or_else(|| "Master".to_string());
     let fx_devs = fx_tr
         .map(|t| {
             t.effects
@@ -183,6 +195,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
     let master_pan = master_tr.map(|t| t.pan).unwrap_or(0.0);
     let master_muted = master_tr.map(|t| t.mute).unwrap_or(false);
     let master_soloed = master_tr.map(|t| t.solo).unwrap_or(false);
+    let master_route = "Out 1/2".to_string();
     let master_devs = master_tr
         .map(|t| {
             t.effects
@@ -239,7 +252,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                                 .p(px(2.0))
                                 .items_stretch()
                                 .children(
-                                    tracks_snapshot.into_iter().map(|(idx, name, vol, pan, muted, soloed, armed, stripe, peak, devs, send_amt)| {
+                                    tracks_snapshot.into_iter().map(|(idx, name, vol, pan, muted, soloed, armed, stripe, peak, devs, send_amt, route_dest)| {
                                         let target = match mode {
                                             AppMode::OpenLive => StripTarget::Live(idx),
                                             AppMode::OpenStudio => StripTarget::Studio(idx),
@@ -260,6 +273,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                                             peak,
                                             devs,
                                             send_amt,
+                                            route_dest,
                                             target,
                                             is_selected,
                                             is_tall,
@@ -292,6 +306,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                             fx_soloed,
                             fx_peak,
                             fx_devs,
+                            fx_route,
                             is_tall,
                             show_devices,
                             show_sends,
@@ -304,6 +319,7 @@ pub fn render_bottom_panel(cx: &mut Context<HikaruApp>) -> AnyElement {
                             master_soloed,
                             master_peak,
                             master_devs,
+                            master_route,
                             is_tall,
                             show_devices,
                             show_sends,
@@ -326,13 +342,8 @@ fn render_bottom_splitter(current_height: f32) -> AnyElement {
         .border_color(rgb(0x38393F))
         .cursor_ns_resize()
         .hover(|s| s.bg(rgb(theme::DAW_ACCENT_ORANGE)))
-        .on_mouse_move(|_, _, cx| {
-            update_state(cx, |s| {
-                let cue = Some(("DRAG".into(), "Move splitter".into()));
-                if s.footer_context_help != cue {
-                    s.footer_context_help = cue;
-                }
-            });
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(cx, Some(e.modifiers), &[("DRAG", "Resize Mix Panel height")]);
         })
         .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
             let start_y = event.position.y.as_f32();
@@ -506,13 +517,8 @@ fn render_sidebar(is_tall: bool, show_dev: bool, show_sends: bool, show_io: bool
                                 .cursor_pointer()
                                 .p(px(2.0))
                                 .hover(|s| s.bg(rgb(0x35373E)).rounded(px(2.0)))
-                                .on_mouse_move(|_, _, cx| {
-                                    update_state(cx, |s| {
-                                        let cue = Some(("CLICK".into(), "Toggle Devices Section".into()));
-                                        if s.footer_context_help != cue {
-                                            s.footer_context_help = cue;
-                                        }
-                                    });
+                                .on_mouse_move(|e, _, cx| {
+                                    set_footer_cues(cx, Some(e.modifiers), &[("CLICK", "Toggle Devices section")]);
                                 })
                                 .on_click(|_, _, cx| {
                                     update_state(cx, |s| {
@@ -540,13 +546,8 @@ fn render_sidebar(is_tall: bool, show_dev: bool, show_sends: bool, show_io: bool
                                 .cursor_pointer()
                                 .p(px(2.0))
                                 .hover(|s| s.bg(rgb(0x35373E)).rounded(px(2.0)))
-                                .on_mouse_move(|_, _, cx| {
-                                    update_state(cx, |s| {
-                                        let cue = Some(("CLICK".into(), "Toggle Sends Section".into()));
-                                        if s.footer_context_help != cue {
-                                            s.footer_context_help = cue;
-                                        }
-                                    });
+                                .on_mouse_move(|e, _, cx| {
+                                    set_footer_cues(cx, Some(e.modifiers), &[("CLICK", "Toggle Sends section")]);
                                 })
                                 .on_click(|_, _, cx| {
                                     update_state(cx, |s| {
@@ -574,13 +575,8 @@ fn render_sidebar(is_tall: bool, show_dev: bool, show_sends: bool, show_io: bool
                                 .cursor_pointer()
                                 .p(px(2.0))
                                 .hover(|s| s.bg(rgb(0x35373E)).rounded(px(2.0)))
-                                .on_mouse_move(|_, _, cx| {
-                                    update_state(cx, |s| {
-                                        let cue = Some(("CLICK".into(), "Toggle Input/Output Section".into()));
-                                        if s.footer_context_help != cue {
-                                            s.footer_context_help = cue;
-                                        }
-                                    });
+                                .on_mouse_move(|e, _, cx| {
+                                    set_footer_cues(cx, Some(e.modifiers), &[("CLICK", "Toggle Input/Output section")]);
                                 })
                                 .on_click(|_, _, cx| {
                                     update_state(cx, |s| {
@@ -705,6 +701,7 @@ fn render_track_strip(
     peak_level: f32,
     devices: Vec<MixerDeviceChipData>,
     send_amount: f32,
+    route_dest: String,
     target: StripTarget,
     is_selected: bool,
     is_tall: bool,
@@ -761,7 +758,7 @@ fn render_track_strip(
         })
         // 4. Sección I/O (cuando is_tall && show_io)
         .when(is_tall && show_io, |this| {
-            this.child(render_strip_io(target))
+            this.child(render_strip_io(target, route_dest))
         })
         // 5. Zona de Controles: M/S/Arm + Pan + Fader & VU
         .child(
@@ -806,7 +803,24 @@ fn render_strip_header(
         .px(px(2.0))
         .cursor_pointer()
         .when(is_selected, |s| s.border_t_2().border_color(rgb(0xFFFFFF)))
-        .on_click(move |_, _, cx| {
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(
+                cx,
+                Some(e.modifiers),
+                &[
+                    ("CLICK", "Select Track"),
+                    ("CTRL+CLICK", "Remove from selection"),
+                    ("ALT+CLICK", "Rename"),
+                    ("DOUBLE-CLICK", "Show devices"),
+                ],
+            );
+        })
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+            if event.click_count >= 2 {
+                update_state(cx, |s| {
+                    s.show_dsp_rack = true;
+                });
+            }
             arranger_view::select_track_column(cx, target);
         })
         .child(
@@ -861,13 +875,8 @@ fn render_strip_devices(devices: Vec<MixerDeviceChipData>, target: StripTarget) 
                 .flex()
                 .items_center()
                 .justify_center()
-                .on_mouse_move(|_, _, cx| {
-                    update_state(cx, |s| {
-                        let cue = Some(("CLICK".into(), "Add Device to track".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(cx, Some(e.modifiers), &[("CLICK", "Add device to track")]);
                 })
                 .on_click(|_, _, cx| {
                     update_state(cx, |s| {
@@ -920,13 +929,16 @@ fn render_strip_devices(devices: Vec<MixerDeviceChipData>, target: StripTarget) 
                             s.move_device(payload.source_target, payload.source_slot, target_clone, slot);
                         });
                     })
-                    .on_mouse_move(move |_, _, cx| {
-                        update_state(cx, |s| {
-                            let cue = Some(("DRAG DEVICE".into(), "Drop on another track to move  ·  CLICK Select".into()));
-                            if s.footer_context_help != cue {
-                                s.footer_context_help = cue;
-                            }
-                        });
+                    .on_mouse_move(move |e, _, cx| {
+                        set_footer_cues(
+                            cx,
+                            Some(e.modifiers),
+                            &[
+                                ("CLICK", "Select device"),
+                                ("DRAG", "Move device to another track"),
+                                ("CLICK ●", "Toggle device on/off"),
+                            ],
+                        );
                     })
                     .on_click(move |_, _, cx| {
                         arranger_view::select_device_slot(cx, target, slot);
@@ -1019,18 +1031,21 @@ fn render_strip_sends(track_idx: usize, send_amount: f32) -> AnyElement {
                         });
                     }
                 })
-                .on_mouse_move(move |_, _, cx| {
+                .on_mouse_move(move |e, _, cx| {
                     let db_str = if s_val <= 0.001 {
                         "-inf dB".to_string()
                     } else {
                         format!("{:.1} dB", (20.0 * s_val.log10()).clamp(-60.0, 6.0))
                     };
-                    update_state(cx, |s| {
-                        let cue = Some((format!("SEND {}", db_str), "DRAG Adjust value    SHIFT Fine-adjust".into()));
-                        if s.footer_context_help != cue {
-                            s.footer_context_help = cue;
-                        }
-                    });
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[
+                            (format!("SEND {}", db_str).leak(), "DRAG Adjust value"),
+                            ("SHIFT+DRAG", "Fine-adjust"),
+                            ("DOUBLE-CLICK", "Reset to -inf dB"),
+                        ],
+                    );
                 })
                 .child(
                     canvas(
@@ -1070,13 +1085,8 @@ fn render_strip_sends(track_idx: usize, send_amount: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// Sección de selector I/O (Input / Output) de la pista.
-fn render_strip_io(target: StripTarget) -> AnyElement {
-    let out_label = match target {
-        StripTarget::Master => "Studio",
-        _ => "Master",
-    };
-
+/// Sección de selector I/O (Input / Output) de la pista en el Mix Panel inferior.
+fn render_strip_io(target: StripTarget, route_dest: String) -> AnyElement {
     v_flex()
         .w_full()
         .h(px(34.0))
@@ -1098,6 +1108,10 @@ fn render_strip_io(target: StripTarget) -> AnyElement {
                 .rounded(px(1.5))
                 .items_center()
                 .justify_between()
+                .cursor_pointer()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(cx, Some(e.modifiers), &[("CLICK", "Select audio input")]);
+                })
                 .child(
                     Label::new("◀ All ins")
                         .text_size(px(7.5))
@@ -1109,7 +1123,7 @@ fn render_strip_io(target: StripTarget) -> AnyElement {
                         .text_color(rgb(0x80848E)),
                 ),
         )
-        // Output row
+        // Output row con dropdown interactivo estilo Bitwig Studio
         .child(
             h_flex()
                 .w_full()
@@ -1120,14 +1134,42 @@ fn render_strip_io(target: StripTarget) -> AnyElement {
                 .items_center()
                 .justify_between()
                 .child(
-                    Label::new(format!("▶ {}", out_label))
-                        .text_size(px(7.5))
-                        .text_color(rgb(0xC4C8D0)),
+                    div()
+                        .id(SharedString::from(format!("bstrip_route_lbl_{:?}", target)))
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .cursor_pointer()
+                        .on_mouse_move(|e, _, cx| {
+                            set_footer_cues(
+                                cx,
+                                Some(e.modifiers),
+                                &[
+                                    ("CLICK", "Next output"),
+                                    ("▾", "Choose output destination"),
+                                ],
+                            );
+                        })
+                        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                            arranger_view::cycle_route_destination(cx, target)
+                        })
+                        .child(
+                            Label::new(format!("▶ {}", route_dest))
+                                .text_size(px(7.5))
+                                .text_color(rgb(0xC4C8D0))
+                                .text_ellipsis(),
+                        ),
                 )
                 .child(
-                    Label::new("▾")
-                        .text_size(px(6.5))
-                        .text_color(rgb(0x80848E)),
+                    Button::new(SharedString::from(format!("bstrip_route_{:?}", target)))
+                        .label("▾")
+                        .compact()
+                        .bg(rgb(0x26272C))
+                        .text_color(rgb(0x80848E))
+                        .rounded(ButtonRounded::None)
+                        .dropdown_menu(move |menu, _window, cx| {
+                            arranger_view::build_route_menu(menu, target, cx)
+                        }),
                 ),
         )
         .into_any_element()
@@ -1242,6 +1284,11 @@ fn render_pan_slider(target: FaderTarget, pan: f32) -> AnyElement {
         })
         .on_mouse_move(move |event, _, cx| {
             if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                crate::app::set_footer_cues(
+                    cx,
+                    Some(event.modifiers),
+                    &[("DRAG", "Adjust panning"), ("DOUBLE-CLICK", "Center (C)")],
+                );
                 return;
             }
             let b = b_move.get();
@@ -1347,7 +1394,7 @@ fn render_fader_vu_well(
     let f_move = fader_bounds.clone();
     let f_paint = fader_bounds.clone();
 
-    let vu_text = level_db_text(peak_level);
+    let (vu_text, vu_clip) = peak_db_readout(peak_level);
     let vol_text = db_text(volume);
 
     v_flex()
@@ -1362,7 +1409,7 @@ fn render_fader_vu_well(
         .py(px(2.0))
         .gap(px(2.0))
         .overflow_hidden()
-        // Cabecera interna: dB del pico y dB del fader en naranja
+        // Cabecera interna monoespaciada: pico (rojo en clip) y dB del fader en naranja
         .child(
             h_flex()
                 .w_full()
@@ -1373,14 +1420,22 @@ fn render_fader_vu_well(
                 .border_b_1()
                 .border_color(rgb(0x23252B))
                 .pb(px(1.0))
+                .overflow_hidden()
                 .child(
                     Label::new(vu_text)
                         .text_size(px(7.0))
-                        .text_color(rgb(0x72767F)),
+                        .font_family("monospace")
+                        .when(vu_clip, |l| l.font_weight(FontWeight::BOLD))
+                        .text_color(if vu_clip {
+                            rgb(VU_CLIP_RED)
+                        } else {
+                            rgb(0x72767F)
+                        }),
                 )
                 .child(
-                    Label::new(vol_text)
-                        .text_size(px(8.5))
+                    Label::new(vol_text.trim_end_matches(" dB").to_string())
+                        .text_size(px(8.0))
+                        .font_family("monospace")
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
                 ),
@@ -1390,7 +1445,7 @@ fn render_fader_vu_well(
             h_flex()
                 .w_full()
                 .flex_1()
-                .min_h(px(40.0))
+                .min_h_0()
                 .items_stretch()
                 .justify_between()
                 .gap(px(2.0))
@@ -1419,6 +1474,14 @@ fn render_fader_vu_well(
                         })
                         .on_mouse_move(move |event, _, cx| {
                             if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
+                                crate::app::set_footer_cues(
+                                    cx,
+                                    Some(event.modifiers),
+                                    &[
+                                        ("DRAG", "Adjust volume"),
+                                        ("DOUBLE-CLICK", "Reset to 0.0 dB"),
+                                    ],
+                                );
                                 return;
                             }
                             let b = f_move.get();
@@ -1508,29 +1571,37 @@ fn render_fader_vu_well(
         .into_any_element()
 }
 
-/// Escala vertical calibrada de dB (0, 6, 12, 24, 36, ∞).
+/// Escala vertical calibrada de dB (0, 6, 12, 18, 24, 30, 36, ∞).
+///
+/// Recortada en alto y ancho (`min_h_0` + `overflow_hidden` en contenedor y
+/// marcas): con el Mix Panel bajo, las marcas se comprimen y `36` / `∞`
+/// nunca bajan del margen inferior de la tarjeta del canal.
 fn render_calibrated_scale() -> AnyElement {
     v_flex()
         .h_full()
-        .w(px(14.0))
+        .min_h_0()
+        .w(px(13.0))
         .flex_shrink_0()
         .justify_between()
         .items_end()
-        .py(px(2.0))
+        .py(px(1.0))
         .overflow_hidden()
         .children(
-            ["0", "6", "12", "24", "36", "∞"]
+            ["0", "6", "12", "18", "24", "30", "36", "∞"]
                 .into_iter()
                 .map(|val| {
                     div()
                         .flex_1()
+                        .min_h_0()
                         .flex()
                         .items_center()
                         .justify_end()
+                        .overflow_hidden()
                         .child(
                             Label::new(val)
-                                .text_size(px(7.0))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(6.5))
+                                .line_height(px(7.0))
+                                .font_family("monospace")
                                 .text_color(rgb(0x72767F)),
                         )
                         .into_any_element()
@@ -1555,13 +1626,8 @@ fn render_add_track_button() -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .on_mouse_move(|_, _, cx| {
-            update_state(cx, |s| {
-                let cue = Some(("CLICK".into(), "Add new track".into()));
-                if s.footer_context_help != cue {
-                    s.footer_context_help = cue;
-                }
-            });
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(cx, Some(e.modifiers), &[("CLICK", "Add new track")]);
         })
         .on_click(|_, _, cx| {
             update_state(cx, |s| {
@@ -1585,6 +1651,7 @@ fn render_fx_strip(
     soloed: bool,
     peak_level: f32,
     devices: Vec<MixerDeviceChipData>,
+    route_dest: String,
     is_tall: bool,
     show_devices: bool,
     show_sends: bool,
@@ -1621,6 +1688,22 @@ fn render_fx_strip(
                 .bg(rgb(slate_hex))
                 .justify_center()
                 .items_center()
+                .cursor_pointer()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK", "Select FX Return track"), ("DOUBLE-CLICK", "Show devices")],
+                    );
+                })
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                    if event.click_count >= 2 {
+                        update_state(cx, |s| {
+                            s.show_dsp_rack = true;
+                        });
+                    }
+                    arranger_view::select_track_column(cx, target);
+                })
                 .child(
                     Label::new("FX 1")
                         .text_size(px(10.0))
@@ -1646,7 +1729,7 @@ fn render_fx_strip(
         })
         // I/O
         .when(is_tall && show_io, |this| {
-            this.child(render_strip_io(target))
+            this.child(render_strip_io(target, route_dest))
         })
         // Controles S/M + Pan + Fader & VU
         .child(
@@ -1680,6 +1763,7 @@ fn render_master_strip(
     soloed: bool,
     peak_level: f32,
     devices: Vec<MixerDeviceChipData>,
+    route_dest: String,
     is_tall: bool,
     show_devices: bool,
     show_sends: bool,
@@ -1716,6 +1800,22 @@ fn render_master_strip(
                 .bg(rgb(0x555A64))
                 .justify_center()
                 .items_center()
+                .cursor_pointer()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK", "Select Master track"), ("DOUBLE-CLICK", "Show devices")],
+                    );
+                })
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
+                    if event.click_count >= 2 {
+                        update_state(cx, |s| {
+                            s.show_dsp_rack = true;
+                        });
+                    }
+                    arranger_view::select_track_column(cx, target);
+                })
                 .child(
                     Label::new("Master")
                         .text_size(px(10.0))
@@ -1741,7 +1841,7 @@ fn render_master_strip(
         })
         // I/O
         .when(is_tall && show_io, |this| {
-            this.child(render_strip_io(target))
+            this.child(render_strip_io(target, route_dest))
         })
         // Controles S/M + Pan + Fader & VU
         .child(
@@ -2050,6 +2150,88 @@ pub fn level_db_text(level: f32) -> String {
     format!("{:.1}dB", db_val)
 }
 
+/// Lectura de pico estilo Bitwig 5.1.7 para la barra superior del pozo.
+///
+/// Devuelve el texto monoespaciado (`-12.4`, `+2.4`, `-inf`) y si la señal
+/// entró en zona de clip (> 0.0 dBFS o tramo rojo del VU, `level > 0.9`),
+/// para que la vista la pinte en rojo `#FF3B30`.
+pub fn peak_db_readout(level: f32) -> (String, bool) {
+    let level = if level.is_finite() { level.max(0.0) } else { 0.0 };
+    if level <= 0.001 {
+        return ("-inf".to_string(), false);
+    }
+    let db = (20.0 * level.log10()).clamp(-60.0, 12.0);
+    let clip = db > 0.0 || level > 0.9;
+    let text = if db > 0.0 {
+        format!("+{:.1}", db)
+    } else {
+        format!("{:.1}", db)
+    };
+    (text, clip)
+}
+
+/// Rojo de clip compartido por la lectura de pico y el tramo superior del VU.
+pub const VU_CLIP_RED: u32 = 0xFF3B30;
+/// Ámbar de la marca de pico instantáneo del VU.
+pub const VU_PEAK_AMBER: u32 = 0xFF9E2C;
+
+// =========================================================================
+// ENRUTAMIENTO I/O (etiquetas y opciones del selector de salida)
+// =========================================================================
+//
+// `Track::route_destination_id` es estado de GUI (el motor todavía suma todo
+// al master). Convención de ids:
+//   0              -> Master (o salida de hardware si la pista ES el master)
+//   1..ROUTE_FX_BASE -> índice de otra pista del mismo modo (live/studio)
+//   ROUTE_FX_BASE+n -> pista de retorno FX n+1
+
+/// Base de ids para las pistas de retorno (`FX 1` = `ROUTE_FX_BASE`).
+pub const ROUTE_FX_BASE: usize = 1000;
+
+/// Etiqueta legible de un destino de ruteo.
+pub fn route_dest_label(id: usize, is_master: bool, track_names: &[String]) -> String {
+    if is_master {
+        return "Out 1/2".to_string();
+    }
+    if id == 0 {
+        return "Master".to_string();
+    }
+    if id >= ROUTE_FX_BASE {
+        return format!("FX {}", id - ROUTE_FX_BASE + 1);
+    }
+    track_names
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| format!("Track {}", id))
+}
+
+/// Opciones del selector de salida para `target`, en el orden de Bitwig:
+/// Master, retornos FX y luego el resto de pistas (sin la propia).
+pub fn route_options(app: &crate::app::AppState, target: StripTarget) -> Vec<(usize, String)> {
+    if target == StripTarget::Master {
+        return vec![(0, "Out 1/2".to_string())];
+    }
+    let mut out = vec![(0, "Master".to_string())];
+    let fx_count = app.fx_tracks.len().max(1);
+    if !matches!(target, StripTarget::Fx(_)) {
+        for n in 0..fx_count {
+            out.push((ROUTE_FX_BASE + n, format!("FX {}", n + 1)));
+        }
+    }
+    let (tracks, own): (&Vec<Track>, Option<usize>) = match target {
+        StripTarget::Live(idx) => (&app.live_tracks, Some(idx + 1)),
+        StripTarget::Studio(idx) => (&app.studio_tracks, Some(idx)),
+        _ => (app.tracks(), None),
+    };
+    for (i, t) in tracks.iter().enumerate().skip(1) {
+        if Some(i) == own || t.is_master {
+            continue;
+        }
+        out.push((i, t.name.clone()));
+    }
+    out
+}
+
 // =========================================================================
 // VU METER VERTICAL (renderizado directo, sin relayout)
 // =========================================================================
@@ -2066,14 +2248,14 @@ pub const VU_WIDTH: f32 = 14.0;
 /// 84px calibrado para dar 12px por cada una de las 7 marcas de dB (0..∞).
 pub const VU_HEIGHT: f32 = 84.0;
 
-/// Color del relleno según tramo: verde -> ámbar -> rojo de clip.
+/// Color del relleno según tramo: verde -> verde-amarillo -> rojo de clip.
 pub fn vu_fill_color(level: f32) -> Hsla {
     if level > 0.9 {
-        rgb(0xFF3C3C).into()
+        rgb(VU_CLIP_RED).into()
     } else if level > 0.75 {
-        rgb(0xFFC800).into()
+        rgb(0xC8E62C).into()
     } else {
-        rgb(0x00FF64).into()
+        rgb(0x2CE64B).into()
     }
 }
 
@@ -2100,6 +2282,13 @@ pub fn smooth_peak(previous: f32, target: f32) -> f32 {
 ///
 /// Ni el `div` ni el `canvas` cambian de tamaño o hijos con `level`: todo el
 /// movimiento ocurre dentro del callback de pintado.
+///
+/// Diseño Bitwig 5.1.7: dos barras estéreo L/R (5.5px) separadas por un
+/// divisor de 1px, tramos segmentados verde (`#2CE64B`, hasta 0.75 = 0 dB),
+/// verde-amarillo (`#C8E62C`, 0.75..0.90) y rojo de clip (`#FF3B30`,
+/// 0.90..1.0), más la marca ámbar de pico. Todo queda dentro de un
+/// contenedor `overflow_hidden`, y cada quad se recorta a los bounds del
+/// canvas, así la señal nunca desborda el margen inferior de la tarjeta.
 pub fn vertical_vu_meter(level: f32) -> AnyElement {
     let level = if level.is_finite() {
         level.clamp(0.0, 1.0)
@@ -2109,50 +2298,67 @@ pub fn vertical_vu_meter(level: f32) -> AnyElement {
     div()
         .w(px(VU_WIDTH))
         .h_full()
+        .min_h_0()
         .flex_shrink_0()
+        .overflow_hidden()
         .child(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    // Fondo: siempre el mismo quad, mismo costo.
-                    window.paint_quad(PaintQuad {
-                        bounds,
-                        background: rgb(0x0A0A0A).into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
+                    let quad = |window: &mut Window, x: f32, y: f32, w: f32, h: f32, col: u32| {
+                        if w <= 0.0 || h <= 0.0 {
+                            return;
+                        }
+                        window.paint_quad(PaintQuad {
+                            bounds: Bounds::new(point(px(x), px(y)), size(px(w), px(h))),
+                            background: rgb(col).into(),
+                            border_color: Hsla::default(),
+                            corner_radii: gpui_kit::Corners::default(),
+                            border_widths: gpui_kit::Edges::default(),
+                            border_style: BorderStyle::default(),
+                        });
+                    };
+                    let ox = bounds.origin.x.as_f32();
+                    let oy = bounds.origin.y.as_f32();
+                    let fw = bounds.size.width.as_f32();
+                    let fh = bounds.size.height.as_f32();
+                    if fw <= 2.0 || fh <= 2.0 {
+                        return;
+                    }
+                    // Fondo empotrado: siempre el mismo quad, mismo costo.
+                    quad(window, ox, oy, fw, fh, 0x0A0A0B);
+                    let bar_w = ((fw - 1.0) / 2.0).max(1.0);
+                    // Divisor central L/R.
+                    quad(window, ox + bar_w, oy, 1.0, fh, 0x1E2024);
+                    // Marca sutil de 0 dB (0.75) en el pozo.
+                    let unity_y = oy + fh * (1.0 - 0.75);
+                    quad(window, ox, unity_y, fw, 1.0, 0x2A2D33);
                     if level <= 0.001 {
                         return;
                     }
-                    let fw = bounds.size.width;
-                    let fh = bounds.size.height;
-                    let sig_h = fh * level;
-                    // Relleno desde abajo: un solo quad por frame.
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
-                            point(bounds.origin.x, bounds.origin.y + fh - sig_h),
-                            size(fw, sig_h),
-                        ),
-                        background: vu_fill_color(level).into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
-                    // Filo superior brillante: marca el pico instantáneo.
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
-                            point(bounds.origin.x, bounds.origin.y + fh - sig_h),
-                            size(fw, px(2.0)),
-                        ),
-                        background: rgb(0xFFFFFF).into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
+                    // Leve desfasaje R para que el estéreo se lea vivo sin
+                    // un segundo pico del motor (señal mono-sumada).
+                    let levels = [level, (level * 0.97).min(1.0)];
+                    let zones: [(f32, f32, u32); 3] = [
+                        (0.0, 0.75, 0x2CE64B),
+                        (0.75, 0.90, 0xC8E62C),
+                        (0.90, 1.0, VU_CLIP_RED),
+                    ];
+                    for (ch, lv) in levels.iter().enumerate() {
+                        let bx = ox + ch as f32 * (bar_w + 1.0);
+                        for (lo, hi, col) in zones {
+                            if *lv <= lo {
+                                break;
+                            }
+                            let top = lv.min(hi);
+                            let y0 = oy + fh * (1.0 - top);
+                            let y1 = oy + fh * (1.0 - lo);
+                            quad(window, bx, y0, bar_w, (y1 - y0).max(0.0), col);
+                        }
+                        // Marca de pico ámbar, recortada dentro del pozo.
+                        let peak_y = (oy + fh * (1.0 - lv)).clamp(oy, oy + fh - 1.5);
+                        quad(window, bx, peak_y, bar_w, 1.5, VU_PEAK_AMBER);
+                    }
                 },
             )
             .w(px(VU_WIDTH))

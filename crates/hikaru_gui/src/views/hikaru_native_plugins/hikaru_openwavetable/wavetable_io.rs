@@ -391,7 +391,7 @@ pub fn load_wavetable(path: &Path, max_frames: usize) -> Result<Wavetable, Wavet
         .map(|stem| stem.to_string_lossy().to_string())
         .unwrap_or_else(|| "Wavetable".to_string());
 
-    let mut reader = hound::WavReader::open(path).map_err(|error| WavetableError::Open {
+    let reader = hound::WavReader::open(path).map_err(|error| WavetableError::Open {
         path: path.to_path_buf(),
         source: error.to_string(),
     })?;

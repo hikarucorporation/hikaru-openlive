@@ -9,8 +9,11 @@ use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled 
 use gpui_kit::*;
 use gpui_kit::base::{Button as BaseButton, NumberInput as BaseNumberInput};
 
-use crate::app::{format_bpm, format_sig, state, step_sig, AppMode, HikaruApp, OpenLiveView};
+use crate::app::{
+    format_bpm, format_sig, set_footer_cues, state, step_sig, AppMode, HikaruApp, OpenLiveView,
+};
 use crate::audio_proxy::{AudioClipData, GuiCommand};
+use crate::theme;
 use crate::ui::text_style_scope::TextStyleScope;
 use crate::views::branding::energy_core_logo_img;
 use crate::views::playlist::ClipType;
@@ -71,14 +74,21 @@ fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement
         // con el acento cuando el Panel de Control ya está abierto, para que el
         // estado del logo y el del panel no puedan contradecirse.
         .bg(if control_panel_open {
-            rgb(0x4A4A4A)
+            rgb(0x3E4148)
         } else {
-            rgb(0x3D3D3D)
+            rgb(0x323438)
         })
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x4A4A4A)))
+        .hover(|style| style.bg(rgb(0x42454D)))
+        .on_mouse_move(|e, _, cx| {
+            set_footer_cues(
+                cx,
+                Some(e.modifiers),
+                &[("CLICK:", "Open Studio Dashboard & Audio Engine")],
+            );
+        })
         .on_click(move |_, _, cx| {
             // Abre/cierra el Panel de Control (Hikaru Dashboard).
             let st = state(cx);
@@ -99,16 +109,32 @@ fn energy_core_transport_button(cx: &mut Context<HikaruApp>) -> impl IntoElement
         .test_support()
 }
 
-fn format_timecode(bars: f32, bpm: f64) -> String {
-    let beats = (bars - 1.0).max(0.0) * 4.0;
-    let total_seconds = (beats / bpm as f32) * 60.0;
+fn format_timecode(bars: f32, bpm: f64, beats_per_bar: u32) -> String {
+    let bpb = beats_per_bar.max(1) as f32;
+    let beats = (bars - 1.0).max(0.0) * bpb;
+    let total_seconds = (beats / (bpm.max(1.0) as f32)) * 60.0;
 
-    let hours = (total_seconds / 3600.0) as u32;
-    let minutes = ((total_seconds % 3600.0) / 60.0) as u32;
+    let minutes = (total_seconds / 60.0) as u32;
     let seconds = (total_seconds % 60.0) as u32;
     let millis = (total_seconds.fract() * 1000.0) as u32;
 
-    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+    format!("{}:{:02}.{:03}", minutes, seconds, millis)
+}
+
+/// Posición musical estilo Bitwig Studio 5.1.7 (`compás.tiempo.semicorchea.centésimas`,
+/// ej. `1.1.1.00` o `22.3.3.67`).
+fn format_musical_position(sample_count: u64, sample_rate: f64, bpm: f64, beats_per_bar: u32) -> String {
+    let sr = sample_rate.max(1.0);
+    let bpb = beats_per_bar.max(1) as u64;
+    let samples_per_beat = (sr * 60.0) / bpm.max(1.0);
+    let total_beats = sample_count as f64 / samples_per_beat.max(1.0);
+    let whole_beats = total_beats.floor() as u64;
+    let bar = 1 + (whole_beats / bpb);
+    let beat = 1 + (whole_beats % bpb);
+    let sub_beat = total_beats.fract() * 4.0;
+    let sixteenth = 1 + (sub_beat.floor() as u64).min(3);
+    let ticks_pct = ((sub_beat.fract() * 100.0).floor() as u64).min(99);
+    format!("{}.{}.{}.{:02}", bar, beat, sixteenth, ticks_pct)
 }
 
 /// Botón de paso (− / +) de la caja de BPM.
@@ -172,15 +198,16 @@ fn sig_step_button(id: &'static str, glyph: &'static str, delta: i32) -> impl In
 /// 6/8, 7/8, 12/8.
 fn render_sig_stepper(sig_input: &Entity<InputState>) -> impl IntoElement {
     TextStyleScope::text_color(
-        rgb(0xE0E0E0),
+        rgb(0xE6E8EC),
         div()
             .flex()
             .h(px(24.0))
-            .w(px(96.0))
-            .rounded(px(3.0))
+            .w(px(88.0))
+            .rounded(px(2.0))
             .border_1()
-            .border_color(rgb(0x4D4D4D))
-            .bg(rgb(0x2E2E2E))
+            .border_color(rgb(0x2F323A))
+            .bg(rgb(0x16171A))
+            .font_family("monospace")
             .overflow_hidden()
             .child(sig_step_button("sig_step_dec", "−", -1))
             .child(
@@ -200,15 +227,16 @@ fn render_sig_stepper(sig_input: &Entity<InputState>) -> impl IntoElement {
 
 fn render_bpm_spinbox(bpm_input: &Entity<InputState>) -> impl IntoElement {
     TextStyleScope::text_color(
-        rgb(0xE0E0E0),
+        rgb(0xE6E8EC),
         div()
             .flex()
             .h(px(24.0))
-            .w(px(96.0))
-            .rounded(px(3.0))
+            .w(px(94.0))
+            .rounded(px(2.0))
             .border_1()
-            .border_color(rgb(0x4D4D4D))
-            .bg(rgb(0x2E2E2E))
+            .border_color(rgb(0x2F323A))
+            .bg(rgb(0x16171A))
+            .font_family("monospace")
             .overflow_hidden()
             .child(
                 BaseNumberInput::new(bpm_input)
@@ -235,6 +263,7 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
     let transport = &app.transport;
     let is_playing = transport.playback_state == TransportPlaybackState::Playing;
     let is_recording = app.is_recording;
+    let is_looping = app.is_looping;
     let is_live = app.mode == AppMode::OpenLive;
     let is_studio = app.mode == AppMode::OpenStudio;
     // `ARRANGER (F9)` es contextual como `Tab`/`F9`: en OpenLive indica el
@@ -244,15 +273,16 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
     let show_dsp_rack = app.show_dsp_rack;
     let show_explorer = app.show_explorer;
     let bpm = transport.bpm;
+    let sample_rate = transport.sample_rate.get() as f64;
+    let sample_count = transport.sample_count;
     let beats_per_bar = transport.beats_per_bar;
     let beat_division = transport.beat_division;
     let bpm_input = app.bpm_input.clone();
     let sig_input = app.sig_input.clone();
-    let samples_per_beat = (transport.sample_rate.get() as f64 * 60.0) / transport.bpm;
-    let samples_per_bar = samples_per_beat * transport.beats_per_bar as f64;
-    let current_bar = 1.0 + (transport.sample_count as f64 / samples_per_bar) as f32;
-    let audio_proxy = app.audio_proxy.clone();
-    drop(app);
+    let samples_per_beat = (sample_rate * 60.0) / bpm.max(1.0);
+    let samples_per_bar = samples_per_beat * beats_per_bar.max(1) as f64;
+    let current_bar = 1.0 + (sample_count as f64 / samples_per_bar.max(1.0)) as f32;
+    let _ = app;
 
     // La caja manda mientras el usuario escribe; el resto del tiempo refleja
     // `transport.bpm`, que es lo que consume el resto de la app.
@@ -285,17 +315,19 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
         }
     }
 
-    // Botonera principal de transporte: el logo de marca y luego
-    // exclusivamente Play/Pause (toggle), Stop y REC, con tamaño uniforme y
-    // spacing compacto:
-    //   [logo] [▶/⏸] [■ STOP] [● REC] | timecode | modos | BPM | compás | vistas
+    let musical_pos = format_musical_position(sample_count, sample_rate, bpm, beats_per_bar);
+    let timecode_str = format_timecode(current_bar, bpm, beats_per_bar);
+    let bpm_lcd = format!("{bpm:.2}");
+
+    // Botonera principal de transporte estilo Bitwig Studio 5.1.7:
+    //   [logo] [▶/▮▮] [■] [●] [⟳] | [LCD 150.00 / 4/4 | 1.1.1.00 / 0:00.000] | modos | BPM | SIG | vistas
     h_flex()
         .id("header_bar")
         .test_support()
         .h(px(40.0))
-        .bg(rgb(0x2A2A2A))
+        .bg(rgb(0x1C1D20))
         .border_b_1()
-        .border_color(rgb(0x3D3D3D))
+        .border_color(rgb(0x121212))
         .items_center()
         .px(px(8.0))
         .gap(px(6.0))
@@ -313,224 +345,487 @@ pub fn render(window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElem
             // (El `text_size` del label lo fija el tema del Button y los
             // iconos SVG Lucide salen como bloques opacos en este renderer,
             // así que el glifo geométrico es la vía de escalado disponible.)
-            Button::new("transport_play_pause").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label(if is_playing { "▮▮" } else { "▶" })
-                .compact()
-                .w(px(TRANSPORT_BTN_W))
-                .bg(rgb(0x3D3D3D))
-                .text_color(if is_playing {
-                    rgb(0x4CAF50)
-                } else {
-                    rgb(0xE0E0E0)
-                })
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        if state.transport.playback_state == TransportPlaybackState::Playing {
-                            // Pausa en la posición actual del playhead.
-                            state.transport.playback_state = TransportPlaybackState::Paused;
-                            state.audio_proxy.send(GuiCommand::Pause);
-                            return;
-                        }
-                        state.transport.playback_state = TransportPlaybackState::Playing;
-                        state.audio_proxy.send(GuiCommand::StopPreview);
-                        state.audio_proxy.send(GuiCommand::SetBpm(state.transport.bpm as f32));
-
-                        if state.mode == AppMode::OpenStudio {
-                            let sr = state.transport.sample_rate.get().max(1.0);
-                            let clips_to_sync: Vec<AudioClipData> = state
-                                .playlist_state
-                                .clips
-                                .iter()
-                                .filter_map(|(track_id, clip)| {
-                                    if let ClipType::Audio {
-                                        sample_path,
-                                        sample_offset_ticks,
-                                        ..
-                                    } = &clip.clip_type
-                                    {
-                                        let clip_length_frames =
-                                            state.transport.clip_length_frames(clip.duration_ticks);
-                                        let duration_secs = clip_length_frames as f32 / sr;
-                                        Some(AudioClipData {
-                                            clip_id: clip.id,
-                                            path: sample_path.clone(),
-                                            start_secs: state.transport.ticks_to_samples(clip.start_tick)
-                                                as f32
-                                                / sr,
-                                            duration_secs,
-                                            offset_secs: state
-                                                .transport
-                                                .ticks_to_samples(*sample_offset_ticks)
-                                                as f32
-                                                / sr,
-                                            track_index: *track_id,
-                                        })
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            state.audio_proxy.send(GuiCommand::SyncPlaylistClips { clips: clips_to_sync });
-                        } else {
-                            state.audio_proxy.send(GuiCommand::SetAppMode(false));
-                        }
-
-                        state.audio_proxy.send(GuiCommand::Seek {
-                            sample_count: state.transport.sample_count,
-                        });
-                        state.audio_proxy.send(GuiCommand::Play);
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_stop").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("■")
-                .compact()
-                .w(px(TRANSPORT_BTN_W))
-                .bg(rgb(0x3D3D3D))
-                .text_color(rgb(0xE0E0E0))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        state.transport.playback_state = TransportPlaybackState::Stopped;
-                        state.transport.sample_count = 0;
-                        state.audio_proxy.send(GuiCommand::Stop);
-                    });
-                }),
-        )
-        .child(
-            Button::new("transport_record").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("●")
-                .compact()
-                .w(px(TRANSPORT_BTN_W))
-                .bg(if is_recording {
-                    rgb(0x5A1A1A)
-                } else {
-                    rgb(0x3D3D3D)
-                })
-                .text_color(if is_recording {
-                    rgb(0xFF5252)
-                } else {
-                    rgb(0xE0E0E0)
-                })
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        state.is_recording = !state.is_recording;
-                        cx.notify();
-                    });
-                }),
-        )
-        .child(
             div()
-                .bg(rgb(0x0F1216))
-                .border_1()
-                .border_color(rgb(0x2D3741))
-                .rounded(px(4.0))
-                .px(px(8.0))
-                .py(px(5.0))
+                .flex()
+                .flex_none()
+                .on_mouse_move(move |e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
+                            if is_playing {
+                                "Pause Playback (Space)"
+                            } else {
+                                "Start Playback (Space)"
+                            },
+                        )],
+                    );
+                })
                 .child(
-                    Label::new(format_timecode(current_bar, bpm))
-                        .text_sm()
-                        .text_color(rgb(0x00DCFF)),
+                    Button::new("transport_play_pause")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label(if is_playing { "▮▮" } else { "▶" })
+                        .compact()
+                        .w(px(TRANSPORT_BTN_W))
+                        .bg(if is_playing {
+                            rgb(theme::BITWIG_ORANGE)
+                        } else {
+                            rgb(0x323438)
+                        })
+                        .text_color(if is_playing {
+                            rgb(0x121212)
+                        } else {
+                            rgb(0xE6E8EC)
+                        })
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, _| {
+                                if state.transport.playback_state == TransportPlaybackState::Playing
+                                {
+                                    // Pausa en la posición actual del playhead.
+                                    state.transport.playback_state =
+                                        TransportPlaybackState::Paused;
+                                    state.audio_proxy.send(GuiCommand::Pause);
+                                    return;
+                                }
+                                state.transport.playback_state = TransportPlaybackState::Playing;
+                                state.audio_proxy.send(GuiCommand::StopPreview);
+                                state
+                                    .audio_proxy
+                                    .send(GuiCommand::SetBpm(state.transport.bpm as f32));
+
+                                if state.mode == AppMode::OpenStudio {
+                                    let sr = state.transport.sample_rate.get().max(1.0);
+                                    let clips_to_sync: Vec<AudioClipData> = state
+                                        .playlist_state
+                                        .clips
+                                        .iter()
+                                        .filter_map(|(track_id, clip)| {
+                                            if let ClipType::Audio {
+                                                sample_path,
+                                                sample_offset_ticks,
+                                                ..
+                                            } = &clip.clip_type
+                                            {
+                                                let clip_length_frames = state
+                                                    .transport
+                                                    .clip_length_frames(clip.duration_ticks);
+                                                let duration_secs =
+                                                    clip_length_frames as f32 / sr;
+                                                Some(AudioClipData {
+                                                    clip_id: clip.id,
+                                                    path: sample_path.clone(),
+                                                    start_secs: state
+                                                        .transport
+                                                        .ticks_to_samples(clip.start_tick)
+                                                        as f32
+                                                        / sr,
+                                                    duration_secs,
+                                                    offset_secs: state
+                                                        .transport
+                                                        .ticks_to_samples(*sample_offset_ticks)
+                                                        as f32
+                                                        / sr,
+                                                    track_index: *track_id,
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+
+                                    state
+                                        .audio_proxy
+                                        .send(GuiCommand::SyncPlaylistClips { clips: clips_to_sync });
+                                } else {
+                                    state.audio_proxy.send(GuiCommand::SetAppMode(false));
+                                }
+
+                                state.audio_proxy.send(GuiCommand::Seek {
+                                    sample_count: state.transport.sample_count,
+                                });
+                                state.audio_proxy.send(GuiCommand::Play);
+                            });
+                        }),
                 ),
         )
         .child(
-            Button::new("mode_openlive").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("OPENLIVE")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(if is_live {
-                    rgb(0x00BCD4)
-                } else {
-                    rgb(0xE0E0E0)
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Stop Playback & Return to Start")],
+                    );
                 })
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        if state.mode != AppMode::OpenLive {
-                            state.mode = AppMode::OpenLive;
-                            state.transport.playback_state = TransportPlaybackState::Stopped;
-                            state.transport.sample_count = 0;
-                            state.audio_proxy.send(GuiCommand::Stop);
-                            state.audio_proxy.send(GuiCommand::SetAppMode(false));
-                        }
-                    });
-                }),
+                .child(
+                    Button::new("transport_stop")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("■")
+                        .compact()
+                        .w(px(TRANSPORT_BTN_W))
+                        .bg(rgb(0x323438))
+                        .text_color(rgb(0xE6E8EC))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, _| {
+                                state.transport.playback_state = TransportPlaybackState::Stopped;
+                                state.transport.sample_count = 0;
+                                state.audio_proxy.send(GuiCommand::Stop);
+                            });
+                        }),
+                ),
         )
         .child(
-            Button::new("mode_openstudio").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("OPENSTUDIO")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .text_color(if is_studio {
-                    rgb(0xFF9100)
-                } else {
-                    rgb(0xE0E0E0)
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(move |e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
+                            if is_recording {
+                                "Disarm Global Record"
+                            } else {
+                                "Enable Arranger Global Record"
+                            },
+                        )],
+                    );
                 })
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, _| {
-                        if state.mode != AppMode::OpenStudio {
-                            state.mode = AppMode::OpenStudio;
-                            state.transport.playback_state = TransportPlaybackState::Stopped;
-                            state.transport.sample_count = 0;
-                            state.audio_proxy.send(GuiCommand::Stop);
-                            state.audio_proxy.send(GuiCommand::SetAppMode(true));
-                        }
-                    });
-                }),
+                .child(
+                    Button::new("transport_record")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("●")
+                        .compact()
+                        .w(px(TRANSPORT_BTN_W))
+                        .bg(if is_recording {
+                            rgb(0xD93829)
+                        } else {
+                            rgb(0x323438)
+                        })
+                        .text_color(if is_recording {
+                            rgb(0x121212)
+                        } else {
+                            rgb(0xE6E8EC)
+                        })
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.is_recording = !state.is_recording;
+                                cx.notify();
+                            });
+                        }),
+                ),
         )
-        .child(Label::new("BPM").text_xs().text_color(rgb(0xE0E0E0)))
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(move |e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[(
+                            "CLICK:",
+                            if is_looping {
+                                "Disable Arranger Loop"
+                            } else {
+                                "Enable Arranger Loop"
+                            },
+                        )],
+                    );
+                })
+                .child(
+                    Button::new("transport_loop")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("⟳")
+                        .compact()
+                        .w(px(TRANSPORT_BTN_W))
+                        .bg(if is_looping {
+                            rgb(theme::BITWIG_ORANGE)
+                        } else {
+                            rgb(0x323438)
+                        })
+                        .text_color(if is_looping {
+                            rgb(0x121212)
+                        } else {
+                            rgb(0xE6E8EC)
+                        })
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.is_looping = !state.is_looping;
+                                cx.notify();
+                            });
+                        }),
+                ),
+        )
+        // Módulo LCD empotrado estilo Bitwig 5.1.7 (`#121212`): Tempo/Métrica | Compás/Timecode
+        .child(
+            h_flex()
+                .id("transport_lcd_display")
+                .h(px(TRANSPORT_BTN_H))
+                .bg(rgb(0x121212))
+                .border_1()
+                .border_color(rgb(0x2B2E36))
+                .rounded(px(2.0))
+                .px(px(8.0))
+                .gap(px(8.0))
+                .items_center()
+                .font_family("monospace")
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[
+                            ("LCD:", "Transport Musical Position & Timecode"),
+                            ("BPM / SIG:", "Edit Tempo or Time Signature"),
+                        ],
+                    );
+                })
+                .child(
+                    v_flex()
+                        .justify_center()
+                        .items_end()
+                        .gap(px(1.0))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0xEAECEF))
+                                .child(bpm_lcd),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(9.5))
+                                .text_color(rgb(0x8F969E))
+                                .child(sig_text),
+                        ),
+                )
+                .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(0x262930)))
+                .child(
+                    v_flex()
+                        .justify_center()
+                        .items_end()
+                        .gap(px(1.0))
+                        .min_w(px(68.0))
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0x5CC8FF))
+                                .child(musical_pos),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(9.5))
+                                .text_color(rgb(0x7FA8C4))
+                                .child(timecode_str),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Switch to OpenLive Clip Launcher Workspace")],
+                    );
+                })
+                .child(
+                    Button::new("mode_openlive")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("OPENLIVE")
+                        .compact()
+                        .bg(if is_live {
+                            rgb(0x2B231D)
+                        } else {
+                            rgb(0x2A2C30)
+                        })
+                        .text_color(if is_live {
+                            rgb(theme::BITWIG_ORANGE)
+                        } else {
+                            rgb(0xC2C6CE)
+                        })
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, _| {
+                                if state.mode != AppMode::OpenLive {
+                                    state.mode = AppMode::OpenLive;
+                                    state.transport.playback_state =
+                                        TransportPlaybackState::Stopped;
+                                    state.transport.sample_count = 0;
+                                    state.audio_proxy.send(GuiCommand::Stop);
+                                    state.audio_proxy.send(GuiCommand::SetAppMode(false));
+                                }
+                            });
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Switch to OpenStudio Arranger Timeline Workspace")],
+                    );
+                })
+                .child(
+                    Button::new("mode_openstudio")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("OPENSTUDIO")
+                        .compact()
+                        .bg(if is_studio {
+                            rgb(0x2B231D)
+                        } else {
+                            rgb(0x2A2C30)
+                        })
+                        .text_color(if is_studio {
+                            rgb(theme::BITWIG_ORANGE)
+                        } else {
+                            rgb(0xC2C6CE)
+                        })
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, _| {
+                                if state.mode != AppMode::OpenStudio {
+                                    state.mode = AppMode::OpenStudio;
+                                    state.transport.playback_state =
+                                        TransportPlaybackState::Stopped;
+                                    state.transport.sample_count = 0;
+                                    state.audio_proxy.send(GuiCommand::Stop);
+                                    state.audio_proxy.send(GuiCommand::SetAppMode(true));
+                                }
+                            });
+                        }),
+                ),
+        )
+        .child(
+            Label::new("BPM")
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x8F969E)),
+        )
         .child(render_bpm_spinbox(&bpm_input))
-        .child(Label::new("SIG").text_xs().text_color(rgb(0xE0E0E0)))
+        .child(
+            Label::new("SIG")
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x8F969E)),
+        )
         .child(render_sig_stepper(&sig_input))
         .child(div().flex_1())
         .child(
-            Button::new("toggle_arranger").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("ARRANGER (F9)")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .when(show_arranger, |this| this.text_color(rgb(0x00BCD4)))
-                .when(!show_arranger, |this| this.text_color(rgb(0xE0E0E0)))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        crate::app::toggle_central_view(state);
-                        cx.notify();
-                    });
-                }),
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Toggle Arranger / Mix Console View (Tab / F9)")],
+                    );
+                })
+                .child(
+                    Button::new("toggle_arranger")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("ARRANGER (F9)")
+                        .compact()
+                        .bg(if show_arranger {
+                            rgb(0x2B231D)
+                        } else {
+                            rgb(0x2A2C30)
+                        })
+                        .when(show_arranger, |this| {
+                            this.text_color(rgb(theme::BITWIG_ORANGE))
+                        })
+                        .when(!show_arranger, |this| this.text_color(rgb(0xC2C6CE)))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                crate::app::toggle_central_view(state);
+                                cx.notify();
+                            });
+                        }),
+                ),
         )
         .child(
-            Button::new("toggle_dsp_rack").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("DSP RACK (F10)")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .when(show_dsp_rack, |this| this.text_color(rgb(0x00BCD4)))
-                .when(!show_dsp_rack, |this| this.text_color(rgb(0xE0E0E0)))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        state.show_dsp_rack = !state.show_dsp_rack;
-                        cx.notify();
-                    });
-                }),
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Toggle Device Chain / DSP Rack Panel (F10)")],
+                    );
+                })
+                .child(
+                    Button::new("toggle_dsp_rack")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("DSP RACK (F10)")
+                        .compact()
+                        .bg(if show_dsp_rack {
+                            rgb(0x2B231D)
+                        } else {
+                            rgb(0x2A2C30)
+                        })
+                        .when(show_dsp_rack, |this| {
+                            this.text_color(rgb(theme::BITWIG_ORANGE))
+                        })
+                        .when(!show_dsp_rack, |this| this.text_color(rgb(0xC2C6CE)))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.show_dsp_rack = !state.show_dsp_rack;
+                                cx.notify();
+                            });
+                        }),
+                ),
         )
         .child(
-            Button::new("toggle_explorer").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("EXPLORER (F11)")
-                .compact()
-                .bg(rgb(0x3D3D3D))
-                .when(show_explorer, |this| this.text_color(rgb(0x00BCD4)))
-                .when(!show_explorer, |this| this.text_color(rgb(0xE0E0E0)))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        state.show_explorer = !state.show_explorer;
-                        cx.notify();
-                    });
-                }),
+            div()
+                .flex()
+                .flex_none()
+                .on_mouse_move(|e, _, cx| {
+                    set_footer_cues(
+                        cx,
+                        Some(e.modifiers),
+                        &[("CLICK:", "Toggle Browser / Sample Explorer Panel (F11)")],
+                    );
+                })
+                .child(
+                    Button::new("toggle_explorer")
+                        .rounded(gpui_kit::component::button::ButtonRounded::None)
+                        .label("EXPLORER (F11)")
+                        .compact()
+                        .bg(if show_explorer {
+                            rgb(0x2B231D)
+                        } else {
+                            rgb(0x2A2C30)
+                        })
+                        .when(show_explorer, |this| {
+                            this.text_color(rgb(theme::BITWIG_ORANGE))
+                        })
+                        .when(!show_explorer, |this| this.text_color(rgb(0xC2C6CE)))
+                        .on_click(move |_, _, cx| {
+                            let st = state(cx);
+                            st.update(cx, |state, cx| {
+                                state.show_explorer = !state.show_explorer;
+                                cx.notify();
+                            });
+                        }),
+                ),
         )
 }

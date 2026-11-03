@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::Size;
 use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
 use crate::app::{state, AppMode, HikaruApp, OpenLiveView, update_state};

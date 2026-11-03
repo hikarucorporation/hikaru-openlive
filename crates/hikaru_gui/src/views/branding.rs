@@ -13,7 +13,7 @@
 
 use gpui_kit::{
     div, img, px, AnyElement, IntoElement as _, InteractiveElement as _, ObjectFit, RenderImage,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, TestSupportExt as _,
+    Styled as _, StyledImage as _, TestSupportExt as _,
 };
 use image::{Rgba, RgbaImage};
 

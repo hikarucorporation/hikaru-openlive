@@ -1,8 +1,7 @@
 use gpui_kit::component::*;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
+use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
 use crate::app::{state, HikaruApp};
@@ -56,12 +55,12 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let device = st.selected_device.clone();
     let sample_rate = st.sample_rate;
     let buffer_size = st.buffer_size;
-    let devices = st.available_devices.clone();
+    let _devices = st.available_devices.clone();
     // El desplazamiento del arrastre de la ventana.
     let drag = app.modal_drags.get(ModalId::AudioSettings);
     let offset = drag.offset();
     let dragging = drag.is_dragging();
-    drop(app);
+    let _ = app;
 
     // La posición de la ventana: la base más el desplazamiento del arrastre.
     let (left, top) = modal::modal_position(BASE_LEFT, BASE_TOP, offset);

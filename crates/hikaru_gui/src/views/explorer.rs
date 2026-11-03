@@ -246,15 +246,15 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let current_path = ex.current_path.clone();
     let path_input = ex.path_input.clone();
     let selected_file = ex.selected_file.clone();
-    let preview_volume = ex.preview_volume;
+    let _preview_volume = ex.preview_volume;
     let preview_position = ex.preview_position;
     let is_playing = ex.is_playing_preview;
     let sample_bpm = ex.sample_bpm;
     let is_synced = ex.is_synced;
     let cached_waveform = ex.cached_waveform.clone();
-    let audio_proxy = app.audio_proxy.clone();
+    let _audio_proxy = app.audio_proxy.clone();
     let project_bpm = app.transport.bpm as f32;
-    drop(app);
+    let _ = app;
 
     let mut entries: Vec<(String, PathBuf, bool)> = Vec::new();
     if let Ok(rd) = fs::read_dir(&current_path) {

@@ -22,7 +22,7 @@ use gpui_kit::component::*;
 use gpui_kit::component::button::{Button, ButtonRounded};
 use gpui_kit::component::label::Label;
 use gpui_kit::prelude::{
-    FluentBuilder as _, InteractiveElement as _, StatefulInteractiveElement as _, Styled as _,
+    FluentBuilder as _, InteractiveElement as _, Styled as _,
 };
 use gpui_kit::*;
 
@@ -711,7 +711,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .into_any_element();
     };
 
-    let (tab, params, target, snap) = (
+    let (_tab, _params, target, _snap) = (
         ce.tab,
         ce.params,
         ce.target,
@@ -747,7 +747,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
 /// Barra superior del Clip Editor: identidad del clip a la izquierda y, a la
 /// derecha y en este orden, modos de edición, Loop, Snap y zoom.
 fn clip_topbar(
-    cx: &mut Context<HikaruApp>,
+    _cx: &mut Context<HikaruApp>,
     clip: &ClipEditorClip,
     ce: &ClipEditorState,
     target: Option<ClipEditorTarget>,
@@ -936,6 +936,7 @@ fn clip_topbar(
 }
 
 /// Ajusta el parámetro identificado por `label` un paso.
+#[allow(dead_code)]
 fn nudge_param(cx: &mut App, label: &'static str, up: bool) {
     state(cx).update(cx, |s, cx| {
         let p = s.clip_editor.params;
@@ -967,6 +968,7 @@ fn nudge_param(cx: &mut App, label: &'static str, up: bool) {
     });
 }
 
+#[allow(dead_code)]
 fn step_for(label: &str) -> f32 {
     match label {
         "Gain" => 0.5,
@@ -982,14 +984,14 @@ fn step_for(label: &str) -> f32 {
 /// Visualizador: regla de compases + waveform + región de loop, con zoom y
 /// scroll propios (independientes del zoom de la Playlist).
 fn waveform_viewer(
-    cx: &mut Context<HikaruApp>,
+    _cx: &mut Context<HikaruApp>,
     clip: &ClipEditorClip,
     ce: &ClipEditorState,
     bpm: f32,
     zoom_x: f32,
 ) -> AnyElement {
     let duration = clip.duration_secs;
-    let start_secs = clip.start_secs;
+    let _start_secs = clip.start_secs;
     let scroll = clamp_scroll(ce.scroll_secs, duration, visible_secs(zoom_x, 800.0));
     // Fuente de picos: la de detalle si tiene señal, si no la del clip (ver
     // `best_peaks`). Éste era el motivo del panel negro.
@@ -1041,7 +1043,7 @@ fn waveform_viewer(
     // Números de compás: calculados acá (no en el closure de pintado).
     let bar_number_labels: Vec<AnyElement> = ruler_labels(scroll, visible_secs(zoom_x, 800.0), bpm, zoom_x)
         .into_iter()
-        .filter(|(text, x, _)| *x > -24.0 && *x < 820.0)
+        .filter(|(_text, x, _)| *x > -24.0 && *x < 820.0)
         .map(|(text, x, is_bar)| {
             Label::new(text.clone())
                 .text_xs()

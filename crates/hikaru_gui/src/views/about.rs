@@ -1,7 +1,6 @@
 use gpui_kit::component::button::Button;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{InteractiveElement as _, Styled as _};
 use gpui_kit::*;
 
@@ -27,7 +26,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
     let drag = app.modal_drags.get(ModalId::About);
     let offset = drag.offset();
     let dragging = drag.is_dragging();
-    drop(app);
+    let _ = app;
 
     let title = match mode {
         AppMode::OpenLive => "Hikaru OpenLive",
