@@ -1065,11 +1065,13 @@ fn render_strip_sends(track_idx: usize, send_amount: f32) -> AnyElement {
                                 border_style: BorderStyle::default(),
                             });
 
-                            // 2. Aguja indicadora (a las 7 en punto por defecto: -135 deg)
-                            let angle = -2.356 + s_val * 4.712;
+                            // 2. Aguja indicadora (a las 7:30 en punto por defecto: -135 deg)
+                            let s_norm = if s_val.is_finite() { s_val.clamp(0.0, 1.0) } else { 0.0 };
+                            let deg = -135.0 + s_norm * 270.0;
+                            let rad = deg.to_radians();
                             let p_len = 5.0;
-                            let nx = cx.as_f32() + angle.cos() * p_len;
-                            let ny = cy.as_f32() + angle.sin() * p_len;
+                            let nx = cx.as_f32() + rad.sin() * p_len;
+                            let ny = cy.as_f32() - rad.cos() * p_len;
 
                             let mut path = PathBuilder::stroke(px(1.5));
                             path.move_to(point(cx, cy));

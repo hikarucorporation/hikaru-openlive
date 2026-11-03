@@ -1868,6 +1868,27 @@ fn render_external_params(
         .into_any_element()
 }
 
+/// Ángulo relativo en grados respecto a las 12 en punto (0° arriba, horario positivo)
+/// para un knob con arco de barrido de 270°:
+/// - `0.0` (mínimo): `-135.0°` (inferior izquierda, posición 7:30)
+/// - `0.5` (centro / neutro): `0.0°` (arriba exacto, posición 12:00)
+/// - `1.0` (máximo): `+135.0°` (inferior derecha, posición 4:30)
+pub fn rotary_knob_angle_deg(normalized: f32) -> f32 {
+    let norm = if normalized.is_finite() {
+        normalized.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    -135.0 + norm * 270.0
+}
+
+/// Coordenadas de pantalla `(x, y)` a partir del centro `(cx, cy)`, radio `r`
+/// y ángulo en grados `deg` (0° = 12 en punto / arriba, horario positivo).
+pub fn rotary_knob_point(cx: f32, cy: f32, r: f32, deg: f32) -> (f32, f32) {
+    let rad = deg.to_radians();
+    (cx + r * rad.sin(), cy - r * rad.cos())
+}
+
 /// Una fila de parámetro: knob rotatorio con aguja estilo Bitwig, nombre y valor,
 /// stepper −, barra horizontal arrastrable y stepper +.
 fn external_param_row(
@@ -1880,6 +1901,7 @@ fn external_param_row(
     let name = param.info.name.clone();
     let display = param.display();
     let default_val = param.info.default_value;
+    let is_bipolar = param.info.min < 0.0 && param.info.max > 0.0;
     let step = if param.info.is_discrete() {
         1.0 / param.info.step_count.max(1) as f32
     } else {
@@ -1940,30 +1962,86 @@ fn external_param_row(
                             let cx = bounds.origin.x + bounds.size.width / 2.0;
                             let cy = bounds.origin.y + bounds.size.height / 2.0;
                             let r = px(8.0);
+                            let cx_f = cx.as_f32();
+                            let cy_f = cy.as_f32();
 
-                            // Cuerpo circular
+                            // 1. Cuerpo circular base
                             window.paint_quad(PaintQuad {
                                 bounds: Bounds::new(point(cx - r, cy - r), size(r * 2.0, r * 2.0)),
-                                background: rgb(0x1B1B20).into(),
-                                border_color: rgb(0x353742).into(),
+                                background: rgb(0x181A20).into(),
+                                border_color: rgb(0x353844).into(),
                                 corner_radii: gpui_kit::Corners::all(r),
                                 border_widths: gpui_kit::Edges::all(px(1.0)),
                                 border_style: BorderStyle::default(),
                             });
 
-                            // Aguja indicadora estilo Bitwig (-135 deg a +135 deg)
-                            let norm = value.clamp(0.0, 1.0);
-                            let angle = -2.356 + norm * 4.712;
-                            let p_len = 6.0;
-                            let nx = cx.as_f32() + angle.cos() * p_len;
-                            let ny = cy.as_f32() + angle.sin() * p_len;
-
-                            let mut path = PathBuilder::stroke(px(1.5));
-                            path.move_to(point(cx, cy));
-                            path.line_to(point(px(nx), px(ny)));
-                            if let Ok(path) = path.build() {
-                                window.paint_path(path, rgb(crate::theme::DAW_ACCENT_ORANGE));
+                            // 2. Track de fondo (arco calibrado de 270°: de -135° a +135°)
+                            let arc_r = 6.6;
+                            let mut track_pb = PathBuilder::stroke(px(1.4));
+                            let track_steps = 18;
+                            for s in 0..=track_steps {
+                                let deg = -135.0 + (s as f32 / track_steps as f32) * 270.0;
+                                let (px_x, px_y) = rotary_knob_point(cx_f, cy_f, arc_r, deg);
+                                if s == 0 {
+                                    track_pb.move_to(point(px(px_x), px(px_y)));
+                                } else {
+                                    track_pb.line_to(point(px(px_x), px(px_y)));
+                                }
                             }
+                            if let Ok(track_path) = track_pb.build() {
+                                window.paint_path(track_path, rgb(0x282B34));
+                            }
+
+                            // 3. Arco de valor activo (sincronizado con el porcentaje real del plugin)
+                            let norm = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+                            let current_deg = rotary_knob_angle_deg(norm);
+                            let (arc_start, arc_end) = if is_bipolar {
+                                (0.0, current_deg)
+                            } else {
+                                (-135.0, current_deg)
+                            };
+
+                            let arc_span = arc_end - arc_start;
+                            if arc_span.abs() > 0.5 {
+                                let mut active_pb = PathBuilder::stroke(px(1.5));
+                                let steps = ((arc_span.abs() / 10.0).ceil() as usize).clamp(2, 27);
+                                for s in 0..=steps {
+                                    let deg = arc_start + (s as f32 / steps as f32) * arc_span;
+                                    let (px_x, px_y) = rotary_knob_point(cx_f, cy_f, arc_r, deg);
+                                    if s == 0 {
+                                        active_pb.move_to(point(px(px_x), px(px_y)));
+                                    } else {
+                                        active_pb.line_to(point(px(px_x), px(px_y)));
+                                    }
+                                }
+                                if let Ok(active_path) = active_pb.build() {
+                                    window.paint_path(active_path, rgb(crate::theme::DAW_ACCENT_ORANGE));
+                                }
+                            }
+
+                            // 4. Aguja indicadora estilo Bitwig
+                            let (nx_in, ny_in) = rotary_knob_point(cx_f, cy_f, 1.2, current_deg);
+                            let (nx_out, ny_out) = rotary_knob_point(cx_f, cy_f, 5.8, current_deg);
+                            let mut needle_pb = PathBuilder::stroke(px(1.5));
+                            needle_pb.move_to(point(px(nx_in), px(ny_in)));
+                            needle_pb.line_to(point(px(nx_out), px(ny_out)));
+                            if let Ok(needle_path) = needle_pb.build() {
+                                window.paint_path(needle_path, rgb(0xFFFFFF));
+                            }
+
+                            // 5. Tapa central / pivote
+                            let cap_r = px(1.8);
+                            window.paint_quad(PaintQuad {
+                                bounds: Bounds::new(
+                                    point(cx - cap_r, cy - cap_r),
+                                    size(cap_r * 2.0, cap_r * 2.0),
+                                ),
+                                background: rgb(0x1F222A).into(),
+                                border_color: rgb(0x3B3F4D).into(),
+                                corner_radii: gpui_kit::Corners::all(cap_r),
+                                border_widths: gpui_kit::Edges::all(px(0.5)),
+                                border_style: BorderStyle::default(),
+                            });
                         },
                     )
                     .size_full(),
@@ -2020,6 +2098,7 @@ fn external_param_row(
                 .flex()
                 .items_center()
                 .justify_center()
+                .cursor_ew_resize()
                 .child(
                     div()
                         .w(px(PARAM_BAR_WIDTH))
