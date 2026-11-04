@@ -2094,6 +2094,7 @@ pub struct Track {
     pub sends: Vec<SendConnection>,
     pub effects: Vec<DspSlot>,
     pub matrix_idx: Option<usize>,
+    pub width: f32,
 }
 
 impl Track {
@@ -2112,6 +2113,7 @@ impl Track {
             sends: Vec::new(),
             effects: Vec::new(),
             matrix_idx: None,
+            width: arranger_view::DEFAULT_TRACK_WIDTH,
         }
     }
 }

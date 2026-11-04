@@ -48,6 +48,10 @@ use crate::views::playlist::{self, ClipType};
 // GEOMETRÍA
 // =========================================================================
 
+pub const DEFAULT_TRACK_WIDTH: f32 = 132.0;
+pub const MIN_TRACK_WIDTH: f32 = 80.0;
+pub const MAX_TRACK_WIDTH: f32 = 340.0;
+
 const SCENE_LABEL_WIDTH: f32 = 116.0;
 /// Alto de pads y launchers: 22px para que 8 escenas + strip quepan en 720p.
 const PAD_HEIGHT: f32 = 22.0;
@@ -671,6 +675,7 @@ struct StripSnapshot {
     selected_slot: usize,
     is_selected_track: bool,
     target: StripTarget,
+    width: f32,
 }
 
 fn snapshot_master(
@@ -679,7 +684,7 @@ fn snapshot_master(
     selected_track: usize,
     selected_slot: usize,
 ) -> StripSnapshot {
-    let (name, volume, pan, muted, soloed, armed, devices, route_dest, sends) = match master {
+    let (name, volume, pan, muted, soloed, armed, devices, route_dest, sends, width) = match master {
         Some(t) => (
             t.name.clone(),
             t.volume,
@@ -696,6 +701,7 @@ fn snapshot_master(
                 .iter()
                 .map(|s| (mixer::route_dest_label(s.target_id, false, &[]), s.amount))
                 .collect(),
+            t.width.clamp(MIN_TRACK_WIDTH, MAX_TRACK_WIDTH),
         ),
         None => (
             "MASTER".to_string(),
@@ -707,6 +713,7 @@ fn snapshot_master(
             Vec::new(),
             mixer::route_dest_label(0, true, &[]),
             Vec::new(),
+            DEFAULT_TRACK_WIDTH,
         ),
     };
     StripSnapshot {
@@ -725,6 +732,7 @@ fn snapshot_master(
         selected_slot,
         is_selected_track: selected_track == 0,
         target: StripTarget::Master,
+        width,
     }
 }
 
@@ -733,7 +741,7 @@ fn snapshot_fx(
     vu: f32,
     selected_slot: usize,
 ) -> StripSnapshot {
-    let (name, volume, pan, muted, soloed, devices) = match fx {
+    let (name, volume, pan, muted, soloed, devices, width) = match fx {
         Some(t) => (
             t.name.clone(),
             t.volume,
@@ -744,6 +752,7 @@ fn snapshot_fx(
                 .iter()
                 .map(|s| (s.id, s.name.clone(), s.active))
                 .collect(),
+            t.width.clamp(MIN_TRACK_WIDTH, MAX_TRACK_WIDTH),
         ),
         None => (
             "FX 1".to_string(),
@@ -752,6 +761,7 @@ fn snapshot_fx(
             false,
             false,
             Vec::new(),
+            DEFAULT_TRACK_WIDTH,
         ),
     };
     StripSnapshot {
@@ -770,6 +780,7 @@ fn snapshot_fx(
         selected_slot,
         is_selected_track: false,
         target: StripTarget::Fx(0),
+        width,
     }
 }
 
@@ -2439,8 +2450,8 @@ fn track_header_cell(
                     .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
                         let start_x = event.position.x.as_f32();
                         update_state(cx, |s| {
-                            let curr_w = s.arranger_track_width;
-                            s.arranger_track_width_drag = Some((start_x, curr_w));
+                            let curr_w = s.track_width(tgt);
+                            s.arranger_track_width_drag = Some((tgt, start_x, curr_w));
                         });
                     }),
             )
@@ -2856,7 +2867,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         selected_slot,
         track_count,
         openstudio_view,
-        track_width,
+        live_widths,
     ) = {
         let app = state(cx).read(cx);
         let track_names: Vec<String> = app
@@ -2976,6 +2987,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     } else {
                         StripTarget::Studio(idx)
                     },
+                    width: t.width.clamp(MIN_TRACK_WIDTH, MAX_TRACK_WIDTH),
                 }
             })
             .collect();
@@ -3040,6 +3052,19 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
         let vu_live: Vec<f32> = (0..track_names.len())
             .map(|i| app.smoothed_track_peaks.get(i).copied().unwrap_or(0.0))
             .collect();
+        let live_widths: Vec<f32> = app
+            .matrix_state
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                app.live_tracks
+                    .get(idx + 1)
+                    .map(|t| t.width)
+                    .unwrap_or(DEFAULT_TRACK_WIDTH)
+                    .clamp(MIN_TRACK_WIDTH, MAX_TRACK_WIDTH)
+            })
+            .collect();
         (
             app.mode,
             track_names,
@@ -3062,7 +3087,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             app.selected_slot_index,
             app.matrix_state.tracks.len() + app.studio_tracks.len(),
             app.openstudio_view,
-            app.arranger_track_width.clamp(80.0, 340.0),
+            live_widths,
         )
     };
 
@@ -3229,6 +3254,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                     engine_handle.clone(),
                 ));
             }
+            let track_w = live_widths.get(idx).copied().unwrap_or(DEFAULT_TRACK_WIDTH);
             let snap = StripSnapshot {
                 name: name.clone(),
                 header: format!("TRK {:02}", idx + 1),
@@ -3245,10 +3271,11 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 selected_slot,
                 is_selected_track: selected_track == idx + 1,
                 target: StripTarget::Live(idx),
+                width: track_w,
             };
             let stripe_hex = theme::track_stripe_hex(idx);
             cols.push(track_column(
-                track_width,
+                track_w,
                 track_header_cell(
                     &format!("TRK {:02}", idx + 1),
                     name,
@@ -3274,7 +3301,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .map(|i| empty_scene_slot("fx", i))
             .collect();
         right_cols.push(track_column(
-            track_width,
+            fx_snap.width,
             track_header_cell("Return", "FX 1", HeaderCapKind::Fx, false, Some(StripTarget::Fx(0))),
             v_flex().w_full().flex_shrink_0().gap(px(PAD_GAP)).children(fx_empty_slots).into_any_element(),
             channel_strip(&fx_snap, "arr_fx_0", 0x88909A),
@@ -3288,7 +3315,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
             .map(|i| empty_scene_slot("master", i))
             .collect();
         right_cols.push(track_column(
-            track_width,
+            master_snap.width,
             track_header_cell(
                 "Master",
                 "Master",
@@ -3332,7 +3359,7 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 Some(snap.target),
             );
             let col = track_column(
-                track_width,
+                snap.width,
                 header,
                 waveform_container(&wave, accent_hex),
                 channel_strip(snap, &format!("arr_studio_{}", idx), fader_accent),

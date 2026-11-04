@@ -466,8 +466,8 @@ pub struct AppState {
 
     /// Ancho dinámico de las columnas de pista en el Arranger View (Bitwig parity).
     pub arranger_track_width: f32,
-    /// Arrastre del separador horizontal de columnas de pista: `(x_inicial, ancho_inicial)`.
-    pub arranger_track_width_drag: Option<(f32, f32)>,
+    /// Arrastre del separador horizontal de columnas de pista: `(track_target, x_inicial, ancho_inicial)`.
+    pub arranger_track_width_drag: Option<(arranger_view::StripTarget, f32, f32)>,
     /// Dispositivo arrastrado actualmente entre pistas (para feedback visual de drop targets).
     pub dragging_device: Option<crate::views::mixer::MixerDeviceDrag>,
 
@@ -785,6 +785,59 @@ impl AppState {
             StripTarget::Live(idx) => self.live_tracks.get_mut(idx + 1).map(|t| &mut t.effects),
             StripTarget::Studio(idx) => self.studio_tracks.get_mut(idx).map(|t| &mut t.effects),
             StripTarget::Fx(idx) => self.fx_tracks.get_mut(idx).map(|t| &mut t.effects),
+        }
+    }
+
+    /// Obtiene el ancho individual de un canal en Arranger View (Bitwig Studio parity).
+    pub fn track_width(&self, target: arranger_view::StripTarget) -> f32 {
+        use arranger_view::StripTarget;
+        match target {
+            StripTarget::Master => match self.mode {
+                AppMode::OpenLive => self.live_tracks.first().map(|t| t.width).unwrap_or(self.arranger_track_width),
+                AppMode::OpenStudio => self.studio_tracks.first().map(|t| t.width).unwrap_or(self.arranger_track_width),
+            },
+            StripTarget::Live(idx) => self.live_tracks.get(idx + 1).map(|t| t.width).unwrap_or(self.arranger_track_width),
+            StripTarget::Studio(idx) => self.studio_tracks.get(idx).map(|t| t.width).unwrap_or(self.arranger_track_width),
+            StripTarget::Fx(idx) => self.fx_tracks.get(idx).map(|t| t.width).unwrap_or(self.arranger_track_width),
+        }
+    }
+
+    /// Ajusta el ancho individual de un canal en Arranger View (Bitwig Studio parity),
+    /// aislándolo al canal objetivo y respetando los límites mínimo y máximo.
+    pub fn set_track_width(&mut self, target: arranger_view::StripTarget, width: f32) {
+        use arranger_view::StripTarget;
+        let clamped = width.clamp(
+            arranger_view::MIN_TRACK_WIDTH,
+            arranger_view::MAX_TRACK_WIDTH,
+        );
+        match target {
+            StripTarget::Master => match self.mode {
+                AppMode::OpenLive => {
+                    if let Some(t) = self.live_tracks.first_mut() {
+                        t.width = clamped;
+                    }
+                }
+                AppMode::OpenStudio => {
+                    if let Some(t) = self.studio_tracks.first_mut() {
+                        t.width = clamped;
+                    }
+                }
+            },
+            StripTarget::Live(idx) => {
+                if let Some(t) = self.live_tracks.get_mut(idx + 1) {
+                    t.width = clamped;
+                }
+            }
+            StripTarget::Studio(idx) => {
+                if let Some(t) = self.studio_tracks.get_mut(idx) {
+                    t.width = clamped;
+                }
+            }
+            StripTarget::Fx(idx) => {
+                if let Some(t) = self.fx_tracks.get_mut(idx) {
+                    t.width = clamped;
+                }
+            }
         }
     }
 
@@ -2119,12 +2172,15 @@ impl Render for HikaruApp {
                             }
                             let st = state(cx);
                             let drag = st.read(cx).arranger_track_width_drag;
-                            if let Some((start_x, start_w)) = drag {
+                            if let Some((target, start_x, start_w)) = drag {
                                 let curr_x = event.position.x.as_f32();
                                 let delta = curr_x - start_x;
-                                let new_w = (start_w + delta).clamp(80.0, 340.0);
+                                let new_w = (start_w + delta).clamp(
+                                    arranger_view::MIN_TRACK_WIDTH,
+                                    arranger_view::MAX_TRACK_WIDTH,
+                                );
                                 st.update(cx, |s, cx| {
-                                    s.arranger_track_width = new_w;
+                                    s.set_track_width(target, new_w);
                                     cx.notify();
                                 });
                             }
