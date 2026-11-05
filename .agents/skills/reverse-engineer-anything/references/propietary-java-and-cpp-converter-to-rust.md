@@ -21,17 +21,21 @@ When inspecting Java UI components (e.g., Detail Editor, Clip Canvas, Note Grid)
 * Convert mutable Java instance variables (`double gain`, `boolean isLooping`) into single-source-of-truth Rust application state.
 * UI updates **must** follow GPUI's entity-component-reactive model using `Model<T>` or `ViewContext`.
 * Map UI interactions into explicit Rust event enums:
-  ```rust
+
+```rust
   pub enum DetailEditorEvent {
       SetClipGain { clip_id: ClipId, gain_db: f32 },
       AdjustWarpMarker { clip_id: ClipId, sample_index: usize, new_time: f64 },
       ToggleLoop { clip_id: ClipId, active: bool },
   }
+```
 
 3. C++ Audio Clip & DSP Data Model Extraction
 A. Data Layout & Parsing
  * Locate binary structures or native memory layouts representing audio clip metadata (offsets, pitch shifts, loop boundaries, transient markers).
  * Re-map native C++ pointers and dynamic arrays to fixed-width, memory-aligned Rust struct representations:
+
+```
    #[repr(C)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioClipMetadata {
@@ -42,6 +46,7 @@ pub struct AudioClipMetadata {
     pub transpose_semitones: i8,
     pub gain_linear: f32,
 }
+```
 
 B. Real-Time Audio Thread Safety
  * No Heap Allocations: Never convert C++ DSP loops into code using Vec::push, Box::new, or dynamic allocations inside the audio thread.
@@ -54,6 +59,8 @@ When analyzing target Java .class / .jar or C++ .so / .dll binaries for UI panel
    * Isolate data attributes from rendering logic. Output a clean .rs data representation.
  * Step 3: GPUI View Construction
    * Generate idiomatic GPUI view functions matching the layout:
+
+```
      impl Render for DetailEditorPanel {
     fn render(&mut self, _cx: &mut ViewContext<Self>) -> impl IntoElement {
         div()
@@ -65,6 +72,8 @@ When analyzing target Java .class / .jar or C++ .so / .dll binaries for UI panel
             .child(/* Waveform canvas & controls */)
     }
 }
+
+```
 
 5. Strict Constraints
  * ❌ DO NOT output direct Java wrappers, JNI bindings, or C++ FFI unless strictly necessary for binary analysis.
