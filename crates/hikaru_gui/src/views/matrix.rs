@@ -721,6 +721,21 @@ pub fn load_clip_into_slot(
     let mut local_state = PlaylistState::default();
     local_state.zoom_x = state.editor_zoom_x;
 
+    let (real_dur, total_frames) = if is_midi {
+        (0.0, 0)
+    } else if let Ok(reader) = hound::WavReader::open(path_str.as_str()) {
+        let spec = reader.spec();
+        let samples = reader.duration();
+        let dur = if spec.sample_rate > 0 {
+            samples as f64 / spec.sample_rate as f64
+        } else {
+            0.0
+        };
+        (dur, samples as u64)
+    } else {
+        (0.0, 0)
+    };
+
     // Picos para la mini waveform del pad: se calculan una sola vez al cargar
     // el archivo, no en cada frame de pintado.
     let peaks = if is_midi {
@@ -738,13 +753,13 @@ pub fn load_clip_into_slot(
             id: new_id,
             name: name.clone(),
             path,
-            duration_secs: 0.0,
+            duration_secs: real_dur,
             content,
             local_state,
             local_track: Track::new(0, name, false),
             local_bar: 1.0,
             loop_start: 0,
-            loop_end: 0,
+            loop_end: total_frames,
             loop_enabled: true,
             has_time_selection: true,
             peaks,

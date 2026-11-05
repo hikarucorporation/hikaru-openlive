@@ -21,7 +21,7 @@ use hikaru_plugin_host::{spawn_floating_gui, PluginFormat, PluginInstance};
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::render::WavetableViewportHandle;
 use crate::views::{
-    about, arranger_view, audio_settings, clip_editor, control_panel, dsp_rack, explorer,
+    about, arranger_view, audio_settings, clip_editor, detail_editor_panel, control_panel, dsp_rack, explorer,
     external_plugins_settings, footer,
     header, matrix, mcp_port_settings, menu_bar, mixer, modal, piano_roll, playlist,
 };
@@ -1971,7 +1971,7 @@ impl Render for HikaruApp {
         let show_piano_roll = app_state.show_piano_roll;
         let show_dsp_rack = app_state.show_dsp_rack;
         let show_clip_editor = app_state.clip_editor.show_editor;
-        let clip_editor_height = app_state.clip_editor.editor_height.max(120.0);
+        let clip_editor_height = app_state.clip_editor.editor_height.max(220.0);
         let show_explorer = app_state.show_explorer;
         let panel_layout = app_state.panel_layout;
         let show_mixer_panel = panel_layout.show_mixer;
@@ -2076,7 +2076,7 @@ impl Render for HikaruApp {
                                         .flex_shrink_0()
                                         .border_t_1()
                                         .border_color(crate::theme::BORDER_COLOR)
-                                        .child(clip_editor::render(cx)),
+                                        .child(detail_editor_panel::render(cx)),
                                 )
                             })
                             // PANEL INFERIOR PLEGABLE: PIANO ROLL (F9/F10)

@@ -1,10 +1,13 @@
 // crates/hikaru_core/src/lib.rs
 
 pub mod audio_buffer;
+pub mod audio_clip_event;
+
 pub use audio_buffer::AudioBuffer;
+pub use audio_clip_event::{AudioClipEvent, StretchMode};
 
 /// Alias para el tipo de dato de audio básico (f32 por estándar)
-pub type AudioSample = f32; // <--- ¡ESTO ARREGLA EL ERROR DE IMPORTACIÓN!
+pub type AudioSample = f32;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SampleRate(f32);
