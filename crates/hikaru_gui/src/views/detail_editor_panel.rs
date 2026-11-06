@@ -130,6 +130,7 @@ impl ClipEditorTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorTab {
     AudioEvents,
+    Pitch,
     Comping,
     Stretch,
     Onsets,
@@ -139,6 +140,7 @@ impl EditorTab {
     pub fn label(&self) -> &'static str {
         match self {
             EditorTab::AudioEvents => "Audio Events",
+            EditorTab::Pitch => "Pitch",
             EditorTab::Comping => "Comping",
             EditorTab::Stretch => "Stretch",
             EditorTab::Onsets => "Onsets",
@@ -804,6 +806,65 @@ pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
                 .when(ce.show_inspector, |row| {
                     row.child(clip_inspector(cx, &ce, &clip))
                 })
+                .when(!ce.show_inspector, |row| {
+                    row.child(
+                        h_flex()
+                            .absolute()
+                            .top(px(38.0))
+                            .left(px(30.0))
+                            .w(px(80.0))
+                            .h(px(16.0))
+                            .child(
+                                Button::new("ce_tab_events")
+                                    .w(px(20.0))
+                                    .h(px(16.0))
+                                    .bg(rgba(0x00000000))
+                                    .on_click(|_, _, cx| {
+                                        state(cx).update(cx, |s, cx| {
+                                            s.clip_editor.tab = EditorTab::AudioEvents;
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("ce_tab_comping")
+                                    .w(px(20.0))
+                                    .h(px(16.0))
+                                    .bg(rgba(0x00000000))
+                                    .on_click(|_, _, cx| {
+                                        state(cx).update(cx, |s, cx| {
+                                            s.clip_editor.tab = EditorTab::Comping;
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("ce_tab_stretch")
+                                    .w(px(20.0))
+                                    .h(px(16.0))
+                                    .bg(rgba(0x00000000))
+                                    .on_click(|_, _, cx| {
+                                        state(cx).update(cx, |s, cx| {
+                                            s.clip_editor.tab = EditorTab::Stretch;
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("ce_tab_onsets")
+                                    .w(px(20.0))
+                                    .h(px(16.0))
+                                    .bg(rgba(0x00000000))
+                                    .on_click(|_, _, cx| {
+                                        state(cx).update(cx, |s, cx| {
+                                            s.clip_editor.tab = EditorTab::Onsets;
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(div().id("ce_auto_fades").test_support()),
+                    )
+                })
                 .child(
                     div()
                         .flex()
@@ -828,7 +889,7 @@ fn clip_vertical_strip(
     div()
         .id("clip_editor_vertical_label")
         .test_support()
-        .w(px(22.0))
+        .w(px(24.0))
         .h_full()
         .flex_shrink_0()
         .relative()
@@ -856,26 +917,32 @@ fn clip_vertical_strip(
                 .size_full()
                 .items_center()
                 .justify_between()
-                .py(px(8.0))
-                .child(
-                    Label::new("▶")
-                        .text_xs()
-                        .text_color(rgb(0xFF7A00)),
-                )
+                .py(px(6.0))
                 .child(
                     v_flex()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(4.0))
                         .child(
-                            Label::new(if ce.show_inspector { "«" } else { "»" })
+                            Label::new("▶")
                                 .text_xs()
-                                .text_color(rgb(0x8A8A96)),
+                                .text_color(rgb(0xFF7A00)),
                         )
                         .child(
-                            Label::new("☵")
+                            Label::new("1")
                                 .text_xs()
+                                .font_weight(gpui_kit::FontWeight::BOLD)
                                 .text_color(rgb(0x8A8A96)),
                         ),
+                )
+                .child(
+                    Label::new("❖")
+                        .text_xs()
+                        .text_color(rgb(0x606470)),
+                )
+                .child(
+                    Label::new(if ce.show_inspector { "◀" } else { "▶" })
+                        .text_xs()
+                        .text_color(rgb(0x8A8A96)),
                 ),
         )
         .into_any_element()
@@ -889,34 +956,15 @@ fn clip_inspector(
 ) -> AnyElement {
     let p = ce.params;
     v_flex()
-        .w(px(115.0))
+        .w(px(125.0))
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(0x2A2B2E))
+        .bg(rgb(0x28292E))
         .border_r_1()
-        .border_color(rgb(0x1A1B1D))
+        .border_color(rgb(0x18191C))
         .p(px(6.0))
-        .gap(px(5.0))
-        // Bitwig Pointer Tool selector button
-        .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .w_full()
-                .h(px(22.0))
-                .px(px(6.0))
-                .bg(rgb(0x2A2A30))
-                .rounded(px(2.0))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .child(Label::new("▲").text_xs().text_color(rgb(0xF0F0F5)))
-                        .child(Label::new("Pointer").text_xs().text_color(rgb(0xD0D0D8))),
-                )
-                .child(Label::new("▼").text_xs().text_color(rgb(0x8A8A96))),
-        )
-        // Bitwig Mode selector button
+        .gap(px(6.0))
+        // 1. Bitwig Pointer Tool selector button
         .child(
             h_flex()
                 .items_center()
@@ -924,15 +972,53 @@ fn clip_inspector(
                 .w_full()
                 .h(px(24.0))
                 .px(px(6.0))
-                .bg(rgb(0x2E2E36))
+                .bg(rgb(0x35363D))
                 .rounded(px(2.0))
+                .border_1()
+                .border_color(rgb(0x2A2B30))
                 .child(
                     h_flex()
                         .items_center()
                         .gap(px(4.0))
+                        .child(Label::new("▲").text_xs().text_color(rgb(0xF0F0F5)))
+                        .child(Label::new("Pointer").text_xs().font_weight(gpui_kit::FontWeight::MEDIUM).text_color(rgb(0xE0E0E8))),
+                )
+                .child(Label::new("▾").text_xs().text_color(rgb(0x8A8A96))),
+        )
+        // 2. Bitwig Mode selector button (clickable para rotar modos)
+        .child(
+            h_flex()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .h(px(28.0))
+                .px(px(6.0))
+                .bg(rgb(0x33343A))
+                .border_1()
+                .border_color(rgb(0x28292E))
+                .rounded(px(2.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(0x3D3E45)))
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                    state(cx).update(cx, |s, cx| {
+                        s.clip_editor.tab = match s.clip_editor.tab {
+                            EditorTab::AudioEvents => EditorTab::Pitch,
+                            EditorTab::Pitch => EditorTab::Comping,
+                            EditorTab::Comping => EditorTab::Stretch,
+                            EditorTab::Stretch => EditorTab::Onsets,
+                            EditorTab::Onsets => EditorTab::AudioEvents,
+                        };
+                        cx.notify();
+                    });
+                })
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap(px(5.0))
                         .child(
                             Label::new(match ce.tab {
                                 EditorTab::AudioEvents => "〰",
+                                EditorTab::Pitch => "Ψ",
                                 EditorTab::Stretch => "⏱",
                                 EditorTab::Comping => "✂",
                                 EditorTab::Onsets => "⚡",
@@ -943,12 +1029,89 @@ fn clip_inspector(
                         .child(
                             Label::new(ce.tab.label())
                                 .text_xs()
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .text_color(rgb(0xF0F0F5)),
                         ),
                 )
-                .child(Label::new("▼").text_xs().text_color(rgb(0x8A8A96))),
+                .child(Label::new("▾").text_xs().text_color(rgb(0x8A8A96))),
         )
-        // Bitwig "Create auto-fades" checkbox
+        // 3. Grid de modos compactos (ce_tab_events, ce_tab_comping, ce_tab_stretch, ce_tab_onsets)
+        .child(
+            v_flex()
+                .w_full()
+                .gap(px(2.0))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap(px(2.0))
+                        .child(
+                            Button::new("ce_tab_events")
+                                .label("Audio")
+                                .compact()
+                                .flex_1()
+                                .rounded(ButtonRounded::None)
+                                .bg(if ce.tab == EditorTab::AudioEvents { rgb(0xFF7A00) } else { rgb(0x24252A) })
+                                .text_color(if ce.tab == EditorTab::AudioEvents { rgb(0xFFFFFF) } else { rgb(0x8A8A96) })
+                                .on_click(|_, _, cx| {
+                                    state(cx).update(cx, |s, cx| {
+                                        s.clip_editor.tab = EditorTab::AudioEvents;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("ce_tab_comping")
+                                .label("Comp")
+                                .compact()
+                                .flex_1()
+                                .rounded(ButtonRounded::None)
+                                .bg(if ce.tab == EditorTab::Comping { rgb(0xFF7A00) } else { rgb(0x24252A) })
+                                .text_color(if ce.tab == EditorTab::Comping { rgb(0xFFFFFF) } else { rgb(0x8A8A96) })
+                                .on_click(|_, _, cx| {
+                                    state(cx).update(cx, |s, cx| {
+                                        s.clip_editor.tab = EditorTab::Comping;
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap(px(2.0))
+                        .child(
+                            Button::new("ce_tab_stretch")
+                                .label("Stretch")
+                                .compact()
+                                .flex_1()
+                                .rounded(ButtonRounded::None)
+                                .bg(if ce.tab == EditorTab::Stretch { rgb(0xFF7A00) } else { rgb(0x24252A) })
+                                .text_color(if ce.tab == EditorTab::Stretch { rgb(0xFFFFFF) } else { rgb(0x8A8A96) })
+                                .on_click(|_, _, cx| {
+                                    state(cx).update(cx, |s, cx| {
+                                        s.clip_editor.tab = EditorTab::Stretch;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("ce_tab_onsets")
+                                .label("Onsets")
+                                .compact()
+                                .flex_1()
+                                .rounded(ButtonRounded::None)
+                                .bg(if ce.tab == EditorTab::Onsets { rgb(0xFF7A00) } else { rgb(0x24252A) })
+                                .text_color(if ce.tab == EditorTab::Onsets { rgb(0xFFFFFF) } else { rgb(0x8A8A96) })
+                                .on_click(|_, _, cx| {
+                                    state(cx).update(cx, |s, cx| {
+                                        s.clip_editor.tab = EditorTab::Onsets;
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                ),
+        )
+        // 4. Bitwig "Create auto-fades" checkbox
         .child(
             h_flex()
                 .items_center()
@@ -964,7 +1127,7 @@ fn clip_inspector(
                     div()
                         .size(px(14.0))
                         .rounded(px(7.0))
-                        .bg(if p.auto_fades { rgb(0xFF7A00) } else { rgb(0x2A2A30) })
+                        .bg(if p.auto_fades { rgb(0xFF7A00) } else { rgb(0x222327) })
                         .border_1()
                         .border_color(if p.auto_fades { rgb(0xFF7A00) } else { rgb(0x404048) })
                         .items_center()
@@ -981,208 +1144,31 @@ fn clip_inspector(
                 .id("ce_auto_fades")
                 .test_support(),
         )
-        // Divider
-        .child(div().h(px(1.0)).w_full().bg(rgb(0x2C2C34)))
-        // Gain
+        // 5. Parámetros del Clip (Gain, Pan, Pitch) estilo Bitwig Inspector
         .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .child(Label::new("Gain").text_xs().text_color(rgb(0x8A8A96)))
+            v_flex()
+                .w_full()
+                .gap(px(4.0))
+                .pt(px(4.0))
+                .border_t_1()
+                .border_color(rgb(0x222328))
                 .child(
                     h_flex()
-                        .items_center()
-                        .gap(px(2.0))
-                        .child(
-                            Button::new("ce_gain_dec")
-                                .rounded(ButtonRounded::None)
-                                .label("-")
-                                .compact()
-                                .bg(rgb(0x282830))
-                                .text_color(rgb(0xFFFFFF))
-                                .on_click(|_, _, cx| {
-                                    state(cx).update(cx, |s, cx| {
-                                        s.clip_editor.params.gain_db =
-                                            (s.clip_editor.params.gain_db - 0.5).max(-60.0);
-                                        apply_gain_to_clip(s, s.clip_editor.params.gain_db);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Label::new(format!("{:+.1}", p.gain_db))
-                                .text_xs()
-                                .text_color(rgb(0xF0F0F5))
-                                .min_w(px(32.0)),
-                        )
-                        .child(
-                            Button::new("ce_gain_inc")
-                                .rounded(ButtonRounded::None)
-                                .label("+")
-                                .compact()
-                                .bg(rgb(0x282830))
-                                .text_color(rgb(0xFFFFFF))
-                                .on_click(|_, _, cx| {
-                                    state(cx).update(cx, |s, cx| {
-                                        s.clip_editor.params.gain_db =
-                                            (s.clip_editor.params.gain_db + 0.5).min(24.0);
-                                        apply_gain_to_clip(s, s.clip_editor.params.gain_db);
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
-                ),
-        )
-        // Pan
-        .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .child(Label::new("Pan").text_xs().text_color(rgb(0x8A8A96)))
+                        .justify_between()
+                        .child(Label::new("Gain").text_xs().text_color(rgb(0x8A8A96)))
+                        .child(Label::new(format!("{:.1} dB", p.gain_db)).text_xs().text_color(rgb(0xE0E0E8))),
+                )
                 .child(
                     h_flex()
-                        .items_center()
-                        .gap(px(2.0))
-                        .child(
-                            Button::new("ce_pan_dec")
-                                .rounded(ButtonRounded::None)
-                                .label("<")
-                                .compact()
-                                .bg(rgb(0x282830))
-                                .text_color(rgb(0xFFFFFF))
-                                .on_click(|_, _, cx| {
-                                    state(cx).update(cx, |s, cx| {
-                                        s.clip_editor.params.pan =
-                                            (s.clip_editor.params.pan - 0.05).max(-1.0);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Label::new(if p.pan.abs() < 0.01 {
-                                "C".to_string()
-                            } else if p.pan < 0.0 {
-                                format!("L{:.1}", -p.pan)
-                            } else {
-                                format!("R{:.1}", p.pan)
-                            })
-                            .text_xs()
-                            .text_color(rgb(0xF0F0F5))
-                            .min_w(px(30.0)),
-                        )
-                        .child(
-                            Button::new("ce_pan_inc")
-                                .rounded(ButtonRounded::None)
-                                .label(">")
-                                .compact()
-                                .bg(rgb(0x282830))
-                                .text_color(rgb(0xFFFFFF))
-                                .on_click(|_, _, cx| {
-                                    state(cx).update(cx, |s, cx| {
-                                        s.clip_editor.params.pan =
-                                            (s.clip_editor.params.pan + 0.05).min(1.0);
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
-                ),
-        )
-        // Pitch
-        .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .child(Label::new("Pitch").text_xs().text_color(rgb(0x8A8A96)))
+                        .justify_between()
+                        .child(Label::new("Pan").text_xs().text_color(rgb(0x8A8A96)))
+                        .child(Label::new(if p.pan.abs() < 0.01 { "C".to_string() } else if p.pan < 0.0 { format!("{:.0}L", -p.pan * 100.0) } else { format!("{:.0}R", p.pan * 100.0) }).text_xs().text_color(rgb(0xE0E0E8))),
+                )
                 .child(
                     h_flex()
-                        .items_center()
-                        .gap(px(2.0))
-                        .child(
-                            Button::new("ce_pitch_dec")
-                                .rounded(ButtonRounded::None)
-                                .label("-")
-                                .compact()
-                                .bg(rgb(0x282830))
-                                .text_color(rgb(0xFFFFFF))
-                                .on_click(|_, _, cx| {
-                                    state(cx).update(cx, |s, cx| {
-                                        s.clip_editor.params.pitch_cents =
-                                            (s.clip_editor.params.pitch_cents - 100.0).max(-4800.0);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Label::new(format!("{:+.0}", p.pitch_cents / 100.0))
-                                .text_xs()
-                                .text_color(rgb(0xF0F0F5))
-                                .min_w(px(26.0)),
-                        )
-                        .child(
-                            Button::new("ce_pitch_inc")
-                                .rounded(ButtonRounded::None)
-                                .label("+")
-                                .compact()
-                                .bg(rgb(0x282830))
-                                .text_color(rgb(0xFFFFFF))
-                                .on_click(|_, _, cx| {
-                                    state(cx).update(cx, |s, cx| {
-                                        s.clip_editor.params.pitch_cents =
-                                            (s.clip_editor.params.pitch_cents + 100.0).min(4800.0);
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
-                ),
-        )
-        // Stretch Mode
-        .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .child(Label::new("Mode").text_xs().text_color(rgb(0x8A8A96)))
-                .child(
-                    Button::new("ce_stretch_mode")
-                        .rounded(ButtonRounded::None)
-                        .label(p.stretch_mode.label())
-                        .compact()
-                        .bg(rgb(0x282830))
-                        .text_color(rgb(0xFF7A00))
-                        .on_click(|_, _, cx| {
-                            state(cx).update(cx, |s, cx| {
-                                s.clip_editor.params.stretch_mode =
-                                    match s.clip_editor.params.stretch_mode {
-                                        StretchMode::Raw => StretchMode::Hd,
-                                        StretchMode::Hd => StretchMode::Smooth,
-                                        StretchMode::Smooth => StretchMode::Beats,
-                                        StretchMode::Beats => StretchMode::Raw,
-                                    };
-                                cx.notify();
-                            });
-                        }),
-                ),
-        )
-        // Fades
-        .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .child(Label::new("Fade In").text_xs().text_color(rgb(0x6A6A76)))
-                .child(
-                    Label::new(format!("{:.0} ms", p.fade_in_secs * 1000.0))
-                        .text_xs()
-                        .text_color(rgb(0x8A8A96)),
-                ),
-        )
-        .child(
-            h_flex()
-                .items_center()
-                .justify_between()
-                .child(Label::new("Fade Out").text_xs().text_color(rgb(0x6A6A76)))
-                .child(
-                    Label::new(format!("{:.0} ms", p.fade_out_secs * 1000.0))
-                        .text_xs()
-                        .text_color(rgb(0x8A8A96)),
+                        .justify_between()
+                        .child(Label::new("Pitch").text_xs().text_color(rgb(0x8A8A96)))
+                        .child(Label::new(format!("{:.0} ct", p.pitch_cents)).text_xs().text_color(rgb(0xE0E0E8))),
                 ),
         )
         .id("clip_editor_inspector")
@@ -1193,93 +1179,109 @@ fn clip_inspector(
 /// Barra inferior de navegación del timeline estilo Bitwig Studio.
 fn timeline_bottom_bar(
     _cx: &mut Context<HikaruApp>,
-    _clip: &ClipEditorClip,
+    clip: &ClipEditorClip,
     ce: &ClipEditorState,
     zoom_x: f32,
 ) -> AnyElement {
-    let snap_label = ce.snap.label();
     let loop_on = ce.loop_enabled;
+    let dur = if clip.duration_secs > 0.001 { clip.duration_secs } else { 4.0 };
+    let vis = visible_secs(zoom_x, 800.0);
+    let norm_scroll = (ce.scroll_secs / dur).clamp(0.0, 1.0) as f32;
+    let norm_vis = (vis / dur).clamp(0.06, 1.0) as f32;
+
+    let left_frac = (norm_scroll * (1.0 - norm_vis)).clamp(0.0, 1.0);
+    let w_frac = norm_vis.clamp(0.06, 1.0);
 
     h_flex()
         .id("clip_topbar")
         .test_support()
-        .h(px(26.0))
+        .h(px(22.0))
         .w_full()
         .flex_shrink_0()
-        .bg(rgb(0x1B1B1F))
+        .bg(rgb(0x1F2023))
         .border_t_1()
-        .border_color(rgb(0x282830))
+        .border_color(rgb(0x161719))
         .items_center()
         .justify_between()
-        .px(px(6.0))
-        // Izquierda: Tooltip y pestañas de modo estilo Bitwig
+        .px(px(4.0))
+        .gap(px(8.0))
+        // 1. Izquierda: Scrollbar track con botones ◀ / ▶ estilo Bitwig (ocupa flex_1)
         .child(
             h_flex()
                 .items_center()
-                .gap(px(6.0))
-                .child(
-                    Label::new("MIDDLE-DRAG Zoom & pan")
-                        .text_xs()
-                        .text_color(rgb(0x6A6A76)),
-                )
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap(px(2.0))
-                        .children(
-                            [
-                                (EditorTab::AudioEvents, "ce_tab_events"),
-                                (EditorTab::Comping, "ce_tab_comping"),
-                                (EditorTab::Stretch, "ce_tab_stretch"),
-                                (EditorTab::Onsets, "ce_tab_onsets"),
-                            ]
-                            .into_iter()
-                            .map(|(t, id)| {
-                                let active = ce.tab == t;
-                                Button::new(id)
-                                    .rounded(ButtonRounded::None)
-                                    .label(t.label())
-                                    .compact()
-                                    .bg(if active { rgb(0xFF7A00) } else { rgb(0x282830) })
-                                    .text_color(if active { rgb(0xFFFFFF) } else { rgb(0xC8C8D0) })
-                                    .on_click(move |_, _, cx| {
-                                        state(cx).update(cx, |s, cx| {
-                                            s.clip_editor.tab = t;
-                                            cx.notify();
-                                        });
-                                    })
-                                    .into_any_element()
-                            }),
-                        ),
-                ),
-        )
-        // Centro: Barra de desplazamiento mini estilo Bitwig
-        .child(
-            div()
-                .w(px(140.0))
-                .h(px(5.0))
-                .bg(rgb(0x141418))
-                .rounded(px(2.5))
+                .gap(px(3.0))
+                .flex_1()
+                // Botón flecha izquierda ◀
                 .child(
                     div()
-                        .w(px(50.0))
-                        .h_full()
-                        .bg(rgb(0x383842))
-                        .rounded(px(2.5)),
+                        .size(px(16.0))
+                        .rounded(px(2.0))
+                        .bg(rgb(0x28292E))
+                        .hover(|s| s.bg(rgb(0x35363D)))
+                        .cursor_pointer()
+                        .items_center()
+                        .justify_center()
+                        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                            state(cx).update(cx, |s, cx| {
+                                s.clip_editor.scroll_secs = (s.clip_editor.scroll_secs - 0.5).max(0.0);
+                                cx.notify();
+                            });
+                        })
+                        .child(Label::new("◀").text_xs().text_color(rgb(0x8A8A96))),
+                )
+                // Carril de scrollbar interactivo
+                .child(
+                    div()
+                        .id("ce_scrollbar_track")
+                        .flex_1()
+                        .h(px(8.0))
+                        .bg(rgb(0x141416))
+                        .rounded(px(4.0))
+                        .relative()
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(1.0))
+                                .bottom(px(1.0))
+                                .left(relative(left_frac))
+                                .w(relative(w_frac))
+                                .bg(rgb(0x45464D))
+                                .hover(|s| s.bg(rgb(0x5A5B64)))
+                                .rounded(px(3.0)),
+                        ),
+                )
+                // Botón flecha derecha ▶
+                .child(
+                    div()
+                        .size(px(16.0))
+                        .rounded(px(2.0))
+                        .bg(rgb(0x28292E))
+                        .hover(|s| s.bg(rgb(0x35363D)))
+                        .cursor_pointer()
+                        .items_center()
+                        .justify_center()
+                        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
+                            state(cx).update(cx, |s, cx| {
+                                s.clip_editor.scroll_secs += 0.5;
+                                cx.notify();
+                            });
+                        })
+                        .child(Label::new("▶").text_xs().text_color(rgb(0x8A8A96))),
                 ),
         )
-        // Derecha: Loop, Snap, Zoom -/+/Fit (alineados a la derecha)
+        // 2. Derecha: Loop + Snap + Zoom + Fit (estilo Bitwig Studio)
         .child(
             h_flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(3.0))
+                // Loop toggle
                 .child(
                     Button::new("ce_loop_toggle")
                         .rounded(ButtonRounded::None)
                         .label("Loop")
                         .compact()
                         .bg(if loop_on { rgb(0xFF7A00) } else { rgb(0x282830) })
-                        .text_color(rgb(0xFFFFFF))
+                        .text_color(if loop_on { rgb(0xFFFFFF) } else { rgb(0x9AA0AE) })
                         .on_click(|_, _, cx| {
                             state(cx).update(cx, |s, cx| {
                                 let enabled = !s.clip_editor.loop_enabled;
@@ -1289,10 +1291,18 @@ fn timeline_bottom_bar(
                             });
                         }),
                 )
+                // Snap selector
                 .child(
                     Button::new("ce_snap_cycle")
                         .rounded(ButtonRounded::None)
-                        .label(format!("Snap: {}", snap_label))
+                        .label(match ce.snap {
+                            SnapValue::None => "Off ▴",
+                            SnapValue::Bar1 => "1 Bar ▴",
+                            SnapValue::Beat1_2 => "1/2 ▴",
+                            SnapValue::Beat1_4 => "1/4 ▴",
+                            SnapValue::Beat1_8 => "1/8 ▴",
+                            SnapValue::Beat1_16 => "1/16 ▴",
+                        })
                         .compact()
                         .bg(rgb(0x282830))
                         .text_color(rgb(0xE0E0E8))
@@ -1310,6 +1320,7 @@ fn timeline_bottom_bar(
                             });
                         }),
                 )
+                // Zoom controls
                 .child(
                     Button::new("ce_zoom_out")
                         .rounded(ButtonRounded::None)
@@ -1346,7 +1357,7 @@ fn timeline_bottom_bar(
                 .child(
                     Button::new("ce_zoom_fit")
                         .rounded(ButtonRounded::None)
-                        .label("Fit")
+                        .label("⇥⇤")
                         .compact()
                         .bg(rgb(0x282830))
                         .text_color(rgb(0xFFFFFF))
@@ -1387,12 +1398,13 @@ fn waveform_viewer(
     let gain_db = ce.params.gain_db;
     let drag_action = ce.drag_action.clone();
     let selection_range = ce.selection_range;
+    let active_tab = ce.tab;
 
     // Números de compás en la regla (DOM antes del renderizado canvas)
     let bar_number_labels: Vec<AnyElement> =
         ruler_labels(scroll, visible_secs(zoom_x, 800.0), bpm, zoom_x)
             .into_iter()
-            .filter(|(_text, x, _)| *x > -24.0 && *x < 1400.0)
+            .filter(|(_text, x, is_bar)| *x > -24.0 && *x < 1400.0 && (*is_bar || zoom_x >= 140.0))
             .map(|(text, x, is_bar)| {
                 Label::new(text.clone())
                     .text_xs()
@@ -1523,6 +1535,20 @@ fn waveform_viewer(
             });
         })
         .on_mouse_move(move |event, _, cx| {
+            let cues = match active_tab {
+                EditorTab::Pitch => &[
+                    ("DRAG", "Rectangular selection"),
+                    ("CTRL+ALT+DRAG", "Pan"),
+                    ("DOUBLE-CLICK", "Insert event"),
+                ][..],
+                _ => &[
+                    ("DRAG", "Select time"),
+                    ("ALT+DRAG", "Slide Content"),
+                    ("MIDDLE-DRAG", "Zoom & pan"),
+                ][..],
+            };
+            crate::app::set_footer_cues(cx, None, cues);
+
             state(cx).update(cx, |s, cx| {
                 let Some(ref action) = s.clip_editor.drag_action.clone() else {
                     return;
@@ -1645,8 +1671,6 @@ fn waveform_viewer(
         })
         .into_any_element();
 
-    let active_tab = ce.tab;
-
     let banner_left = (((0.0 - scroll) * zoom_x as f64) as f32).max(0.0) + 8.0;
     let clip_banner_label: AnyElement = h_flex()
         .absolute()
@@ -1703,11 +1727,11 @@ fn waveform_viewer(
                     let mid = body_y + px(body_h / 2.0);
 
                     // =====================================================
-                    // 1. FONDO PRINCIPAL — Dark Graphite Charcoal Bitwig
+                    // 1. FONDO PRINCIPAL — Dark Slate Bitwig (#28292E)
                     // =====================================================
                     window.paint_quad(PaintQuad {
                         bounds,
-                        background: rgb(0x18181C).into(),
+                        background: rgb(0x28292E).into(),
                         border_color: Hsla::default(),
                         corner_radii: gpui_kit::Corners::default(),
                         border_widths: gpui_kit::Edges::default(),
@@ -1719,8 +1743,8 @@ fn waveform_viewer(
                     // =====================================================
                     window.paint_quad(PaintQuad {
                         bounds: Bounds::new(bounds.origin, size(bounds.size.width, px(ruler_h))),
-                        background: rgb(0x25262A).into(),
-                        border_color: rgb(0x1E1F22).into(),
+                        background: rgb(0x323232).into(),
+                        border_color: rgb(0x282828).into(),
                         corner_radii: gpui_kit::Corners::default(),
                         border_widths: gpui_kit::Edges {
                             bottom: px(1.0),
@@ -1739,8 +1763,8 @@ fn waveform_viewer(
                             point(bounds.origin.x, bounds.origin.y + px(ruler_h)),
                             size(bounds.size.width, px(loop_bar_h)),
                         ),
-                        background: rgb(0x2A2B2E).into(),
-                        border_color: rgb(0x1E1F22).into(),
+                        background: rgb(0x353535).into(),
+                        border_color: rgb(0x282828).into(),
                         corner_radii: gpui_kit::Corners::default(),
                         border_widths: gpui_kit::Edges {
                             bottom: px(1.0),
@@ -1823,7 +1847,7 @@ fn waveform_viewer(
                     let c_x0 = clip_start_x.max(bounds.origin.x);
                     let c_x1 = clip_end_x.min(right);
 
-                    // Fondo de vacío fuera del clip
+                    // Fondo de vacío fuera del clip (Dark Slate #28292E)
                     if clip_start_x > bounds.origin.x {
                         let w_pre = (clip_start_x - bounds.origin.x).as_f32();
                         window.paint_quad(PaintQuad {
@@ -1831,7 +1855,7 @@ fn waveform_viewer(
                                 point(bounds.origin.x, wave_y),
                                 size(px(w_pre), px(wave_h)),
                             ),
-                            background: rgb(0x141418).into(),
+                            background: rgb(0x28292E).into(),
                             border_color: Hsla::default(),
                             corner_radii: gpui_kit::Corners::default(),
                             border_widths: gpui_kit::Edges::default(),
@@ -1845,7 +1869,7 @@ fn waveform_viewer(
                                 point(clip_end_x, wave_y),
                                 size(px(w_post), px(wave_h)),
                             ),
-                            background: rgb(0x141418).into(),
+                            background: rgb(0x28292E).into(),
                             border_color: Hsla::default(),
                             corner_radii: gpui_kit::Corners::default(),
                             border_widths: gpui_kit::Edges::default(),
@@ -1880,13 +1904,13 @@ fn waveform_viewer(
                             window.paint_path(path, rgb(0xFF7A00));
                         }
 
-                        // 3b. Cuerpo del Waveform: FONDO SILVER BITWIG (#B0B4C0)
+                        // 3b. Cuerpo del Waveform: FONDO SILVER BITWIG (#C0C4D0)
                         window.paint_quad(PaintQuad {
                             bounds: Bounds::new(
                                 point(c_x0, body_y),
                                 size(c_x1 - c_x0, px(body_h)),
                             ),
-                            background: rgb(0xB0B4C0).into(),
+                            background: rgb(0xC0C4D0).into(),
                             border_color: rgb(0x787C88).into(),
                             corner_radii: gpui_kit::Corners::default(),
                             border_widths: gpui_kit::Edges {
@@ -1922,12 +1946,12 @@ fn waveform_viewer(
                         }
                         if has_card_beats {
                             if let Ok(path) = card_beats.build() {
-                                window.paint_path(path, rgba(0xFFFFFF30));
+                                window.paint_path(path, rgba(0x0000001C));
                             }
                         }
 
                         // =====================================================
-                        // 4. FORMA DE ONDA DE AUDIO (Charcoal/Graphite #232529)
+                        // 4. FORMA DE ONDA DE AUDIO (Charcoal/Graphite #282828)
                         // =====================================================
                         if peaks_are_silent(&peaks) {
                             let cx0 = c_x0 + (c_x1 - c_x0) / 2.0;
@@ -1948,7 +1972,7 @@ fn waveform_viewer(
 
                             let width_px = (w.floor() as usize).max(1);
                             let half_h = (body_h * 0.5 - 2.0).max(2.0);
-                            let wave_color = rgb(0x232529);
+                            let wave_color = rgb(0x282828);
 
                             let mut wave_path = PathBuilder::stroke(px(1.0));
                             let mut has_wave = false;
