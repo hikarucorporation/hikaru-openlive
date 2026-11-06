@@ -224,6 +224,12 @@ Don't hesitate: open the issue however it came to be. If it's valid, it's valid.
 
 ---
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=hikarucorporation/hikaru-openlive&type=Date)](https://star-history.com/#hikarucorporation/hikaru-openlive&Date)
+
+---
+
 ## License
 
 This program is free software under the terms of the **GNU Affero General Public License (AGPLv3)**. See [`LICENSE`](https://www.gnu.org/licenses/agpl-3.0.en.html) for more details.
