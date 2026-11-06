@@ -167,6 +167,10 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ---
 
+# Nota: Creo que poner GPUI Kit a todo en vez de mejorar lo que tenía en **egui** fue una idea parcialmente de mierda XD
+
+![meme](assets/gauss-wojak-joda-2.jpeg)
+
 ## 👥 Comunidad y Colaboradores
 
 Estamos **buscando contribuyentes** para seguir impulsando el desarrollo de **Hikaru OpenLive**! 🙌
@@ -202,6 +206,12 @@ Estamos en la búsqueda activa de **nuevos contribuyentes** para el código en *
 Eso incluye bugs, feature requests, reproducciones y Pull Requests — **con o sin agentes de IA**. Si un agente de IA te ayudó a detectar, reproducir o incluso arreglar algo, **abrí el issue igualmente**: los hallazgos, logs o propuestas del agente son más que bienvenidos. Los issues escritos por humanos son igual de válidos y siempre se aceptan.
 
 No dudes y no filtres: abrí el issue como se haya creado. Si es válido, es válido. 🚀
+
+## ⭐ Historial de Estrellas
+
+[![Gráfico de Historial de Estrellas](https://api.star-history.com/svg?repos=hikarucorporation/hikaru-openlive&type=Date)](https://star-history.com/#hikarucorporation/hikaru-openlive&Date)
+
+---
 
 ## Licencia
 

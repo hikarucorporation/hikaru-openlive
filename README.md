@@ -180,6 +180,10 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 8. **Hardware & MIDI mapping**: controllers, physical input, real-time timestretching, bug fixes.
 9. **GPU-based UI (gpui-kit)**: keep the proprietary-DAW look & feel with free/open-source software. **[DONE]**
 
+# Note: I think switching everything to GPUI Kit instead of improving what I had in **egui** was a partially shitty idea XD
+
+![meme](assets/gauss-wojak-joda-2.jpeg)
+
 ---
 
 ## 👥 Community & Contributors
