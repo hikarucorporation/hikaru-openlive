@@ -498,6 +498,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                 output_level_bits,
                 Some(engine_arc.clone()),
             );
+            app.state.wavetable_viewport.spawn_connect(Some(cc.egui_ctx.clone()));
             app.sync_hardware_sample_rate(hardware_sr);
 
             if let Some(ref path) = project_path {

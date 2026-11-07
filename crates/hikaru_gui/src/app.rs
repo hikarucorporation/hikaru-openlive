@@ -969,13 +969,13 @@ impl HikaruApp {
         output_level_bits: Arc<AtomicU32>,
         engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
     ) -> Self {
-        let wavetable_viewport = WavetableViewportHandle::new();
         let state = AppState::new(
             audio_proxy,
             position_clock,
             output_level_bits,
             engine_handle,
         );
+        let wavetable_viewport = state.wavetable_viewport.clone();
 
         Self {
             state,
@@ -1044,6 +1044,7 @@ impl HikaruApp {
 impl eframe::App for HikaruApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::apply_theme(ctx);
+        self.state.wavetable_viewport.spawn_connect(Some(ctx.clone()));
         self.sync_frame(ctx);
 
         // Global Keyboard shortcuts

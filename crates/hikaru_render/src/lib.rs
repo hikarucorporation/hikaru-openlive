@@ -47,8 +47,9 @@ pub use knob::{
 };
 pub use context::{GpuContext, ReadbackError, RenderTarget};
 pub use mesh::{
-    terrain_view_proj, terrain_view_proj_angled, GpuMesh, MeshRenderer, MeshType, MeshUniforms,
-    RenderMode, RenderSettings, WavetableMesh, WavetableMeshParams, TERRAIN_LINE_WIDTH,
+    terrain_view_proj, terrain_view_proj_angled, GpuMesh, GradientMode, MeshRenderer, MeshType,
+    MeshUniforms, RenderMode, RenderSettings, WavetableMesh, WavetableMeshParams,
+    TERRAIN_LINE_WIDTH,
 };
 pub use quad::{
     QuadError, QuadInstance, QuadRenderer, SpriteLayout, SpriteSheet, SpriteSheetResources,

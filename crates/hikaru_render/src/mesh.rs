@@ -45,12 +45,27 @@ struct Uniforms {
     light_dir: vec3<f32>,
     // Intensidad de la luz, 0..1.
     light_intensity: f32,
-    // Tinte base de la malla (RGBA).
+    // Tinte primario / inicial de la malla (RGBA).
     tint: vec4<f32>,
     // Ancho del suavizado de borde en píxeles (ver `RenderSettings::aa_feather`):
     // 0 es trazo duro. Llega por uniforme para no reconstruir geometría al
     // mover el slider del panel.
     aa_feather: f32,
+    // Relleno explícito para alinear `tint_secondary` a 16 bytes.
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    // Tinte secundario / final del degradado (RGB) + intensidad de mezcla en `.a`.
+    tint_secondary: vec4<f32>,
+    // Tinte de realce del ciclo activo bajo `WT POS` (RGB) + boost en `.a`.
+    tint_active: vec4<f32>,
+    // Parámetros del degradado en espacio local:
+    // `.x` = modo (0 = Sólido, 1 = Profundidad Z, 2 = Amplitud Y, 3 = Fase X,
+    //              4 = Ciclo Activo, 5 = Arcoíris),
+    // `.y` = invertir dirección (0 o 1),
+    // `.z` = extensión total en Z (`thickness * depth_scale`),
+    // `.w` = desplazamiento de matiz (0..1) para modo Arcoíris.
+    gradient_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -59,6 +74,7 @@ struct VsOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) local_normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) local_pos: vec3<f32>,
 };
 
 @vertex
@@ -68,7 +84,14 @@ fn vs_main(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
     out.clip_position = uniforms.view_proj * vec4<f32>(position, 1.0);
     out.local_normal = normal;
     out.uv = uv;
+    out.local_pos = position;
     return out;
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
+    let k = vec3<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    let p = abs(fract(vec3<f32>(h, h, h) + k) * 6.0 - vec3<f32>(3.0, 3.0, 3.0));
+    return v * mix(vec3<f32>(1.0, 1.0, 1.0), clamp(p - vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0), vec3<f32>(1.0)), s);
 }
 
 @fragment
@@ -84,24 +107,53 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // justo lo que el rim tiene que resaltar.
     let rim = pow(1.0 - abs(dot(normal, vec3<f32>(0.0, 0.0, 1.0))), 2.0);
 
-    // Brillo por vértice. El `uv.y` lo usa [`WavetableMesh::from_table`] como
-    // factor de realce: 1.0 en el ciclo que está mirando el knob de índice y
-    // menos en el resto, que es lo que da la lectura de "estoy parado en el
-    // frame 7 de 64" sin rotular nada sobre la imagen.
+    // Brillo por vértice (`uv.y`): 1.0 en el ciclo seleccionado y menos en el resto.
     let shade = in.uv.y;
 
-    // Antialiasing analítico del borde: `uv.x` es la coordenada transversal
-    // de la línea (-1..+1, ver `push_terrain_line` y `push_ribbon`). El alfa
-    // cae a 0 en `aa_feather` píxeles (vía `fwidth`) en vez de serruchar el
-    // borde, y las líneas lejanas —cuya proyección es más fina que el píxel—
-    // se atenúan en vez de titilar o saltearse. Funciona con el blending
-    // normal del pipeline (MSAA real exigiría texturas multimuestra en el
-    // `RenderTarget`, que es de `context`, no de este pipeline).
+    // Antialiasing analítico del borde (`uv.x` en -1..+1).
     let edge = 1.0 - abs(in.uv.x);
     let aa = clamp(edge / (fwidth(in.uv.x) * uniforms.aa_feather + 1e-6), 0.0, 1.0);
 
+    // Coordenadas normalizadas 0..1 en espacio local de la malla:
+    let u_phase = clamp(in.local_pos.x / 260.0 + 0.5, 0.0, 1.0);
+    let v_amp = clamp(in.local_pos.y / 86.4 + 0.5, 0.0, 1.0);
+    let z_span = max(uniforms.gradient_params.z, 1.0);
+    let w_depth = clamp(0.5 - in.local_pos.z / z_span, 0.0, 1.0);
+
+    let mode = i32(round(uniforms.gradient_params.x));
+    var grad_t = 0.0;
+    if (mode == 1) {
+        grad_t = w_depth;
+    } else if (mode == 2) {
+        grad_t = v_amp;
+    } else if (mode == 3) {
+        grad_t = u_phase;
+    } else if (mode == 4) {
+        grad_t = clamp((shade - 0.25) / 0.75, 0.0, 1.0);
+    } else if (mode == 5) {
+        grad_t = fract(u_phase * 0.65 + w_depth * 0.35 + uniforms.gradient_params.w);
+    }
+
+    if (uniforms.gradient_params.y > 0.5) {
+        grad_t = 1.0 - grad_t;
+    }
+
+    let grad_mix = clamp(uniforms.tint_secondary.a, 0.0, 1.0);
+    var base_rgb = uniforms.tint.rgb;
+    if (mode == 5) {
+        let rainbow = hsv_to_rgb(grad_t, 0.88, 1.0);
+        base_rgb = mix(uniforms.tint.rgb, rainbow, grad_mix);
+    } else if (mode > 0) {
+        base_rgb = mix(uniforms.tint.rgb, uniforms.tint_secondary.rgb, grad_t * grad_mix);
+    }
+
+    // Realce cromático del ciclo activo bajo `WT POS`
+    let active_mask = pow(clamp((shade - 0.32) / 0.68, 0.0, 1.0), 2.2);
+    let active_boost = clamp(uniforms.tint_active.a, 0.0, 1.0) * active_mask;
+    let final_rgb = mix(base_rgb, uniforms.tint_active.rgb, active_boost);
+
     let lit = 0.25 + 0.75 * diffuse;
-    let color = vec4<f32>(uniforms.tint.rgb * (lit + 0.35 * rim) * shade, uniforms.tint.a * aa);
+    let color = vec4<f32>(final_rgb * (lit + 0.35 * rim) * shade, uniforms.tint.a * aa);
     return color;
 }
 "#;
@@ -272,6 +324,72 @@ impl MeshType {
     }
 }
 
+/// Modo de degradado cromático de la malla en el fragment shader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GradientMode {
+    /// Color sólido uniforme (usa `color_primary`).
+    #[default]
+    Solid,
+    /// Degradado en profundidad (`Z`): del frente (`color_primary`) al fondo (`color_secondary`).
+    DepthZ,
+    /// Degradado por amplitud vertical (`Y`): del valle (`color_primary`) a la cresta (`color_secondary`).
+    AmplitudeY,
+    /// Degradado horizontal por fase (`X`): de izquierda (`color_primary`) a derecha (`color_secondary`).
+    PhaseX,
+    /// Degradado por proximidad al ciclo activo bajo `WT POS`.
+    ActiveFocus,
+    /// Espectro arcoíris continuo a través de fase y profundidad.
+    Rainbow,
+}
+
+impl GradientMode {
+    /// Lista completa de modos para iterar en la UI.
+    pub const ALL: [GradientMode; 6] = [
+        GradientMode::Solid,
+        GradientMode::DepthZ,
+        GradientMode::AmplitudeY,
+        GradientMode::PhaseX,
+        GradientMode::ActiveFocus,
+        GradientMode::Rainbow,
+    ];
+
+    /// Rótulo corto para los selectores de la UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            GradientMode::Solid => "Sólido",
+            GradientMode::DepthZ => "Prof. Z",
+            GradientMode::AmplitudeY => "Amplitud Y",
+            GradientMode::PhaseX => "Fase X",
+            GradientMode::ActiveFocus => "Foco WT",
+            GradientMode::Rainbow => "Arcoíris",
+        }
+    }
+
+    /// Código numérico para `uniforms.gradient_params.x` en WGSL.
+    pub fn shader_code(self) -> f32 {
+        match self {
+            GradientMode::Solid => 0.0,
+            GradientMode::DepthZ => 1.0,
+            GradientMode::AmplitudeY => 2.0,
+            GradientMode::PhaseX => 3.0,
+            GradientMode::ActiveFocus => 4.0,
+            GradientMode::Rainbow => 5.0,
+        }
+    }
+
+    /// Cicla al siguiente modo de degradado.
+    pub fn cycle(self) -> Self {
+        match self {
+            GradientMode::Solid => GradientMode::DepthZ,
+            GradientMode::DepthZ => GradientMode::AmplitudeY,
+            GradientMode::AmplitudeY => GradientMode::PhaseX,
+            GradientMode::PhaseX => GradientMode::ActiveFocus,
+            GradientMode::ActiveFocus => GradientMode::Rainbow,
+            GradientMode::Rainbow => GradientMode::Solid,
+        }
+    }
+}
+
 /// Parámetros de look del visor de wavetable, editables en vivo desde el
 /// panel "Hikaru OpenWavetable Settings" de la UI.
 ///
@@ -302,6 +420,24 @@ pub struct RenderSettings {
     pub aa_feather: f32,
     /// Multiplicador del tinte (brillo/glow general del visor).
     pub glow: f32,
+    /// Color primario / inicial del wavetable (RGB lineal 0..1).
+    pub color_primary: [f32; 3],
+    /// Color secundario / final del degradado (RGB lineal 0..1).
+    pub color_secondary: [f32; 3],
+    /// Color de realce del ciclo activo bajo `WT POS` (RGB lineal 0..1).
+    pub color_active: [f32; 3],
+    /// Color de fondo del visor (RGB lineal 0..1).
+    pub bg_color: [f32; 3],
+    /// Modo de degradado cromático.
+    pub gradient_mode: GradientMode,
+    /// Intensidad de mezcla del degradado (0.0 = sólo primario, 1.0 = degradado completo).
+    pub gradient_mix: f32,
+    /// Cuánto se tiñe el ciclo activo hacia `color_active` (0.0..1.0).
+    pub active_boost: f32,
+    /// Invierte la dirección del degradado (`false` = normal, `true` = invertido).
+    pub gradient_invert: bool,
+    /// Desplazamiento de fase cromática (0.0..1.0) para el modo `Rainbow`.
+    pub rainbow_shift: f32,
 }
 
 impl Default for RenderSettings {
@@ -316,6 +452,15 @@ impl Default for RenderSettings {
             mesh: MeshType::default(),
             aa_feather: 1.0,
             glow: 1.0,
+            color_primary: [1.0, 0.55, 0.15],
+            color_secondary: [0.12, 0.86, 1.0],
+            color_active: [1.0, 0.92, 0.55],
+            bg_color: [0.043, 0.047, 0.059],
+            gradient_mode: GradientMode::Solid,
+            gradient_mix: 0.85,
+            active_boost: 0.0,
+            gradient_invert: false,
+            rainbow_shift: 0.0,
         }
     }
 }
@@ -343,6 +488,23 @@ impl RenderSettings {
         mix(self.mesh as u64);
         mix(self.aa_feather.to_bits() as u64);
         mix(self.glow.to_bits() as u64);
+        for c in self.color_primary {
+            mix(c.to_bits() as u64);
+        }
+        for c in self.color_secondary {
+            mix(c.to_bits() as u64);
+        }
+        for c in self.color_active {
+            mix(c.to_bits() as u64);
+        }
+        for c in self.bg_color {
+            mix(c.to_bits() as u64);
+        }
+        mix(self.gradient_mode as u64);
+        mix(self.gradient_mix.to_bits() as u64);
+        mix(self.active_boost.to_bits() as u64);
+        mix(u64::from(self.gradient_invert));
+        mix(self.rainbow_shift.to_bits() as u64);
         hash
     }
 }
@@ -1169,13 +1331,19 @@ pub struct MeshUniforms {
     pub light_dir: [f32; 3],
     /// Intensidad de la luz.
     pub light_intensity: f32,
-    /// Tinte base.
+    /// Tinte primario / inicial de la malla (RGBA).
     pub tint: [f32; 4],
     /// Ancho del suavizado de borde en píxeles (ver `RenderSettings`).
     pub aa_feather: f32,
     /// Relleno a 16 bytes: el tamaño total tiene que ser múltiplo de 16 como
     /// el `struct Uniforms` del WGSL.
     pub _pad: [f32; 3],
+    /// Tinte secundario del degradado (RGB) + mezcla `0..1` en `.a`.
+    pub tint_secondary: [f32; 4],
+    /// Tinte de realce del ciclo activo bajo `WT POS` (RGB) + boost `0..1` en `.a`.
+    pub tint_active: [f32; 4],
+    /// Parámetros del degradado (`[modo, invertir, z_span, rainbow_shift]`).
+    pub gradient_params: [f32; 4],
 }
 
 impl Default for MeshUniforms {
@@ -1577,10 +1745,11 @@ mod tests {
 
     #[test]
     fn uniform_buffer_matches_the_wgsl_struct() {
-        // mat4x4 (64) + vec3 + f32 (16) + vec4 (16) + f32 + pad (16) = 112
+        // mat4x4 (64) + vec3 + f32 (16) + vec4 (16) + f32 + pad (16)
+        // + tint_secondary (16) + tint_active (16) + gradient_params (16) = 160
         // bytes. Con `min_binding_size: None` en el layout, wgpu no valida
         // esto: el síntoma es iluminación corrida.
-        assert_eq!(std::mem::size_of::<MeshUniforms>(), 112);
+        assert_eq!(std::mem::size_of::<MeshUniforms>(), 160);
     }
 
     #[test]
@@ -2047,6 +2216,15 @@ mod tests {
             |s| s.mesh = MeshType::Solid,
             |s| s.aa_feather = 0.0,
             |s| s.glow = 1.5,
+            |s| s.color_primary = [0.2, 0.8, 1.0],
+            |s| s.color_secondary = [1.0, 0.2, 0.7],
+            |s| s.color_active = [0.5, 1.0, 0.5],
+            |s| s.bg_color = [0.1, 0.1, 0.15],
+            |s| s.gradient_mode = GradientMode::DepthZ,
+            |s| s.gradient_mix = 0.4,
+            |s| s.active_boost = 0.6,
+            |s| s.gradient_invert = true,
+            |s| s.rainbow_shift = 0.5,
         ] {
             let mut other = RenderSettings::default();
             set(&mut other);

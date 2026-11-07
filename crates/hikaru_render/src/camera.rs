@@ -394,6 +394,9 @@ impl Camera {
             // valor del panel (ver `render_viewer` en `hikaru_gui`).
             aa_feather: 1.0,
             _pad: [0.0; 3],
+            tint_secondary: [tint[0], tint[1], tint[2], 0.0],
+            tint_active: [tint[0], tint[1], tint[2], 0.0],
+            gradient_params: [0.0, 0.0, 240.0, 0.0],
         }
     }
 }

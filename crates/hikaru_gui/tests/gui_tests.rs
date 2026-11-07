@@ -497,6 +497,102 @@ fn bitwig_layout_toggles_mode_and_view_coherence() {
 }
 
 #[test]
+fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
+    use hikaru_audio_engine::AudioEngine;
+    use hikaru_core::SampleRate;
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::AudioProxy;
+    use hikaru_gui::views::dsp_rack::{self, OPEN_WAVETABLE_CARD_WIDTH, RACK_HEIGHT};
+    use hikaru_gui::views::mixer::DspSlot;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let (tx, _rx) = mpsc::channel();
+    let proxy = AudioProxy::new(tx);
+    let clock = Arc::new(AtomicU64::new(0));
+    let level = Arc::new(AtomicU32::new(0));
+    static WT: [f32; 2048] = [0.0f32; 2048];
+    let engine = AudioEngine::new(SampleRate::new(48000.0), &WT, clock.clone());
+    let mut state = AppState::new(proxy, clock, level, Some(Arc::new(Mutex::new(engine))));
+
+    // Insert OpenWavetable on Track 1 (index 1)
+    let mut slot = DspSlot::default();
+    slot.name = "OpenWavetable".to_string();
+    state.live_tracks[1].effects.push(slot);
+    state.selected_track_index = 1;
+    state.selected_slot_index = 0;
+
+    let ctx = egui::Context::default();
+    hikaru_gui::theme::apply_theme(&ctx);
+
+    let dock_h = RACK_HEIGHT + 6.0;
+    for frame_i in 0..3 {
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(1280.0, 720.0),
+        ));
+        let mut used_rect = egui::Rect::NOTHING;
+        let out = ctx.run(raw_input, |ctx| {
+            egui::TopBottomPanel::bottom("bottom_dock")
+                .exact_height(dock_h)
+                .show(ctx, |ui| {
+                    let top_before = ui.cursor().min.y;
+                    dsp_rack::render(ui, &mut state);
+                    used_rect = ui.min_rect();
+                    assert!(
+                        (used_rect.min.y - top_before).abs() <= 2.0,
+                        "Frame {frame_i}: dsp_rack debe arrancar arriba del dock (min.y={}, top_before={})",
+                        used_rect.min.y,
+                        top_before
+                    );
+                });
+        });
+
+        let dock_top = 720.0 - dock_h;
+        let mut found_title = false;
+        let mut found_basic_shapes = false;
+        for clipped in &out.shapes {
+            if let egui::epaint::Shape::Text(txt) = &clipped.shape {
+                let s = txt.galley.text();
+                if s == "OpenWavetable" {
+                    found_title = true;
+                    assert!(
+                        txt.pos.y <= dock_top + 32.0,
+                        "Frame {frame_i}: el título 'OpenWavetable' debe estar arriba de la tarjeta (y={}, dock_top={dock_top})",
+                        txt.pos.y
+                    );
+                }
+                if s.starts_with("Basic Shapes") {
+                    found_basic_shapes = true;
+                    assert!(
+                        txt.pos.y <= dock_top + 56.0,
+                        "Frame {frame_i}: 'Basic Shapes' debe estar arriba del cuerpo de OpenWavetable (y={}, dock_top={dock_top})",
+                        txt.pos.y
+                    );
+                }
+            }
+        }
+        assert!(found_title, "Frame {frame_i}: debe pintarse el título OpenWavetable");
+        assert!(found_basic_shapes, "Frame {frame_i}: debe pintarse Basic Shapes");
+
+        // Verify that every painted shape inside bottom_dock starts near the top of the dock
+        // and stays strictly within OPEN_WAVETABLE_CARD_WIDTH horizontally.
+        assert!(
+            used_rect.height() <= dock_h + 2.0,
+            "Frame {frame_i}: dsp_rack no debe desbordar la altura del dock ({} > {})",
+            used_rect.height(),
+            dock_h
+        );
+        assert!(
+            used_rect.width() <= 1280.0 && OPEN_WAVETABLE_CARD_WIDTH <= 460.0,
+            "Frame {frame_i}: el ancho de OpenWavetable debe mantenerse compacto ({})",
+            used_rect.width()
+        );
+    }
+}
+
+#[test]
 fn bitwig_wgpu_sdf_shader_parses_and_validates_cleanly() {
     use hikaru_gui::ui::bitwig_wgpu::BITWIG_SDF_SHADER;
     use naga::valid::{Capabilities, ValidationFlags, Validator};
@@ -568,4 +664,33 @@ fn lemon_studio_vector_icons_and_meter_ballistics_coherence() {
     assert_eq!(tr1.color, egui::Color32::from_rgb(0xFF, 0x55, 0x00));
     assert_eq!(tr2.color, egui::Color32::from_rgb(0xE5, 0xAE, 0x19));
     assert_eq!(tr3.color, egui::Color32::from_rgb(0x3A, 0xA8, 0xE0));
+}
+
+#[test]
+fn openwavetable_default_starts_in_3d_with_multicycle_table_and_mesh_controls() {
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::{
+        SettingParam, WavetableEditor,
+    };
+    use hikaru_render::{MeshType, RenderMode};
+
+    let mut editor = WavetableEditor::default();
+    assert_eq!(
+        editor.render_mode,
+        RenderMode::Mode3D,
+        "OpenWavetable debe arrancar en modo 3D por defecto"
+    );
+    assert!(
+        editor.frame_count() > 1,
+        "La tabla inicial de OpenWavetable debe tener múltiples ciclos para apilar en 3D (frames={})",
+        editor.frame_count()
+    );
+    assert_eq!(editor.render_settings.mesh, MeshType::Wireframe);
+    editor.render_settings.mesh = editor.render_settings.mesh.cycle();
+    assert_eq!(editor.render_settings.mesh, MeshType::Ribbon);
+    editor.render_settings.mesh = editor.render_settings.mesh.cycle();
+    assert_eq!(editor.render_settings.mesh, MeshType::Solid);
+
+    let hash_before = editor.render_settings.key_hash();
+    SettingParam::Yaw.set(&mut editor.render_settings, 22.0);
+    assert_ne!(hash_before, editor.render_settings.key_hash());
 }

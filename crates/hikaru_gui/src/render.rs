@@ -889,13 +889,11 @@ impl WavetableViewport {
     /// knob con el valor viejo durante un frame.
     pub fn view(&mut self, request: &WavetableViewRequest<'_>) -> WavetableView {
         let viewer_key = request.viewer.key();
-        let knob_key = knob_key(request.morph, request.knob_body, request.knob_marker);
+        let viewer_hash = frame_key_hash(viewer_key);
 
-        // Atajo de cache: los dos están igual, no hay nada que hacer.
-        if let (Some(viewer), Some(knob)) =
-            (self.viewer.get(frame_key_hash(viewer_key)), self.knob.get(knob_key))
-        {
-            return WavetableView { viewer: Some(viewer), knob: Some(knob), error: None };
+        // Atajo de cache: si el visor no cambió, reutilizamos la imagen sin readback.
+        if let Some(viewer) = self.viewer.get(viewer_hash) {
+            return WavetableView { viewer: Some(viewer), knob: None, error: None };
         }
 
         // El renderer se mueve por un rato porque `ensure_mesh` lo necesita por
@@ -904,7 +902,7 @@ impl WavetableViewport {
             return WavetableView::empty(self.last_error.clone());
         };
 
-        let result = self.render_view(&mut renderer, request, (viewer_key, knob_key));
+        let result = self.render_view(&mut renderer, request, viewer_key);
 
         // Se devuelve siempre, incluso si el render falló: si no, el primer
         // error mataría el renderer para el resto de la sesión.
@@ -931,20 +929,18 @@ impl WavetableViewport {
         }
     }
 
-    /// Dibuja las dos piezas y las sube como imágenes.
+    /// Dibuja el visor 3D y lo sube como imagen cacheada.
     fn render_view(
         &mut self,
         renderer: &mut HikaruRenderer,
         request: &WavetableViewRequest<'_>,
-        keys: (FrameKey, u64),
+        viewer_key: FrameKey,
     ) -> Result<WavetableView, RendererError> {
         let viewer = self.render_viewer(renderer, request)?;
-        let knob = self.render_knob(renderer, request)?;
 
-        self.viewer.store(frame_key_hash(keys.0), viewer.clone());
-        self.knob.store(keys.1, knob.clone());
+        self.viewer.store(frame_key_hash(viewer_key), viewer.clone());
 
-        Ok(WavetableView { viewer: Some(viewer), knob: Some(knob), error: None })
+        Ok(WavetableView { viewer: Some(viewer), knob: None, error: None })
     }
 
     /// El visor: la cinta de la Wavetable.
@@ -975,11 +971,48 @@ impl WavetableViewport {
         } else {
             1.0
         };
+        let sanitize_rgb = |rgb: [f32; 3]| -> [f32; 3] {
+            [
+                if rgb[0].is_finite() { rgb[0].clamp(0.0, 1.0) } else { 1.0 },
+                if rgb[1].is_finite() { rgb[1].clamp(0.0, 1.0) } else { 0.55 },
+                if rgb[2].is_finite() { rgb[2].clamp(0.0, 1.0) } else { 0.15 },
+            ]
+        };
+        let c_pri = sanitize_rgb(viewer.settings.color_primary);
+        let c_sec = sanitize_rgb(viewer.settings.color_secondary);
+        let c_act = sanitize_rgb(viewer.settings.color_active);
+        let grad_mix = if viewer.settings.gradient_mix.is_finite() {
+            viewer.settings.gradient_mix.clamp(0.0, 1.0)
+        } else {
+            0.85
+        };
+        let act_boost = if viewer.settings.active_boost.is_finite() {
+            viewer.settings.active_boost.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let rainbow_shift = if viewer.settings.rainbow_shift.is_finite() {
+            viewer.settings.rainbow_shift.rem_euclid(1.0)
+        } else {
+            0.0
+        };
         let tint = [
-            viewer.tint[0] * glow,
-            viewer.tint[1] * glow,
-            viewer.tint[2] * glow,
+            c_pri[0] * glow,
+            c_pri[1] * glow,
+            c_pri[2] * glow,
             viewer.tint[3],
+        ];
+        let tint_secondary = [
+            c_sec[0] * glow,
+            c_sec[1] * glow,
+            c_sec[2] * glow,
+            grad_mix,
+        ];
+        let tint_active = [
+            c_act[0] * glow,
+            c_act[1] * glow,
+            c_act[2] * glow,
+            act_boost,
         ];
         // Un feather negativo o NaN apagaría la malla en el shader (alfa ≤ 0):
         // se sanea acá porque el WGSL no valida.
@@ -988,16 +1021,23 @@ impl WavetableViewport {
         } else {
             1.0
         };
+        let depth_scale = if viewer.settings.depth_scale.is_finite() {
+            viewer.settings.depth_scale.clamp(0.1, 4.0)
+        } else {
+            1.0
+        };
+        let z_span = (viewer.mesh_params.thickness * depth_scale).max(1.0);
+        let gradient_params = [
+            viewer.settings.gradient_mode.shader_code(),
+            if viewer.settings.gradient_invert { 1.0 } else { 0.0 },
+            z_span,
+            rainbow_shift,
+        ];
         let uniforms = match viewer.render_mode {
             RenderMode::Mode3D => {
                 // La escala de profundidad del panel estira la caja que se
                 // encuadra, igual que estira la geometría: las dos leen el
                 // mismo ajuste y el terreno siempre cabe en pantalla.
-                let depth_scale = if viewer.settings.depth_scale.is_finite() {
-                    viewer.settings.depth_scale.clamp(0.1, 4.0)
-                } else {
-                    1.0
-                };
                 MeshUniforms {
                     view_proj: terrain_view_proj_angled(
                         [
@@ -1017,6 +1057,9 @@ impl WavetableViewport {
                     tint,
                     aa_feather,
                     _pad: [0.0; 3],
+                    tint_secondary,
+                    tint_active,
+                    gradient_params,
                 }
             }
             RenderMode::Mode2D => {
@@ -1031,6 +1074,9 @@ impl WavetableViewport {
                 );
                 let mut uniforms = camera.uniforms(aspect, tint);
                 uniforms.aa_feather = aa_feather;
+                uniforms.tint_secondary = tint_secondary;
+                uniforms.tint_active = tint_active;
+                uniforms.gradient_params = gradient_params;
                 uniforms
             }
         };
@@ -1053,6 +1099,7 @@ impl WavetableViewport {
     }
 
     /// El knob de `WT POS`.
+    #[allow(dead_code)]
     fn render_knob(
         &mut self,
         renderer: &mut HikaruRenderer,
