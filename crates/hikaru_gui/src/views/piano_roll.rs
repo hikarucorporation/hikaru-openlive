@@ -1,14 +1,9 @@
+// Piano Roll / Editor MIDI
 use std::collections::{HashMap, HashSet};
 
-use gpui_kit::component::*;
-use gpui_kit::component::button::Button;
-use gpui_kit::component::label::Label;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
-use gpui_kit::*;
-
-use crate::app::{state, HikaruApp};
+use crate::app::AppState;
 use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::theme;
 use super::hikaru_native_plugins::hikaru_opendms::OpenDms;
 use super::mixer::Track;
 
@@ -37,22 +32,13 @@ pub struct PianoRollState {
     pub mode: PianoRollMode,
     pub zoom_x: f32,
     pub key_height: f32,
-    /// Scroll del área de grilla (ambos ejes). Vive acá y no en la vista
-    /// porque los handlers de click necesitan restar el offset para traducir
-    /// coordenadas de ventana a contenido, y `ScrollHandle` no depende de GPUI.
-    pub grid_scroll: gpui_kit::ScrollHandle,
-    /// `true` una vez que se aplicó el layout inicial (zoom + foco en C4).
-    /// Se hace UNA vez: si no, cada frame recolocaría el scroll y el usuario
-    /// no podría scrollear.
+    pub scroll_offset: egui::Vec2,
     pub layout_initialized: bool,
-    /// Frames restantes esperando el primer prepaint (ver `LAYOUT_WAIT_FRAMES`).
     pub layout_wait_frames: u8,
     pub notes: Vec<MidiNote>,
     pub drum_map: HashMap<u8, String>,
     pub playhead_tick: u64,
     pub prev_playhead_tick: u64,
-    #[allow(dead_code)]
-    triggered_notes: HashSet<(u8, u64)>,
     pub selection_start_tick: u64,
     pub selection_end_tick: u64,
     pub selection_active: bool,
@@ -72,8 +58,8 @@ pub struct PianoRollState {
     pub note_resize_delta_duration: i64,
     pub selected_notes: HashSet<usize>,
     pub note_marquee_active: bool,
-    pub note_marquee_start: Option<gpui_kit::Point<gpui_kit::Pixels>>,
-    pub note_marquee_current: Option<gpui_kit::Point<gpui_kit::Pixels>>,
+    pub note_marquee_start: Option<egui::Pos2>,
+    pub note_marquee_current: Option<egui::Pos2>,
     pub note_marquee_additive: bool,
     pub notes_source_slot: Option<(usize, usize)>,
     pub note_move_active: bool,
@@ -81,7 +67,7 @@ pub struct PianoRollState {
     pub note_move_orig: Vec<(usize, u64, u8)>,
     pub note_move_preview_delta_ticks: i64,
     pub note_move_preview_delta_rows: i32,
-    pub note_move_origin_pointer: Option<gpui_kit::Point<gpui_kit::Pixels>>,
+    pub note_move_origin_pointer: Option<egui::Pos2>,
 }
 
 impl Default for PianoRollState {
@@ -90,14 +76,13 @@ impl Default for PianoRollState {
             mode: PianoRollMode::Keys,
             zoom_x: DEFAULT_ZOOM_X,
             key_height: DEFAULT_KEY_HEIGHT,
-            grid_scroll: gpui_kit::ScrollHandle::default(),
+            scroll_offset: egui::Vec2::ZERO,
             layout_initialized: false,
             layout_wait_frames: 0,
             notes: Vec::new(),
             drum_map: HashMap::new(),
             playhead_tick: 0,
             prev_playhead_tick: 0,
-            triggered_notes: HashSet::new(),
             selection_start_tick: 0,
             selection_end_tick: 0,
             selection_active: false,
@@ -174,496 +159,92 @@ impl PianoRollState {
 }
 
 pub fn sync_drum_map_from_opendms(state: &mut PianoRollState, opendms: &OpenDms) {
-    let pad_entries: Vec<(u8, String)> = opendms.pads.iter().map(|pad| {
-        let display_name = if pad.sample_path.is_some() {
-            let filename = pad.display_filename();
-            format!("{}: {}", pad.name, filename)
-        } else {
-            pad.name.clone()
-        };
-        (pad.midi_note, display_name)
-    }).collect();
-
     state.drum_map.clear();
-    for (pitch, name) in pad_entries {
-        state.drum_map.insert(pitch, name);
+    for pad in &opendms.pads {
+        if let Some(ref path) = pad.sample_path {
+            let name = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Sample")
+                .to_string();
+            state.drum_map.insert(pad.midi_note, name);
+        }
     }
+    state.mode = if state.drum_map.is_empty() {
+        PianoRollMode::Keys
+    } else {
+        PianoRollMode::Drums
+    };
 }
 
 fn find_opendms_in_track(track: &Track) -> Option<&OpenDms> {
-    track.effects.iter().find_map(|slot| {
-        if slot.name == "Hikaru OpenDMS" {
-            slot.dms_state.as_ref()
-        } else {
-            None
-        }
-    })
+    track.effects.iter().find_map(|slot| slot.dms_state.as_ref())
 }
 
-const QUANTIZE_TICKS: u64 = 240;
 pub const TICKS_PER_BEAT: u64 = 960;
 pub const TICKS_PER_BAR: u64 = 3840;
 pub const RULER_HEIGHT: f32 = 24.0;
-const NOTE_INSERT_VELOCITY: u8 = 100;
-#[allow(dead_code)]
-const NOTE_EDGE_HIT_W: f32 = 8.0;
-const MIN_NOTE_DURATION_TICKS: u64 = QUANTIZE_TICKS;
-
-// =========================================================================
-// GEOMETRÍA DEL PANEL (virtualización + layout inicial)
-// =========================================================================
-//
-// La grilla es de 128 filas MIDI de alto fijo, así que SIEMPRE desborda el
-// panel: sin scroll vertical el usuario queda clavado en la fila 0 (G9) y ve
-// un área vacía. Y el zoom por defecto tenía que hacer que un compás entre en
-// el panel; con el valor anterior (0.15) un compás medía 576 px, o sea que
-// sólo se veía un sliver de compás y el contenido crecía a ~74.000 px de ancho.
-
-/// Filas de la grilla (una por nota MIDI, 0 = pitch 127 = G9).
 pub const MIDI_KEY_COUNT: u32 = 128;
-/// Columna de nombres de tecla, en px de contenido.
-pub const SIDEBAR_WIDTH: f32 = 140.0;
-/// Alto por defecto de una fila de tecla, en px.
+pub const SIDEBAR_WIDTH: f32 = 120.0;
 pub const DEFAULT_KEY_HEIGHT: f32 = 16.0;
-/// Zoom por defecto: 4 compases entran en el ancho útil del panel.
 pub const DEFAULT_ZOOM_X: f32 = 0.06;
 pub const MIN_ZOOM_X: f32 = 0.008;
 pub const MAX_ZOOM_X: f32 = 0.5;
-/// Compases que siempre se pueden scrollear aunque no haya notas.
 pub const DEFAULT_BARS: u64 = 32;
-/// Pitch al que apunta la vista al abrir el panel (C4, el centro del registro
-/// useful). Antes el scroll arrancaba en 0 => G9.
 pub const FOCUS_PITCH: u8 = 60;
-/// Compases que el zoom inicial intenta que entren en el panel.
 pub const BARS_FIT_TO_PANEL: f32 = 4.0;
-/// Espacio reservado a la barra de scroll vertical al calculaar el zoom.
-const SCROLLBAR_ALLOWANCE: f32 = 16.0;
-/// Filas extra por arriba y por abajo del viewport, para que un scroll rápido
-/// no muestre un borde vacío.
 const ROW_OVERSCAN: u32 = 4;
-/// Margen extra en ticks a ambos lados (un compás reach).
 const TICK_OVERSCAN: u64 = TICKS_PER_BAR;
-/// Viewport de Backup: antes del primer prepaint el handle todavía no conoce
-/// el tamaño real. Es un piso, no un techo, así que la grilla siempre dibuja
-/// algo acotado en vez de las 128 filas.
 const MIN_VIEWPORT_W: f32 = 480.0;
 const MIN_VIEWPORT_H: f32 = 180.0;
-/// Frames que se piden para esperar el primer prepaint que publique el tamaño
-/// real del viewport. Acotado: si el panel nunca se layoutea (0 px), el piano
-/// roll no puede pedir frames para siempre.
-const LAYOUT_WAIT_FRAMES: u8 = 8;
 
 const PITCH_CLASS_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
-/// Nombres de las 128 teclas ("C-1".."G9"), indexados por fila.
-///
-/// Antes se armaban con `format!` las 128 etiquetas en CADA frame. La tabla se
-/// calcula una única vez: en el loop de render sólo hay un clon de
-/// `SharedString` (que es un `SmolStr`, o sea un refcount).
-fn pitch_name_table() -> &'static [gpui_kit::SharedString; MIDI_KEY_COUNT as usize] {
-    static TABLE: std::sync::OnceLock<[gpui_kit::SharedString; MIDI_KEY_COUNT as usize]> =
-        std::sync::OnceLock::new();
-    TABLE.get_or_init(|| {
-        std::array::from_fn(|row| {
-            let pitch = (MIDI_KEY_COUNT as usize - 1 - row) as u8;
-            gpui_kit::SharedString::from(format!(
-                "{}{}",
-                PITCH_CLASS_NAMES[(pitch % 12) as usize],
-                (pitch / 12) as i32 - 1
-            ))
-        })
-    })
+pub fn pitch_name(pitch: u8) -> String {
+    let octave = (pitch as i32 / 12) - 1;
+    let name = PITCH_CLASS_NAMES[(pitch % 12) as usize];
+    format!("{}{}", name, octave)
 }
 
-fn quantize_tick(tick: u64, step: u64) -> u64 {
-    if step == 0 {
+pub fn is_black_key(pitch: u8) -> bool {
+    matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
+}
+
+pub fn quantize_tick(tick: u64, step: u64) -> u64 {
+    if step <= 1 {
         return tick;
     }
-    (tick / step) * step
+    let half = step / 2;
+    ((tick + half) / step) * step
 }
 
-#[allow(dead_code)]
-fn resize_note_left(orig_start: u64, orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
-    let end = orig_start.saturating_add(orig_duration);
-    let min_dur = MIN_NOTE_DURATION_TICKS;
-    if end <= min_dur {
-        return (0, end.max(min_dur));
-    }
-    let new_start = quantize_tick(pointer_tick, QUANTIZE_TICKS).min(end - min_dur);
-    let new_duration = end - new_start;
-    (new_start, new_duration)
-}
-
-#[allow(dead_code)]
-fn resize_note_right(orig_start: u64, _orig_duration: u64, pointer_tick: u64) -> (u64, u64) {
-    let min_dur = MIN_NOTE_DURATION_TICKS;
-    let new_end = quantize_tick(pointer_tick, QUANTIZE_TICKS).max(orig_start + min_dur);
-    let new_duration = new_end - orig_start;
-    (orig_start, new_duration)
-}
-
-fn apply_resize_left_delta(orig_start: u64, orig_duration: u64, delta_start: i64) -> (u64, u64) {
-    let end = orig_start.saturating_add(orig_duration);
-    let min_end = orig_start.saturating_add(MIN_NOTE_DURATION_TICKS);
-    let new_end = end.max(min_end);
-    let raw_start = (orig_start as i64).saturating_add(delta_start);
-    let new_start = (raw_start.max(0) as u64).min(new_end.saturating_sub(MIN_NOTE_DURATION_TICKS));
-    (new_start, new_end.saturating_sub(new_start))
-}
-
-fn apply_resize_right_delta(orig_start: u64, orig_duration: u64, delta_duration: i64) -> (u64, u64) {
-    let raw_dur = (orig_duration as i64).saturating_add(delta_duration);
-    let new_dur = (raw_dur.max(MIN_NOTE_DURATION_TICKS as i64) as u64)
-        .max(MIN_NOTE_DURATION_TICKS);
-    (orig_start, new_dur)
-}
-
-#[allow(dead_code)]
-fn compute_resize_left_delta(
-    targets: &[(usize, u64, u64)],
-    grab_index: usize,
-    pointer_tick: u64,
-) -> i64 {
-    let (_, orig_start, orig_duration) = match targets.iter().find(|(i, _, _)| *i == grab_index) {
-        Some(t) => *t,
-        None => return 0,
-    };
-    let (new_start, _) = resize_note_left(orig_start, orig_duration, pointer_tick);
-    (new_start as i64) - (orig_start as i64)
-}
-
-#[allow(dead_code)]
-fn compute_resize_right_delta(
-    targets: &[(usize, u64, u64)],
-    grab_index: usize,
-    pointer_tick: u64,
-) -> i64 {
-    let (_, orig_start, orig_duration) = match targets.iter().find(|(i, _, _)| *i == grab_index) {
-        Some(t) => *t,
-        None => return 0,
-    };
-    let (_, new_dur) = resize_note_right(orig_start, orig_duration, pointer_tick);
-    (new_dur as i64) - (orig_duration as i64)
-}
-
-#[allow(dead_code)]
-fn build_resize_targets(
-    notes: &[MidiNote],
-    grab_index: usize,
-    selected: &HashSet<usize>,
-) -> Vec<(usize, u64, u64)> {
-    let mut idxs: Vec<usize> = if selected.contains(&grab_index) && selected.len() > 1 {
-        selected.iter().copied().filter(|&i| i < notes.len()).collect()
-    } else {
-        vec![grab_index]
-    };
-    if !idxs.contains(&grab_index) && grab_index < notes.len() {
-        idxs.push(grab_index);
-    }
-    idxs.sort_unstable();
-    idxs.dedup();
-    idxs.into_iter()
-        .filter_map(|i| notes.get(i).map(|n| (i, n.start_tick, n.duration_ticks)))
-        .collect()
-}
-
-fn apply_move_delta(start_tick: u64, pitch: u8, delta_ticks: i64, delta_rows: i32) -> (u64, u8) {
-    let new_start = if delta_ticks >= 0 {
-        start_tick.saturating_add(delta_ticks as u64)
-    } else {
-        start_tick.saturating_sub(delta_ticks.unsigned_abs())
-    };
-    let new_pitch = (i32::from(pitch) - delta_rows).clamp(0, 127) as u8;
-    (new_start, new_pitch)
-}
-
-#[allow(dead_code)]
-fn compute_note_move_deltas(
-    orig: &[(usize, u64, u8)],
-    grab_index: usize,
-    raw_delta_ticks: i64,
-    raw_delta_rows: i32,
-) -> (i64, i32) {
-    let grab_start = match orig.iter().find(|(i, _, _)| *i == grab_index) {
-        Some((_, start, _)) => *start,
-        None => return (0, 0),
-    };
-
-    let target = (grab_start as i64)
-        .saturating_add(raw_delta_ticks)
-        .max(0);
-    let snapped = quantize_tick(target as u64, QUANTIZE_TICKS) as i64;
-    let mut delta_ticks = snapped - grab_start as i64;
-
-    if let Some(min_start) = orig.iter().map(|(_, s, _)| *s).min() {
-        if delta_ticks < 0 {
-            delta_ticks = delta_ticks.max(-(min_start as i64));
-        }
-    }
-
-    let mut delta_rows = raw_delta_rows;
-    if let (Some(min_pitch), Some(max_pitch)) = (
-        orig.iter().map(|(_, _, p)| i32::from(*p)).min(),
-        orig.iter().map(|(_, _, p)| i32::from(*p)).max(),
-    ) {
-        delta_rows = delta_rows.clamp(max_pitch - 127, min_pitch);
-    }
-
-    (delta_ticks, delta_rows)
-}
-
-fn select_note_set(selected: &mut HashSet<usize>, index: usize, additive: bool) {
-    if additive {
-        selected.insert(index);
-    } else if !selected.contains(&index) {
-        selected.clear();
-        selected.insert(index);
-    }
-}
-
-#[allow(dead_code)]
-fn hit_test_note_body(
-    notes: &[MidiNote],
-    pos: Point<Pixels>,
-    grid_rect: Bounds<Pixels>,
-    zoom_x: f32,
-    key_height: f32,
-) -> Option<usize> {
-    let inset = NOTE_EDGE_HIT_W * 0.5;
-    for (i, note) in notes.iter().enumerate().rev() {
-        let rect = note_rect(grid_rect, note, zoom_x, key_height);
-        if !rect.intersects(&grid_rect) || !rect.contains(&pos) {
-            continue;
-        }
-        if rect.size.width.as_f32() <= NOTE_EDGE_HIT_W {
-            return None;
-        }
-        let body = Bounds::new(
-            point(rect.origin.x + px(inset), rect.origin.y),
-            size(rect.size.width - px(inset * 2.0), rect.size.height),
-        );
-        if body.contains(&pos) {
-            return Some(i);
-        }
-    }
-    None
-}
-
-#[allow(dead_code)]
-fn hit_test_note_full(
-    notes: &[MidiNote],
-    pos: Point<Pixels>,
-    grid_rect: Bounds<Pixels>,
-    zoom_x: f32,
-    key_height: f32,
-) -> Option<usize> {
-    for (i, note) in notes.iter().enumerate().rev() {
-        let rect = note_rect(grid_rect, note, zoom_x, key_height);
-        if rect.intersects(&grid_rect) && rect.contains(&pos) {
-            return Some(i);
-        }
-    }
-    None
-}
-
-#[allow(dead_code)]
-fn notes_in_marquee(
-    notes: &[MidiNote],
-    marquee: Bounds<Pixels>,
-    grid_rect: Bounds<Pixels>,
-    zoom_x: f32,
-    key_height: f32,
-) -> HashSet<usize> {
-    let mut out = HashSet::new();
-    for (i, note) in notes.iter().enumerate() {
-        let rect = note_rect(grid_rect, note, zoom_x, key_height);
-        if rect.intersects(&marquee) {
-            out.insert(i);
-        }
-    }
-    out
-}
-
-#[allow(dead_code)]
-fn remove_selected_notes(notes: &mut Vec<MidiNote>, selected: &mut HashSet<usize>) -> usize {
-    let sel = std::mem::take(selected);
-    let before = notes.len();
-    *notes = std::mem::take(notes)
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| !sel.contains(i))
-        .map(|(_, n)| n)
-        .collect();
-    before - notes.len()
-}
-
-#[allow(dead_code)]
-fn duplicate_selected_notes(
-    notes: &mut Vec<MidiNote>,
-    selected: &HashSet<usize>,
-) -> Vec<usize> {
-    if selected.is_empty() {
-        return Vec::new();
-    }
-
-    let mut sorted: Vec<usize> = selected.iter().copied().filter(|&i| i < notes.len()).collect();
-    sorted.sort_unstable();
-
-    let mut selected_notes: Vec<MidiNote> = Vec::with_capacity(sorted.len());
-    for i in sorted {
-        selected_notes.push(notes[i].clone());
-    }
-    if selected_notes.is_empty() {
-        return Vec::new();
-    }
-
-    let min_start = selected_notes.iter().map(|n| n.start_tick).min().unwrap_or(0);
-    let max_end = selected_notes
-        .iter()
-        .map(|n| n.start_tick + n.duration_ticks)
-        .max()
-        .unwrap_or(0);
-    let duration_block = max_end.saturating_sub(min_start);
-
-    let base = notes.len();
-    let mut new_indices = Vec::with_capacity(selected_notes.len());
-    for note in selected_notes {
-        let mut clone = note.clone();
-        clone.start_tick = note.start_tick.saturating_add(duration_block);
-        notes.push(clone);
-        new_indices.push(notes.len() - 1);
-    }
-    debug_assert_eq!(base + new_indices.len(), notes.len());
-    new_indices
-}
-
-pub fn trigger_playhead_notes(
-    state: &mut PianoRollState,
-    tracks: &[Track],
-    selected_track_index: usize,
-    audio_proxy: &AudioProxy,
-) {
-    let current_tick = state.playhead_tick;
-    let prev_tick = state.prev_playhead_tick;
-
-    if current_tick != prev_tick {
-        for note in &state.notes {
-            if note_just_crossed(prev_tick, current_tick, note.start_tick) {
-                let velocity_scale = note.velocity as f32 / 127.0;
-                preview_drum_pad(
-                    tracks,
-                    selected_track_index,
-                    note.pitch,
-                    velocity_scale,
-                    audio_proxy,
-                );
-            }
-        }
-    }
-
-    state.prev_playhead_tick = state.playhead_tick;
-}
-
-fn note_just_crossed(prev_tick: u64, current_tick: u64, start_tick: u64) -> bool {
-    (prev_tick < start_tick || prev_tick > current_tick)
-        && current_tick >= start_tick
-        && current_tick < start_tick + 240
-}
-
-#[allow(dead_code)]
-fn note_rect(grid_rect: Bounds<Pixels>, note: &MidiNote, zoom_x: f32, key_height: f32) -> Bounds<Pixels> {
-    let x = grid_rect.origin.x + px(note.start_tick as f32 * zoom_x);
-    let y = grid_rect.origin.y + px((127 - note.pitch) as f32 * key_height);
-    Bounds::new(
-        point(x, y),
-        size(
-            px((note.duration_ticks as f32 * zoom_x).max(4.0)),
-            px(key_height - 1.0),
-        ),
-    )
-}
-
-fn preview_drum_pad(
-    tracks: &[Track],
-    selected_track_index: usize,
-    pitch: u8,
-    velocity_scale: f32,
-    audio_proxy: &AudioProxy,
-) {
-    if let Some(track) = tracks.get(selected_track_index) {
-        if let Some(opendms) = find_opendms_in_track(track) {
-            if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == pitch) {
-                if pad.sample_path.is_some() {
-                    let adsr = &opendms.sampler.adsr;
-                    let speed = 2.0_f32.powf(pad.pitch / 12.0);
-                    audio_proxy.send(GuiCommand::DmsNoteOn {
-                        pad_idx: pad.id,
-                        gain: pad.volume * velocity_scale,
-                        pan: pad.pan,
-                        velocity: velocity_scale,
-                        play_speed: speed as f64,
-                        attack_ms: adsr.attack,
-                        decay_ms: adsr.decay,
-                        sustain: adsr.sustain,
-                        release_ms: adsr.release,
-                    });
-                }
-            }
-        }
-    }
-}
-
-/// Rango del contenido que realmente se ve, en coordenadas de contenido.
-///
-/// Es la clave de la virtualización: todo lo que se dibuja (teclas del sidebar,
-/// líneas de la grilla, notas, regla, playhead) se recorta contra este rango.
-/// Antes se iteraban las 128 filas y todas las notas en cada frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GridViewport {
-    /// Offset de scroll en px de contenido, normalizado a positivo (GPUI lo
-    /// devuelve negativo cuando se scrollea hacia abajo/hacia la derecha).
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub width: f32,
     pub height: f32,
-    /// Filas MIDI visibles, `[row_start, row_end)`. Fila 0 = pitch 127 = G9.
     pub row_start: u32,
     pub row_end: u32,
-    /// Ticks visibles, `[tick_start, tick_end]`.
     pub tick_start: u64,
     pub tick_end: u64,
 }
 
-impl GridViewport {
-    /// Alto en px que ocupa el rango de filas visible.
-    pub fn visible_rows_height(&self, key_height: f32) -> f32 {
-        (self.row_end.saturating_sub(self.row_start)) as f32 * key_height
-    }
-}
-
-/// Calcula el viewport visible de la grilla a partir del offset de scroll y del
-/// tamaño del área.
-///
-/// `viewport` es el tamaño que publica `ScrollHandle::bounds()`, válido recién
-/// después del prepaint del frame anterior; hasta entonces cae al piso
-/// `MIN_VIEWPORT_*`, para que el primer frame sea acotado en vez de pintar las
-/// 128 filas.
 pub fn compute_grid_viewport(
-    offset: Point<Pixels>,
-    viewport: gpui_kit::Size<Pixels>,
+    scroll_x: f32,
+    scroll_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
     key_height: f32,
     zoom_x: f32,
 ) -> GridViewport {
     let kh = if key_height > 0.5 { key_height } else { DEFAULT_KEY_HEIGHT };
     let zx = if zoom_x > f32::EPSILON { zoom_x } else { MIN_ZOOM_X };
-    let width = viewport.width.as_f32().max(MIN_VIEWPORT_W);
-    let height = viewport.height.as_f32().max(MIN_VIEWPORT_H);
-    let scroll_x = (-offset.x.as_f32()).max(0.0);
-    let scroll_y = (-offset.y.as_f32()).max(0.0);
+    let width = viewport_w.max(MIN_VIEWPORT_W);
+    let height = viewport_h.max(MIN_VIEWPORT_H);
 
-    // Las filas arrancan RULER_HEIGHT más abajo del contenido.
     let rows_top = scroll_y - RULER_HEIGHT;
     let rows_bottom = scroll_y + height - RULER_HEIGHT;
     let row_start = ((rows_top / kh).floor() as i64 - i64::from(ROW_OVERSCAN))
@@ -673,7 +254,6 @@ pub fn compute_grid_viewport(
         .max(row_start + 1)
         .min(MIDI_KEY_COUNT);
 
-    // El área de notas arranca SIDEBAR_WIDTH a la derecha del contenido.
     let ticks_left = scroll_x - SIDEBAR_WIDTH;
     let ticks_right = scroll_x + width - SIDEBAR_WIDTH;
     let tick_start = ((ticks_left / zx).floor() as i64 - TICK_OVERSCAN as i64).max(0) as u64;
@@ -692,676 +272,319 @@ pub fn compute_grid_viewport(
     }
 }
 
-/// ¿La nota toca el viewport? Comparación entera: no construye `Bounds`, así que
-/// recorrer todas las notas cuesta nanosegundos por nota en vez de un `div()`.
 pub fn note_visible_in(start_tick: u64, duration_ticks: u64, pitch: u8, vp: &GridViewport) -> bool {
     let row = i64::from(MIDI_KEY_COUNT) - 1 - i64::from(pitch);
     if row < i64::from(vp.row_start) || row >= i64::from(vp.row_end) {
         return false;
     }
-    // Las notas tienen ancho mínimo de 4 px, así que una nota que empieza justo
-    // afuera del viewport puede igual asomar: por eso `tick_start` ya trae un
-    // compás de overscan.
-    let end = start_tick.saturating_add(duration_ticks);
-    end >= vp.tick_start && start_tick <= vp.tick_end
+    let end_tick = start_tick.saturating_add(duration_ticks);
+    end_tick >= vp.tick_start && start_tick <= vp.tick_end
 }
 
-/// Zoom que hace entrar `bars` compases en el ancho útil del panel.
 pub fn fit_zoom_x(viewport_width: f32, bars: f32) -> f32 {
-    let usable = (viewport_width - SIDEBAR_WIDTH - SCROLLBAR_ALLOWANCE).max(120.0);
-    (usable / (bars.max(1.0) * TICKS_PER_BAR as f32)).clamp(MIN_ZOOM_X, MAX_ZOOM_X)
+    let usable_w = (viewport_width - SIDEBAR_WIDTH).max(120.0);
+    let total_ticks = bars.max(1.0) * TICKS_PER_BAR as f32;
+    (usable_w / total_ticks).clamp(MIN_ZOOM_X, MAX_ZOOM_X)
 }
 
-/// Y del contenido que debería quedar en el borde superior del viewport para
-/// dejar `pitch` en el medio del panel.
 pub fn focus_scroll_y(viewport_height: f32, key_height: f32, pitch: u8) -> f32 {
-    let kh = if key_height > 0.5 { key_height } else { DEFAULT_KEY_HEIGHT };
-    let row = MIDI_KEY_COUNT as f32 - 1.0 - f32::from(pitch);
-    let center = RULER_HEIGHT + (row + 0.5) * kh;
-    (center - viewport_height * 0.5).max(0.0)
+    let row = (MIDI_KEY_COUNT.saturating_sub(1) - u32::from(pitch)) as f32;
+    let target_y = RULER_HEIGHT + row * key_height;
+    (target_y - viewport_height * 0.5).max(0.0)
 }
 
-/// Ancho del contenido, en ticks.
-///
-/// Antes el piso eran `TICKS_PER_BAR * 128` compases, lo que al zoom anterior
-/// daba un canvas de ~74.000 px de ancho. Ahora el piso son `DEFAULT_BARS`
-/// compases y el contenido crece sólo hasta donde llegan las notas.
 pub fn total_ticks_for(max_note_tick: u64, playhead_tick: u64) -> u64 {
-    (TICKS_PER_BAR * DEFAULT_BARS)
-        .max(max_note_tick.max(playhead_tick).saturating_add(TICKS_PER_BAR * 2))
+    let default_ticks = DEFAULT_BARS * TICKS_PER_BAR;
+    max_note_tick.max(playhead_tick).max(default_ticks)
 }
 
-/// ¿Es una tecla negra? (C#, D#, F#, G#, A#)
-fn is_black_key(pitch: u8) -> bool {
-    matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
-}
+pub fn trigger_playhead_notes(
+    state: &mut PianoRollState,
+    tracks: &[Track],
+    selected_track_index: usize,
+    audio_proxy: &AudioProxy,
+) {
+    let current_tick = state.playhead_tick;
+    let prev_tick = state.prev_playhead_tick;
 
-/// Tablas de arrastre indexadas por índice de nota.
-///
-/// Antes cada nota hacía un `iter().find()` sobre `note_move_orig` y otro sobre
-/// `note_resize_targets`: dos O(n·m) por frame mientras se arrastraba. Ahora se
-/// indexa una vez por frame, y sólo si el arrastre está activo.
-fn drag_lookup_maps(
-    prs: &PianoRollState,
-) -> (HashMap<usize, (u64, u8)>, HashMap<usize, (u64, u64)>) {
-    let mut move_map = HashMap::new();
-    let mut resize_map = HashMap::new();
-    if prs.note_move_active {
-        move_map.reserve(prs.note_move_orig.len());
-        for &(i, start, pitch) in &prs.note_move_orig {
-            move_map.insert(i, (start, pitch));
-        }
-    }
-    if prs.note_resize_active {
-        resize_map.reserve(prs.note_resize_targets.len());
-        for &(i, start, dur) in &prs.note_resize_targets {
-            resize_map.insert(i, (start, dur));
-        }
-    }
-    (move_map, resize_map)
-}
-
-/// Geometría de la nota `i` con los previews de arrastre/resize ya aplicados.
-fn effective_note_geometry(
-    prs: &PianoRollState,
-    i: usize,
-    move_map: &HashMap<usize, (u64, u8)>,
-    resize_map: &HashMap<usize, (u64, u64)>,
-) -> (u64, u64, u8) {
-    let note = &prs.notes[i];
-    let (mut start, mut dur, mut pitch) = (note.start_tick, note.duration_ticks, note.pitch);
-    if let Some(&(orig_start, orig_pitch)) = move_map.get(&i) {
-        let (new_start, new_pitch) = apply_move_delta(
-            orig_start,
-            orig_pitch,
-            prs.note_move_preview_delta_ticks,
-            prs.note_move_preview_delta_rows,
-        );
-        start = new_start;
-        pitch = new_pitch;
-    }
-    if let Some(&(orig_start, orig_dur)) = resize_map.get(&i) {
-        match prs.note_resize_handle {
-            SelectionDragHandle::Left => {
-                let (new_start, new_dur) =
-                    apply_resize_left_delta(orig_start, orig_dur, prs.note_resize_delta_start);
-                start = new_start;
-                dur = new_dur;
+    if current_tick != prev_tick {
+        for note in &state.notes {
+            if (prev_tick < note.start_tick || prev_tick > current_tick)
+                && current_tick >= note.start_tick
+                && current_tick < note.start_tick + 240
+            {
+                let velocity_scale = note.velocity as f32 / 127.0;
+                preview_drum_pad(
+                    tracks,
+                    selected_track_index,
+                    note.pitch,
+                    velocity_scale,
+                    audio_proxy,
+                );
             }
-            SelectionDragHandle::Right => {
-                let (_, new_dur) =
-                    apply_resize_right_delta(orig_start, orig_dur, prs.note_resize_delta_duration);
-                dur = new_dur;
-            }
-            SelectionDragHandle::None => {}
         }
     }
-    (start, dur, pitch)
+
+    state.prev_playhead_tick = state.playhead_tick;
 }
 
-/// Nombre de la tecla de la fila `row` (fila 0 = G9).
-fn key_label(mode: PianoRollMode, prs: &PianoRollState, row: u32) -> gpui_kit::SharedString {
-    let pitch = (MIDI_KEY_COUNT - 1 - row.min(MIDI_KEY_COUNT - 1)) as u8;
-    match mode {
-        PianoRollMode::Keys => pitch_name_table()[row as usize].clone(),
-        PianoRollMode::Drums => match prs.drum_map.get(&pitch) {
-            Some(name) => gpui_kit::SharedString::from(format!("{} ({})", name, pitch)),
-            None => gpui_kit::SharedString::from(format!("Pad {}", pitch)),
-        },
+fn preview_drum_pad(
+    tracks: &[Track],
+    selected_track_index: usize,
+    pitch: u8,
+    _velocity: f32,
+    audio_proxy: &AudioProxy,
+) {
+    if let Some(track) = tracks.get(selected_track_index) {
+        if let Some(opendms) = find_opendms_in_track(track) {
+            if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == pitch) {
+                if let Some(ref path) = pad.sample_path {
+                    audio_proxy.send(GuiCommand::PreviewSample {
+                        path: path.clone(),
+                        volume: 1.0,
+                        speed: 1.0,
+                    });
+                }
+            }
+        }
     }
 }
 
-/// Layout inicial del piano roll: zoom que llena el panel + foco en el registro
-/// medio (C4) en vez de arrancar arriba del todo (G9).
-///
-/// Devuelve `true` si hay que pedir otro frame (el viewport aún no se conoce, o
-/// recién se acaba de aplicar el layout y hace falta repintar).
 pub fn sync_frame(prs: &mut PianoRollState) -> bool {
-    let viewport = prs.grid_scroll.bounds().size;
-    if viewport.width.as_f32() <= 1.0 || viewport.height.as_f32() <= 1.0 {
-        if prs.layout_initialized {
-            return false;
-        }
-        // Todavía sin prepaint: pedimos otro frame con un presupuesto acotado.
-        // El presupuesto se rearma sólo cuando vuelve a hacer falta (panel
-        // recién abierto), así que no hay forma de pedir frames para siempre.
-        if prs.layout_wait_frames == 0 {
-            prs.layout_wait_frames = LAYOUT_WAIT_FRAMES;
-        }
-        prs.layout_wait_frames -= 1;
-        return true;
-    }
-
     if !prs.layout_initialized {
-        prs.zoom_x = fit_zoom_x(viewport.width.as_f32(), BARS_FIT_TO_PANEL);
-        let viewport_h = viewport.height.as_f32();
-        let content_h = RULER_HEIGHT + MIDI_KEY_COUNT as f32 * prs.key_height;
-        let max_scroll = (content_h - viewport_h).max(0.0);
-        let top = focus_scroll_y(viewport_h, prs.key_height, FOCUS_PITCH).clamp(0.0, max_scroll);
-        prs.grid_scroll.set_offset(point(px(0.0), px(-top)));
+        prs.scroll_offset.y = focus_scroll_y(360.0, prs.key_height, FOCUS_PITCH);
         prs.layout_initialized = true;
         return true;
     }
-
     false
 }
 
-pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
-    let app = state(cx).read(cx);
-    let prs = &app.piano_roll_state;
-    let mode = prs.mode;
+/// Render the Piano Roll editor panel using egui.
+pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
+    let prs = &mut app.piano_roll_state;
+    let total_width = ui.available_width();
+    let total_height = ui.available_height();
+
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(total_width, total_height),
+        egui::Sense::click_and_drag(),
+    );
+
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::DAW_BG_LAYER_1);
+
+    let sidebar_w = SIDEBAR_WIDTH;
+    let ruler_h = RULER_HEIGHT;
+    let key_h = prs.key_height;
     let zoom_x = prs.zoom_x;
-    let key_height = prs.key_height;
-    let playhead_tick = prs.playhead_tick;
-    let sel_active = prs.selection_active;
-    let sel_start = prs.selection_start_tick;
-    let sel_end = prs.selection_end_tick;
-    let loop_enabled = prs.loop_enabled;
-    let sel_notes = prs.selected_notes.len();
 
-    let sidebar_width = SIDEBAR_WIDTH;
-    let max_note_tick = prs
-        .notes
-        .iter()
-        .map(|n| n.start_tick.saturating_add(n.duration_ticks))
-        .max()
-        .unwrap_or(0);
-    let total_ticks = total_ticks_for(max_note_tick, playhead_tick);
-    let grid_h = MIDI_KEY_COUNT as f32 * key_height;
-    let content_w = sidebar_width + total_ticks as f32 * zoom_x;
-    let content_h = RULER_HEIGHT + grid_h;
+    let content_x = rect.min.x + sidebar_w;
+    let content_y = rect.min.y + ruler_h;
+    let grid_rect = egui::Rect::from_min_max(
+        egui::pos2(content_x, content_y),
+        rect.max,
+    );
 
-    let scroll = prs.grid_scroll.clone();
-    let vp = compute_grid_viewport(scroll.offset(), scroll.bounds().size, key_height, zoom_x);
+    // Scroll & zoom
+    if response.hovered() {
+        let delta = ui.input(|i| i.smooth_scroll_delta);
+        if delta.x != 0.0 || delta.y != 0.0 {
+            if ui.input(|i| i.modifiers.ctrl) {
+                prs.zoom_x = (prs.zoom_x * (1.0 + delta.y * 0.01)).clamp(MIN_ZOOM_X, MAX_ZOOM_X);
+            } else {
+                prs.scroll_offset.x = (prs.scroll_offset.x + delta.x).min(0.0);
+                let max_y = (MIDI_KEY_COUNT as f32 * key_h - grid_rect.height()).max(0.0);
+                prs.scroll_offset.y = (prs.scroll_offset.y - delta.y).clamp(0.0, max_y);
+            }
+        }
+    }
 
-    // Ventana visible en coordenadas de CONTENIDO, recortada contra el
-    // contenido. Todos los hijos absolutos se posicionan con esta ventana y
-    // miden como máximo el viewport: así ningún nodo de layout crece con los
-    // 32 compases ni con las 128 filas.
-    let win_x0 = vp.scroll_x.clamp(0.0, content_w);
-    let win_y0 = vp.scroll_y.clamp(RULER_HEIGHT, content_h);
-    let win_x1 = (win_x0 + vp.width).min(content_w);
-    let win_y1 = (vp.scroll_y + vp.height).min(content_h);
-    let win_w = (win_x1 - win_x0).max(1.0);
-    let win_h = (win_y1 - win_y0).max(1.0);
+    let scroll_x = prs.scroll_offset.x;
+    let scroll_y = prs.scroll_offset.y;
 
-    // ---------------------------------------------------------------------
-    // NOTAS: sólo las que tocan el viewport.
-    // ---------------------------------------------------------------------
-    let (move_map, resize_map) = drag_lookup_maps(prs);
-    let mut note_rects: Vec<AnyElement> = Vec::new();
-    for i in 0..prs.notes.len() {
-        let (st, dur, pitch) = effective_note_geometry(prs, i, &move_map, &resize_map);
-        if !note_visible_in(st, dur, pitch, &vp) {
+    // --- 1. RULER ---
+    let ruler_rect = egui::Rect::from_min_max(
+        egui::pos2(content_x, rect.min.y),
+        egui::pos2(rect.max.x, content_y),
+    );
+    painter.rect_filled(ruler_rect, 0.0, theme::DAW_RULER_BG);
+    painter.line_segment([ruler_rect.left_bottom(), ruler_rect.right_bottom()], egui::Stroke::new(1.0_f32, theme::DAW_BORDER_SUBTLE));
+
+    let first_bar = ((-scroll_x) / (TICKS_PER_BAR as f32 * zoom_x)).floor() as u64;
+    let last_bar = first_bar + (ruler_rect.width() / (TICKS_PER_BAR as f32 * zoom_x)).ceil() as u64 + 2;
+
+    for b in first_bar..=last_bar {
+        let px = content_x + scroll_x + (b * TICKS_PER_BAR) as f32 * zoom_x;
+        if px >= content_x && px <= rect.max.x {
+            painter.line_segment(
+                [egui::pos2(px, ruler_rect.min.y + 10.0), egui::pos2(px, ruler_rect.max.y)],
+                egui::Stroke::new(1.0_f32, theme::DAW_GRID_MAJOR),
+            );
+            painter.text(
+                egui::pos2(px + 4.0, ruler_rect.min.y + 2.0),
+                egui::Align2::LEFT_TOP,
+                format!("{}", b + 1),
+                egui::FontId::monospace(10.0),
+                theme::TEXT_MUTED,
+            );
+        }
+    }
+
+    // --- 2. PIANO KEYS SIDEBAR ---
+    let sidebar_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x, content_y),
+        egui::pos2(content_x, rect.max.y),
+    );
+    painter.rect_filled(sidebar_rect, 0.0, theme::DAW_PANEL_BG);
+    painter.line_segment([sidebar_rect.right_top(), sidebar_rect.right_bottom()], egui::Stroke::new(1.0_f32, theme::DAW_BORDER_SUBTLE));
+
+    // Top-left header
+    let tl_rect = egui::Rect::from_min_max(rect.min, egui::pos2(content_x, content_y));
+    painter.rect_filled(tl_rect, 0.0, theme::DAW_BG_LAYER_2);
+    painter.text(
+        tl_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        match prs.mode {
+            PianoRollMode::Keys => "PIANO ROLL",
+            PianoRollMode::Drums => "DRUM PADS",
+        },
+        egui::FontId::proportional(11.0),
+        theme::TEXT_MUTED,
+    );
+
+    let first_row = (scroll_y / key_h).floor() as u32;
+    let visible_rows = (sidebar_rect.height() / key_h).ceil() as u32 + 1;
+    let last_row = (first_row + visible_rows).min(MIDI_KEY_COUNT);
+
+    let sidebar_painter = painter.with_clip_rect(sidebar_rect);
+    for row in first_row..last_row {
+        let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
+        let y0 = content_y + row as f32 * key_h - scroll_y;
+        let y1 = y0 + key_h;
+        let key_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x, y0),
+            egui::pos2(content_x, y1),
+        );
+
+        let is_black = is_black_key(pitch);
+        let key_bg = if is_black {
+            egui::Color32::from_rgb(26, 26, 28)
+        } else {
+            egui::Color32::from_rgb(45, 45, 48)
+        };
+        sidebar_painter.rect_filled(key_rect, 0.0, key_bg);
+        sidebar_painter.line_segment([key_rect.left_bottom(), key_rect.right_bottom()], egui::Stroke::new(0.5_f32, theme::DAW_BORDER_SUBTLE));
+
+        let label = match prs.mode {
+            PianoRollMode::Keys => pitch_name(pitch),
+            PianoRollMode::Drums => {
+                if let Some(name) = prs.drum_map.get(&pitch) {
+                    name.clone()
+                } else {
+                    format!("Pad {}", pitch)
+                }
+            }
+        };
+        sidebar_painter.text(
+            egui::pos2(key_rect.max.x - 6.0, key_rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            label,
+            egui::FontId::monospace(9.0),
+            if is_black { theme::TEXT_MUTED } else { theme::TEXT_PRIMARY },
+        );
+    }
+
+    // --- 3. GRID & NOTES ---
+    let grid_painter = painter.with_clip_rect(grid_rect);
+
+    // Grid row backgrounds
+    for row in first_row..last_row {
+        let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
+        let y0 = content_y + row as f32 * key_h - scroll_y;
+        let y1 = y0 + key_h;
+        let is_black = is_black_key(pitch);
+        if is_black {
+            grid_painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(content_x, y0), egui::pos2(rect.max.x, y1)),
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 40),
+            );
+        }
+        grid_painter.line_segment(
+            [egui::pos2(content_x, y1), egui::pos2(rect.max.x, y1)],
+            egui::Stroke::new(0.5_f32, theme::DAW_BORDER_SUBTLE),
+        );
+    }
+
+    // Grid vertical lines
+    for b in first_bar..=last_bar {
+        let px = content_x + scroll_x + (b * TICKS_PER_BAR) as f32 * zoom_x;
+        if px >= content_x && px <= rect.max.x {
+            grid_painter.line_segment(
+                [egui::pos2(px, content_y), egui::pos2(px, rect.max.y)],
+                egui::Stroke::new(1.0_f32, theme::DAW_GRID_MAJOR),
+            );
+        }
+    }
+
+    // Draw MIDI Notes
+    let mut clicked_note_index = None;
+    for (idx, note) in prs.notes.iter().enumerate() {
+        let row = (MIDI_KEY_COUNT - 1 - note.pitch as u32) as f32;
+        let nx = content_x + scroll_x + note.start_tick as f32 * zoom_x;
+        let nw = (note.duration_ticks as f32 * zoom_x).max(4.0);
+        let ny = content_y + row * key_h - scroll_y + 1.0;
+        let nh = key_h - 2.0;
+
+        let note_rect = egui::Rect::from_min_size(
+            egui::pos2(nx, ny),
+            egui::vec2(nw, nh),
+        );
+
+        if note_rect.max.x < content_x || note_rect.min.x > rect.max.x ||
+           note_rect.max.y < content_y || note_rect.min.y > rect.max.y {
             continue;
         }
-        let is_sel = prs.selected_notes.contains(&i);
-        let nx = sidebar_width + st as f32 * zoom_x;
-        let ny = (MIDI_KEY_COUNT - 1 - u32::from(pitch)) as f32 * key_height;
-        let nw = (dur as f32 * zoom_x).max(4.0);
-        let body_color = if resize_map.contains_key(&i) {
-            rgb(0xFFBE3C)
-        } else if is_sel {
-            rgb(0xFFD23C)
+
+        let is_selected = prs.selected_notes.contains(&idx);
+        let note_color = if is_selected {
+            theme::ACCENT_HOVER
         } else {
-            rgb(0xFF8C00)
+            theme::ACCENT_PRIMARY
         };
-        note_rects.push(
-            div()
-                .absolute()
-                .left(px(nx))
-                .top(px(ny + RULER_HEIGHT))
-                .w(px(nw))
-                .h(px(key_height - 1.0))
-                .bg(body_color)
-                .border_1()
-                .border_color(if is_sel { rgb(0xFFFFA0) } else { rgb(0xFFFFFF) })
-                // `NamedInteger` en vez de `format!("pr_note_{i}")`: el id no
-                // aloca por frame.
-                .id(("pr_note", i as u64))
-                .on_click(move |event, _, cx| {
-                    let shift = event.modifiers().shift;
-                    let st2 = state(cx);
-                    st2.update(cx, |state, cx| {
-                        let prs = &mut state.piano_roll_state;
-                        select_note_set(&mut prs.selected_notes, i, shift);
-                        cx.notify();
-                    });
-                })
-                .into_any_element(),
+
+        grid_painter.rect_filled(note_rect, 2.0, note_color);
+        grid_painter.rect_stroke(
+            note_rect,
+            2.0,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
+            egui::StrokeKind::Inside,
         );
+
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if note_rect.contains(pos) {
+                    clicked_note_index = Some(idx);
+                }
+            }
+        }
     }
 
-    // ---------------------------------------------------------------------
-    // GRILLA: bandas negras + líneas de fila, en UN SOLO canvas.
-    //
-    // Este era EL congelamiento. El loop creaba un canvas por fila (128) y
-    // cada uno llevaba `.w(canvas_w).h(grid_h)`: 128 capas de 73.000 x 2.048 px
-    // superpuestas, cada una con su `request_layout` y su `paint_path`, en cada
-    // frame (y durante la reproducción hay un `cx.notify()` por frame). Ahora
-    // hay un canvas del tamaño del viewport con un único path.
-    // ---------------------------------------------------------------------
-    let rows_top = RULER_HEIGHT + vp.row_start as f32 * key_height;
-    let grid_canvas = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let rows_h = bounds.size.height;
-            let mut path = PathBuilder::stroke(px(0.5));
-            for (i, row) in (vp.row_start..vp.row_end).enumerate() {
-                let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
-                let y = bounds.origin.y + px(i as f32 * key_height);
-                if is_black_key(pitch) {
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
-                            point(bounds.origin.x, y),
-                            size(bounds.size.width, px(key_height)),
-                        ),
-                        background: rgba(0x00000026).into(),
-                        border_color: rgba(0x00000000).into(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
-                }
-                path.move_to(point(bounds.origin.x, y));
-                path.line_to(point(bounds.origin.x + bounds.size.width, y));
-            }
-            let _ = rows_h;
-            if let Ok(built) = path.build() {
-                window.paint_path(built, rgb(0x1E1E1E));
-            }
-        },
-    )
-    .absolute()
-    .left(px(win_x0))
-    .top(px(rows_top))
-    .w(px(win_w))
-    .h(px(vp.visible_rows_height(key_height)));
-
-    let mut sidebar_rows: Vec<AnyElement> = Vec::new();
-    for row in vp.row_start..vp.row_end {
-        let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
-        let y = row as f32 * key_height;
-        let is_black = is_black_key(pitch);
-        let (bg, tc) = match mode {
-            PianoRollMode::Keys => {
-                if is_black {
-                    (rgb(0x28282D), rgb(0xFFFFFF))
-                } else {
-                    (rgb(0xDCDCE1), rgb(0x000000))
-                }
-            }
-            PianoRollMode::Drums => (rgb(0x232328), rgb(0xC8C8C8)),
-        };
-        // La etiqueta sale de una tabla precalculada: antes eran 128 `format!`
-        // por frame (y 128 `format!("pr_key_{}")` para los ids).
-        let label = key_label(mode, prs, row);
-        sidebar_rows.push(
-            div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(RULER_HEIGHT + y))
-                .w(px(sidebar_width))
-                .h(px(key_height))
-                .bg(bg)
-                .border_r_1()
-                .border_color(rgb(0x323232))
-                .child(
-                    Label::new(label)
-                        .text_xs()
-                        .text_color(tc)
-                        .pl(px(6.0)),
-                )
-                .id(("pr_key", u64::from(pitch)))
-                .test_support()
-                .on_click(move |_, _, cx| {
-                    let st2 = state(cx);
-                    st2.update(cx, |state, _| {
-                        preview_drum_pad(
-                            &state.live_tracks,
-                            state.selected_track_index,
-                            pitch,
-                            1.0,
-                            &state.audio_proxy,
-                        );
-                    });
-                })
-                .into_any_element(),
-        );
+    if let Some(idx) = clicked_note_index {
+        if ui.input(|i| i.modifiers.shift) {
+            prs.selected_notes.insert(idx);
+        } else {
+            prs.selected_notes.clear();
+            prs.selected_notes.insert(idx);
+        }
     }
 
-    // La selección y el playhead también se acotan a la ventana visible: eran
-    // canvas de `content_w x grid_h` completos, los tres más grandes del árbol.
-    // Además el playhead no se crea si está fuera de la vista.
-    let sel_visible = sel_active
-        && sel_end > sel_start
-        && sel_end >= vp.tick_start
-        && sel_start <= vp.tick_end;
-    let sel_canvas = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            if sel_visible {
-                let sx0 = bounds.origin.x + px(sel_start as f32 * zoom_x - win_x0);
-                let sx1 = bounds.origin.x + px(sel_end as f32 * zoom_x - win_x0);
-                let mx0 = sx0.min(sx1);
-                let mx1 = sx0.max(sx1);
-                let sel_rect = Bounds::new(
-                    point(mx0, bounds.origin.y),
-                    size(mx1 - mx0, bounds.size.height),
-                );
-                window.paint_quad(PaintQuad {
-                    bounds: sel_rect,
-                    background: rgba(0x64C8FF26).into(),
-                    border_color: rgba(0x64C8FF00).into(),
-                    corner_radii: gpui_kit::Corners::default(),
-                    border_widths: gpui_kit::Edges::default(),
-                    border_style: BorderStyle::default(),
-                });
-                let bracket = rgb(0x00C8FF);
-                for bx in [mx0, mx1] {
-                    let mut path = PathBuilder::stroke(px(2.0));
-                    path.move_to(point(bx, bounds.origin.y));
-                    path.line_to(point(bx, bounds.origin.y + bounds.size.height));
-                    if let Ok(built) = path.build() {
-                        window.paint_path(built, bracket);
-                    }
-                }
-            }
-        },
-    )
-    .absolute()
-    .left(px(win_x0))
-    .top(px(win_y0))
-    .w(px(win_w))
-    .h(px(win_h));
-
-    let playhead_visible = playhead_tick >= vp.tick_start && playhead_tick <= vp.tick_end;
-    let playhead_canvas = playhead_visible.then(|| {
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let phx = bounds.origin.x + px(playhead_tick as f32 * zoom_x - win_x0);
-                let mut path = PathBuilder::stroke(px(2.0));
-                path.move_to(point(phx, bounds.origin.y));
-                path.line_to(point(phx, bounds.origin.y + bounds.size.height));
-                if let Ok(built) = path.build() {
-                    window.paint_path(built, rgb(0x00C8FF));
-                }
-            },
-        )
-        .absolute()
-        .left(px(win_x0))
-        .top(px(win_y0))
-        .w(px(win_w))
-        .h(px(win_h))
-        .into_any_element()
-    });
-
-    // Capa de interacción: cubre sólo la ventana visible de la grilla. Va
-    // ANTES que las notas para que el click caiga en la nota y no en el fondo
-    // (antes las notas eran inalcanzables: quedaban tapadas por esta capa).
-    let grid_interaction = div()
-        .absolute()
-        .left(px(win_x0))
-        .top(px(win_y0))
-        .w(px(win_w))
-        .h(px(win_h))
-        .id("pr_grid_interaction")
-        .test_support()
-        .on_click(move |event, _, cx| {
-            let Some(pos) = event.mouse_position() else {
-                return;
-            };
-            let st2 = state(cx);
-            st2.update(cx, |state, cx| {
-                let prs = &mut state.piano_roll_state;
-                // `pos` viene en coordenadas de ventana; el contenido está
-                // corrido por el scroll en AMBOS ejes, así que hay que
-                // deshacerlo (antes sólo se restaban sidebar y ruler, así que
-                // con scroll el click caía en la fila/tick equivocados).
-                let off = prs.grid_scroll.offset();
-                let content_x = pos.x.as_f32() - off.x.as_f32();
-                let content_y = pos.y.as_f32() - off.y.as_f32();
-                let local_x = content_x - SIDEBAR_WIDTH;
-                let local_y = content_y - RULER_HEIGHT;
-                if local_x < 0.0 || local_y < 0.0 {
-                    return;
-                }
-                let raw_tick = (local_x / zoom_x).max(0.0) as u64;
-                let q_tick = quantize_tick(raw_tick, QUANTIZE_TICKS);
-                let row = (local_y / key_height).max(0.0) as i32;
-                let pitch = (MIDI_KEY_COUNT as i32 - 1 - row).clamp(0, 127) as u8;
-                let already = prs.notes.iter().any(|n| {
-                    n.pitch == pitch
-                        && q_tick >= n.start_tick
-                        && q_tick < n.start_tick.saturating_add(n.duration_ticks)
-                });
-                if !already {
-                    prs.notes.push(MidiNote {
-                        pitch,
-                        start_tick: q_tick,
-                        duration_ticks: QUANTIZE_TICKS,
-                        velocity: NOTE_INSERT_VELOCITY,
-                    });
-                    if prs.mode == PianoRollMode::Drums {
-                        preview_drum_pad(
-                            &state.live_tracks,
-                            state.selected_track_index,
-                            pitch,
-                            1.0,
-                            &state.audio_proxy,
-                        );
-                    }
-                }
-                cx.notify();
-            });
-        });
-
-    // REGLA: un canvas del ancho de la ventana visible, y el loop arranca en el
-    // primer compás dentro de la vista en vez de recorrer los 32 desde el 0.
-    // Con el zoom anterior eran ~480 barras dibujadas por frame.
-    let bar_w = TICKS_PER_BAR as f32 * zoom_x;
-    let beat_w = TICKS_PER_BEAT as f32 * zoom_x;
-    let ruler_canvas = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let base = bounds.origin.x;
-            let y_top = bounds.origin.y + px(4.0);
-            let y_bottom = bounds.origin.y + bounds.size.height;
-            // Subdivisión de compás sólo si entra sin quedar ilegible.
-            let mut step = TICKS_PER_BAR;
-            if bar_w >= 4.0 * 56.0 {
-                step = TICKS_PER_BEAT;
-            }
-            let first = vp.tick_start / step * step;
-            let mut bars = PathBuilder::stroke(px(1.5));
-            let mut minor = PathBuilder::stroke(px(0.5));
-            let mut tick = first;
-            while tick <= vp.tick_end + step {
-                let x = base + px(tick as f32 * zoom_x - win_x0);
-                if x > bounds.origin.x + bounds.size.width {
-                    break;
-                }
-                if tick % TICKS_PER_BAR == 0 {
-                    bars.move_to(point(x, y_top));
-                    bars.line_to(point(x, y_bottom));
-                    // Bandera del compás: se mantiene como rectángulo pintado a
-                    // mano (igual que antes) en vez de `paint_text`, que
-                    // necesita una fuente cargada en la ventana.
-                    let mut flag = PathBuilder::fill();
-                    flag.move_to(point(x + px(5.0), bounds.origin.y + px(3.0)));
-                    flag.line_to(point(x + px(13.0), bounds.origin.y + px(3.0)));
-                    flag.line_to(point(x + px(13.0), bounds.origin.y + px(13.0)));
-                    flag.line_to(point(x + px(5.0), bounds.origin.y + px(13.0)));
-                    flag.close();
-                    if let Ok(built) = flag.build() {
-                        window.paint_path(built, rgb(0xD2D2D2));
-                    }
-                } else if beat_w >= 12.0 {
-                    minor.move_to(point(x, y_top));
-                    minor.line_to(point(x, y_bottom));
-                }
-                tick += step;
-            }
-            if let Ok(built) = bars.build() {
-                window.paint_path(built, rgb(0x8C8C8C));
-            }
-            if let Ok(built) = minor.build() {
-                window.paint_path(built, rgb(0x4A4A4A));
-            }
-        },
-    )
-    .absolute()
-    .left(px(win_x0))
-    .top(px(0.0))
-    .w(px(win_w))
-    .h(px(RULER_HEIGHT))
-    .into_any_element();
-
-    let bar = (playhead_tick / TICKS_PER_BAR) + 1;
-    let beat = ((playhead_tick % TICKS_PER_BAR) / TICKS_PER_BEAT) + 1;
-
-    v_flex()
-        .id("piano_roll")
-        .test_support()
-        .size_full()
-        .child(
-            h_flex()
-                .items_center()
-                .gap(px(6.0))
-                .h(px(28.0))
-                .bg(rgb(0x181A20))
-                .px(px(8.0))
-                .child(
-                    Button::new("pr_mode_keys").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("🎹 Keys")
-                        .compact()
-                        .when(mode == PianoRollMode::Keys, |b| b.text_color(rgb(0x00B4D8)))
-                        .on_click(move |_, _, cx| {
-                            let st2 = state(cx);
-                            st2.update(cx, |state, cx| {
-                                state.piano_roll_state.mode = PianoRollMode::Keys;
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    Button::new("pr_mode_drums").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("🥁 Drums")
-                        .compact()
-                        .when(mode == PianoRollMode::Drums, |b| b.text_color(rgb(0x00B4D8)))
-                        .on_click(move |_, _, cx| {
-                            let st2 = state(cx);
-                            st2.update(cx, |state, cx| {
-                                state.piano_roll_state.mode = PianoRollMode::Drums;
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(Label::new(format!("Zoom {:.2}", zoom_x)).text_xs())
-                .child(Label::new(format!("Compás: {}.{} | Tick: {}", bar, beat, playhead_tick)).text_xs())
-                .when(sel_active, |this| {
-                    this.child(Label::new(format!("Sel: {} -> {}", sel_start, sel_end)).text_xs())
-                        .child(
-                            Button::new("pr_loop_toggle").rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label(if loop_enabled { "Loop ON" } else { "Loop OFF" })
-                                .compact()
-                                .when(loop_enabled, |b| b.text_color(rgb(0x39FF14)))
-                                .on_click(move |_, _, cx| {
-                                    let st2 = state(cx);
-                                    st2.update(cx, |state, cx| {
-                                        state.piano_roll_state.loop_enabled =
-                                            !state.piano_roll_state.loop_enabled;
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Button::new("pr_clear_sel").rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label("X Sel")
-                                .compact()
-                                .on_click(move |_, _, cx| {
-                                    let st2 = state(cx);
-                                    st2.update(cx, |state, cx| {
-                                        state.piano_roll_state.clear_selection();
-                                        state.piano_roll_state.loop_enabled = false;
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                })
-                .when(sel_notes > 0, |this| {
-                    this.child(Label::new(format!("Notas: {}", sel_notes)).text_xs())
-                        .child(
-                            Button::new("pr_clear_notes").rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label("X Notas")
-                                .compact()
-                                .on_click(move |_, _, cx| {
-                                    let st2 = state(cx);
-                                    st2.update(cx, |state, cx| {
-                                        state.piano_roll_state.clear_note_selection();
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                }),
-        )
-        .child(
-            // Raíz del scroller. La barra va como HERMANA del área scrolleable
-            // (no como hija): GPUI le aplica el offset de scroll a los hijos, así
-            // que como hija se iría con el scroll. Es la misma estructura que
-            // arma `gpui_component::scroll::Scrollable`.
-            div()
-                .id("pr_scroll_root")
-                .test_support()
-                .flex_1()
-                .relative()
-                .overflow_hidden()
-                .child(
-                    div()
-                        .id("pr_scroll_area")
-                        .test_support()
-                        .size_full()
-                        // Scroll en AMBOS ejes: con sólo horizontal (como
-                        // estaba) las 128 filas no se podían scrollear y la
-                        // vista quedaba clavada en G9 con el resto vacío.
-                        .overflow_scroll()
-                        .track_scroll(&scroll)
-                        .child(
-                            div()
-                                .id("pr_content")
-                                .test_support()
-                                .w(px(content_w))
-                                .h(px(content_h))
-                                .flex_none()
-                                .relative()
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .left(px(0.0))
-                                        .top(px(0.0))
-                                        .w(px(sidebar_width))
-                                        .h(px(RULER_HEIGHT))
-                                        .bg(rgb(0x141418))
-                                        .into_any_element(),
-                                )
-                                .child(ruler_canvas)
-                                .children(sidebar_rows)
-                                .child(grid_canvas.into_any_element())
-                                .child(sel_canvas.into_any_element())
-                                .child(playhead_canvas.unwrap_or_else(|| div().into_any_element()))
-                                // La capa de interacción va antes que las notas
-                                // para que el click llegue a la nota.
-                                .child(grid_interaction.into_any_element())
-                                .children(note_rects),
-                        ),
-                )
-                .child(
-                    gpui_kit::component::scroll::Scrollbar::new(&scroll)
-                        .id("pr_scrollbar")
-                        .axis(gpui_kit::component::scroll::ScrollbarAxis::Both)
-                        .viewport_from_layout(),
-                ),
-        )
-        .into_any_element()
+    // Playhead line
+    let playhead_px = content_x + scroll_x + prs.playhead_tick as f32 * zoom_x;
+    if playhead_px >= content_x && playhead_px <= rect.max.x {
+        grid_painter.line_segment(
+            [egui::pos2(playhead_px, rect.min.y), egui::pos2(playhead_px, rect.max.y)],
+            egui::Stroke::new(1.5_f32, theme::PLAYHEAD_COLOR),
+        );
+    }
 }

@@ -62,15 +62,17 @@ vst3-host = "0.1"
 clap = { version = "4.6", features = ["derive"] }
 serde_json = "1"
 colored = "2"
-# La versión DEBE coincidir exactamente con la que usa `gpui-pre-wgpu`
-# (transitiva de gpui-kit). Si se desvía, cargo compila dos copias de wgpu en
-# el mismo binario y los tipos no son intercambiables entre crates.
-wgpu = "29.0.4"
+# Versión unificada con eframe 0.31 y egui-wgpu 0.31
+wgpu = "24.0.5"
 # Ya viene en el grafo por wgpu/wgpu-core; declararlo explícito sólo para
 # derivar `Pod`/`Zeroable` y empaquetar buffers sin `unsafe` a mano.
 bytemuck = { version = "1.25", features = ["derive"] }
 # Sólo para los tests: valida los shaders WGSL sin necesitar una GPU.
-naga = { version = "29.0", features = ["wgsl-in"] }
+naga = { version = "24.0.0", features = ["wgsl-in"] }
+egui = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+egui-wgpu = "0.31"
+pollster = "0.4"
 
 # [profile.dev]
 # debug = 1
@@ -86,21 +88,3 @@ debug = 1             # Mantiene la velocidad del Release pero te da la línea e
 
 [patch.crates-io]
 vst3-host = { path = "vst3-host-patched" }
-
-# Parche local: agrega `CursorStyle::Hidden` para poder ocultar el puntero
-# durante gestos continuos (middle-drag de la Playlist).
-#
-# Por qué está vendorizado en vez de forked: `CursorStyle` es un enum cerrado y
-# TODO `match` exhaustivo sobre él vive en crates externos. Sólo hacen falta los
-# dos crates que compilan en Linux; los backends de macOS/Windows/web se ignoran
-# (no se compilan acá) y NO tienen el brazo `Hidden`.
-#
-# OJO AL ACTUALIZAR gpui-kit: si sube la versión de gpui-pre, hay que volver a
-# aplicar el parche sobre las fuentes nuevas. Diff del parche:
-#   gpui-pre-patched/src/platform.rs               -> nueva variante en el enum
-#   gpui-pre-linux-patched/src/linux/wayland.rs    -> brazo en to_shape()
-#   gpui-pre-linux-patched/src/linux/platform.rs   -> brazo en cursor_style_to_icon_names()
-#   .../linux/wayland/client.rs                    -> 3 puntos: set_cursor_style, Enter, restore_cursor_after_hide
-#   .../linux/x11/client.rs                        -> get_cursor_icon delega al cursor vacío
-gpui-pre = { path = "gpui-pre-patched" }
-gpui-pre-linux = { path = "gpui-pre-linux-patched" }

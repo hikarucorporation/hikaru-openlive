@@ -1,71 +1,58 @@
-// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/rack_card.rs
+// La tarjeta compacta de Hikaru OpenDMS en la tira de módulos del rack.
+use crate::app::AppState;
+use crate::theme;
 
-//! La tarjeta compacta de **Hikaru OpenDMS** en la tira de módulos del rack.
-//!
-//! # Qué muestra
-//!
-//! El rack dibuja cada plugin en una tarjeta de ancho fijo. Para el sampler de
-//! percusión, la tarjeta **no** muestra la grilla de pads: la grilla no entra
-//! en 388px de ancho y la única información que interesa mientras se programa
-//! es cuántos pads hay y cuántos tienen sample cargado. Por eso la tarjeta
-//! muestra el nombre del sampler y el conteo `cargados/total`.
-//!
-//! # Por qué vive acá y no en `dsp_rack.rs`
-//!
-//! Antes esta función era un `fn` privado dentro de `views/dsp_rack.rs`, y era
-//! el único pedazo de un plugin nativo incrustado en el archivo del rack. Con
-//! el subsistema de plugins nativos, el rack debería conocer a los plugins
-//! **sólo** para delegar: cada rama de su `match` es una llamada a un módulo de
-//! `views::hikaru_native_plugins`, y el panel de cada plugin vive en la
-//! carpeta del plugin.
-//!
-//! Ojo con el nombre: acá `render_dms_compact` sería ambiguo, porque
-//! [`crate::views::hikaru_native_plugins::hikaru_opendms::open_dms::render_dms_compact`]
-//! ya existe y es otra cosa (la grilla de pads, con hit-testing y drag & drop).
-//! Ésta es la *tarjeta*, aquélla es la *grilla*.
-
-use gpui_kit::component::label::Label;
-use gpui_kit::*;
-
-use crate::app::{state, HikaruApp};
-
-/// Dibuja la tarjeta del sampler en la tira de módulos del rack.
-///
-/// Si el slot no tiene estado de DMS todavía (recién asignado, o la carga del
-/// sample todavía en curso), muestra el placeholder en vez de un conteo que
-/// mentiría con cero pads.
-pub fn render_rack_card(cx: &mut Context<HikaruApp>, track_idx: usize, idx: usize) -> AnyElement {
-    let app = state(cx).read(cx);
-    let Some(dms) = app.slot(track_idx, idx).and_then(|slot| slot.dms_state.clone()) else {
-        return div()
-            .w_full()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Label::new("No DMS state").text_xs().text_color(rgb(0x555555)))
-            .into_any_element();
+pub fn render_rack_card(ui: &mut egui::Ui, app: &AppState, track_idx: usize, idx: usize) {
+    let Some(dms) = app.slot(track_idx, idx).and_then(|slot| slot.dms_state.as_ref()) else {
+        ui.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new("No DMS state").size(11.0).color(theme::TEXT_MUTED));
+        });
+        return;
     };
+
     let pads = dms.pad_count;
     let loaded = dms.pads.iter().filter(|pad| pad.sample_path.is_some()).count();
 
-    div()
-        .w_full()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(4.0))
-        .child(
-            Label::new("OpenDMS Sampler")
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x00FFC8)),
-        )
-        .child(
-            Label::new(format!("{loaded}/{pads} pads"))
-                .text_xs()
-                .text_color(rgb(0x888888)),
-        )
-        .into_any_element()
+    ui.vertical_centered(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new("OpenDMS Sampler")
+                .size(13.0)
+                .strong()
+                .color(theme::ACCENT_PRIMARY),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!("{loaded}/{pads} pads loaded"))
+                .size(11.0)
+                .color(theme::TEXT_SECONDARY),
+        );
+        ui.add_space(8.0);
+        // Mini pad grid visualization
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 80.0), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4.0, theme::DAW_BG_LAYER_2);
+
+        let cols = 4;
+        let rows = 4;
+        let pad_w = (rect.width() - 5.0 * 2.0) / cols as f32;
+        let pad_h = (rect.height() - 5.0 * 2.0) / rows as f32;
+
+        for r in 0..rows {
+            for c in 0..cols {
+                let pad_idx = (rows - 1 - r) * cols + c;
+                let px = rect.min.x + 2.0 + c as f32 * pad_w;
+                let py = rect.min.y + 2.0 + r as f32 * pad_h;
+                let pad_rect = egui::Rect::from_min_size(egui::pos2(px, py), egui::vec2(pad_w - 2.0, pad_h - 2.0));
+
+                let has_sample = dms.pads.get(pad_idx).map(|p| p.sample_path.is_some()).unwrap_or(false);
+                let fill = if has_sample {
+                    theme::ACCENT_PRIMARY
+                } else {
+                    theme::DAW_BG_LAYER_3
+                };
+                painter.rect_filled(pad_rect, 2.0, fill);
+            }
+        }
+    });
 }

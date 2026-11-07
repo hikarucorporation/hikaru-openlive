@@ -1,50 +1,23 @@
-// crates/hikaru_gui/src/views/dsp_rack.rs
+// Hikaru OpenLive / OpenStudio - Bitwig 5.1.7 Bottom Device Panel (`dsp_rack.rs`)
+// GNU Affero General Public License v3
 
-use gpui_kit::component::*;
-use gpui_kit::component::button::{Button, ButtonRounded};
-use gpui_kit::component::input::Input;
-use gpui_kit::component::label::Label;
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::Size;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
-use gpui_kit::*;
+use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
 
-use crate::app::{set_footer_cues, state, HikaruApp, ParamDragState};
+use crate::app::AppState;
 use crate::theme;
-use crate::ui::text_style_scope::TextStyleScope;
-use crate::views::external_plugins_settings::capture_host_parent;
+use crate::ui::fonts;
+use crate::ui::icons;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
 use crate::views::hikaru_native_plugins::hikaru_openeq3;
-use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
-use crate::views::mixer::{DspSlot, ExternalParamsStatus};
+use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
+use crate::views::mixer::DspSlot;
 
-pub const RACK_HEIGHT: f32 = 200.0;
-
-pub const CARD_WIDTH: f32 = 388.0;
-
-/// Ancho de la tarjeta del OpenWavetable: dos sub-tarjetas modulares
-/// (visualizador 3D | controles y parámetros).
-pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 580.0;
-
-/// Ancho de la tarjeta del OpenSpectral Phaser: dos columnas maestras
-/// (display FFT | controles) que no caben en el rack estándar de 388 px.
-pub const PHASER_CARD_WIDTH: f32 = 840.0;
-
-/// Ancho de la tarjeta modular de un plugin externo VST3/CLAP/UZU:
-/// dos sub-bloques horizontales adyacentes (`flex_row`: identidad/estado/editor
-/// a la izquierda | lista desplazable `overflow_y_scroll` de perillas/parámetros
-/// a la derecha), acotada estrictamente a `max_h(220px)`.
-const EXTERNAL_CARD_WIDTH: f32 = 468.0;
-
-const CARD_PADDING: f32 = 6.0;
-
-const CARD_GAP: f32 = 6.0;
-
-const CARD_HEADER_HEIGHT: f32 = 20.0;
-
-const CARD_FOOTER_HEIGHT: f32 = 20.0;
+pub const RACK_HEIGHT: f32 = 178.0;
+pub const CARD_WIDTH: f32 = 340.0;
+pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 446.0;
+pub const PHASER_CARD_WIDTH: f32 = 480.0;
+pub const EXTERNAL_CARD_WIDTH: f32 = 360.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginEntry {
@@ -54,17 +27,28 @@ pub struct PluginEntry {
 }
 
 pub const PLUGIN_CATALOG: [PluginEntry; 4] = [
-    PluginEntry { category: "Efectos", name: "OpenEQ3", label: "OpenEQ3" },
-    PluginEntry { category: "Efectos", name: "OpenSpectral Phaser", label: "OpenSpectral Phaser" },
-    PluginEntry { category: "Generadores", name: "OpenWavetable", label: "Hikaru OpenWavetable" },
-    PluginEntry { category: "Generadores", name: "Hikaru OpenDMS", label: "Hikaru OpenDMS" },
+    PluginEntry {
+        category: "Audio FX",
+        name: "OpenEQ3",
+        label: "OpenEQ3",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "OpenSpectral Phaser",
+        label: "OpenSpectral Phaser",
+    },
+    PluginEntry {
+        category: "Polysynth",
+        name: "OpenWavetable",
+        label: "Hikaru OpenWavetable",
+    },
+    PluginEntry {
+        category: "Drum Synth",
+        name: "Hikaru OpenDMS",
+        label: "Hikaru OpenDMS",
+    },
 ];
 
-/// Filtro de formato del navegador de plugins del rack.
-///
-/// Vive en el estado global de la app (`AppState::plugin_browser_filter`)
-/// porque el navegador se reconstruye en cada frame: un valor local no
-/// sobreviviría al primer `notify` y el chip activo parpadearía.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PluginBrowserFilter {
     #[default]
@@ -74,1805 +58,6 @@ pub enum PluginBrowserFilter {
     Clap,
 }
 
-impl PluginBrowserFilter {
-    const TABS: [(Self, &'static str); 4] = [
-        (Self::All, "Todos"),
-        (Self::Native, "Nativos"),
-        (Self::Vst3, "VST3"),
-        (Self::Clap, "CLAP"),
-    ];
-
-    fn matches_external(self, format: hikaru_plugin_host::PluginFormat) -> bool {
-        match self {
-            Self::All => true,
-            Self::Native => false,
-            Self::Vst3 => format == hikaru_plugin_host::PluginFormat::VST3,
-            Self::Clap => format == hikaru_plugin_host::PluginFormat::CLAP,
-        }
-    }
-
-    fn show_natives(self) -> bool {
-        matches!(self, Self::All | Self::Native)
-    }
-}
-
-/// Cierra el navegador de plugins del track dado, sea cual sea el slot que
-/// lo abrió. Lo llaman el backdrop, la ✕, la tecla de cierre y cada
-/// asignación: un navegador abierto tras asignar apuntaría a un slot cuyo
-/// contenido ya cambió.
-fn close_browser(cx: &mut gpui_kit::App, track_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            for slot in track.effects.iter_mut() {
-                slot.menu_open = false;
-            }
-        }
-        state.add_slot_menu_open = false;
-        cx.notify();
-    });
-}
-
-fn rack_button(id: impl Into<gpui_kit::ElementId>) -> Button {
-    Button::new(id)
-        .rounded(ButtonRounded::None)
-        .compact()
-        .with_size(gpui_kit::component::Size::XSmall)
-}
-
-fn assign_plugin(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize, name: &str) {
-    let st = state(cx);
-    let name = name.to_string();
-    cx.defer(move |cx| {
-        st.update(cx, |state, cx| {
-            if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-                slot.name = name.clone();
-                // Cambiar de plugin limpia cualquier error de carga anterior:
-                // el mensaje era de otro plugin y ya no aplica.
-                slot.load_error = None;
-                slot.menu_open = false;
-                slot.options_open = false;
-            }
-            state.selected_slot_index = slot_idx;
-            state.add_slot_menu_open = false;
-            cx.notify();
-        });
-    });
-}
-
-/// Asigna un plugin externo (VST3/CLAP) a un slot.
-///
-/// No carga el binario: guarda la metadata del descriptor. Instanciarlo en el
-/// hilo de la GUI los dejaría haciendo audio fuera del hilo de audio (ver
-/// `hikaru_plugin_host::PluginInstance::process`), así que la carga real la
-/// hace el motor cuando este slot entre en la cadena de efectos. Esa
-/// separación es la que permite que un plugin roto se marque en el slot en vez
-/// de romper la apertura del proyecto.
-fn assign_external_plugin(
-    cx: &mut gpui_kit::App,
-    track_idx: usize,
-    slot_idx: usize,
-    descriptor: hikaru_plugin_host::PluginDescriptor,
-) {
-    let st = state(cx);
-    let audio_proxy = st.read(cx).audio_proxy.clone();
-    // El motor indexa sus pistas 0..=15 SIN master, mientras que `track_idx`
-    // viene del mixer, que mete el MASTER en 0. Sin esta conversión la cadena
-    // se inserta una pista más abajo de la que mezcla el clip, y el plugin
-    // procesa siempre un buffer mudo. Se resuelve acá, antes del `defer`, para
-    // capturar la pista que estaba seleccionada al hacer clic (y no la que
-    // quede seleccionada cuando corra el deferred).
-    let engine_idx = st.read(cx).engine_track_index();
-    cx.defer(move |cx| {
-        st.update(cx, |state, cx| {
-            if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-                slot.name = descriptor.name.clone();
-                slot.external = Some(descriptor.clone());
-                slot.load_error = None;
-                // Plugin nuevo = parámetros nuevos: se tira la caché vieja y
-                // se sondea en diferido (hilo aparte, ver `request_external_params`).
-                slot.external_params.clear();
-                slot.params_status = ExternalParamsStatus::Idle;
-                slot.menu_open = false;
-                slot.options_open = false;
-            }
-            state.request_external_params(&descriptor);
-            state.selected_slot_index = slot_idx;
-            state.add_slot_menu_open = false;
-            // El master no tiene pista equivalente en el motor: una cadena de
-            // insert no tiene dónde insertarse, así que se dice en el slot en
-            // vez de mandar un comando que el motor no puede satisfacer.
-            if engine_idx.is_none() {
-                if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-                    slot.load_error = Some("El master no tiene cadena de efectos".to_string());
-                }
-            }
-            cx.notify();
-        });
-        // Cargar el plugin en el motor de audio (hilo de control del engine).
-        // El `dlopen` + init corre en el engine, nunca en el hilo de la GUI.
-        let Some(engine_idx) = engine_idx else {
-            return;
-        };
-        audio_proxy.send(crate::audio_proxy::GuiCommand::LoadExternalPlugin {
-            track_idx: engine_idx,
-            slot_idx,
-            descriptor,
-        });
-    });
-}
-
-/// Abre el editor nativo del plugin en una ventana hija de la del DAW.
-///
-/// Captura el handle nativo de GPUI en el click (`window` sólo existe en el
-/// handler, no en el render) y lo reduce a `HostParentKind`: en sesión X11
-/// la ventana del plugin nace hija de la del DAW (transient, centrada, sin
-/// flash vacía ni cierres fantasma); en Wayland cae al flotante de XWayland
-/// porque una superficie Wayland no puede emparentar ventanas X11. Todo el
-/// trabajo pesado (`dlopen`, X11, embebido) corre en el hilo de la ventana:
-/// el hilo principal vuelve de inmediato y nunca se cuelga.
-fn open_external_editor(
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::App,
-    track_idx: usize,
-    slot_idx: usize,
-) {
-    let descriptor = {
-        let app = state(cx).read(cx);
-        app.slot(track_idx, slot_idx).and_then(|slot| slot.external.clone())
-    };
-    let Some(descriptor) = descriptor else {
-        return;
-    };
-    let parent = capture_host_parent(window);
-
-    // La cinta que alimenta al editor se busca por la clave del MOTOR
-    // `(pista, slot)`, y `track_idx` es el índice del mixer, que es uno más. Sin
-    // esta conversión el editor se queda escuchando la pista de al lado y el
-    // display muestra otra cosa (o nada).
-    let tap_key = {
-        let app = state(cx).read(cx);
-        match app.engine_track_index() {
-            Some(engine_idx) => (engine_idx, slot_idx),
-            None => {
-                eprintln!(
-                    "[DSP Rack] La pista del mixer {} no tiene índice de motor; el editor abrirá sin audio",
-                    track_idx
-                );
-                hikaru_plugin_host::tap::NO_SLOT
-            }
-        }
-    };
-
-    state(cx).update(cx, |state, cx| {
-        state
-            .plugin_settings_state
-            .open_plugin(&descriptor, parent, tap_key);
-        cx.notify();
-    });
-}
-
-/// Cierra la ventana nativa del editor de un plugin por nombre.
-///
-/// El cierre va por nombre y no por slot porque `PluginSettingsState` indexa
-/// las ventanas abiertas por nombre de plugin: es lo que permite que dos slots
-/// con el mismo plugin compartan una sola ventana en vez de abrir dos.
-fn close_external_editor(cx: &mut gpui_kit::App, plugin_name: &str) {
-    let st = state(cx);
-    st.update(cx, |state, _| {
-        state.plugin_settings_state.close_plugin(plugin_name);
-    });
-}
-
-/// Re-eleva los editores nativos abiertos sin robarles el foco al DAW.
-///
-/// Esto es la mitad "GPUI" del envoltorio tipo Fruity Wrapper. La otra mitad
-/// son los hints de `WM_TRANSIENT_FOR` / `_NET_WM_STATE_ABOVE` que se aplican
-/// al abrir la ventana (ver `external_plugins_settings`).
-///
-/// # Por qué hace falta si ya hay `_NET_WM_STATE_ABOVE`
-///
-/// El hint se aplica una vez, antes del `map`, y después manda el gestor de
-/// ventanas. Cada vez que el usuario clickea cualquier parte del DAW —una
-/// pista, un clip, un knob del rack— el WM sube su propia ventana y deja el
-/// editor del plugin detrás: exactamente el síntoma que se quiere eliminar.
-///
-/// Cuando el DAW recupera la activación, se avisa a cada ventana abierta para
-/// que se re-eleve. El re-elevado usa `ConfigureWindow(stack=Above)`, que
-/// Re-elevar **sin** activar. Si focused el editor, el usuario perdería el foco
-/// del knob que estaba por tocar.
-///
-/// No hay forma de "no enviar un Unfocus": GPUI no emite `LowerWindow`, lo que
-/// baja la ventana del plugin es el propio WM reacting al click. La única
-/// manera de que el editor vuelva a quedar arriba sin quitarle el foco al DAW
-/// es pedir el re-apilado después del click, que es lo que hace esto.
-pub fn keep_plugin_editors_above(cx: &mut gpui_kit::App) {
-    let st = state(cx);
-    let any_open = st.read(cx).plugin_settings_state.any_plugin_open();
-    if !any_open {
-        return;
-    }
-    st.update(cx, |state, _| {
-        state.plugin_settings_state.raise_open_plugins();
-    });
-}
-
-/// Fija un parámetro externo desde un knob del rack.
-///
-/// Escribe la caché del slot (lo que pintan los knobs), lo deja pendiente
-/// para el motor (`flush_pending_external_params`) y la manda en vivo a la
-/// ventana abierta si la hay (el editor nativo la refleja al instante).
-/// Todo no bloqueante: si la ventana cayó, el gesto igual queda guardado.
-///
-/// Devuelve `false` cuando el gesto no cambió nada —id inexistente, o valor que
-/// tras el snapping ya era el mismo— y en ese caso no se notifica ni se envía
-/// nada. Eso es lo que evita el "arrastre lento": un `cx.notify()` reconstruye
-/// la ventana entera, y hacerlo por cada píxel de un drag que en su mayoría no
-/// mueve el valor convertía cada clic en dos reconstrucciones completas
-/// (armar y desarmar el gesto) más una por evento.
-fn commit_external_param(
-    cx: &mut gpui_kit::App,
-    track_idx: usize,
-    slot_idx: usize,
-    id: u32,
-    value: f32,
-) -> bool {
-    let st = state(cx);
-
-    // `applied` es el valor ya redondeado: es el que se muestra, el que va al
-    // editor nativo y el que tiene que ir al motor. Mandar el `value` crudo
-    // hacía que un parámetro discreto sonara en un valor y se viera en otro.
-    let mut applied: Option<f32> = None;
-    st.update(cx, |state, _| {
-        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-            applied = slot.set_external_param(id, value);
-        }
-    });
-    let Some(applied) = applied else {
-        return false;
-    };
-
-    // Avisarle al editor nativo abierto, si lo hay. El `is_empty` va **antes**
-    // de clonar el nombre: `HashMap::is_empty` no cuesta nada, mientras que la
-    // `String` del nombre del plugin se clonaba en cada píxel del arrastre
-    // aunque no hubiera ninguna ventana abierta (el caso normal).
-    if st.read(cx).plugin_settings_state.any_plugin_open() {
-        let plugin_name = st
-            .read(cx)
-            .slot(track_idx, slot_idx)
-            .and_then(|slot| slot.external.as_ref().map(|ext| ext.name.clone()));
-        if let Some(plugin_name) = plugin_name {
-            st.update(cx, |state, _| {
-                state
-                    .plugin_settings_state
-                    .send_param_to_open_plugin(&plugin_name, id, applied);
-            });
-        }
-    }
-
-    // Sólo ahora se repinta: el valor de la caché ya es el nuevo.
-    st.update(cx, |_, cx| cx.notify());
-
-    // Al motor de audio lo mandan los pendientes del slot, que se drenan una
-    // vez por frame (`AppState::flush_pending_external_params`). Mandarlo acá
-    // también sería mandarlo dos veces: el knob del rack y el del editor
-    // nativo escriben en el mismo lugar.
-    true
-}
-
-/// Empieza un drag de la barra de un parámetro: agarre en la posición de
-/// ventana `(x, y)`.
-///
-/// Sin `cx.notify()`: `param_drag` no lo pinta nadie, así que notificar acá
-/// reconstruía la ventana entera sin que cambiara un solo píxel. El gesto igual
-/// queda vivo porque el seguimiento no depende de un repintar: los listeners se
-/// registran **siempre** en cada paint del rack (ver
-/// [`param_drag_keepalive`]), no sólo mientras hay arrastre.
-fn param_drag_begin(
-    cx: &mut gpui_kit::App,
-    track_idx: usize,
-    slot_idx: usize,
-    id: u32,
-    x: f32,
-    y: f32,
-) {
-    let value = state(cx)
-        .read(cx)
-        .slot(track_idx, slot_idx)
-        .and_then(|slot| {
-            slot.external_params
-                .iter()
-                .find(|p| p.info.id == id)
-                .map(|p| p.value)
-        })
-        .unwrap_or(0.0);
-    state(cx).update(cx, |state, _| {
-        state.param_drag = Some(ParamDragState::new(track_idx, slot_idx, id, x, y, value));
-    });
-}
-
-/// Continúa el drag hasta la posición de ventana `(x, y)`.
-///
-/// El valor lo calcula [`ParamDragState::advance`], que devuelve `None` cuando
-/// el gesto todavía no pasó el umbral de eje: en ese caso no se toca nada y no
-/// se paga un `cx.notify()`.
-///
-/// El `ParamDragState` avanzado se escribe **antes** de confirmar el valor para
-/// que el eje quede fijado en el estado global. `param_drag` no lo pinta nadie,
-/// así que esa escritura no dispara un repintar por su cuenta.
-fn param_drag_move(cx: &mut gpui_kit::App, x: f32, y: f32, fine: bool) {
-    let st = state(cx);
-    let current = st.read(cx).param_drag;
-    let Some(mut drag) = current else {
-        return;
-    };
-    let Some(value) = drag.advance(x, y, fine) else {
-        return;
-    };
-    st.update(cx, |state, _| {
-        state.param_drag = Some(drag);
-    });
-    commit_external_param(cx, drag.track, drag.slot, drag.param_id, value);
-}
-
-/// Cierra el drag. Sin `notify()` por el mismo motivo que en
-/// [`param_drag_begin`]: el último `commit_external_param` que movió algo ya
-/// notificó, y si el gesto no llegó a mover nada no hay nada que repintar.
-fn param_drag_end(cx: &mut gpui_kit::App) {
-    state(cx).update(cx, |state, _| {
-        state.param_drag = None;
-    });
-}
-
-/// Registra el seguimiento del arrastre a nivel de ventana.
-///
-/// # Por qué no `on_mouse_move` de la tarjeta
-///
-/// Los listeners de elemento de GPUI Kit se despachan **sólo si el hitbox del
-/// elemento está bajo el cursor** (`div.rs`: el closure arranca con
-/// `if phase == DispatchPhase::Bubble && hitbox.is_hovered(window)`). Con el
-/// seguimiento en la tarjeta, en cuanto el cursor salía de ella el gesto se
-/// congelaba a mitad de camino —y el `mouse_up` también se perdía, dejando
-/// `param_drag` colgado para el movimiento de mouse que viniera después—. Como
-/// la barra es horizontal y baja 10px, sacarla de la tarjeta era cuestión de
-/// pocos píxeles: la mitad de la caja del arrastre se quedaba sin responder,
-/// que es justo lo que se veía como lag.
-///
-/// `Window::on_mouse_event` no lleva esa condición: el gesto sigue aunque el
-/// cursor salga de la tarjeta, de la ventana o de la pantalla.
-///
-/// # Por qué se registra siempre
-///
-/// `Window::on_mouse_event` borra sus listeners en cada frame renderizado y sólo
-/// admite registrarse en fase de paint, así que no se puede registrar desde el
-/// `mouse_down`. Y como `param_drag_begin` no notifica (no hay nada que
-/// repintar), **no hay frame nuevo entre el clic y el primer movimiento**. Por
-/// eso el registro va en el paint del rack y no se condiciona a que haya un
-/// arrastre en curso: el listener de siempre es el que atiende el primer
-/// movimiento. Cuando no hay gesto, el listener vuelve en su primera guarda.
-fn register_param_drag_tracking(window: &mut gpui_kit::Window) {
-    window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
-        let fine = event.modifiers.shift || event.modifiers.control;
-        param_drag_move(
-            cx,
-            f32::from(event.position.x),
-            f32::from(event.position.y),
-            fine,
-        );
-    });
-    window.on_mouse_event(move |event: &MouseUpEvent, _phase, _window, cx| {
-        // Sólo el izquierdo cierra el gesto: el derecho abre el menú de la
-        // tarjeta y no debe abortar un arrastre que sigue vivo.
-        if event.button == gpui_kit::MouseButton::Left {
-            param_drag_end(cx);
-        }
-    });
-}
-
-/// Canvas invisible que mantiene vivo el seguimiento del arrastre.
-///
-/// `Window::on_mouse_event` borra sus listeners en cada frame renderizado, así
-/// que hay que volver a registrar en cada frame. Este canvas lo hace desde su
-/// fase de **paint**, que es la única desde la que la API lo permite
-/// (`window.rs` hace `debug_assert_paint()`).
-///
-/// El invariante que sostiene el gesto: si se renderizó un frame, el paint de
-/// este canvas corrió y el listener quedó registrado de nuevo; y si no se
-/// renderizó ningún frame, entonces no se borró ningún listener. No hay forma
-/// de quedarse sin seguimiento a mitad de arrastre.
-///
-/// No tiene hitbox (no registra interactividad), así que no intercepta el mouse
-/// de la barra ni de los botones de la tarjeta.
-fn param_drag_keepalive() -> AnyElement {
-    canvas(
-        |_bounds, _window, _cx| {},
-        move |_bounds, _state, window, _cx| {
-            register_param_drag_tracking(window);
-        },
-    )
-    .absolute()
-    .inset_0()
-    .into_any_element()
-}
-
-fn open_plugin_menu(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            for (i, s) in track.effects.iter_mut().enumerate() {
-                if i == slot_idx {
-                    s.menu_open = true;
-                    s.options_open = false;
-                } else {
-                    s.menu_open = false;
-                    s.options_open = false;
-                }
-            }
-        }
-        state.selected_slot_index = slot_idx;
-        state.add_slot_menu_open = false;
-        cx.notify();
-    });
-}
-
-fn cycle_card_menu(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
-    let options_open = state(cx)
-        .read(cx)
-        .slot(track_idx, slot_idx)
-        .is_some_and(|slot| slot.options_open);
-    if options_open {
-        open_plugin_menu(cx, track_idx, slot_idx);
-    } else {
-        open_options_menu(cx, track_idx, slot_idx);
-    }
-}
-
-fn open_options_menu(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            for (i, s) in track.effects.iter_mut().enumerate() {
-                if i == slot_idx {
-                    s.options_open = !s.options_open;
-                    s.menu_open = false;
-                } else {
-                    s.options_open = false;
-                    s.menu_open = false;
-                }
-            }
-        }
-        state.selected_slot_index = slot_idx;
-        state.add_slot_menu_open = false;
-        cx.notify();
-    });
-}
-
-fn remove_slot_at(cx: &mut gpui_kit::App, track_idx: usize, slot_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        let selected = state.selected_slot_index;
-        let new_len = if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            if slot_idx < track.effects.len() {
-                track.effects.remove(slot_idx);
-            }
-            track.effects.len()
-        } else {
-            0
-        };
-        state.selected_slot_index = if new_len == 0 {
-            0
-        } else {
-            selected.min(new_len - 1)
-        };
-        cx.notify();
-    });
-}
-
-fn remove_selected_slot(cx: &mut gpui_kit::App, track_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        let selected = state.selected_slot_index;
-        if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-            if selected < track.effects.len() {
-                track.effects.remove(selected);
-                state.selected_slot_index = if track.effects.is_empty() {
-                    0
-                } else {
-                    selected.min(track.effects.len() - 1)
-                };
-            }
-        }
-        cx.notify();
-    });
-}
-
-pub fn render(cx: &mut Context<HikaruApp>) -> impl IntoElement {
-    let (track_idx, selected_slot, cards, title) = {
-        let app = state(cx).read(cx);
-        let track_idx = app.safe_track_index();
-        if !app.tracks().get(track_idx).is_some() {
-            return v_flex().size_full().into_any_element();
-        }
-        let track = &app.tracks()[track_idx];
-
-        (
-            track_idx,
-            app.selected_slot_index,
-            // Proyección, no `track.effects.clone()`. La tarjeta sólo necesita
-            // estos campos (ver `CardSnapshot`) y el editor de cada módulo lee
-            // su propio estado por `track_idx`/`slot_idx`. El clonado entero
-            // arrastraba la `WavetableEditor` de cada slot —y con ella los
-            // `256 * TABLE_RESOLUTION` f32 de la tabla, ~2 MB por slot— en
-            // CADA render. Con un fader de plugin abajo, cada `cx.notify()`
-            // del arrastre pagaba esa copia y el gesto se arrastraba.
-            track
-                .effects
-                .iter()
-                .map(CardSnapshot::from_slot)
-                .collect::<Vec<_>>(),
-            rack_title(&track.name, app.matrix_state.selected_slot.map(|(_, scene)| scene)),
-        )
-    };
-
-    let (open_browser, open_options) = {
-        let app = state(cx).read(cx);
-        let track = &app.tracks()[track_idx];
-        let open_browser = track.effects.iter().position(|slot| slot.menu_open);
-        let open_options = track.effects.iter().position(|slot| slot.options_open);
-        (open_browser, open_options)
-    };
-    let options_left = open_options.map(|idx| card_x_offset(&cards, idx));
-
-    div()
-        .id("dsp_rack")
-        .w_full()
-        .h(px(RACK_HEIGHT))
-        .max_h(px(220.0))
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .w_full()
-                .h(px(RACK_HEIGHT))
-                .max_h(px(220.0))
-                .flex()
-                .flex_col()
-                .bg(rgb(0x14141A))
-                .border_t_1()
-                .border_color(rgb(0x2A2A2A))
-                .child(
-                    div()
-                        .w_full()
-                        .h(px(20.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .px(px(8.0))
-                        .bg(rgb(0x1A1A1F))
-                        .child(Label::new(title).text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x888888)))
-                )
-                .child(
-                    div()
-                        .id("dsp_strip")
-                        .w_full()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .max_h(px(RACK_HEIGHT - 20.0))
-                        .overflow_x_scrollbar()
-                        .child(
-                            h_flex()
-                                .h_full()
-                                .items_stretch()
-                                .gap(px(CARD_GAP))
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .children(cards.iter().enumerate().map(|(idx, card)| {
-                                    render_card(cx, track_idx, idx, card, idx == selected_slot)
-                                }))
-                                .child(render_add_slot_button(cx, track_idx, cards.len()))
-                        )
-                )
-        )
-        .when_some(open_browser, |this, idx| {
-            this.child(render_plugin_browser(cx, track_idx, idx))
-        })
-        .when_some(open_options.zip(options_left), |this, (idx, left)| {
-            this.child(render_options_menu(cx, track_idx, idx, left))
-        })
-        // Red de seguridad del seguimiento del arrastre. Va al final para que
-        // quede por encima: es invisible y no registra hitbox, así que no
-        // intercepta el mouse de las barras ni de los botones. Uno solo para
-        // todo el rack, y no uno por tarjeta, para que sean un listener por
-        // frame.
-        .child(param_drag_keepalive())
-        .into_any_element()
-}
-
-/// Lo único de un [`DspSlot`] que la tarjeta necesita para dibujarse.
-///
-/// Existe para no clonar la cadena entera en cada render (ver [`render`]).
-/// `Clone` es barato: son dos `String` y una [`hikaru_plugin_host::PluginDescriptor`].
-#[derive(Clone)]
-struct CardSnapshot {
-    name: String,
-    active: bool,
-    options_open: bool,
-    external: Option<hikaru_plugin_host::PluginDescriptor>,
-    load_error: Option<String>,
-}
-
-impl CardSnapshot {
-    fn from_slot(slot: &DspSlot) -> Self {
-        Self {
-            name: slot.name.clone(),
-            active: slot.active,
-            options_open: slot.options_open || slot.menu_open,
-            external: slot.external.clone(),
-            load_error: slot.load_error.clone(),
-        }
-    }
-}
-
-/// X de la tarjeta `idx` dentro de la tira. Las tarjetas pueden tener anchos
-/// distintos (el phaser, la wavetable y los plugins externos VST3/CLAP usan
-/// diseño horizontal de dos columnas), así que se suma el ancho real de cada
-/// una en vez de asumir un ancho fijo.
-fn card_width(card: &CardSnapshot) -> f32 {
-    if card.external.is_some() {
-        EXTERNAL_CARD_WIDTH
-    } else if card.name == "OpenSpectral Phaser"
-        || card.name == "OpenSpectralPhaser"
-        || card.name == "OpenSpectralFX"
-        || card.name == "OpenSpectral"
-    {
-        PHASER_CARD_WIDTH
-    } else if card.name == "OpenWavetable" {
-        OPEN_WAVETABLE_CARD_WIDTH
-    } else {
-        CARD_WIDTH
-    }
-}
-
-fn card_x_offset(cards: &[CardSnapshot], idx: usize) -> f32 {
-    let before = cards
-        .iter()
-        .take(idx)
-        .map(|c| card_width(c) + CARD_GAP)
-        .sum::<f32>();
-    8.0 + before
-}
-
-fn render_add_slot_button(cx: &mut Context<HikaruApp>, track_idx: usize, _slot_count: usize) -> AnyElement {
-    let menu_open = {
-        let app = state(cx).read(cx);
-        app.add_slot_menu_open
-    };
-
-    div()
-        .id(format!("dsp_add_slot_{track_idx}"))
-        .w(px(50.0))
-        .h_full()
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(if menu_open { rgb(0x252530) } else { rgb(0x1C1C22) })
-        .border_1()
-        .border_color(if menu_open { rgb(theme::BITWIG_ORANGE) } else { rgb(0x2A2A30) })
-        .rounded(px(4.0))
-        .cursor_pointer()
-        .on_mouse_move(|e, _, cx| {
-            set_footer_cues(
-                cx,
-                Some(e.modifiers),
-                &[("CLICK:", "Insert New Device / VST3 / CLAP Plugin in Chain")],
-            );
-        })
-        .on_click(move |_, _, cx| {
-            state(cx).update(cx, |state, cx| {
-                if let Some(track) = state.tracks_mut().get_mut(track_idx) {
-                    let new_id = track.effects.len();
-                    track.effects.push(DspSlot::new(new_id, "Empty Slot".to_string()));
-                    open_wavetable::log_initial_wavetable(&format!("slot t{track_idx}s{new_id}"));
-                    state.selected_slot_index = new_id;
-                    if let Some(slot) = state.slot_mut(track_idx, new_id) {
-                        slot.menu_open = true;
-                    }
-                }
-                state.add_slot_menu_open = false;
-                cx.notify();
-            });
-        })
-        .child(
-            Label::new("[ + ]")
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x888888))
-        )
-        .into_any_element()
-}
-
-fn render_card(
-    cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    idx: usize,
-    card: &CardSnapshot,
-    is_selected: bool,
-) -> AnyElement {
-    let name = card.name.clone();
-    let slot_active = card.active;
-    let options_open = card.options_open;
-    let external = card.external.clone();
-    let load_error = card.load_error.clone();
-
-    let target = if track_idx == 0 {
-        crate::views::arranger_view::StripTarget::Master
-    } else {
-        crate::views::arranger_view::StripTarget::Live(track_idx.saturating_sub(1))
-    };
-
-    let card_w = card_width(card);
-    let is_external = external.is_some();
-
-    div()
-        .id(format!("dsp_card_{track_idx}_{idx}"))
-        .w(px(card_w))
-        .h_full()
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .bg(if is_selected { rgb(0x23252E) } else { rgb(0x1A1B20) })
-        .border_1()
-        .border_color(if is_selected { rgb(theme::BITWIG_ORANGE) } else { rgb(0x2A2C34) })
-        .rounded(px(4.0))
-        .overflow_hidden()
-        // Drop target: soltar otro dispositivo en esta tarjeta lo reordena a esta posición
-        .can_drop(|payload: &dyn std::any::Any, _, _| payload.is::<crate::views::mixer::MixerDeviceDrag>())
-        .on_drop(move |payload: &crate::views::mixer::MixerDeviceDrag, _, cx| {
-            let st = state(cx);
-            st.update(cx, |s, cx| {
-                s.move_device(payload.source_target, payload.source_slot, target, idx);
-                cx.notify();
-            });
-        })
-        .on_click(move |_, _, cx| {
-            state(cx).update(cx, |state, cx| {
-                state.selected_slot_index = idx;
-                cx.notify();
-            });
-        })
-        .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
-            eprintln!("[Hikaru] card RIGHT t{track_idx}s{idx}");
-            open_plugin_menu(cx, track_idx, idx);
-        })
-        .on_aux_click(move |_, _, cx| {
-            eprintln!("[Hikaru] card AUX t{track_idx}s{idx}");
-            open_plugin_menu(cx, track_idx, idx);
-        })
-        .child(render_card_header(track_idx, idx, &name, slot_active, options_open, is_selected, target))
-        .child(render_card_body(
-            cx,
-            track_idx,
-            idx,
-            &name,
-            external.as_ref(),
-            load_error.as_deref(),
-        ))
-        .child(render_card_footer(cx, track_idx, idx, &name, is_external))
-        .into_any_element()
-}
-
-fn render_card_header(
-    track_idx: usize,
-    idx: usize,
-    name: &str,
-    active: bool,
-    options_open: bool,
-    is_selected: bool,
-    target: crate::views::arranger_view::StripTarget,
-) -> AnyElement {
-    let drag_payload = crate::views::mixer::MixerDeviceDrag {
-        source_target: target,
-        source_slot: idx,
-        device_name: name.to_string(),
-    };
-
-    h_flex()
-        .id(format!("dsp_card_hdr_{track_idx}_{idx}"))
-        .w_full()
-        .h(px(CARD_HEADER_HEIGHT))
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(4.0))
-        .px(px(CARD_PADDING))
-        .bg(if is_selected { rgb(0x292B34) } else { rgb(0x212329) })
-        .border_b_1()
-        .border_color(rgb(0x2C2F38))
-        .cursor_grab()
-        .on_mouse_move(|e, _, cx| {
-            set_footer_cues(
-                cx,
-                Some(e.modifiers),
-                &[
-                    ("CLICK:", "Select Device"),
-                    ("DRAG:", "Move Device to Track / Reorder"),
-                    ("RIGHT-CLICK:", "Replace Device"),
-                    ("DEL:", "Remove Device"),
-                ],
-            );
-        })
-        .on_drag(drag_payload, |payload, _, _, cx| {
-            let name = payload.device_name.clone();
-            cx.new(|_| crate::views::mixer::MixerDeviceDragGhost { device_name: name })
-        })
-        .child(
-            rack_button(format!("dsp_card_toggle_{track_idx}_{idx}"))
-                .rounded(ButtonRounded::None)
-                .label(if active { "●" } else { "○" })
-                .compact()
-                .when(active, |b| b.text_color(rgb(0x00FF88)))
-                .when(!active, |b| b.text_color(rgb(0x666666)))
-                .on_click(move |_, _, cx| {
-                    state(cx).update(cx, |state, cx| {
-                        if let Some(slot) = state.slot_mut(track_idx, idx) {
-                            slot.active = !slot.active;
-                        }
-                        cx.notify();
-                    });
-                })
-        )
-        .child(
-            Label::new(format!("{:02} {}", idx + 1, name))
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(if active { rgb(0xE0E0E0) } else { rgb(0x666666) })
-                .flex_1()
-                .truncate()
-        )
-        .child(
-            div()
-                .id(format!("dsp_card_menu_{track_idx}_{idx}"))
-                .min_w(px(22.0))
-                .px(px(4.0))
-                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                    eprintln!("[Hikaru] triangle LEFT t{track_idx}s{idx}");
-                    cycle_card_menu(cx, track_idx, idx);
-                })
-                .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
-                    eprintln!("[Hikaru] triangle RIGHT t{track_idx}s{idx}");
-                    open_plugin_menu(cx, track_idx, idx);
-                })
-                .on_aux_click(move |_, _, cx| {
-                    eprintln!("[Hikaru] triangle AUX t{track_idx}s{idx}");
-                    open_plugin_menu(cx, track_idx, idx);
-                })
-                .child(
-                    Label::new(if options_open { "▲" } else { "▼" })
-                        .text_xs()
-                        .text_color(rgb(0xE0E0E0)),
-                )
-                .into_any_element()
-        )
-        .into_any_element()
-}
-
-fn render_card_body(
-    cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    idx: usize,
-    name: &str,
-    external: Option<&hikaru_plugin_host::PluginDescriptor>,
-    load_error: Option<&str>,
-) -> AnyElement {
-    // Un plugin externo gana sobre el `match` por nombre: el nombre de un
-    // VST3 podría coincidir con el de un interno, y el descriptor es la
-    // identidad fiable.
-    if let Some(descriptor) = external {
-        return render_external_card(cx, track_idx, idx, descriptor, load_error);
-    }
-
-    match name {
-        "OpenWavetable" => open_wavetable::render_module(cx, track_idx, idx),
-        "Hikaru OpenDMS" => render_rack_card(cx, track_idx, idx),
-        "OpenEQ3" => hikaru_openeq3::render_module(),
-        "OpenSpectral Phaser" | "OpenSpectralPhaser" | "OpenSpectralFX" | "OpenSpectral" => {
-            openspectral_phaser::render_module(cx, track_idx, idx)
-        }
-        _ => {
-            div()
-                .id(format!("dsp_empty_{track_idx}_{idx}"))
-                .w_full()
-                .flex_1()
-                .min_h(px(0.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                    open_plugin_menu(cx, track_idx, idx);
-                })
-                .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
-                    open_plugin_menu(cx, track_idx, idx);
-                })
-                .on_aux_click(move |_, _, cx| {
-                    open_plugin_menu(cx, track_idx, idx);
-                })
-                .child(
-                    Label::new("Empty Slot")
-                        .text_sm()
-                        .text_color(rgb(0x888888))
-                )
-                .into_any_element()
-        }
-    }
-}
-
-fn render_card_footer(
-    cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    idx: usize,
-    name: &str,
-    is_external: bool,
-) -> AnyElement {
-    if is_external {
-        return div().w_full().h(px(0.0)).into_any_element();
-    }
-    match name {
-        "OpenWavetable" => open_wavetable::render_module_footer(cx, track_idx, idx),
-        "OpenSpectral Phaser" | "OpenSpectralPhaser" | "OpenSpectralFX" | "OpenSpectral" => {
-            openspectral_phaser::render_module_footer(cx, track_idx, idx)
-        }
-        _ => div().w_full().h(px(CARD_FOOTER_HEIGHT)).into_any_element(),
-    }
-}
-
-/// Navegador de plugins del rack (estilo DAW pro).
-///
-/// Sustituye al antiguo menú flotante anclado a la tarjeta: en vez de un
-/// popup estrecho con el listado crudo, es un panel que ocupa toda la tira
-/// del rack con cabecera (título + buscador + cierre), fila de filtros por
-/// formato, lista con scroll y acciones de escaneo. Todo con el tema oscuro
-/// de Hikaru (fondos `#14141A`/`#1C1C22`, acento naranja `#FF6E00`).
-///
-/// Vive como overlay absoluto sobre la tira (`top(20)` = debajo del título
-/// del rack): no mueve ni superpone tarjetas, y al asignar o cerrar se
-/// desmonta sin dejar estado colgado (`close_browser`).
-fn render_plugin_browser(
-    cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    slot_idx: usize,
-) -> AnyElement {
-    let (all_externals, query, filter, scan_status, is_scanning, scan_error_count, gui_errors, search_input) = {
-        let app = state(cx).read(cx);
-        (
-            app.plugin_settings_state.discovered_plugins.clone(),
-            app.plugin_browser_query.clone(),
-            app.plugin_browser_filter,
-            app.plugin_settings_state.status_message.clone(),
-            app.plugin_settings_state.is_scanning,
-            app.plugin_settings_state.scan_errors.len(),
-            app.plugin_settings_state.gui_errors.clone(),
-            app.plugin_search_input.clone(),
-        )
-    };
-    let needle = query.trim().to_lowercase();
-
-    let natives: Vec<PluginEntry> = PLUGIN_CATALOG
-        .iter()
-        .copied()
-        .filter(|entry| {
-            needle.is_empty()
-                || entry.label.to_lowercase().contains(&needle)
-                || entry.name.to_lowercase().contains(&needle)
-        })
-        .collect();
-    // El id identifica al plugin entre escaneos, así que dos plugins con el
-    // mismo nombre no colisionan en el DOM de GPUI (que indexa por id).
-    let filtered_externals: Vec<hikaru_plugin_host::PluginDescriptor> = all_externals
-        .into_iter()
-        .filter(|d| filter.matches_external(d.format))
-        .filter(|d| {
-            needle.is_empty()
-                || d.name.to_lowercase().contains(&needle)
-                || d.vendor.to_lowercase().contains(&needle)
-        })
-        .collect();
-    let show_natives = filter.show_natives();
-
-    let target_label = format!("Pista {} · Slot {:02}", track_idx + 1, slot_idx + 1);
-
-    div()
-        .id("plugin_browser")
-        .absolute()
-        .left(px(0.0))
-        .w_full()
-        .top(px(20.0))
-        .bottom(px(0.0))
-        .flex()
-        .flex_col()
-        .bg(rgb(0x101014))
-        .border_t_1()
-        .border_color(rgb(0xFF6E00))
-        .child(
-            // Cabecera: qué slot se está vistiendo + buscador + cierre.
-            h_flex()
-                .w_full()
-                .h(px(32.0))
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(8.0))
-                .px(px(10.0))
-                .bg(rgb(0x1A1A1F))
-                .border_b_1()
-                .border_color(rgb(0x2A2A30))
-                .child(
-                    Label::new("AÑADIR PLUGIN")
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0xE0E0E0)),
-                )
-                .child(
-                    Label::new(target_label)
-                        .text_xs()
-                        .text_color(rgb(0x888888)),
-                )
-                .child(
-                    TextStyleScope::text_color(
-                        rgb(0xE0E0E0),
-                        div()
-                            .flex_1()
-                            .h(px(22.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .bg(rgb(0x0C0C10))
-                            .border_1()
-                            .border_color(rgb(0x2A2A30))
-                            .rounded(px(4.0))
-                            .px(px(6.0))
-                            .child(
-                                Label::new("⌕")
-                                    .text_xs()
-                                    .text_color(rgb(0x666666)),
-                            )
-                            .child(
-                                Input::new(&search_input)
-                                    .appearance(false)
-                                    .bordered(false)
-                                    .cleanable(true)
-                                    .h_full()
-                                    .w_full()
-                                    .with_size(Size::XSmall),
-                            ),
-                    ),
-                )
-                .child(
-                    rack_button("dsp_browser_close")
-                        .label("✕")
-                        .on_click(move |_, _, cx| {
-                            close_browser(cx, track_idx);
-                        }),
-                ),
-        )
-        .child(
-            // Filtros por formato + estado del escaneo + acciones.
-            h_flex()
-                .w_full()
-                .h(px(28.0))
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(4.0))
-                .px(px(10.0))
-                .children(PluginBrowserFilter::TABS.iter().map(|(tab, label)| {
-                    let active = *tab == filter;
-                    rack_button(format!("dsp_browser_tab_{label}"))
-                        .label(*label)
-                        .when(active, |b| {
-                            b.bg(rgb(0x3A2410)).text_color(rgb(0xFF9E40))
-                        })
-                        .when(!active, |b| b.text_color(rgb(0x888888)))
-                        .on_click(move |_, _, cx| {
-                            let tab = *tab;
-                            state(cx).update(cx, |state, cx| {
-                                state.plugin_browser_filter = tab;
-                                cx.notify();
-                            });
-                        })
-                        .into_any_element()
-                }))
-                .child(div().flex_1())
-                .child(
-                    Label::new(if is_scanning {
-                        "Escaneando…".to_string()
-                    } else if scan_error_count > 0 {
-                        format!("{scan_status} ({scan_error_count} omitidos)")
-                    } else {
-                        scan_status.clone()
-                    })
-                    .text_xs()
-                    .truncate()
-                    .max_w(px(260.0))
-                    .text_color(rgb(0x666666)),
-                )
-                .child(
-                    rack_button("dsp_browser_rescan")
-                        .label(if is_scanning { "…" } else { "⟳ Rescan" })
-                        .on_click(move |_, _, cx| {
-                            state(cx).update(cx, |state, cx| {
-                                state.plugin_settings_state.start_scan();
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    rack_button("dsp_browser_paths")
-                        .label("Rutas…")
-                        .on_click(move |_, _, cx| {
-                            state(cx).update(cx, |state, cx| {
-                                state.plugin_settings_state.is_open = true;
-                                cx.notify();
-                            });
-                        }),
-                ),
-        )
-        .child(
-            // Resultados con scroll: nativos arriba, externos debajo.
-            v_flex()
-                .w_full()
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_y_scrollbar()
-                .px(px(10.0))
-                .py(px(6.0))
-                .gap(px(3.0))
-                .when(show_natives && !natives.is_empty(), |this| {
-                    this.child(browser_section_header("Plugins nativos · Hikaru"))
-                })
-                .children(natives.iter().map(|entry| {
-                    browser_native_row(track_idx, slot_idx, *entry)
-                }))
-                .when(show_natives && natives.is_empty() && filtered_externals.is_empty(), |this| {
-                    this.child(browser_empty_state("Sin nativos para esa búsqueda."))
-                })
-                .when(!filtered_externals.is_empty(), |this| {
-                    this.child(browser_section_header(&format!(
-                        "VST3 / CLAP externos ({})",
-                        filtered_externals.len()
-                    )))
-                })
-                .children(filtered_externals.iter().map(|descriptor| {
-                    let gui_error = gui_errors.get(&descriptor.name).cloned();
-                    browser_external_row(track_idx, slot_idx, descriptor.clone(), gui_error)
-                }))
-                .when(filtered_externals.is_empty(), |this| {
-                    this.child(browser_empty_state(
-                        "Ningún externo coincide. Pulsa ⟳ Rescan o revisa Rutas…",
-                    ))
-                })
-                .into_any_element(),
-        )
-        .into_any_element()
-}
-
-/// Cabecera de sección del navegador ("Plugins nativos", "VST3 / CLAP (3)").
-fn browser_section_header(title: &str) -> AnyElement {
-    Label::new(title)
-        .text_xs()
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(0x6A7080))
-        .into_any_element()
-}
-
-fn browser_empty_state(message: &str) -> AnyElement {
-    div()
-        .w_full()
-        .py(px(6.0))
-        .flex()
-        .justify_center()
-        .child(
-            Label::new(message)
-                .text_xs()
-                .text_color(rgb(0x4A5060)),
-        )
-        .into_any_element()
-}
-
-/// Fila de plugin nativo: toda la fila asigna (el "Añadir ›" es affordance
-/// visual, no un botón anidado, para no disparar dos asignaciones).
-fn browser_native_row(track_idx: usize, slot_idx: usize, entry: PluginEntry) -> AnyElement {
-    div()
-        .id(format!("dsp_browser_nat_{}_{slot_idx}", entry.name))
-        .w_full()
-        .h(px(28.0))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .px(px(8.0))
-        .bg(rgb(0x1C1C22))
-        .border_1()
-        .border_color(rgb(0x2A2A30))
-        .rounded(px(4.0))
-        .on_click(move |_, _, cx| {
-            assign_plugin(cx, track_idx, slot_idx, entry.name);
-        })
-        .child(
-            Label::new("INT")
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x00FF88)),
-        )
-        .child(
-            Label::new(entry.label)
-                .text_xs()
-                .truncate()
-                .flex_1()
-                .text_color(rgb(0xE8EAF0)),
-        )
-        .child(
-            Label::new(entry.category)
-                .text_xs()
-                .flex_shrink_0()
-                .text_color(rgb(0x666666)),
-        )
-        .child(
-            Label::new("Añadir ›")
-                .text_xs()
-                .flex_shrink_0()
-                .text_color(rgb(0xFF9E40)),
-        )
-        .into_any_element()
-}
-
-/// Fila de plugin externo. Si su GUI falló alguna vez (`gui_errors`), la
-/// fila lo muestra en rojo en vez de prometer un editor que no abre: el
-/// plugin sigue asignable para audio, pero el usuario sabe qué pasa.
-fn browser_external_row(
-    track_idx: usize,
-    slot_idx: usize,
-    descriptor: hikaru_plugin_host::PluginDescriptor,
-    gui_error: Option<String>,
-) -> AnyElement {
-    let is_vst3 = descriptor.format == hikaru_plugin_host::PluginFormat::VST3;
-    let badge = if is_vst3 { "VST3" } else { "CLAP" };
-    let badge_color = if is_vst3 { rgb(0x64B4FF) } else { rgb(0xB464FF) };
-    let row_id = descriptor.id.clone();
-    let plugin_name = descriptor.name.clone();
-    let sub = if descriptor.vendor.is_empty() {
-        descriptor
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default()
-    } else {
-        descriptor.vendor.clone()
-    };
-
-    v_flex()
-        .w_full()
-        .flex_shrink_0()
-        .bg(rgb(0x1C1C22))
-        .border_1()
-        .border_color(rgb(0x2A2A30))
-        .rounded(px(4.0))
-        .px(px(8.0))
-        .py(px(2.0))
-        .child(
-            div()
-                .id(format!("dsp_browser_ext_{row_id}_{slot_idx}"))
-                .w_full()
-                .h(px(24.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .on_click(move |_, _, cx| {
-                    assign_external_plugin(cx, track_idx, slot_idx, descriptor.clone());
-                })
-                .child(
-                    Label::new(badge)
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .flex_shrink_0()
-                        .w(px(36.0))
-                        .text_color(badge_color),
-                )
-                .child(
-                    Label::new(plugin_name)
-                        .text_xs()
-                        .truncate()
-                        .flex_1()
-                        .text_color(rgb(0xE8EAF0)),
-                )
-                .child(
-                    Label::new(sub)
-                        .text_xs()
-                        .truncate()
-                        .flex_shrink_0()
-                        .w(px(140.0))
-                        .text_color(rgb(0x666666)),
-                )
-                .child(
-                    Label::new("Añadir ›")
-                        .text_xs()
-                        .flex_shrink_0()
-                        .text_color(rgb(0xFF9E40)),
-                )
-                .into_any_element(),
-        )
-        .when_some(gui_error, |this, message| {
-            this.child(
-                Label::new(format!("⚠ {message}"))
-                    .text_xs()
-                    .truncate()
-                    .text_color(rgb(0xFF7A5C)),
-            )
-        })
-        .into_any_element()
-}
-
-fn render_options_menu(
-    _cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    slot_idx: usize,
-    left: f32,
-) -> AnyElement {
-    div()
-        .absolute()
-        .left(px(left))
-        .bottom(px(RACK_HEIGHT))
-        .w(px(CARD_WIDTH))
-        .bg(rgb(0x1E1E26))
-        .border_1()
-        .border_color(rgb(0x3A3A45))
-        .rounded(px(4.0))
-        .shadow(vec![gpui_kit::BoxShadow {
-            color: gpui_kit::black().opacity(0.5),
-            offset: point(px(0.0), px(-4.0)),
-            blur_radius: px(8.0),
-            spread_radius: px(0.0),
-            inset: false,
-        }])
-        .p(px(4.0))
-        .gap(px(2.0))
-        .child(
-            rack_button(format!("dsp_opt_save_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label("Save Preset...")
-                .compact()
-                .w_full()
-                .on_click(move |_, _, cx| {
-                    state(cx).update(cx, |state, cx| {
-                        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-                            slot.options_open = false;
-                        }
-                        cx.notify();
-                    });
-                }),
-        )
-        .child(
-            rack_button(format!("dsp_opt_paths_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label("Add Wavetable Paths...")
-                .compact()
-                .w_full()
-                .on_click(move |_, _, cx| {
-                    crate::views::explorer::begin_wavetable_pick(cx, track_idx, slot_idx);
-                    state(cx).update(cx, |state, cx| {
-                        if let Some(slot) = state.slot_mut(track_idx, slot_idx) {
-                            slot.options_open = false;
-                        }
-                        cx.notify();
-                    });
-                }),
-        )
-        .child(
-            rack_button(format!("dsp_opt_delete_{track_idx}_{slot_idx}"))
-                .rounded(ButtonRounded::None)
-                .label("Delete Slot")
-                .compact()
-                .w_full()
-                .on_click(move |_, _, cx| {
-                    remove_slot_at(cx, track_idx, slot_idx);
-                }),
-        )
-        .into_any_element()
-}
-
-/// Tarjeta de un plugin externo VST3/CLAP.
-///
-/// Es un placeholder, no el editor: el editor nativo es una ventana del sistema
-/// (XWayland, ver `hikaru_plugin_host::platform::linux`), no un árbol de
-/// elementos GPUI. Lo que se dibuja acá es el ancla visual dentro del rack --
-/// formato, archivo y el botón que abre la ventana -- para que el usuario sepa
-/// qué tiene cargado sin abrir nada.
-///
-/// El contenedor no reserva el tamaño real del editor porque no se puede
-/// conocer sin instanciar el plugin. Cuando el motor lo cargue se puede
-/// pintar el tamaño preferido; hasta entonces el layout del rack no depende de
-/// plugins externos, que es lo que evita que la ventana salte al cargarlos.
-fn render_external_card(
-    cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    idx: usize,
-    descriptor: &hikaru_plugin_host::PluginDescriptor,
-    load_error: Option<&str>,
-) -> AnyElement {
-    let is_vst3 = descriptor.format == hikaru_plugin_host::PluginFormat::VST3;
-    let badge = if is_vst3 { "VST3" } else { "CLAP" };
-    let badge_color = if is_vst3 { rgb(0x64B4FF) } else { rgb(0xB464FF) };
-    let file_name = descriptor
-        .path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    // Un slot con error de carga muestra el mensaje y no ofrece abrir el
-    // editor: insistir produciría el mismo fallo y, si el plugin llegó a
-    // cargarse a medias, dejaría una ventana zombie.
-    // Error de GUI nativa (hilo de la ventana → `gui_errors` vía
-    // `poll_updates`): el plugin cargó pero su editor no abrió. Se pinta en
-    // la tarjeta en vez de cerrar el DAW o dejar una ventana vacía.
-    let (gui_error, editor_open, editor_opening, params, params_total, params_status, slot_has_gui) = {
-        let app = state(cx).read(cx);
-        let slot_params = app
-            .slot(track_idx, idx)
-            .map(|slot| {
-                (
-                    // Sólo las filas que se dibujan. La lista completa se
-                    // descartaba después (`.take(MAX_PARAM_ROWS)` más abajo), y
-                    // clonar N `ExternalParamState` son 2 `String` por entrada:
-                    // en un plugin con 300 parámetros eso eran 600 alocs por
-                    // frame para pintar 8 filas, y se pagaba en cada `notify`
-                    // del drag del fader.
-                    (
-                        slot.external_params.clone(),
-                        slot.external_params.len(),
-                    ),
-                    slot.params_status.clone(),
-                    slot.has_gui,
-                )
-            })
-            .unwrap_or_default();
-        (
-            app.plugin_settings_state.gui_error_for(&descriptor.name),
-            app.plugin_settings_state.is_plugin_open(&descriptor.name),
-            app.plugin_settings_state.is_plugin_opening(&descriptor.name),
-            slot_params.0 .0,
-            slot_params.0 .1,
-            slot_params.1,
-            slot_params.2,
-        )
-    };
-    let blocked_by_gui_error = gui_error.is_some();
-
-    // `descriptor.has_gui` viene del escaneo de disco, que no instancia nada
-    // y por lo tanto lo deja siempre en `false`: usarlo haría que este botón
-    // no se dibujara jamás. El sondeo diferido sí crea una instancia real, así
-    // que su respuesta es la que manda. `descriptor.has_gui` queda como
-    // respaldo para el frame previo a que termine el sondeo.
-    let can_open_editor = slot_has_gui.unwrap_or(descriptor.has_gui) && load_error.is_none();
-
-    // Primer frame con externo asignado: pedir el sondeo de parámetros. Corre
-    // una sola vez (la petición marca `Probing` en el acto) en un hilo
-    // aparte; el resultado vuelve vía `drain_param_probes`.
-    if matches!(params_status, ExternalParamsStatus::Idle) {
-        let descriptor = descriptor.clone();
-        let st = state(cx);
-        cx.update_entity(&st, |state, cx| {
-            state.request_external_params(&descriptor);
-            cx.notify();
-        });
-    }
-
-    let kind_label = match descriptor.kind {
-        hikaru_plugin_host::PluginKind::Instrument => "INST",
-        hikaru_plugin_host::PluginKind::Effect => "FX",
-    };
-    let vendor_label = if descriptor.vendor.trim().is_empty() {
-        kind_label.to_string()
-    } else {
-        descriptor.vendor.clone()
-    };
-
-    // Diseño Horizontal Modular (`h_flex` / `flex_row`) estilo Bitwig Studio 5.1.7:
-    //   [Sub-bloque Izquierdo: Identidad / Estado / Editor GUI] | [Sub-bloque Derecho: Lista Desplazable de Parámetros]
-    h_flex()
-        .id(format!("dsp_external_{track_idx}_{idx}"))
-        .test_support()
-        .w_full()
-        .flex_1()
-        .min_h(px(0.0))
-        .items_stretch()
-        .gap(px(6.0))
-        .p(px(5.0))
-        .overflow_hidden()
-        .on_mouse_down(gpui_kit::MouseButton::Right, move |_, _, cx| {
-            open_plugin_menu(cx, track_idx, idx);
-        })
-        // El seguimiento del arrastre de los knobs NO va acá: un
-        // `on_mouse_move` de elemento sólo se despacha mientras el hitbox está
-        // bajo el cursor, así que el gesto moría en cuanto el cursor salía de
-        // la tarjeta. Vive a nivel de ventana, en `param_drag_keepalive`.
-        // ── 1. SUB-BLOQUE IZQUIERDO: IDENTIDAD, ESTADO Y BOTÓN DE EDITOR NATIVO ──
-        .child(
-            v_flex()
-                .w(px(142.0))
-                .h_full()
-                .min_h(px(0.0))
-                .flex_shrink_0()
-                .justify_between()
-                .p(px(6.0))
-                .bg(rgb(0x13151B))
-                .border_1()
-                .border_color(rgb(0x262A36))
-                .rounded(px(3.0))
-                .overflow_hidden()
-                .child(
-                    v_flex()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .gap(px(3.0))
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .items_center()
-                                .justify_between()
-                                .gap(px(4.0))
-                                .child(
-                                    div()
-                                        .px(px(4.0))
-                                        .py(px(1.0))
-                                        .rounded(px(2.0))
-                                        .bg(rgb(0x1D212B))
-                                        .border_1()
-                                        .border_color(badge_color)
-                                        .font_family("monospace")
-                                        .text_size(px(9.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(badge_color)
-                                        .child(badge),
-                                )
-                                .child(
-                                    Label::new(kind_label)
-                                        .text_size(px(9.0))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(0x7C8392)),
-                                ),
-                        )
-                        .child(
-                            Label::new(descriptor.name.clone())
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .truncate()
-                                .text_color(rgb(0xECEFF4)),
-                        )
-                        .child(
-                            Label::new(vendor_label)
-                                .text_size(px(9.5))
-                                .truncate()
-                                .text_color(rgb(0x9097A6)),
-                        )
-                        .child(
-                            div()
-                                .font_family("monospace")
-                                .text_size(px(8.5))
-                                .text_color(rgb(0x5F6574))
-                                .truncate()
-                                .child(file_name),
-                        )
-                        .when_some(load_error.map(|e| e.to_string()), |this, message| {
-                            this.child(
-                                Label::new(format!("⚠ {message}"))
-                                    .text_size(px(9.0))
-                                    .text_color(rgb(theme::BITWIG_ORANGE))
-                                    .truncate(),
-                            )
-                        })
-                        .when_some(gui_error, |this, message| {
-                            this.child(
-                                Label::new(format!("⚠ {message}"))
-                                    .text_size(px(9.0))
-                                    .text_color(rgb(0xFF7A5C))
-                                    .truncate(),
-                            )
-                        }),
-                )
-                // Toggle de editor nativo. Es un botón porque abrir la GUI del plugin es
-                // costoso (dlopen + creación de ventana nativa en un hilo aparte) y no
-                // tiene sentido mantenerlo cargado si el usuario no lo está mirando.
-                //
-                // `editor_open` refleja el estado real que devuelve
-                // `plugin_settings_state`, no un bool local: la ventana se puede cerrar
-                // desde el WM y el toggle tiene que enterarse.
-                .when(can_open_editor && !blocked_by_gui_error, |this| {
-                    let (label, active) = if editor_open {
-                        ("■  Editor", true)
-                    } else if editor_opening {
-                        ("…  Abriendo", false)
-                    } else {
-                        ("▸  Editor", false)
-                    };
-                    // El nombre se clona para que el closure lo tenga por valor: el
-                    // toggle necesita poder cerrar por nombre, no reabrir por slot.
-                    let plugin_name = descriptor.name.clone();
-                    this.child(
-                        div()
-                            .w_full()
-                            .on_mouse_move(move |e, _, cx| {
-                                set_footer_cues(
-                                    cx,
-                                    Some(e.modifiers),
-                                    &[(
-                                        "CLICK:",
-                                        if active {
-                                            "Close Native Plugin Editor Window"
-                                        } else {
-                                            "Open Native Plugin Editor Window"
-                                        },
-                                    )],
-                                );
-                            })
-                            .child(
-                                rack_button(format!("dsp_editor_{track_idx}_{idx}"))
-                                    .rounded(ButtonRounded::None)
-                                    .label(label)
-                                    .compact()
-                                    .w_full()
-                                    .bg(if active {
-                                        rgb(theme::BITWIG_ORANGE)
-                                    } else {
-                                        rgb(0x282C36)
-                                    })
-                                    .text_color(if active {
-                                        rgb(0x121212)
-                                    } else {
-                                        rgb(0xE6E8EC)
-                                    })
-                                    .on_click(move |_, window, cx| {
-                                        if active {
-                                            close_external_editor(cx, &plugin_name);
-                                        } else {
-                                            open_external_editor(window, cx, track_idx, idx);
-                                        }
-                                    }),
-                            ),
-                    )
-                }),
-        )
-        // ── 2. SUB-BLOQUE DERECHO: LISTA DESPLAZABLE (`overflow_y_scroll`) DE PARÁMETROS ──
-        .child(render_external_params(
-            cx,
-            track_idx,
-            idx,
-            descriptor,
-            &params,
-            params_total,
-            &params_status,
-        ))
-        .into_any_element()
-}
-
-/// Knobs del plugin externo: parámetros automatizables con drag vertical,
-/// steppers de precisión y valor con el formato del plugin.
-///
-/// Máximo 8 filas (la tarjeta vive en un rack de 340px): el resto vive en el
-/// editor nativo. Cada gesto escribe la caché del slot, la marca `dirty`
-/// para el motor y la manda en vivo a la ventana abierta
-/// (`commit_external_param`). Lo que el editor nativo mueve por su cuenta
-/// vuelve por `apply_param_feedback` y los knobs lo reflejan sin pelear con
-/// el drag en curso (el feedback cede ante el dedo).
-/// `params` trae sólo las [`MAX_PARAM_ROWS`] filas que caben en la tarjeta, para
-/// no clonar la lista entera a cada frame. `params_total` es el conteo real
-/// del plugin, que es lo que necesita el rótulo: no se puede deducir de
-/// `params.len()` justamente porque esa lista viene truncada.
-fn render_external_params(
-    _cx: &mut Context<HikaruApp>,
-    track_idx: usize,
-    idx: usize,
-    descriptor: &hikaru_plugin_host::PluginDescriptor,
-    params: &[crate::views::mixer::ExternalParamState],
-    params_total: usize,
-    status: &ExternalParamsStatus,
-) -> AnyElement {
-    let is_clap = descriptor.format == hikaru_plugin_host::PluginFormat::CLAP;
-
-    let header: AnyElement = match status {
-        ExternalParamsStatus::Probing => Label::new("Leyendo parámetros…")
-            .text_xs()
-            .text_color(rgb(0x666666))
-            .into_any_element(),
-        ExternalParamsStatus::Failed(message) => {
-            let descriptor = descriptor.clone();
-            h_flex()
-                .gap(px(6.0))
-                .items_center()
-                .child(
-                    Label::new(format!("⚠ {message}"))
-                        .text_xs()
-                        .truncate()
-                        .flex_1()
-                        .text_color(rgb(0xFF7A5C)),
-                )
-                .child(
-                    rack_button(format!("dsp_param_retry_{track_idx}_{idx}"))
-                        .label("Reintentar")
-                        .compact()
-                        .flex_shrink_0()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.request_external_params(&descriptor);
-                                cx.notify();
-                            });
-                        }),
-                )
-                .into_any_element()
-        }
-        ExternalParamsStatus::Ready if params.is_empty() => Label::new(if is_clap {
-            "CLAP: parámetros no vinculados por el host."
-        } else {
-            "Sin parámetros automatizables."
-        })
-        .text_xs()
-        .text_color(rgb(0x555555))
-        .into_any_element(),
-        ExternalParamsStatus::Ready => h_flex()
-            .w_full()
-            .items_center()
-            .justify_between()
-            .gap(px(4.0))
-            .child(
-                Label::new(format!("PARÁMETROS ({params_total})"))
-                    .text_size(px(9.5))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0x8D95A5)),
-            )
-            .child(
-                div()
-                    .font_family("monospace")
-                    .text_size(px(8.5))
-                    .text_color(rgb(0x5E6575))
-                    .child("SHIFT: Fine · 2×CLICK: Reset"),
-            )
-            .into_any_element(),
-        ExternalParamsStatus::Idle => Label::new("Preparando parámetros…")
-            .text_xs()
-            .text_color(rgb(0x555555))
-            .into_any_element(),
-    };
-
-    v_flex()
-        .flex_1()
-        .min_w(px(0.0))
-        .h_full()
-        .min_h(px(0.0))
-        .p(px(5.0))
-        .gap(px(3.0))
-        .bg(rgb(0x14161D))
-        .border_1()
-        .border_color(rgb(0x252834))
-        .rounded(px(3.0))
-        .overflow_hidden()
-        .child(header)
-        .child(
-            div()
-                .id(SharedString::from(format!("dsp_param_scroll_{track_idx}_{idx}")))
-                .w_full()
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_y_scroll()
-                .pr(px(2.0))
-                .gap(px(2.0))
-                .flex()
-                .flex_col()
-                .children(
-                    params
-                        .iter()
-                        .map(|param| external_param_row(track_idx, idx, param)),
-                ),
-        )
-        .into_any_element()
-}
-
-/// Ángulo relativo en grados respecto a las 12 en punto (0° arriba, horario positivo)
-/// para un knob con arco de barrido de 270°:
-/// - `0.0` (mínimo): `-135.0°` (inferior izquierda, posición 7:30)
-/// - `0.5` (centro / neutro): `0.0°` (arriba exacto, posición 12:00)
-/// - `1.0` (máximo): `+135.0°` (inferior derecha, posición 4:30)
 pub fn rotary_knob_angle_deg(normalized: f32) -> f32 {
     let norm = if normalized.is_finite() {
         normalized.clamp(0.0, 1.0)
@@ -1882,286 +67,10 @@ pub fn rotary_knob_angle_deg(normalized: f32) -> f32 {
     -135.0 + norm * 270.0
 }
 
-/// Coordenadas de pantalla `(x, y)` a partir del centro `(cx, cy)`, radio `r`
-/// y ángulo en grados `deg` (0° = 12 en punto / arriba, horario positivo).
 pub fn rotary_knob_point(cx: f32, cy: f32, r: f32, deg: f32) -> (f32, f32) {
     let rad = deg.to_radians();
     (cx + r * rad.sin(), cy - r * rad.cos())
 }
-
-/// Una fila de parámetro: knob rotatorio con aguja estilo Bitwig, nombre y valor,
-/// stepper −, barra horizontal arrastrable y stepper +.
-fn external_param_row(
-    track_idx: usize,
-    idx: usize,
-    param: &crate::views::mixer::ExternalParamState,
-) -> AnyElement {
-    let id = param.info.id;
-    let value = param.value;
-    let name = param.info.name.clone();
-    let display = param.display();
-    let default_val = param.info.default_value;
-    let is_bipolar = param.info.min < 0.0 && param.info.max > 0.0;
-    let step = if param.info.is_discrete() {
-        1.0 / param.info.step_count.max(1) as f32
-    } else {
-        0.05
-    };
-    let fill_w = (value.clamp(0.0, 1.0) * PARAM_BAR_WIDTH).max(2.0);
-
-    h_flex()
-        .id(format!("dsp_param_row_{track_idx}_{idx}_{id}"))
-        .w_full()
-        .h(px(24.0))
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(5.0))
-        .px(px(3.0))
-        .py(px(1.0))
-        .border_b_1()
-        .border_color(rgb(0x1F222A))
-        .hover(|s| s.bg(rgb(0x1F222C)))
-        .on_mouse_move(|e, _, cx| {
-            set_footer_cues(
-                cx,
-                Some(e.modifiers),
-                &[
-                    ("DRAG:", "Adjust Parameter"),
-                    ("SHIFT+DRAG:", "Fine Adjust"),
-                    ("CTRL+DRAG:", "Fine Adjust"),
-                    ("DOUBLE-CLICK:", "Reset to Default"),
-                ],
-            );
-        })
-        // 1. Bitwig Rotary Knob con indicador de aguja y drag vertical
-        .child(
-            div()
-                .id(format!("dsp_paramknob_{track_idx}_{idx}_{id}"))
-                .w(px(20.0))
-                .h(px(20.0))
-                .flex_shrink_0()
-                .cursor_ns_resize()
-                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                    if event.click_count >= 2 {
-                        commit_external_param(cx, track_idx, idx, id, default_val);
-                        return;
-                    }
-                    param_drag_begin(
-                        cx,
-                        track_idx,
-                        idx,
-                        id,
-                        f32::from(event.position.x),
-                        f32::from(event.position.y),
-                    );
-                })
-                .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            let cx = bounds.origin.x + bounds.size.width / 2.0;
-                            let cy = bounds.origin.y + bounds.size.height / 2.0;
-                            let r = px(8.0);
-                            let cx_f = cx.as_f32();
-                            let cy_f = cy.as_f32();
-
-                            // 1. Cuerpo circular base
-                            window.paint_quad(PaintQuad {
-                                bounds: Bounds::new(point(cx - r, cy - r), size(r * 2.0, r * 2.0)),
-                                background: rgb(0x181A20).into(),
-                                border_color: rgb(0x353844).into(),
-                                corner_radii: gpui_kit::Corners::all(r),
-                                border_widths: gpui_kit::Edges::all(px(1.0)),
-                                border_style: BorderStyle::default(),
-                            });
-
-                            // 2. Track de fondo (arco calibrado de 270°: de -135° a +135°)
-                            let arc_r = 6.6;
-                            let mut track_pb = PathBuilder::stroke(px(1.4));
-                            let track_steps = 18;
-                            for s in 0..=track_steps {
-                                let deg = -135.0 + (s as f32 / track_steps as f32) * 270.0;
-                                let (px_x, px_y) = rotary_knob_point(cx_f, cy_f, arc_r, deg);
-                                if s == 0 {
-                                    track_pb.move_to(point(px(px_x), px(px_y)));
-                                } else {
-                                    track_pb.line_to(point(px(px_x), px(px_y)));
-                                }
-                            }
-                            if let Ok(track_path) = track_pb.build() {
-                                window.paint_path(track_path, rgb(0x282B34));
-                            }
-
-                            // 3. Arco de valor activo (sincronizado con el porcentaje real del plugin)
-                            let norm = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
-                            let current_deg = rotary_knob_angle_deg(norm);
-                            let (arc_start, arc_end) = if is_bipolar {
-                                (0.0, current_deg)
-                            } else {
-                                (-135.0, current_deg)
-                            };
-
-                            let arc_span = arc_end - arc_start;
-                            if arc_span.abs() > 0.5 {
-                                let mut active_pb = PathBuilder::stroke(px(1.5));
-                                let steps = ((arc_span.abs() / 10.0).ceil() as usize).clamp(2, 27);
-                                for s in 0..=steps {
-                                    let deg = arc_start + (s as f32 / steps as f32) * arc_span;
-                                    let (px_x, px_y) = rotary_knob_point(cx_f, cy_f, arc_r, deg);
-                                    if s == 0 {
-                                        active_pb.move_to(point(px(px_x), px(px_y)));
-                                    } else {
-                                        active_pb.line_to(point(px(px_x), px(px_y)));
-                                    }
-                                }
-                                if let Ok(active_path) = active_pb.build() {
-                                    window.paint_path(active_path, rgb(crate::theme::DAW_ACCENT_ORANGE));
-                                }
-                            }
-
-                            // 4. Aguja indicadora estilo Bitwig
-                            let (nx_in, ny_in) = rotary_knob_point(cx_f, cy_f, 1.2, current_deg);
-                            let (nx_out, ny_out) = rotary_knob_point(cx_f, cy_f, 5.8, current_deg);
-                            let mut needle_pb = PathBuilder::stroke(px(1.5));
-                            needle_pb.move_to(point(px(nx_in), px(ny_in)));
-                            needle_pb.line_to(point(px(nx_out), px(ny_out)));
-                            if let Ok(needle_path) = needle_pb.build() {
-                                window.paint_path(needle_path, rgb(0xFFFFFF));
-                            }
-
-                            // 5. Tapa central / pivote
-                            let cap_r = px(1.8);
-                            window.paint_quad(PaintQuad {
-                                bounds: Bounds::new(
-                                    point(cx - cap_r, cy - cap_r),
-                                    size(cap_r * 2.0, cap_r * 2.0),
-                                ),
-                                background: rgb(0x1F222A).into(),
-                                border_color: rgb(0x3B3F4D).into(),
-                                corner_radii: gpui_kit::Corners::all(cap_r),
-                                border_widths: gpui_kit::Edges::all(px(0.5)),
-                                border_style: BorderStyle::default(),
-                            });
-                        },
-                    )
-                    .size_full(),
-                ),
-        )
-        // 2. Nombre y valor display (con doble clic para resetear)
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .justify_center()
-                .cursor_pointer()
-                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                    if event.click_count >= 2 {
-                        commit_external_param(cx, track_idx, idx, id, default_val);
-                    }
-                })
-                .child(
-                    Label::new(name)
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .truncate()
-                        .text_color(rgb(0xDFE2E8)),
-                )
-                .child(
-                    div()
-                        .font_family("monospace")
-                        .text_size(px(9.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .text_color(rgb(crate::theme::DAW_ACCENT_ORANGE))
-                        .child(display),
-                ),
-        )
-        // 3. Stepper −
-        .child(
-            rack_button(format!("dsp_param_dec_{track_idx}_{idx}_{id}"))
-                .label("−")
-                .compact()
-                .flex_shrink_0()
-                .w(px(18.0))
-                .on_click(move |_, _, cx| {
-                    commit_external_param(cx, track_idx, idx, id, value - step);
-                }),
-        )
-        // 4. Barra compacta arrastrable
-        .child(
-            div()
-                .id(format!("dsp_parambar_{track_idx}_{idx}_{id}"))
-                .test_support()
-                .flex_shrink_0()
-                .w(px(PARAM_BAR_WIDTH))
-                .h(px(PARAM_BAR_HIT_H))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_ew_resize()
-                .child(
-                    div()
-                        .w(px(PARAM_BAR_WIDTH))
-                        .h(px(PARAM_BAR_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .bg(rgb(0x0C0C10))
-                        .border_1()
-                        .border_color(rgb(0x2A2A30))
-                        .rounded(px(3.0))
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .w(px(fill_w))
-                                .h_full()
-                                .bg(rgb(crate::theme::DAW_ACCENT_ORANGE))
-                                .into_any_element(),
-                        )
-                        .into_any_element(),
-                )
-                .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                    if event.click_count >= 2 {
-                        commit_external_param(cx, track_idx, idx, id, default_val);
-                        return;
-                    }
-                    param_drag_begin(
-                        cx,
-                        track_idx,
-                        idx,
-                        id,
-                        f32::from(event.position.x),
-                        f32::from(event.position.y),
-                    );
-                })
-                .into_any_element(),
-        )
-        // 5. Stepper +
-        .child(
-            rack_button(format!("dsp_param_inc_{track_idx}_{idx}_{id}"))
-                .label("+")
-                .compact()
-                .flex_shrink_0()
-                .w(px(18.0))
-                .on_click(move |_, _, cx| {
-                    commit_external_param(cx, track_idx, idx, id, value + step);
-                }),
-        )
-        .into_any_element()
-}
-
-/// Ancho fijo de la barra del knob (el relleno se calcula en px).
-const PARAM_BAR_WIDTH: f32 = 56.0;
-
-/// Alto de la barra **dibujada**. Chiquita a propósito: la fila mide 20px y la
-/// barra es una línea de valor, no un knob.
-const PARAM_BAR_HEIGHT: f32 = 10.0;
-
-/// Alto del **hitbox** de la barra: la fila entera.
-///
-/// El dibujo no cambia, sólo la caja que agarra el mouse. Con 10px de alto había
-/// que apuntar al riel para que el `mouse_down` entrara, y un arrastre horizontal
-/// con la más mínima desviación vertical se salía de la caja.
-const PARAM_BAR_HIT_H: f32 = 20.0;
 
 pub fn rack_title(track_name: &str, scene: Option<usize>) -> String {
     match scene {
@@ -2170,7 +79,357 @@ pub fn rack_title(track_name: &str, scene: Option<usize>) -> String {
     }
 }
 
-pub fn handle_delete_key(cx: &mut gpui_kit::App) {
-    let track_idx = state(cx).read(cx).safe_track_index();
-    remove_selected_slot(cx, track_idx);
+pub fn keep_plugin_editors_above(_app: &mut AppState) {}
+
+pub fn handle_delete_key(app: &mut AppState) {
+    let track_idx = app.safe_track_index();
+    let slot_idx = app.selected_slot_index;
+    if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+        if slot_idx < track.effects.len() {
+            track.effects.remove(slot_idx);
+            if slot_idx >= track.effects.len() && !track.effects.is_empty() {
+                app.selected_slot_index = track.effects.len() - 1;
+            }
+        }
+    }
+}
+
+pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
+    let track_idx = app.safe_track_index();
+    let is_project_master = track_idx == 0;
+    let (track_name, track_color) = app
+        .current_tracks()
+        .get(track_idx)
+        .map(|t| (t.name.clone(), t.color))
+        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE));
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+
+        // =====================================================================
+        // 1. Tira vertical izquierda de Bitwig (`PROJECT` corona / `TRACK`)
+        // =====================================================================
+        let strip_h = ui.available_height().max(RACK_HEIGHT - 4.0);
+        let (strip_rect, _) = ui.allocate_exact_size(vec2(26.0, strip_h), Sense::hover());
+        if ui.is_rect_visible(strip_rect) {
+            let p = ui.painter();
+            p.rect_filled(strip_rect, 0.0, Color32::from_rgb(0x23, 0x25, 0x29));
+
+            let half_h = (strip_rect.height() * 0.48).round();
+            let proj_tab = Rect::from_min_size(strip_rect.min, vec2(26.0, half_h));
+            let trk_tab = Rect::from_min_max(pos2(strip_rect.min.x, proj_tab.max.y + 1.0), strip_rect.max);
+
+            let proj_resp = ui.interact(proj_tab, ui.id().with("dsp_proj_tab"), Sense::click());
+            let trk_resp = ui.interact(trk_tab, ui.id().with("dsp_trk_tab"), Sense::click());
+
+            p.rect_filled(
+                proj_tab,
+                0.0,
+                if is_project_master {
+                    Color32::from_rgb(0x52, 0x54, 0x5A)
+                } else {
+                    Color32::from_rgb(0x32, 0x34, 0x3A)
+                },
+            );
+            icons::paint_crown(
+                p,
+                Rect::from_center_size(pos2(proj_tab.center().x, proj_tab.min.y + 12.0), vec2(12.0, 10.0)),
+                if is_project_master {
+                    theme::ACCENT_ORANGE
+                } else {
+                    Color32::from_rgb(0x9E, 0xA2, 0xAA)
+                },
+            );
+            for (ci, ch) in "PROJ".chars().enumerate() {
+                p.text(
+                    pos2(proj_tab.center().x, proj_tab.min.y + 27.0 + ci as f32 * 10.5),
+                    Align2::CENTER_CENTER,
+                    ch.to_string(),
+                    fonts::semibold(8.5),
+                    if is_project_master {
+                        Color32::from_rgb(0x11, 0x12, 0x14)
+                    } else {
+                        Color32::from_rgb(0xA6, 0xAA, 0xB2)
+                    },
+                );
+            }
+
+            p.rect_filled(
+                trk_tab,
+                0.0,
+                if !is_project_master {
+                    Color32::from_rgb(0x58, 0x5A, 0x60)
+                } else {
+                    Color32::from_rgb(0x32, 0x34, 0x3A)
+                },
+            );
+            p.rect_filled(
+                Rect::from_min_size(trk_tab.min, vec2(3.5, trk_tab.height())),
+                0.0,
+                track_color,
+            );
+            for (ci, ch) in "TRACK".chars().enumerate() {
+                p.text(
+                    pos2(trk_tab.center().x + 1.0, trk_tab.min.y + 14.0 + ci as f32 * 11.0),
+                    Align2::CENTER_CENTER,
+                    ch.to_string(),
+                    fonts::semibold(8.5),
+                    if !is_project_master {
+                        Color32::from_rgb(0x11, 0x12, 0x14)
+                    } else {
+                        Color32::from_rgb(0xA6, 0xAA, 0xB2)
+                    },
+                );
+            }
+
+            p.line_segment(
+                [strip_rect.right_top(), strip_rect.right_bottom()],
+                Stroke::new(1.0_f32, theme::BW_CAPSULE_BORDER),
+            );
+
+            if proj_resp.on_hover_text("Project / Master Devices").clicked() {
+                app.selected_track_index = 0;
+            }
+            if trk_resp.on_hover_text("Selected Track Devices").clicked() && app.selected_track_index == 0 {
+                if app.current_tracks().len() > 1 {
+                    app.selected_track_index = 1;
+                }
+            }
+        }
+
+        // =====================================================================
+        // 2. Pozo negro profundo `#0B0C0E` de la cadena de dispositivos Bitwig
+        // =====================================================================
+        egui::Frame::NONE
+            .fill(theme::BW_DARK_WELL)
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("dsp_rack_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+
+                            // Píldora vertical de cabecera de pista a la izquierda de la cadena
+                            let pill_h = (RACK_HEIGHT - 10.0).max(156.0);
+                            let (pill_rect, _) = ui.allocate_exact_size(vec2(22.0, pill_h), Sense::hover());
+                            if ui.is_rect_visible(pill_rect) {
+                                let p = ui.painter();
+                                p.rect_filled(pill_rect, 3.0, Color32::from_rgb(0x46, 0x48, 0x4E));
+                                p.rect_filled(
+                                    Rect::from_min_size(pill_rect.min, vec2(pill_rect.width(), 12.0)),
+                                    2.5,
+                                    track_color,
+                                );
+                                icons::paint_power_switch(
+                                    p,
+                                    Rect::from_center_size(
+                                        pos2(pill_rect.center().x, pill_rect.min.y + 24.0),
+                                        vec2(14.0, 14.0),
+                                    ),
+                                    theme::ACCENT_ORANGE,
+                                    Color32::from_rgb(0x14, 0x12, 0x10),
+                                );
+                                icons::paint_icon(
+                                    p,
+                                    Rect::from_center_size(
+                                        pos2(pill_rect.center().x, pill_rect.max.y - 16.0),
+                                        vec2(13.0, 13.0),
+                                    ),
+                                    icons::LINK,
+                                    Color32::from_rgb(0x18, 0x19, 0x1C),
+                                    1.7,
+                                );
+                            }
+
+                            let slot_count = app
+                                .current_tracks()
+                                .get(track_idx)
+                                .map(|t| t.effects.len())
+                                .unwrap_or(0);
+
+                            let mut slot_to_remove = None;
+                            for slot_idx in 0..slot_count {
+                                let slot_info = app
+                                    .current_tracks()
+                                    .get(track_idx)
+                                    .and_then(|t| t.effects.get(slot_idx))
+                                    .cloned();
+                                let Some(slot) = slot_info else { continue };
+
+                                let is_selected = app.selected_slot_index == slot_idx;
+                                let card_w = match slot.name.as_str() {
+                                    "OpenWavetable" => OPEN_WAVETABLE_CARD_WIDTH,
+                                    "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
+                                    _ => CARD_WIDTH,
+                                };
+                                let card_h = (RACK_HEIGHT - 10.0).max(156.0);
+
+                                egui::Frame::NONE
+                                    .fill(Color32::from_rgb(0x2E, 0x30, 0x35))
+                                    .stroke(Stroke::new(
+                                        if is_selected { 1.5_f32 } else { 1.0_f32 },
+                                        if is_selected {
+                                            theme::ACCENT_ORANGE
+                                        } else {
+                                            Color32::from_rgb(0x46, 0x49, 0x52)
+                                        },
+                                    ))
+                                    .corner_radius(3.5)
+                                    .inner_margin(egui::Margin::symmetric(6, 4))
+                                    .show(ui, |ui| {
+                                        let inner_w = card_w - 12.0;
+                                        ui.set_min_width(inner_w);
+                                        ui.set_max_width(inner_w);
+                                        ui.set_min_height(card_h - 8.0);
+                                        ui.set_max_height(card_h - 8.0);
+
+                                        // Barra de título estilo módulo Bitwig (Power switch vectorial + Título + Close vectorial)
+                                        ui.allocate_ui_with_layout(
+                                            vec2(inner_w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                let active = slot.active;
+                                                let (pwr_r, pwr_resp) =
+                                                    ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                                icons::paint_power_switch(
+                                                    ui.painter(),
+                                                    pwr_r,
+                                                    if active {
+                                                        theme::ACCENT_ORANGE
+                                                    } else {
+                                                        Color32::from_rgb(0x44, 0x47, 0x50)
+                                                    },
+                                                    if active {
+                                                        Color32::from_rgb(0x14, 0x12, 0x10)
+                                                    } else {
+                                                        Color32::from_rgb(0xB8, 0xBC, 0xC4)
+                                                    },
+                                                );
+                                                if pwr_resp.on_hover_text("Device Active / Bypass").clicked() {
+                                                    if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                                        if let Some(s) = t.effects.get_mut(slot_idx) {
+                                                            s.active = !s.active;
+                                                        }
+                                                    }
+                                                }
+
+                                                if ui
+                                                    .selectable_label(
+                                                        is_selected,
+                                                        RichText::new(&slot.name)
+                                                            .font(fonts::semibold(11.5))
+                                                            .color(theme::TEXT_PRIMARY),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    app.selected_slot_index = slot_idx;
+                                                }
+
+                                                let rem_w = (ui.available_width() - 20.0).max(0.0);
+                                                ui.add_space(rem_w);
+
+                                                let (close_r, close_resp) =
+                                                    ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                                if close_resp.hovered() {
+                                                    ui.painter().rect_filled(
+                                                        close_r,
+                                                        2.5,
+                                                        Color32::from_rgb(0x48, 0x4A, 0x52),
+                                                    );
+                                                }
+                                                icons::paint_icon(
+                                                    ui.painter(),
+                                                    close_r.shrink(3.5),
+                                                    icons::X_CLOSE,
+                                                    if close_resp.hovered() {
+                                                        Color32::WHITE
+                                                    } else {
+                                                        theme::TEXT_MUTED
+                                                    },
+                                                    1.7,
+                                                );
+                                                if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                                    slot_to_remove = Some(slot_idx);
+                                                }
+                                            },
+                                        );
+
+                                        ui.separator();
+
+                                        // Cuerpo del dispositivo DSP
+                                        match slot.name.as_str() {
+                                            "OpenWavetable" => {
+                                                open_wavetable::render_module(ui, app, track_idx, slot_idx);
+                                            }
+                                            "Hikaru OpenDMS" => {
+                                                render_rack_card(ui, app, track_idx, slot_idx);
+                                            }
+                                            "OpenEQ3" => {
+                                                hikaru_openeq3::render_module(ui);
+                                            }
+                                            "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
+                                                openspectral_phaser::render_module(ui, app, track_idx, slot_idx);
+                                            }
+                                            _ => {
+                                                ui.vertical_centered(|ui| {
+                                                    ui.add_space(16.0);
+                                                    ui.label(
+                                                        RichText::new(&slot.name)
+                                                            .font(fonts::semibold(12.0))
+                                                            .color(theme::TEXT_SECONDARY),
+                                                    );
+                                                    ui.label(
+                                                        RichText::new("External Plugin")
+                                                            .font(fonts::regular(10.0))
+                                                            .color(theme::TEXT_MUTED),
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    });
+                            }
+
+                            if let Some(idx) = slot_to_remove {
+                                if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if idx < track.effects.len() {
+                                        track.effects.remove(idx);
+                                    }
+                                }
+                            }
+
+                            // Botón circular `+` estilo ranura de inserción Bitwig
+                            ui.vertical(|ui| {
+                                ui.add_space(56.0);
+                                ui.menu_button(
+                                    RichText::new("+")
+                                        .font(fonts::semibold(15.0))
+                                        .color(theme::TEXT_PRIMARY),
+                                    |ui| {
+                                        ui.label(
+                                            RichText::new(format!("Insert Device on {track_name}"))
+                                                .font(fonts::semibold(11.0))
+                                                .color(theme::ACCENT_ORANGE),
+                                        );
+                                        ui.separator();
+                                        for plugin in &PLUGIN_CATALOG {
+                                            let row_txt = format!("{}  [{}]", plugin.label, plugin.category);
+                                            if ui.button(row_txt).clicked() {
+                                                if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+                                                    let mut new_slot = DspSlot::default();
+                                                    new_slot.name = plugin.name.to_string();
+                                                    track.effects.push(new_slot);
+                                                    app.selected_slot_index = track.effects.len() - 1;
+                                                }
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                    });
+            });
+    });
 }

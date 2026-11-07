@@ -234,7 +234,7 @@ impl SpriteSheetResources {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -295,14 +295,14 @@ impl SpriteSheet {
         });
 
         ctx.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
+            wgpu::ImageCopyTexture {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             data,
-            wgpu::TexelCopyBufferLayout {
+            wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
                 rows_per_image: Some(height),
@@ -469,9 +469,8 @@ impl QuadRenderer {
 
         let pipeline_layout = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hikaru_render::quad::layout"),
-            bind_group_layouts: &[Some(&globals_layout), Some(&resources.layout), Some(&instance_layout)],
-            // `var<immediate>` no se usa en este shader.
-            immediate_size: 0,
+            bind_group_layouts: &[&globals_layout, &resources.layout, &instance_layout],
+            push_constant_ranges: &[],
         });
 
         let pipeline = ctx.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -486,8 +485,6 @@ impl QuadRenderer {
             },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                // Los quads son coplanarios y siempre de cara al observador:
-                // culling no aporta nada y sólo agrega una restricción más.
                 cull_mode: None,
                 ..Default::default()
             },
@@ -503,7 +500,7 @@ impl QuadRenderer {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -576,7 +573,6 @@ impl QuadRenderer {
                 label: Some("hikaru_render::quad::pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
-                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // `Load`: los quads se acumulan sobre lo ya dibujado.
@@ -587,7 +583,6 @@ impl QuadRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.pipeline);

@@ -329,11 +329,11 @@ mod tests {
     #[test]
     fn cada_modo_ofrece_su_propio_filtro_y_ningun_otro() {
         let (live_label, live_exts) = filter_for(AppMode::OpenLive);
-        assert_eq!(live_label, "Hikaru OpenLive Project (*.oplf)");
+        assert_eq!(live_label, OPENLIVE_FILTER);
         assert_eq!(live_exts, &["oplf"]);
 
         let (studio_label, studio_exts) = filter_for(AppMode::OpenStudio);
-        assert_eq!(studio_label, "Hikaru OpenStudio Project (*.opsf)");
+        assert_eq!(studio_label, OPENSTUDIO_FILTER);
         assert_eq!(studio_exts, &["opsf"]);
     }
 }

@@ -24,10 +24,11 @@ hikaru_cli = { path = "../hikaru_cli" }
 # Comparte la misma versión de wgpu que gpui-kit a través del workspace, así
 # que no se compilan dos copias del backend.
 hikaru_render = { path = "../hikaru_render" }
-gpui-kit = "0.6.6"
-# `RenderImage::new` (el tipo que usa el elemento `img` de GPUI Kit) toma un
-# `image::Frame`. GPUI no lo reexporta, así que hay que declarar el crate. La
-# versión tiene que ser la misma que usa `gpui-pre` o el tipo no coincide.
+eframe = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
 image = "0.25.1"
 hound = "3.5"
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
@@ -53,8 +54,5 @@ name = "hikaru_openlive"
 path = "src/main.rs"
 
 [dev-dependencies]
-# Harness headless de GPUI para tests de interacción (click_at con
-# hit-testing real). Solo afecta a `cargo test`.
-gpui-kit = { version = "0.6.6", features = ["test-support"] }
-# Los tests del formato de proyecto escriben WAVs de prueba en un temp dir.
 hound = "3.5"
+naga = { workspace = true }

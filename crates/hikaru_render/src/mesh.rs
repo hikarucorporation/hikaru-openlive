@@ -1244,9 +1244,8 @@ impl MeshRenderer {
 
         let pipeline_layout = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hikaru_render::mesh::layout"),
-            bind_group_layouts: &[Some(&uniform_layout)],
-            // `var<immediate>` no se usa en este shader.
-            immediate_size: 0,
+            bind_group_layouts: &[&uniform_layout],
+            push_constant_ranges: &[],
         });
 
         let pipeline = ctx.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1265,19 +1264,13 @@ impl MeshRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                // Las líneas del terreno son cintas planas de una sola cara
-                // (ver `push_terrain_line`) con winding para normal `+Y`,
-                // hacia la cámara fija de frente-arriba. El culling quita lo
-                // que el depth test taparía igual; `push_ribbon` (ciclo
-                // aislado) es un tubo cerrado y usa el mismo modo sin
-                // cambios.
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1292,7 +1285,7 @@ impl MeshRenderer {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -1347,7 +1340,6 @@ impl MeshRenderer {
                 label: Some("hikaru_render::mesh::pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.color_view,
-                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // La malla se compone sobre el fondo, así que el color
@@ -1366,7 +1358,6 @@ impl MeshRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.pipeline);

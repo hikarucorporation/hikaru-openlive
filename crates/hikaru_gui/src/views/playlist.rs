@@ -2,33 +2,12 @@
 //
 // LÍMITE DEL MÓDULO: esta vista es SÓLO tiempo. Contiene la regla de
 // compases (ruler), filas horizontales limpias por pista, grilla con snap,
-// clips de audio/MIDI y playhead. NO contiene ningún control de mezcla
-// (faders, pan, S/M/R, volúmenes en dB): esos viven en el mixer lateral de
-// `arranger_view.rs` y no deben sangrar adentro del lienzo temporal. El
-// lienzo sólo recibe arrastre de samples, creación/selección de clips y
-// navegación temporal (seek, zoom, scroll).
-use std::cell::Cell;
+// clips de audio/MIDI y playhead.
 use std::path::PathBuf;
-use std::rc::Rc;
 
-use gpui_kit::component::*;
-use gpui_kit::component::button::Button;
-use gpui_kit::component::label::Label;
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
-use gpui_kit::*;
-
-use crate::app::{state, AppState, HikaruApp};
-use crate::audio_proxy::{AudioProxy, GuiCommand};
+use crate::app::AppState;
+use crate::audio_proxy::GuiCommand;
 use crate::theme;
-use crate::views::clip_editor::ClipEditorTarget;
-use crate::views::matrix::{
-    self, compact_level_meter, end_mix_drag, h_mix_slider_ex, ms_button_sized, pan_knob_ex,
-    step_mix_pan_gesture, step_mix_slider_gesture, MatrixMixTarget,
-};
-use crate::views::mixer::Track;
 use hikaru_transport::DEFAULT_PPQN;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,16 +19,16 @@ pub enum ViewMode<'a> {
 #[allow(dead_code)]
 impl<'a> ViewMode<'a> {
     #[inline]
-    fn drives_engine(&self) -> bool {
+    pub fn drives_engine(&self) -> bool {
         matches!(self, ViewMode::Arranger)
     }
 
     #[inline]
-    fn allows_track_add_remove(&self) -> bool {
+    pub fn allows_track_add_remove(&self) -> bool {
         matches!(self, ViewMode::Arranger)
     }
 
-    fn header_label(&self) -> String {
+    pub fn header_label(&self) -> String {
         match self {
             ViewMode::Arranger => "PLAYLIST / TIMELINE".to_string(),
             ViewMode::ClipEditor { title } => title.to_string(),
@@ -79,7 +58,7 @@ pub enum ClipType {
     },
 }
 
-pub type Color32 = Hsla;
+pub type Color32 = egui::Color32;
 
 #[derive(Clone, Debug)]
 pub struct PlaylistClip {
@@ -88,7 +67,7 @@ pub struct PlaylistClip {
     pub start_tick: u64,
     pub duration_ticks: u64,
     pub clip_type: ClipType,
-    pub color: Hsla,
+    pub color: egui::Color32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,13 +78,6 @@ pub enum LoopDragHandle {
     Body,
 }
 
-/// Arrastre de un clip de audio/MIDI por la grilla (botón izquierdo).
-///
-/// `grab_dx_px` / `grab_dy_px` son el offset del cursor respecto al origen
-/// del clip (coords de ventana) al momento del agarre: durante el `MouseMove`
-/// la nueva posición se calcula como `cursor - grab`, así el clip no salta
-/// al agarrarlo fuera de su esquina. `moved` distingue click de drag para
-/// suprimir la re-selección del `on_click` posterior al drop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaylistClipDrag {
     pub clip_id: usize,
@@ -126,11 +98,9 @@ pub struct PlaylistState {
     pub grid_numerator: u32,
     pub grid_denominator: u32,
     pub zoom_x: f32,
-    /// Altura de fila (zoom vertical con `Alt` + rueda). Arranca en
-    /// `TRACK_ROW_H` (sincronizada con el mixer) y el usuario la agranda o
-    /// achica con la rueda; la geometría siempre usa `track_height()`
-    /// (valor acotado), nunca esta cifra en crudo.
     pub row_h: f32,
+    pub scroll_offset_x: f32,
+    pub scroll_offset_y: f32,
     pub selected_clips: Vec<usize>,
     pub clipboard: Vec<(usize, PlaylistClip)>,
     pub needs_full_sync: bool,
@@ -143,29 +113,11 @@ pub struct PlaylistState {
     pub loop_preview_active: bool,
     pub loop_drag_handle: LoopDragHandle,
     pub loop_drag_completed_this_frame: bool,
-    /// Gesto de arrastre de clip en curso (`None` = sin drag). Global —y no
-    /// flag local del widget— porque los clips se reconstruyen en cada frame
-    /// (mismo motivo que los drags del mixer en `AppState`).
     pub clip_drag: Option<PlaylistClipDrag>,
-    /// Suprime el `on_click` de selección que sigue al `mouse_up` de un drag
-    /// con movimiento (la selección ya quedó fijada al agarrar el clip).
     pub clip_click_suppress: bool,
-    /// Gesto de selección rectangular en curso (click derecho + arrastrar).
-    /// `None` = sin gesto. Global por la misma razón que `clip_drag`: la
-    /// grilla se reconstruye cada frame.
     pub marquee: Option<MarqueeState>,
-    /// Gesto de recorte de un borde de clip en curso. `None` = sin gesto.
-    /// Global por la misma razón que `clip_drag`/`marquee`.
     pub trim_drag: Option<TrimDrag>,
-    /// Clip cuyo borde está bajo el cursor y por cuál lado, para pintar el
-    /// cursor `e-resize`/`w-resize` y resaltar el handle.
     pub trim_hover: Option<(usize, TrimEdge)>,
-    /// Playhead fantasma: tick bajo el puntero mientras éste está sobre la
-    /// grilla o la regla. `None` = el puntero no está en la zona temporal (o
-    /// hay un gesto en curso), así que no se dibuja la guía.
-    ///
-    /// Se guarda el TICK y no la x en píxeles a propósito: así la guía se
-    /// reposiciona sola si el zoom o el scroll cambian bajo el puntero.
     pub hover_tick: Option<u64>,
 }
 
@@ -181,6 +133,8 @@ impl Default for PlaylistState {
             grid_denominator: 4,
             zoom_x: 0.04,
             row_h: TRACK_ROW_H,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 0.0,
             selected_clips: Vec::new(),
             clipboard: Vec::new(),
             needs_full_sync: true,
@@ -204,11 +158,6 @@ impl Default for PlaylistState {
 }
 
 impl PlaylistState {
-    /// Altura de fila efectiva, acotada a `[MIN_ROW_H, MAX_ROW_H]`.
-    ///
-    /// Toda la geometría (headers, clips, drag, drop) debe usar este método
-    /// y no `row_h` en crudo, para que un valor extremo nunca deforme el
-    /// lienzo ni rompa el mapeo px→fila.
     pub fn track_height(&self) -> f32 {
         clamped_row_h(self.row_h)
     }
@@ -233,8 +182,6 @@ impl PlaylistState {
         self.loop_drag_completed_this_frame = true;
     }
 
-    /// Tick de pegado por defecto: el playhead visible (con el loop aplicado),
-    /// que es donde un DAW pega por omisión.
     pub fn paste_tick(&self) -> u64 {
         loop_display_tick(
             self.playhead_tick,
@@ -301,7 +248,7 @@ impl PlaylistState {
         }
     }
 
-    pub fn sync_all_clips_to_engine(&mut self, audio_proxy: &AudioProxy, bpm: f64) {
+    pub fn sync_all_clips_to_engine(&mut self, audio_proxy: &crate::audio_proxy::AudioProxy, bpm: f64) {
         for (track_id, clip) in &self.clips {
             if let ClipType::Audio { ref sample_path, sample_offset_ticks, .. } = clip.clip_type {
                 let position_secs = ticks_to_secs_precise(clip.start_tick, self.ppqn, bpm);
@@ -323,83 +270,38 @@ impl PlaylistState {
     }
 }
 
-/// Geometría compartida de la Playlist / Timeline (OpenStudio).
-///
-/// `TRACK_ROW_H` es la altura de fila POR DEFECTO (`PlaylistState::row_h`
-/// arranca acá). Son 68px porque el Track Header ahora replica la caja de
-/// mezcla del Session Matrix (nombre + M/S + knob de pan de 22px + fader de
-/// volumen de 12px + lecturas dB/pan): con los 54px de antes los controles se
-/// superponían. El zoom vertical (`Alt` + rueda) la cambia sólo en la playlist,
-/// y `MIN_ROW_H` mantiene el mínimo justo para que la caja siga entrando sin
-/// solaparse.
 pub const TRACK_ROW_H: f32 = 68.0;
-/// Alto de la regla de compases (banda de compases + carril inferior de loop).
 pub const RULER_H: f32 = 26.0;
-/// Límites del zoom temporal (px por tick).
 pub const MIN_ZOOM_X: f32 = 0.005;
 pub const MAX_ZOOM_X: f32 = 2.0;
-/// Límites del zoom vertical (altura de fila en px).
-///
-/// `MIN_ROW_H` es la caja de mezcla del header completa (68px por defecto:
-/// 28px del knob + padding de 3px de cada lado + la fila del título) para que
-/// los controles nunca se pisen al achicar; `MAX_ROW_H` evita filas gigantes
-/// que rompan el scroll o el layout.
 pub const MIN_ROW_H: f32 = 60.0;
 pub const MAX_ROW_H: f32 = 180.0;
-
-/// Multiplicativo de zoom por un "notch" completo de rueda (×1.25 / ÷1.25).
-///
-/// Es el mismo paso que usaban los botones `+` / `-`; el zoom con rueda
-/// ahora es *continuo* y usa este valor como unidad de referencia.
 pub const ZOOM_STEP_FACTOR: f32 = 1.25;
-
-/// Líneas que equivalen a un notch completo de rueda clásica (X11/GTK).
-///
-/// Sirve de normalizador: con 3 líneas el comportamiento es idéntico al del
-/// paso fijo anterior, así que la rueda traditional no cambia de feel.
 pub const LINES_PER_NOTCH: f32 = 3.0;
-
-/// Píxeles que equivalen a un notch completo cuando el delta viene en píxeles
-/// (rueda en modo alto DPI o trackpad).
-///
-/// Un notch de rueda en píxeles ronda los 50-55; los trackpad mandan deltas
-/// mucho menores y así el zoom responde gradual en vez de saltar 25% entero.
 pub const PX_PER_NOTCH: f32 = 53.0;
 
 #[inline]
-fn px_to_ticks(px: f32, zoom_x: f32) -> u64 {
+pub fn px_to_ticks(px: f32, zoom_x: f32) -> u64 {
     (px.max(0.0) / zoom_x.max(0.0001)) as u64
 }
 
 #[inline]
-fn ticks_to_px(ticks: u64, zoom_x: f32) -> f32 {
+pub fn ticks_to_px(ticks: u64, zoom_x: f32) -> f32 {
     ticks as f32 * zoom_x
 }
 
-/// Ticks por compás según la firma actual (`SIG num/den`).
-///
-/// Un compás tiene `beats_per_bar` negras; cada negra son `ppqn` ticks.
-/// La división (`den`) no cambia la duración en este secuenciador (el PPQN es
-/// por negra), pero se conserva como parámetro para validar la firma.
 pub fn ticks_per_bar(ppqn: u64, beats_per_bar: u32) -> u64 {
     ppqn.max(1) * beats_per_bar.max(1) as u64
 }
 
-/// Número de compás (1-based) que contiene `tick`.
 pub fn bar_number_at_tick(tick: u64, ticks_per_bar: u64) -> u32 {
     (tick / ticks_per_bar.max(1)) as u32 + 1
 }
 
-/// Posición X (px, relativa al inicio del grid) del compás `bar` (1-based).
 pub fn bar_to_px(bar: u32, ticks_per_bar: u64, zoom_x: f32) -> f32 {
     (bar.saturating_sub(1) as u64 * ticks_per_bar.max(1)) as f32 * zoom_x
 }
 
-/// Ticks de la subdivisión de grilla (`quantize`) para un `denominador` dado.
-///
-/// `1/4` = una negra (`ppqn`), `1/8` = media negra, `1/16` = un cuarto.
-/// El numerador se ignora a propósito: el snap siempre subdivide la redonda
-/// (`4/den` de compás de 4/4), igual que el selector del footer.
 pub fn snap_step_ticks(ppqn: u64, grid_denominator: u32) -> u64 {
     let ppqn = ppqn.max(1);
     match grid_denominator.max(1) {
@@ -412,7 +314,6 @@ pub fn snap_step_ticks(ppqn: u64, grid_denominator: u32) -> u64 {
     .max(1)
 }
 
-/// Zoom con acote a `[MIN_ZOOM_X, MAX_ZOOM_X]`. Función pura para testear.
 pub fn clamped_zoom(zoom: f32) -> f32 {
     if !zoom.is_finite() {
         return 0.04;
@@ -420,12 +321,10 @@ pub fn clamped_zoom(zoom: f32) -> f32 {
     zoom.clamp(MIN_ZOOM_X, MAX_ZOOM_X)
 }
 
-/// Factor de zoom tras pulsar `+` / `-` (×1.25 / ÷1.25, acotado).
 pub fn step_zoom(zoom: f32, zoom_in: bool) -> f32 {
     clamped_zoom(if zoom_in { zoom * 1.25 } else { zoom / 1.25 })
 }
 
-/// Altura de fila acotada a `[MIN_ROW_H, MAX_ROW_H]`. Función pura para testear.
 pub fn clamped_row_h(h: f32) -> f32 {
     if !h.is_finite() {
         return TRACK_ROW_H;
@@ -433,290 +332,12 @@ pub fn clamped_row_h(h: f32) -> f32 {
     h.clamp(MIN_ROW_H, MAX_ROW_H)
 }
 
-/// Inicia un gesto de recorte al agarrar un borde del clip.
-///
-/// Congela los valores originales (para arrastre incremental e inversión de
-/// dirección sin zona muerta) y el offset del cursor respecto del borde.
-fn start_clip_trim(cx: &mut App, clip_id: usize, edge: TrimEdge, cursor_x: f32, edge_x: f32) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some((_, clip)) = s.playlist_state.clips.iter().find(|(_, c)| c.id == clip_id) else {
-            return;
-        };
-        let (orig_offset, orig_total) = match clip.clip_type {
-            ClipType::Audio {
-                sample_offset_ticks,
-                total_sample_ticks,
-                ..
-            } => (sample_offset_ticks, total_sample_ticks),
-            // Pattern/MIDI no tienen audio que recortar: no hay gesto.
-            _ => return,
-        };
-        s.playlist_state.trim_drag = Some(TrimDrag {
-            clip_id,
-            edge,
-            orig_edge_tick: match edge {
-                TrimEdge::Left => clip.start_tick,
-                TrimEdge::Right => clip.start_tick.saturating_add(clip.duration_ticks),
-            },
-            orig_start: clip.start_tick,
-            orig_duration: clip.duration_ticks,
-            orig_offset,
-            orig_total,
-            grab_dx_px: cursor_x - edge_x,
-            moved: false,
-        });
-        cx.notify();
-    });
-}
-
-/// Aplica un paso del recorte: snap del borde al cursor, en vivo.
-///
-/// `zone` son los bounds de la grilla para pasar de px de ventana a ticks.
-fn update_clip_trim(cx: &mut App, cursor_x: f32, zone: [f32; 4]) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some(drag) = s.playlist_state.trim_drag else {
-            return;
-        };
-        let ppqn = s.playlist_state.ppqn.max(1);
-        let zoom = s.playlist_state.zoom_x;
-        let grid = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
-        let min_ticks = min_clip_ticks(ppqn);
-        // Cursor menos agarre → px relativos a la grilla → ticks → snap.
-        let rel_x = (cursor_x - drag.grab_dx_px - zone[0]).max(0.0);
-        let edge_tick = snap_ticks(px_to_ticks(rel_x, zoom), grid);
-        let Some((_, clip)) = s.playlist_state.clips.iter_mut().find(|(_, c)| c.id == drag.clip_id)
-        else {
-            s.playlist_state.trim_drag = None;
-            return;
-        };
-        let (start, dur, offset) = trim_apply(
-            drag.orig_start,
-            drag.orig_duration,
-            drag.orig_offset,
-            drag.orig_total,
-            drag.edge,
-            edge_tick,
-            grid,
-            min_ticks,
-        );
-        if clip.start_tick == start && clip.duration_ticks == dur {
-            return;
-        }
-        clip.start_tick = start;
-        clip.duration_ticks = dur;
-        if let ClipType::Audio {
-            sample_offset_ticks,
-            ..
-        } = &mut clip.clip_type
-        {
-            *sample_offset_ticks = offset;
-        }
-        if let Some(d) = s.playlist_state.trim_drag.as_mut() {
-            d.moved = true;
-        }
-        cx.notify();
-    });
-}
-
-/// Cierra el gesto de recorte y sincroniza el clip con el motor.
-///
-/// Se manda un único `UpdateClipBounds` al soltar (no por frame), igual que el
-/// drag de clips: el motor así no reprograma la Scheduler en cada mousemove.
-fn finish_clip_trim(cx: &mut App) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some(drag) = s.playlist_state.trim_drag.take() else {
-            return;
-        };
-        if drag.moved {
-            // El gesto de trim no debe disparar la re-selección del `on_click`.
-            s.playlist_state.clip_click_suppress = true;
-            let ppqn = s.playlist_state.ppqn.max(1);
-            let bpm = s.transport.bpm;
-            let found = s
-                .playlist_state
-                .clips
-                .iter()
-                .find(|(_, c)| c.id == drag.clip_id)
-                .map(|(k, c)| (*k, c.start_tick, c.duration_ticks, c.clip_type.clone()));
-            if let Some((key, start, dur, clip_type)) = found {
-                if let ClipType::Audio {
-                    sample_offset_ticks, ..
-                } = clip_type
-                {
-                    s.audio_proxy.send(GuiCommand::UpdateClipBounds {
-                        clip_id: drag.clip_id,
-                        track_index: key,
-                        scene_index: 0,
-                        position_secs: ticks_to_secs_precise(start, ppqn, bpm),
-                        duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
-                        offset_secs: ticks_to_secs_precise(sample_offset_ticks, ppqn, bpm),
-                    });
-                }
-            }
-        }
-        cx.notify();
-    });
-}
-
-/// Handle visual de un borde de clip (indicador de que se puede recortar).
-///
-/// Es decorativo: la zona de agarre real la decide `trim_edge_at` en el
-/// `mouse_down`/`mouse_move` del clip, así el hit test no depende del layout
-/// de estos hijos. Se resalta (más ancho y claro) cuando el cursor está encima
-/// o cuando ese borde está siendo arrastrado.
-fn clip_edge_handle(id: String, side: TrimEdge, active: bool) -> AnyElement {
-    let w = if active { 3.0 } else { 2.0 };
-    let col = if active {
-        rgb(0xFFFFFF)
-    } else {
-        rgba(0xFFFFFF80)
-    };
-    let base = div()
-        .id(SharedString::from(id))
-        .test_support()
-        .absolute()
-        .top(px(0.0))
-        .bottom(px(0.0))
-        .w(px(w))
-        .bg(col);
-    base.left(px(if side == TrimEdge::Left { 0.0 } else { -w }))
-        .into_any_element()
-}
-
-/// Origen de la grilla (panel temporal) en coords de VENTANA, a partir de los
-/// bounds medidos de la zona de seek.
-///
-/// `zone_bounds` registra la zona de seek, que va Montada en `top = ruler_h`
-/// dentro del panel: su origen en Y es el del panel + la regla. Por eso acá se
-/// descuenta `ruler_h` para recuperar el origen real del panel (donde arranca
-/// el compás 1 y donde se posiciona el rect del marquee).
-///
-/// Se usa en los HANDLERS (no en el render): leer el `Cell` durante el render
-/// da el valor del frame anterior, y en el primer frame del marquee todavía
-/// valía 0 — eso corría el rect por todo el ancho de los headers + la regla.
-pub fn grid_origin_from_zone(zone: [f32; 4], ruler_h: f32) -> (f32, f32) {
-    (zone[0], zone[1] - ruler_h)
-}
-
-/// Avanza el rectángulo del marquee con la posición del cursor.
-///
-/// Se llama desde el catcher global (así el gesto sobrevive aunque el cursor
-/// pase por encima de un clip o salga del panel). La posición del evento viene en
-/// coords de ventana y se convierte a LOCALES de la grilla al vuelo, así el
-/// estado siempre vive en el mismo sistema que `clip_rects`.
-fn update_marquee(x: f32, y: f32, zone: [f32; 4], ruler_h: f32, cx: &mut App) {
-    let (gx, gy) = grid_origin_from_zone(zone, ruler_h);
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        if let Some(m) = s.playlist_state.marquee {
-            s.playlist_state.marquee = Some(MarqueeState {
-                cur_x: x - gx,
-                cur_y: y - gy,
-                ..m
-            });
-            cx.notify();
-        }
-    });
-}
-
-/// Cierra el gesto de marquee tras soltar el botón derecho.
-///
-/// - Si el gesto superó `MARQUEE_DRAG_THRESHOLD`: selecciona todos los clips
-///   que tocan el rectángulo. Con `Shift` la selección se SUMA a la existente;
-///   sin él, reemplaza (comportamiento estándar de caja).
-/// - Si NO lo superó (click simple): es el gesto del menú contextual, así que
-///   sólo se limpia el estado — el menú lo abre el `context_menu` del elemento.
-///
-/// Siempre limpia `marquee` y notifica (un frame por evento).
-fn finish_marquee(
-    cur: (f32, f32),
-    zone: [f32; 4],
-    ruler_h: f32,
-    clip_rects: &[(usize, usize, f32, f32, f32, f32)],
-    additive: bool,
-    cx: &mut App,
-) {
-    let (gx, gy) = grid_origin_from_zone(zone, ruler_h);
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some(m) = s.playlist_state.marquee else {
-            return;
-        };
-        s.playlist_state.marquee = None;
-        // El ancla quedó fijada en coords LOCALES al apretar; sólo el extremo
-        // final viene en coords de ventana y se convierte acá.
-        let end = MarqueeState {
-            cur_x: cur.0 - gx,
-            cur_y: cur.1 - gy,
-            ..m
-        };
-        // Click simple: no hay caja que aplicar, el menú contextual abre.
-        if !end.is_drag() {
-            cx.notify();
-            return;
-        }
-        // Ambos extremos ya están en coords de grilla, igual que `clip_rects`:
-        // se comparan sin ninguna conversión adicional.
-        let rect = end.normalized();
-        let keys = playlist_row_keys(s);
-        let hits = clips_in_marquee(clip_rects, rect, &keys);
-        if additive {
-            for id in hits {
-                if !s.playlist_state.selected_clips.contains(&id) {
-                    s.playlist_state.selected_clips.push(id);
-                }
-            }
-        } else {
-            s.playlist_state.selected_clips = hits;
-        }
-        cx.notify();
-    });
-}
-
-/// Re-sincroniza TODOS los clips con el motor tras un cambio en el conjunto
-/// (pegar, duplicar, cortar).
-///
-/// Los clips de audio se recargan con `LoadClip` (mismo id ⇒ el motor
-/// reemplaza el existente). Los de patrón/MIDI no tienen mensaje equivalente
-/// y quedan para el ciclo normal de `needs_full_sync`.
-fn sync_clips_to_engine(s: &mut AppState, _cx: &mut App) {
-    let bpm = s.transport.bpm;
-    let proxy = s.audio_proxy.clone();
-    s.playlist_state.sync_all_clips_to_engine(&proxy, bpm);
-}
-
-/// Gesto de desplazamiento con botón central (ruedita) en curso.
-///
-/// Igual que `MixerPanState` pero para la Playlist: se guarda la última
-/// posición vista del puntero y cada `MouseMove` aplica sólo el delta
-/// incremental. Es incremental (no absoluto `ancla + offset inicial`) porque
-/// un esquema absoluto acumularía valor crudo fuera de rango al pasar un límite
-/// y el viewport tardaría en responder al volver: así no hay zonas muertas.
-///
-/// Los offsets de scroll viven en `ScrollHandle` con signo NEGATIVO
-/// (`[-max_offset, 0]`), por eso el clamp de `clamp_scroll_offset` es a la
-/// izquierda, no a 0.
-/// Estado del gesto de navegación con botón central (ruedita).
-///
-/// `last` es la posición del cursor en el paso anterior: el gesto es
-/// **incremental** (delta desde el último evento) y no absoluto, para que no
-/// haya zonas muertas al invertir el sentido en un borde. La geometría del
-/// lienzo se congela al iniciar el gesto (`total_ticks`, `header_width`, etc.
-/// no cambian mientras se arrastra) y se guarda acá para que los `mousemove`
-/// que llegan al catcher global no tengan que arrastrarla por los closures.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaylistPanState {
     pub last: (f32, f32),
     pub geometry: PlaylistNavGeometry,
 }
 
-/// Instantánea del lienzo necesaria para anclar el zoom del gesto.
-///
-/// La calcula `render` (que es quien conoce `total_ticks`, `header_width`,
-/// `ruler_h` y `row_count`) y se pasa a `start_playlist_pan`.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct PlaylistNavGeometry {
     pub header_width: f32,
@@ -725,28 +346,9 @@ pub struct PlaylistNavGeometry {
     pub row_count: usize,
 }
 
-/// Sensibilidad del pan: 1px de mouse = 1px de viewport.
-///
-/// 1:1 da control preciso compás por compás. El alcance se logra con trazos
-/// largos; amplificar volvería el gesto incontrolable y haría que el viewport
-/// salte de un límite al otro con un flick corto.
 pub const PAN_SENSITIVITY: f32 = 1.0;
-
-/// Píxeles de arrastre vertical que equivalen a un notch de zoom.
-///
-/// 120px ≈ un trazo cómodo de mouse para un paso de `×1.25`, así que con un
-/// gesto de 300px se recorre ~2.5 notches (≈1.75×): cambio perceptible sin que
-/// el viewport se vaya de las manos. A diferencia de la rueda (que llega
-/// normalizada en notches), acá el delta viene en píxeles de drag libre.
 pub const MMB_DRAG_PX_PER_NOTCH: f32 = 120.0;
 
-/// Notches de zoom (con signo) para un delta vertical de middle-drag.
-///
-/// Positivo = zoom in. Arrastrar **hacia arriba** acerca el tiempo, igual que
-/// en Bitwig; como en GPUI la rueda que sube resta, el signo se invierte acá.
-/// El mismo `smooth_zoom` de la rueda aplica la magnitud, así que el gesto
-/// queda continuo (sin escalones) y acotado por `MIN_ZOOM_X`/`MAX_ZOOM_X`.
-/// Función pura para testear.
 pub fn mmb_drag_notches(dy: f32) -> f32 {
     if !dy.is_finite() {
         return 0.0;
@@ -754,191 +356,10 @@ pub fn mmb_drag_notches(dy: f32) -> f32 {
     -dy / MMB_DRAG_PX_PER_NOTCH
 }
 
-/// Acota un offset de scroll al rango real del handle: `[-max, 0]`.
-///
-/// Devolver el valor YA acotado es lo que mantiene sincronizada la scrollbar
-/// (que lee el mismo handle) paso a paso.
 pub fn clamp_scroll_offset(current: f32, max: f32) -> f32 {
     (current).clamp(-max.max(0.0), 0.0)
 }
 
-fn is_playlist_panning(cx: &mut App) -> bool {
-    state(cx).read(cx).playlist_pan.is_some()
-}
-
-/// Inicia el gesto de navegación: sembramos la referencia del gesto y
-/// congelamos la geometría del lienzo (que no cambia durante el arrastre).
-fn start_playlist_pan(cx: &mut App, position: Point<Pixels>, geometry: PlaylistNavGeometry) {
-    let st = state(cx);
-    // El pan cubre la grilla con un catcher, así que su `on_mouse_move` deja de
-    // correr: si no se borra acá, la guía se queda congelada en el último tick
-    // durante toda la navegación.
-    clear_hover_tick(cx);
-    st.update(cx, |s, cx| {
-        s.playlist_pan = Some(PlaylistPanState {
-            last: (position.x.as_f32(), position.y.as_f32()),
-            geometry,
-        });
-        cx.notify();
-    });
-}
-
-/// Aplica un paso de la navegación combinada, al estilo Bitwig:
-///
-/// - **Eje X** → pan temporal: el viewport sigue al cursor. Arrastrar a la
-///   derecha avanza en el tiempo (con offsets negativos, quedar más negativo).
-/// - **Eje Y** → zoom continuo de la vista temporal, anclado al cursor: el
-///   punto que estaba bajo el puntero queda bajo el puntero. Se calcula con
-///   `smooth_zoom` (mismo factor que la rueda) y se compensa el offset con
-///   `anchor_h_offset`, igual que `apply_playlist_wheel_zoom`.
-///
-/// El zoom se ancla **incrementalmente** en cada `mousemove`, igual que hace la
-/// rueda: es lo que hace que el contenido "se pegue" al cursor durante todo el
-/// trazo sin que el ancla se vaya acumulando error.
-fn update_playlist_pan(cx: &mut App, position: Point<Pixels>) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some(pan) = s.playlist_pan else {
-            return;
-        };
-        // El viewport sigue al cursor: arrastrar a la derecha/abajo lo mueve
-        // en ese sentido, y con offsets negativos eso es restar el delta.
-        let dx = (position.x.as_f32() - pan.last.0) * PAN_SENSITIVITY;
-        let dy = position.y.as_f32() - pan.last.1;
-        let geometry = pan.geometry;
-
-        let h = s.playlist_scroll_h.clone();
-        let bounds = h.bounds();
-
-        // --- Eje X: pan temporal.
-        let old_zoom = clamped_zoom(s.playlist_state.zoom_x);
-        let new_zoom = smooth_zoom(old_zoom, mmb_drag_notches(dy));
-
-        // --- Eje Y: zoom continuo anclado al cursor.
-        if (new_zoom - old_zoom).abs() > f32::EPSILON {
-            let viewport_w = bounds.size.width.as_f32();
-            let cursor_vx = position.x.as_f32() - bounds.origin.x.as_f32();
-            // Mismo piso de 800px que usa el zoom con rueda, para que con muy
-            // poco contenido el offset no quede pegado a un rango degenerado.
-            let content_w = (geometry.header_width + geometry.total_ticks as f32 * new_zoom).max(800.0);
-            let new_offset_x = anchor_h_offset(
-                cursor_vx,
-                geometry.header_width,
-                old_zoom,
-                new_zoom,
-                h.offset().x.as_f32(),
-                viewport_w,
-                content_w,
-            );
-            h.set_offset(point(px(new_offset_x), h.offset().y));
-            s.playlist_state.zoom_x = new_zoom;
-        }
-
-        // El pan de X se aplica siempre (aunque el Y esté en un límite de zoom):
-        // son ejes independientes, y atar uno al otro haría que el gesto se
-        // "congelara" al llegar al tope del zoom.
-        if dx != 0.0 {
-            let new_x = clamp_scroll_offset(h.offset().x.as_f32() - dx, h.max_offset().x.as_f32());
-            h.set_offset(point(px(new_x), h.offset().y));
-        }
-
-        // Avanza la referencia: el próximo evento acumula desde acá. (Si el
-        // mismo evento burbujea por los dos contenedores, la segunda pasada ve
-        // delta cero y es no-op.)
-        if let Some(p) = s.playlist_pan.as_mut() {
-            p.last = (position.x.as_f32(), position.y.as_f32());
-        }
-        // El `notify` es obligatorio: mutar un `ScrollHandle` no invalida nada
-        // por sí solo, así que sin esto el viewport se movería a saltos.
-        cx.notify();
-    });
-}
-
-/// Cierra el gesto de navegación y restaura el cursor por defecto.
-fn stop_playlist_pan(cx: &mut App) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        if s.playlist_pan.take().is_some() {
-            cx.notify();
-        }
-    });
-}
-
-/// Cursor de edición de clips (`Ctrl`/`Cmd` + tecla). `shift` distingue
-/// `Ctrl+Shift+V` (pegarasure-style) del pegado normal.
-///
-/// Trabaja sobre `&mut AppState` para que el pegado también sincronice al motor
-/// (ids nuevos → `LoadClip`), igual que el drop por arrastre. Devuelve `true`
-/// si el atajo era de edición y se consumió.
-pub fn handle_edit_shortcut(key: &str, shift: bool, cx: &mut App) -> bool {
-    let st = state(cx);
-    match key {
-        "c" => {
-            st.update(cx, |s, _| {
-                copy_selected_clips(&mut s.playlist_state);
-            });
-            true
-        }
-        "x" => {
-            st.update(cx, |s, cx| {
-                if cut_selected_clips(&mut s.playlist_state) > 0 {
-                    sync_clips_to_engine(s, cx);
-                }
-            });
-            true
-        }
-        "v" => {
-            st.update(cx, |s, cx| {
-                let grid = snap_step_ticks(s.playlist_state.ppqn, s.playlist_state.grid_denominator)
-                    .max(1);
-                // `Ctrl+V` pega en el playhead; `Ctrl+Shift+V` es el pegado
-                // explícito del mismo buffer (ambas rutas usan el clipboard
-                // interno, no el del sistema).
-                let at = s.playlist_state.paste_tick();
-                let keys = playlist_row_keys(s);
-                let ids = paste_clips(&mut s.playlist_state, at, grid, &keys);
-                if ids.is_empty() {
-                    return;
-                }
-                sync_clips_to_engine(s, cx);
-                let _ = shift;
-            });
-            true
-        }
-        "d" => {
-            st.update(cx, |s, cx| {
-                let grid = snap_step_ticks(s.playlist_state.ppqn, s.playlist_state.grid_denominator)
-                    .max(1);
-                let ids = duplicate_selected_clips(&mut s.playlist_state, grid);
-                if !ids.is_empty() {
-                    sync_clips_to_engine(s, cx);
-                }
-            });
-            true
-        }
-        _ => false,
-    }
-}
-
-// =========================================================================
-// RECORTE DE CLIPS (TRIMMING) EN LOS BORDES
-// =========================================================================
-
-/// Ancho en px de la zona de agarre de cada borde del clip (izq/der).
-///
-/// 6px es la zona "de facility" de un DAW: entra sin Require Precisión pero
-/// todavía es fácil de(err)ar fuera porque el resto del clip es superficie de
-/// arrastre. Los handles dibujados son más angostos que esta zona para no
-/// tapar el waveform.
-pub const TRIM_EDGE_PX: f32 = 6.0;
-
-/// Duración mínima de un clip en ticks. Nunca 0: un clip de duración 0 no se
-/// puede renderizar ni recortar. Es la unidad del snap más gruesa dividida.
-pub fn min_clip_ticks(ppqn: u64) -> u64 {
-    (ppqn.max(1) / 4).max(1)
-}
-
-/// Qué borde del clip se está arrastrando.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrimEdge {
     Left,
@@ -946,27 +367,19 @@ pub enum TrimEdge {
 }
 
 impl TrimEdge {
-    pub fn cursor(self) -> CursorStyle {
+    pub fn cursor(self) -> egui::CursorIcon {
         match self {
-            TrimEdge::Left => CursorStyle::ResizeLeft,
-            TrimEdge::Right => CursorStyle::ResizeRight,
+            TrimEdge::Left => egui::CursorIcon::ResizeWest,
+            TrimEdge::Right => egui::CursorIcon::ResizeEast,
         }
     }
 }
 
-/// Gesto de recorte en curso: mantiene los valores ORIGINALES del clip para
-/// que el arrastre sea incremental (como el drag de clips) y para poder
-/// invertir la dirección en un borde sin zona muerta.
-///
-/// `grab_dx_px` es la distancia entre el cursor y el borde agarrado, para que
-/// el clip no salte al agarrarlo fuera del borde.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrimDrag {
     pub clip_id: usize,
     pub edge: TrimEdge,
-    /// Ticks del borde agarrado al iniciar (start si `Left`, end si `Right`).
     pub orig_edge_tick: u64,
-    /// Start/duración/offset de audio originales.
     pub orig_start: u64,
     pub orig_duration: u64,
     pub orig_offset: u64,
@@ -975,22 +388,12 @@ pub struct TrimDrag {
     pub moved: bool,
 }
 
-/// Hit test de los bordes: devuelve el borde agarrable del clip bajo el cursor.
-///
-/// `x` es la posición del cursor en coords de VENTANA; `clip_x/w` también (los
-///中日 los lee `render` del mismo espacio que los eventos). La zona se
-/// extiende un poco más si el clip es angosto que `edge_px`, para que siempre
-/// haya superficie agarrable. Función pura para testear.
 pub fn trim_edge_at(x: f32, clip_x: f32, clip_w: f32, edge_px: f32) -> Option<TrimEdge> {
     if clip_w <= 0.0 {
         return None;
     }
-    // Los bordes están donde están; lo que se expande es la ZONA de agarre
-    // (hacia adentro) cuando el clip es más angosto que 2 zonas, para que
-    // siempre haya superficie agarrable sin mover el borde real.
     let left = clip_x;
     let right = clip_x + clip_w;
-    // El centro del clip gana: si `x` cae en ambos bordes, el más cercano.
     if x >= left && x <= left + edge_px {
         if x - left <= right - x {
             return Some(TrimEdge::Left);
@@ -1004,18 +407,6 @@ pub fn trim_edge_at(x: f32, clip_x: f32, clip_w: f32, edge_px: f32) -> Option<Tr
     None
 }
 
-/// Resultado de un recorte: `(start_tick, duration_ticks, offset_ticks)`.
-///
-/// `orig_start/dur/offset` son los valores antes del gesto, `edge_tick` el tick
-/// al que se snapió el borde agarrado. Función pura para testear.
-///
-/// - Borde derecho: sólo cambia la duración. Al alargarlo más allá del audio
-///   disponible se recorta contra `max_dur` (fin real del sample), así no
-///   aparece silencio inventado.
-/// - Borde izquierdo: se mueve el inicio del clip Y el offset interno del
-///   audio en la misma cantidad, de modo que el waveform no "salta" dentro del
-///   clip (esto es el trim clásico: el contenido bajo la grilla no se mueve).
-///   No se deja pasar del offset 0 ni del final del audio.
 pub fn trim_apply(
     orig_start: u64,
     orig_dur: u64,
@@ -1028,9 +419,6 @@ pub fn trim_apply(
 ) -> (u64, u64, u64) {
     match edge {
         TrimEdge::Right => {
-            // El largo real del sample es `orig_total`; desde el offset
-            // actual quedan `total - offset` ticks de audio. El fin no puede
-            // pasar de ahí (si no, aparecería silencio inventado).
             let audio_left = orig_total.saturating_sub(orig_offset);
             let audio_end = orig_start
                 .saturating_add(audio_left)
@@ -1042,8 +430,6 @@ pub fn trim_apply(
             (orig_start, dur, orig_offset)
         }
         TrimEdge::Left => {
-            // El offset nunca puede ser negativo (no hay audio antes del
-            // sample) ni pasar del fin del sample.
             let max_tick = orig_start
                 .saturating_add(orig_dur)
                 .saturating_sub(min_ticks);
@@ -1059,32 +445,12 @@ pub fn trim_apply(
     }
 }
 
-/// Extremos temporales de un clip de audio: `(offset_disponible, fin_audio)`.
-/// Funciones puras auxiliares para los tests de trimming.
 pub fn audio_span(offset: u64, total: u64) -> (u64, u64) {
     (offset, offset.saturating_add(total))
 }
 
-// =========================================================================
-// SELECCIÓN POR CAJA (marquee / rubber-band) Y EDICIÓN DE CLIPS
-// =========================================================================
-
-/// Desplazamiento mínimo (px) para que un click derecho cuente como arrastre
-/// de marquee y no como "click simple" para abrir el menú contextual.
-///
-/// Por debajo de este umbral el gesto se resuelve como click simple: abrir un
-/// menú por un temblor de 1px al querer seleccionar sería molesto.
 pub const MARQUEE_DRAG_THRESHOLD: f32 = 4.0;
 
-/// Gesto de selección rectangular en curso (click derecho + arrastrar).
-///
-/// Las coordenadas son de VENTANA (las que trae el evento) porque el marquee
-/// se pinta en el mismo espacio que la grilla; el mapeo a ticks/filas se hace
-/// al soltar usando los bounds medidos de la zona (`zone_bounds`).
-///
-/// Vive en `PlaylistState` (global, no flag local del widget) porque la grilla
-/// se reconstruye en cada frame: con un flag local el primer `notify` cortaría
-/// el gesto y el rectángulo no seguiría al cursor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MarqueeState {
     pub start_x: f32,
@@ -1094,19 +460,14 @@ pub struct MarqueeState {
 }
 
 impl MarqueeState {
-    /// Distancia manhattan recorrida: barata y suficiente para el umbral.
     pub fn drag_distance(&self) -> f32 {
         (self.cur_x - self.start_x).abs() + (self.cur_y - self.start_y).abs()
     }
 
-    /// ¿Superó el umbral para considerarse arrastre y no click simple?
     pub fn is_drag(&self) -> bool {
         self.drag_distance() >= MARQUEE_DRAG_THRESHOLD
     }
 
-    /// Rectángulo normalizado `(x0, y0, x1, y1)`: arrastrar hacia arriba o
-    /// hacia la izquierda invierte los extremos en vez de dar un rect con
-    /// ancho/alto negativo.
     pub fn normalized(&self) -> (f32, f32, f32, f32) {
         let x0 = self.start_x.min(self.cur_x);
         let y0 = self.start_y.min(self.cur_y);
@@ -1116,243 +477,141 @@ impl MarqueeState {
     }
 }
 
-/// Rectángulo normalizado a partir de dos esquinas sueltas. Función pura.
 pub fn normalize_rect(ax: f32, ay: f32, bx: f32, by: f32) -> (f32, f32, f32, f32) {
     (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by))
 }
 
-/// ¿Se intersectan dos rectángulos `(x0, y0, x1, y1)`?
-///
-/// Toque en el borde cuenta como intersección (el rect del marquee es
-/// translúcido y apenas toca el clip cuando el usuario roza su borde), así que
-/// la comparación es inclusiva (`<=`).
 pub fn rects_intersect(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
-    a.0 <= b.2 && a.2 >= b.0 && a.1 <= b.3 && a.3 >= b.1
+    let (ax0, ay0, ax1, ay1) = a;
+    let (bx0, by0, bx1, by1) = b;
+    ax0 < bx1 && ax1 > bx0 && ay0 < by1 && ay1 > by0
 }
 
-/// Ids de los clips que tocan el rectángulo del marquee.
-///
-/// `rows` son los clips con su geometría ya en px de ventana
-/// `(track_key, clip_id, x, y, w, h)`. Sólo entra el clip si su track sigue
-/// existiendo (`track_keys` acota las filas visibles) — evita seleccionar
-/// clips huérfanos tras borrar una pista. Función pura para testear.
 pub fn clips_in_marquee(
-    rows: &[(usize, usize, f32, f32, f32, f32)],
-    rect: (f32, f32, f32, f32),
-    track_keys: &[usize],
+    clips: &[(usize, PlaylistClip)],
+    marquee_rect: (f32, f32, f32, f32),
+    row_keys: &[usize],
+    zoom_x: f32,
+    row_h: f32,
+    grid_ox: f32,
+    grid_oy: f32,
 ) -> Vec<usize> {
-    rows.iter()
-        .filter(|(track_key, _, x, y, w, h)| {
-            track_keys.contains(track_key) && rects_intersect(rect, (*x, *y, x + w, y + h))
+    clips
+        .iter()
+        .filter_map(|(track_id, clip)| {
+            let row_idx = row_keys.iter().position(|k| k == track_id)?;
+            let cx0 = grid_ox + ticks_to_px(clip.start_tick, zoom_x);
+            let cx1 = cx0 + ticks_to_px(clip.duration_ticks, zoom_x);
+            let cy0 = grid_oy + row_idx as f32 * row_h;
+            let cy1 = cy0 + row_h;
+            if rects_intersect(marquee_rect, (cx0, cy0, cx1, cy1)) {
+                Some(clip.id)
+            } else {
+                None
+            }
         })
-        .map(|(_, clip_id, _, _, _, _)| *clip_id)
         .collect()
 }
 
-/// Extremos temporales de un conjunto de clips: `(min_start, max_end)`.
-///
-/// `max_end` es el tick final del clip más largo (start + duration). Se usa
-/// para pegar en bloque justo a continuación del final del conjunto.
-fn selection_span(clips: &[(usize, PlaylistClip)]) -> (u64, u64) {
-    let mut min_start = u64::MAX;
-    let mut max_end = 0u64;
-    for (_, c) in clips {
-        min_start = min_start.min(c.start_tick);
-        max_end = max_end.max(c.start_tick.saturating_add(c.duration_ticks));
-    }
-    if min_start == u64::MAX {
-        (0, 0)
-    } else {
-        (min_start, max_end)
-    }
-}
-
-/// Copia los clips seleccionados al buffer interno (sin tocar la grilla).
-///
-/// Devuelve cuántos clips entraron al portapapeles. Sin selección es no-op
-/// (`Ctrl+C` no debe limpiar un clipboard ya lleno).
 pub fn copy_selected_clips(s: &mut PlaylistState) -> usize {
-    if s.selected_clips.is_empty() {
-        return 0;
+    s.clipboard.clear();
+    for (t, c) in &s.clips {
+        if s.selected_clips.contains(&c.id) {
+            s.clipboard.push((*t, c.clone()));
+        }
     }
-    let picked: Vec<(usize, PlaylistClip)> = s
-        .clips
-        .iter()
-        .filter(|(_, c)| s.selected_clips.contains(&c.id))
-        .cloned()
-        .collect();
-    let n = picked.len();
-    if n > 0 {
-        s.clipboard = picked;
-    }
-    n
+    s.clipboard.len()
 }
 
-/// Copia al buffer y borra los clips seleccionados de la grilla (`Ctrl+X`).
-///
-/// Devuelve cuántos clips se movieron al portapapeles.
 pub fn cut_selected_clips(s: &mut PlaylistState) -> usize {
-    let n = copy_selected_clips(s);
-    if n > 0 {
-        let sel = s.selected_clips.clone();
-        s.clips.retain(|(_, c)| !sel.contains(&c.id));
-        s.selected_clips.clear();
-    }
-    n
+    let count = copy_selected_clips(s);
+    s.clips.retain(|(_, c)| !s.selected_clips.contains(&c.id));
+    s.selected_clips.clear();
+    s.needs_full_sync = true;
+    count
 }
 
-/// Generador de ids de clip libre (no colisiona con los ya presentes).
-fn next_free_clip_id(s: &PlaylistState) -> usize {
-    s.clips
-        .iter()
-        .map(|(_, c)| c.id)
-        .max()
-        .unwrap_or(0)
-        .max(s.next_clip_id)
-        + 1
+pub fn next_free_clip_id(s: &PlaylistState) -> usize {
+    let max_id = s.clips.iter().map(|(_, c)| c.id).max().unwrap_or(0);
+    max_id.saturating_add(1)
 }
 
-/// Pega el clipboard en `at_tick` (con snap), conservando cada clip en su
-/// pista y su offset relativo al inicio del conjunto copiado.
-///
-/// Devuelve los ids de los clips creados. Si el clipboard está vacío o el
-/// track de destino ya no existe, no inserta nada.
 pub fn paste_clips(
     s: &mut PlaylistState,
-    at_tick: u64,
-    grid_ticks: u64,
-    track_keys: &[usize],
+    target_tick: u64,
+    target_track_offset: usize,
 ) -> Vec<usize> {
     if s.clipboard.is_empty() {
         return Vec::new();
     }
-    let (min_start, _) = selection_span(&s.clipboard);
-    // El primer tick del conjunto queda pegado en `at_tick` (ya snapped por el
-    // llamador) y cada clip conserva su separación relativa original.
-    let delta = at_tick.saturating_sub(min_start);
+    let min_tick = s.clipboard.iter().map(|(_, c)| c.start_tick).min().unwrap_or(0);
+    let min_track = s.clipboard.iter().map(|(t, _)| *t).min().unwrap_or(0);
+
     let mut new_ids = Vec::new();
-    for (track_key, clip) in &s.clipboard {
-        if !track_keys.contains(track_key) {
-            continue;
-        }
-        let id = next_free_clip_id(s);
-        let mut copy = clip.clone();
-        copy.id = id;
-        copy.start_tick = snap_ticks(clip.start_tick.saturating_add(delta), grid_ticks);
-        s.clips.push((*track_key, copy));
-        new_ids.push(id);
-        s.next_clip_id = s.next_clip_id.max(id + 1);
+    for (orig_t, orig_c) in &s.clipboard {
+        let tick_offset = orig_c.start_tick.saturating_sub(min_tick);
+        let track_offset = orig_t.saturating_sub(min_track);
+        let new_track = target_track_offset + track_offset;
+        let new_tick = target_tick.saturating_add(tick_offset);
+
+        let new_id = next_free_clip_id(s);
+        let mut new_clip = orig_c.clone();
+        new_clip.id = new_id;
+        new_clip.start_tick = new_tick;
+
+        s.clips.push((new_track, new_clip));
+        new_ids.push(new_id);
     }
     s.selected_clips = new_ids.clone();
+    s.needs_full_sync = true;
     new_ids
 }
 
-/// Duplica los clips seleccionados justo a continuación de su punto final
-/// (`Ctrl+D`): conserva pistas, duración y orden, y queda seleccionado lo nuevo.
-///
-/// Devuelve los ids de los duplicados.
 pub fn duplicate_selected_clips(s: &mut PlaylistState, grid_ticks: u64) -> Vec<usize> {
     if s.selected_clips.is_empty() {
         return Vec::new();
     }
-    let picked: Vec<(usize, PlaylistClip)> = s
+    let mut selected: Vec<(usize, PlaylistClip)> = s
         .clips
         .iter()
         .filter(|(_, c)| s.selected_clips.contains(&c.id))
         .cloned()
         .collect();
-    if picked.is_empty() {
-        return Vec::new();
-    }
-    let (_, max_end) = selection_span(&picked);
-    // El conjunto duplicado arranca exactamente donde termina el original.
-    let delta = max_end.saturating_sub(selection_span(&picked).0);
+
+    let max_end = selected
+        .iter()
+        .map(|(_, c)| c.start_tick.saturating_add(c.duration_ticks))
+        .max()
+        .unwrap_or(0);
+    let shift_ticks = snap_ticks(max_end, grid_ticks.max(1));
+
     let mut new_ids = Vec::new();
-    for (track_key, clip) in &picked {
-        let id = next_free_clip_id(s);
-        let mut copy = clip.clone();
-        copy.id = id;
-        copy.start_tick = snap_ticks(clip.start_tick.saturating_add(delta), grid_ticks);
-        s.clips.push((*track_key, copy));
-        new_ids.push(id);
-        s.next_clip_id = s.next_clip_id.max(id + 1);
+    for (t, mut c) in selected.drain(..) {
+        let new_id = next_free_clip_id(s);
+        c.id = new_id;
+        c.start_tick = c.start_tick.saturating_add(shift_ticks);
+        s.clips.push((t, c));
+        new_ids.push(new_id);
     }
     s.selected_clips = new_ids.clone();
+    s.needs_full_sync = true;
     new_ids
 }
 
-/// Altura de fila tras un paso de zoom vertical (×1.25 / ÷1.25, acotada).
 pub fn step_row_h(h: f32, zoom_in: bool) -> f32 {
     clamped_row_h(if zoom_in { h * 1.25 } else { h / 1.25 })
 }
 
-/// `true` si la rueda sube (acercar / agrandar).
-///
-/// En GPUI la rueda que baja suma delta positivo (`scroll_offset += delta`),
-/// así que subir es `y < 0`. Acepta `Pixels` (trackpads) y `Lines` (rueda
-/// clásica); si el gesto es puramente horizontal se mira `x`.
-pub fn wheel_zoom_in(delta: &ScrollDelta) -> bool {
-    let (dx, dy) = match *delta {
-        ScrollDelta::Pixels(p) => (p.x.as_f32(), p.y.as_f32()),
-        ScrollDelta::Lines(p) => (p.x, p.y),
-    };
-    let d = if dy != 0.0 { dy } else { dx };
-    d < 0.0
-}
-
-/// Delta de rueda normalizado a **notches con signo**: `1.0` es un notch
-/// completo hacia adentro, `0.5` medio notch, `-1.0` un notch hacia afuera.
-///
-/// A diferencia de [`wheel_zoom_in`] (que devuelve sólo el signo), esto
-/// conserva la *magnitud* del gesto: un nudge de 2px en un trackpad vale
-/// `2/53` de notch, así que el zoom se mueve de forma gradual en vez de saltar
-/// el 25% entero. El signo está invertido respecto al delta crudo porque en
-/// GPUI la rueda que sube resta (`wheel_zoom_in` explota esa convención).
-///
-/// Normaliza con [`LINES_PER_NOTCH`] o [`PX_PER_NOTCH`] según la variante del
-/// delta. Función pura para testear.
-pub fn wheel_notches(delta: &ScrollDelta) -> f32 {
-    let (dx, dy, per_notch) = match *delta {
-        ScrollDelta::Pixels(p) => (p.x.as_f32(), p.y.as_f32(), PX_PER_NOTCH),
-        ScrollDelta::Lines(p) => (p.x, p.y, LINES_PER_NOTCH),
-    };
-    let d = if dy != 0.0 { dy } else { dx };
-    if !d.is_finite() || !per_notch.is_finite() || per_notch <= 0.0 {
-        return 0.0;
-    }
-    -d / per_notch
-}
-
-/// Zoom tras un zoom continuo de `notches` notches, acotado.
-///
-/// `new = zoom * ZOOM_STEP_FACTOR^notches`, así que un notch completo
-/// reproduce exactamente el paso fijo de antes (`×1.25`) y los notches
-/// fraccionarios dan movimiento proporcional. Función pura para testear.
 pub fn smooth_zoom(zoom: f32, notches: f32) -> f32 {
-    if !notches.is_finite() {
-        return clamped_zoom(zoom);
-    }
-    clamped_zoom(zoom * ZOOM_STEP_FACTOR.powf(notches))
+    let factor = ZOOM_STEP_FACTOR.powf(notches);
+    clamped_zoom(zoom * factor)
 }
 
-/// Altura de fila tras un zoom vertical continuo, acotada.
-///
-/// Misma regla que [`smooth_zoom`] pero sobre `row_h` y con
-/// `[MIN_ROW_H, MAX_ROW_H]`. Función pura para testear.
 pub fn smooth_row_h(h: f32, notches: f32) -> f32 {
-    if !notches.is_finite() {
-        return clamped_row_h(h);
-    }
-    clamped_row_h(h * ZOOM_STEP_FACTOR.powf(notches))
+    let factor = ZOOM_STEP_FACTOR.powf(notches);
+    clamped_row_h(h * factor)
 }
 
-/// Nuevo offset horizontal (`<= 0`) tras un zoom anclado al cursor.
-///
-/// `cursor_vx` es el x del cursor relativo al viewport; `header_w` el ancho
-/// de la columna de headers (contenido no temporal). Se calcula el tick bajo
-/// el cursor con el zoom viejo y se elige el offset que lo deja bajo el
-/// cursor con el zoom nuevo, acotado al recorrido real del contenido.
-/// Función pura para testear.
 pub fn anchor_h_offset(
     cursor_vx: f32,
     header_w: f32,
@@ -1362,18 +621,14 @@ pub fn anchor_h_offset(
     viewport_w: f32,
     content_w: f32,
 ) -> f32 {
-    let old_zoom = old_zoom.max(0.0001);
-    let tick = (cursor_vx - old_offset_x - header_w) / old_zoom;
-    let new_offset = cursor_vx - header_w - tick * new_zoom;
-    let min = -(content_w - viewport_w).max(0.0);
-    new_offset.clamp(min, 0.0)
+    let track_x = (cursor_vx - header_w - old_offset_x).max(0.0);
+    let tick = (track_x / old_zoom) as u64;
+    let new_track_x = tick as f32 * new_zoom;
+    let new_offset_x = cursor_vx - header_w - new_track_x;
+    let max_scroll = (content_w - viewport_w).max(0.0);
+    new_offset_x.clamp(-max_scroll, 0.0)
 }
 
-/// Nuevo offset vertical (`<= 0`) tras un zoom de altura de fila anclado.
-///
-/// Las filas escalan uniformemente bajo la regla (`ruler_h` queda fija), así
-/// que el contenido bajo el cursor se reubica por factor `new/old` y el
-/// offset compensa para que no se mueva. Función pura para testear.
 pub fn anchor_v_offset(
     cursor_vy: f32,
     ruler_h: f32,
@@ -1383,3089 +638,154 @@ pub fn anchor_v_offset(
     viewport_h: f32,
     content_h: f32,
 ) -> f32 {
-    let scale = if old_row_h > 0.0 {
-        new_row_h / old_row_h
-    } else {
-        1.0
-    };
-    let content_y = cursor_vy - old_offset_y;
-    let new_content_y = ruler_h + (content_y - ruler_h) * scale;
-    let new_offset = cursor_vy - new_content_y;
-    let min = -(content_h - viewport_h).max(0.0);
-    new_offset.clamp(min, 0.0)
+    let track_y = (cursor_vy - ruler_h - old_offset_y).max(0.0);
+    let row_idx = track_y / old_row_h;
+    let new_track_y = row_idx * new_row_h;
+    let new_offset_y = cursor_vy - ruler_h - new_track_y;
+    let max_scroll = (content_h - viewport_h).max(0.0);
+    new_offset_y.clamp(-max_scroll, 0.0)
 }
 
 pub fn snap_ticks(ticks: u64, grid_ticks: u64) -> u64 {
-    if grid_ticks == 0 {
+    if grid_ticks <= 1 {
         return ticks;
     }
-    ((ticks as f64 / grid_ticks as f64).round() as u64).saturating_mul(grid_ticks)
+    let half = grid_ticks / 2;
+    ((ticks + half) / grid_ticks) * grid_ticks
 }
 
-#[allow(dead_code)]
-fn ticks_to_pixel_x(ticks: u64, ppqn: u64, zoom_x: f32, playlist_offset_x: f32) -> f32 {
-    let ppqn = ppqn.max(1) as f32;
-    let pixels_per_beat = ppqn * zoom_x;
-    (ticks as f32 / ppqn) * pixels_per_beat + playlist_offset_x
+pub fn min_clip_ticks(ppqn: u64) -> u64 {
+    (ppqn / 16).max(1)
 }
 
 pub fn loop_display_tick(
-    current_tick: u64,
-    loop_start_ticks: u64,
-    loop_end_ticks: u64,
-    loop_enabled: bool,
+    playhead_tick: u64,
+    loop_start: u64,
+    loop_end: u64,
+    loop_active: bool,
 ) -> u64 {
-    if !loop_enabled {
-        return current_tick;
+    if loop_active && loop_end > loop_start {
+        let len = loop_end - loop_start;
+        if playhead_tick >= loop_start {
+            loop_start + ((playhead_tick - loop_start) % len)
+        } else {
+            playhead_tick
+        }
+    } else {
+        playhead_tick
     }
-    let len = loop_end_ticks.saturating_sub(loop_start_ticks);
-    if len == 0 || loop_end_ticks <= loop_start_ticks {
-        return current_tick;
-    }
-    if current_tick < loop_start_ticks {
-        return current_tick;
-    }
-    if current_tick >= loop_end_ticks {
-        return loop_start_ticks + ((current_tick - loop_start_ticks) % len);
-    }
-    current_tick
 }
 
-#[allow(dead_code)]
-fn samples_to_ticks_precise(sample_count: u64, ppqn: u64, bpm: f64, sample_rate: u32) -> u64 {
-    let ppqn = ppqn.max(1);
-    if bpm <= 0.0 || sample_rate == 0 {
-        return 0;
-    }
-    let seconds = sample_count as f64 / sample_rate as f64;
-    let seconds_per_tick = (60.0 / bpm) / ppqn as f64;
-    (seconds / seconds_per_tick).round() as u64
-}
-
-fn ticks_to_samples_precise(ticks: u64, ppqn: u64, bpm: f64, sample_rate: u32) -> u64 {
-    let ppqn = ppqn.max(1);
-    if bpm <= 0.0 || sample_rate == 0 {
-        return 0;
-    }
-    let seconds_per_tick = (60.0 / bpm) / ppqn as f64;
-    (ticks as f64 * seconds_per_tick * sample_rate as f64).round() as u64
-}
-
-/// Ticks a segundos, sin la precisión de sample.
-///
-/// Es la matemática de posiciones que usa el módulo de proyecto
-/// (`crate::project`) para guardar y recargar la región de loop global en
-/// TICKS: los samples dependen del sample rate de la máquina que abre el
-/// proyecto, los ticks no.
-#[inline]
 pub fn ticks_to_secs_precise(ticks: u64, ppqn: u64, bpm: f64) -> f32 {
-    if ppqn == 0 || bpm <= 0.0 {
-        return 0.0;
-    }
-    let seconds_per_tick = (60.0 / bpm) / (ppqn as f64);
-    (ticks as f64 * seconds_per_tick) as f32
+    let ppqn_f = ppqn.max(1) as f64;
+    let bpm_f = bpm.max(1.0);
+    let beats = ticks as f64 / ppqn_f;
+    let secs = beats * (60.0 / bpm_f);
+    secs as f32
 }
 
-/// Duración en ticks y picos normalizados de un WAV.
-///
-/// Público porque `crate::project::openstudio` lo usa al abrir un proyecto:
-/// los picos NO se guardan en el `.opsf` (son caché derivada) y se releen del
-/// sample.
 pub fn load_sample_info(path: &PathBuf, ppqn: u64, bpm: f64) -> (u64, Vec<f32>) {
     let mut peaks = Vec::new();
+    let mut total_samples = 44100;
+    let sample_rate = 44100;
 
-    match hound::WavReader::open(path) {
-        Ok(mut reader) => {
-            let spec = reader.spec();
-            let total_frames = reader.duration() as u64;
-            let channels = spec.channels.max(1) as u64;
+    if let Ok(mut reader) = hound::WavReader::open(path) {
+        let _spec = reader.spec();
+        let samples_count = reader.duration() as usize;
+        total_samples = samples_count;
+        let num_peaks = 256;
+        let step = (samples_count / num_peaks).max(1);
 
-            if spec.sample_rate > 0 && total_frames > 0 && bpm > 0.0 {
-                let duration_sec = total_frames as f64 / spec.sample_rate as f64;
-                let seconds_per_tick = (60.0 / bpm) / ppqn.max(1) as f64;
-                let calculated_ticks = (duration_sec / seconds_per_tick).round() as u64;
+        let mut current_max: f32 = 0.0;
+        let mut count = 0;
 
-                let target_peaks = 512;
-                let step_frames = ((total_frames as usize) / target_peaks).max(1);
-                let step_samples = step_frames * channels as usize;
-
-                let samples: Vec<f32> = match spec.sample_format {
-                    hound::SampleFormat::Int => {
-                        let max_val = (1i64 << (spec.bits_per_sample - 1)) as f32;
-                        reader.samples::<i32>()
-                            .filter_map(|s| s.ok())
-                            .map(|s| (s as f32 / max_val).abs())
-                            .collect()
-                    }
-                    hound::SampleFormat::Float => {
-                        reader.samples::<f32>()
-                            .filter_map(|s| s.ok())
-                            .map(|s| s.abs())
-                            .collect()
-                    }
-                };
-
-                for chunk in samples.chunks(step_samples) {
-                    let max_peak = chunk.iter().cloned().fold(0.0f32, f32::max);
-                    peaks.push(max_peak.clamp(0.0, 1.0));
+        for sample in reader.samples::<i32>() {
+            if let Ok(s) = sample {
+                let norm = (s as f32 / i32::MAX as f32).abs();
+                if norm > current_max {
+                    current_max = norm;
                 }
-
-                return (calculated_ticks.max(1), peaks);
+                count += 1;
+                if count >= step {
+                    peaks.push(current_max);
+                    current_max = 0.0;
+                    count = 0;
+                }
             }
         }
-        Err(err) => {
-            eprintln!("[PLAYLIST ERROR] Hound no pudo abrir {:?}: {}", path, err);
+        if peaks.is_empty() {
+            peaks.push(0.5);
         }
     }
 
-    (0, peaks)
+    let secs = total_samples as f64 / sample_rate as f64;
+    let beats = secs / (60.0 / bpm.max(1.0));
+    let total_ticks = (beats * ppqn as f64).round() as u64;
+
+    (total_ticks, peaks)
 }
 
 pub fn build_audio_clip(
     id: usize,
     name: String,
-    path: &PathBuf,
     start_tick: u64,
+    path: PathBuf,
     ppqn: u64,
     bpm: f64,
-    color: Hsla,
 ) -> PlaylistClip {
-    let (duration_ticks, peaks) = load_sample_info(path, ppqn, bpm);
-    let duration_ticks = duration_ticks.max(1);
-
+    let (total_ticks, peaks) = load_sample_info(&path, ppqn, bpm);
     PlaylistClip {
         id,
         name,
         start_tick,
-        duration_ticks,
+        duration_ticks: total_ticks.max(ppqn),
         clip_type: ClipType::Audio {
             sample_path: path.to_string_lossy().to_string(),
             peaks,
             sample_offset_ticks: 0,
-            total_sample_ticks: duration_ticks,
+            total_sample_ticks: total_ticks.max(ppqn),
         },
-        color,
+        color: theme::ACCENT_PRIMARY,
     }
 }
 
-// =========================================================================
-// DRAG & DROP DE CLIPS (botón izquierdo sobre el clip)
-// =========================================================================
-
-/// Claves de pista (índices al vector del modo activo) en orden de fila.
-fn playlist_row_keys(s: &AppState) -> Vec<usize> {
-    row_keys_of(match s.mode {
-        crate::app::AppMode::OpenLive => &s.live_tracks,
-        crate::app::AppMode::OpenStudio => &s.studio_tracks,
-    })
+pub fn grid_origin_from_zone(zone: [f32; 4], ruler_h: f32) -> (f32, f32) {
+    (zone[0], zone[1] + ruler_h)
 }
 
-/// Índices de fila (no-master) de un vector de pistas. Función pura: la
-/// comparten el render, el drag de clips y las operaciones de clipboard.
-fn row_keys_of(tracks: &[Track]) -> Vec<usize> {
-    tracks
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| !t.is_master)
-        .map(|(i, _)| i)
-        .collect()
-}
-
-// =========================================================================
-// MEZCLA EN LOS TRACK HEADERS (M/S/volumen/pan) — espejo del Session Matrix
-// =========================================================================
-//
-// Los headers de la Playlist usan los MISMOS widgets que el Session Matrix
-// (`matrix::h_mix_slider_ex`, `pan_knob_ex`, `ms_button`), así que el diseño
-// es idéntico y sólo cambia la destino de la escritura: los helpers de abajo
-// escriben en la pista del MODO ACTIVO y espejan al mixer y a la Session
-// Matrix (más el `GuiCommand` al motor). Así M/S/vol/pan quedan
-// bidireccionales entre Playlist, Mixer y Matrix.
-
-/// Índice de fila de la playlist → índice de pista del motor.
-///
-/// En OpenStudio la fila 0 es `studio_tracks[0]` (el índice coincide con el
-/// vector); en OpenLive la fila 0 es `live_tracks[1]` (el 0 es el master y la
-/// Matrix indexa sus pistas desde 0). Es la misma convención de
-/// `playlist_row_keys` + `arranger_view::StripTarget`.
-fn playlist_row_to_engine_idx(s: &AppState, row: usize) -> usize {
-    match s.mode {
-        crate::app::AppMode::OpenLive => row,
-        crate::app::AppMode::OpenStudio => row,
+pub fn handle_edit_shortcut(key: &str, _shift: bool, app: &mut AppState) -> bool {
+    match key {
+        "c" | "C" => {
+            copy_selected_clips(&mut app.playlist_state);
+            true
+        }
+        "x" | "X" => {
+            cut_selected_clips(&mut app.playlist_state);
+            true
+        }
+        "v" | "V" => {
+            let target_tick = app.playlist_state.paste_tick();
+            paste_clips(&mut app.playlist_state, target_tick, app.selected_track_index);
+            true
+        }
+        "d" | "D" => {
+            let ppqn = app.playlist_state.ppqn;
+            let step = snap_step_ticks(ppqn, app.playlist_state.grid_denominator);
+            duplicate_selected_clips(&mut app.playlist_state, step);
+            true
+        }
+        "Delete" | "Backspace" => {
+            let selected = app.playlist_state.selected_clips.clone();
+            app.playlist_state.clips.retain(|(_, c)| !selected.contains(&c.id));
+            app.playlist_state.selected_clips.clear();
+            app.playlist_state.needs_full_sync = true;
+            true
+        }
+        _ => false,
     }
 }
 
-/// Escribe el volumen en la pista del modo activo, espejando al resto de vistas.
-fn apply_playlist_volume(s: &mut AppState, row: usize, volume: f32) {
-    let volume = volume.clamp(0.0, 1.0);
-    let engine_idx = playlist_row_to_engine_idx(s, row);
-    match s.mode {
-        crate::app::AppMode::OpenLive => {
-            if let Some(t) = s.matrix_state.tracks.get_mut(row) {
-                t.volume = volume;
-            }
-            if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
-                live.volume = volume;
-            }
-        }
-        crate::app::AppMode::OpenStudio => {
-            if let Some(t) = s.studio_tracks.get_mut(engine_idx) {
-                t.volume = volume;
-            }
-        }
-    }
-    s.audio_proxy.send(GuiCommand::SetTrackVolume {
-        track_idx: engine_idx,
-        volume_db: volume,
-    });
-}
-
-/// Escribe el paneo en la pista del modo activo, espejando al resto de vistas.
-fn apply_playlist_pan(s: &mut AppState, row: usize, pan: f32) {
-    let pan = pan.clamp(-1.0, 1.0);
-    let engine_idx = playlist_row_to_engine_idx(s, row);
-    match s.mode {
-        crate::app::AppMode::OpenLive => {
-            if let Some(t) = s.matrix_state.tracks.get_mut(row) {
-                t.pan = pan;
-            }
-            if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
-                live.pan = pan;
-            }
-        }
-        crate::app::AppMode::OpenStudio => {
-            if let Some(t) = s.studio_tracks.get_mut(engine_idx) {
-                t.pan = pan;
-            }
-        }
-    }
-    s.audio_proxy.send(GuiCommand::SetTrackPan {
-        track_idx: engine_idx,
-        pan,
-    });
-}
-
-/// Invierte Mute: pista del modo activo + espejo Matrix/Mixer + motor.
-fn toggle_playlist_mute(cx: &mut App, row: usize) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let engine_idx = playlist_row_to_engine_idx(s, row);
-        let muted = match s.mode {
-            crate::app::AppMode::OpenLive => {
-                let muted = s
-                    .matrix_state
-                    .tracks
-                    .get(row)
-                    .map(|t| !t.muted)
-                    .unwrap_or(false);
-                if let Some(t) = s.matrix_state.tracks.get_mut(row) {
-                    t.muted = muted;
-                }
-                if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
-                    live.mute = muted;
-                }
-                muted
-            }
-            crate::app::AppMode::OpenStudio => {
-                let Some(t) = s.studio_tracks.get_mut(engine_idx) else {
-                    return;
-                };
-                t.mute = !t.mute;
-                t.mute
-            }
-        };
-        s.audio_proxy.send(GuiCommand::SetTrackMute {
-            track_idx: engine_idx,
-            mute: muted,
-        });
-        cx.notify();
-    });
-}
-
-/// Invierte Solo: pista del modo activo + espejo Matrix/Mixer + motor.
-fn toggle_playlist_solo(cx: &mut App, row: usize) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let engine_idx = playlist_row_to_engine_idx(s, row);
-        let soloed = match s.mode {
-            crate::app::AppMode::OpenLive => {
-                let soloed = s
-                    .matrix_state
-                    .tracks
-                    .get(row)
-                    .map(|t| !t.soloed)
-                    .unwrap_or(false);
-                if let Some(t) = s.matrix_state.tracks.get_mut(row) {
-                    t.soloed = soloed;
-                }
-                if let Some(live) = s.live_tracks.get_mut(engine_idx + 1) {
-                    live.solo = soloed;
-                }
-                soloed
-            }
-            crate::app::AppMode::OpenStudio => {
-                let Some(t) = s.studio_tracks.get_mut(engine_idx) else {
-                    return;
-                };
-                t.solo = !t.solo;
-                t.solo
-            }
-        };
-        s.audio_proxy.send(GuiCommand::SetTrackSolo {
-            track_idx: engine_idx,
-            solo: soloed,
-        });
-        cx.notify();
-    });
-}
-
-/// Estado de mezcla de una fila para pintar el header (nombre, M, S, vol, pan).
-fn playlist_row_mix(s: &AppState, row: usize) -> (String, bool, bool, f32, f32) {
-    let engine_idx = playlist_row_to_engine_idx(s, row);
-    match s.mode {
-        crate::app::AppMode::OpenLive => {
-            let live = s.live_tracks.get(engine_idx + 1);
-            let mx = s.matrix_state.tracks.get(row);
-            match (live, mx) {
-                (Some(l), Some(m)) => (l.name.clone(), m.muted, m.soloed, m.volume, m.pan),
-                (Some(l), None) => (l.name.clone(), l.mute, l.solo, l.volume, l.pan),
-                _ => (format!("TRK {:02}", row + 1), false, false, 0.75, 0.0),
-            }
-        }
-        crate::app::AppMode::OpenStudio => match s.studio_tracks.get(engine_idx) {
-            Some(t) => (t.name.clone(), t.mute, t.solo, t.volume, t.pan),
-            None => (format!("TRK {:02}", row + 1), false, false, 0.75, 0.0),
-        },
-    }
-}
-
-fn playlist_row_arm_and_peak(s: &AppState, row: usize) -> (bool, f32) {
-    let engine_idx = playlist_row_to_engine_idx(s, row);
-    let armed = match s.mode {
-        crate::app::AppMode::OpenLive => s
-            .live_tracks
-            .get(engine_idx)
-            .map(|t| t.arm)
-            .unwrap_or(false),
-        crate::app::AppMode::OpenStudio => s
-            .studio_tracks
-            .get(engine_idx)
-            .map(|t| t.arm)
-            .unwrap_or(false),
-    };
-    let peak = s
-        .smoothed_track_peaks
-        .get(engine_idx.saturating_sub(1))
-        .copied()
-        .unwrap_or(0.0);
-    (armed, peak)
-}
-
-fn toggle_playlist_arm(cx: &mut App, row: usize) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let engine_idx = playlist_row_to_engine_idx(s, row);
-        match s.mode {
-            crate::app::AppMode::OpenLive => {
-                if let Some(live) = s.live_tracks.get_mut(engine_idx) {
-                    live.arm = !live.arm;
-                }
-            }
-            crate::app::AppMode::OpenStudio => {
-                if let Some(t) = s.studio_tracks.get_mut(engine_idx) {
-                    t.arm = !t.arm;
-                }
-            }
-        }
-        cx.notify();
-    });
-}
-
-/// Paso adaptativo de etiquetas de compás en la regla temporal para evitar
-/// colisiones visuales en zooms muy alejados (`MIN_ZOOM_X`).
-fn adaptive_bar_stride(ticks_per_bar_val: u64, zoom_x: f32) -> u64 {
-    let bar_px = ticks_to_px(ticks_per_bar_val.max(1), zoom_x);
-    for stride in [1u64, 2, 4, 8, 16, 32, 64, 128] {
-        if bar_px * stride as f32 >= 36.0 {
-            return stride;
-        }
-    }
-    128
-}
-
-/// Inserta un clip de audio desde el Explorer en la posición `(rel_x, rel_y)` de la grilla.
-fn drop_audio_at_grid_pos(
-    s: &mut AppState,
-    path: &PathBuf,
-    rel_x: f32,
-    rel_y: f32,
-    track_ids: &[usize],
-) {
-    let ppqn = s.playlist_state.ppqn.max(1);
-    let bpm = s.transport.bpm;
-    let zoom_x = s.playlist_state.zoom_x;
-    let track_height = s.playlist_state.track_height();
-    let snap_val = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
-    let raw = px_to_ticks(rel_x.max(0.0), zoom_x);
-    let drop_tick = snap_ticks(raw, snap_val);
-    let row = ((rel_y / track_height).floor() as isize)
-        .clamp(0, track_ids.len().saturating_sub(1) as isize) as usize;
-    let Some(&target_tid) = track_ids.get(row) else {
-        return;
-    };
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let pstr = path.to_string_lossy().to_string();
-    let (dur, _peaks) = load_sample_info(path, ppqn, bpm);
-    let clip = build_audio_clip(
-        s.playlist_state.next_clip_id,
-        name,
-        path,
-        drop_tick,
-        ppqn,
-        bpm,
-        rgb(theme::track_stripe_hex(row)).into(),
-    );
-    let cid = s.playlist_state.next_clip_id;
-    s.playlist_state.next_clip_id += 1;
-    s.playlist_state.clips.push((target_tid, clip));
-    s.playlist_state.selected_clips = vec![cid];
-    s.audio_proxy.send(GuiCommand::LoadClip {
-        clip_id: cid,
-        path: pstr,
-        position_secs: ticks_to_secs_precise(drop_tick, ppqn, bpm),
-        duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
-        offset_secs: 0.0,
-        track_index: target_tid,
-        scene_index: 0,
-    });
-}
-
-/// Inicio de interacción en la regla temporal fija superior:
-/// - Banda superior (`y < ruler_h - 9.0`): posiciona el cabezal (Seek).
-/// - Carril inferior (`y >= ruler_h - 9.0`): edición interactiva de región de Loop.
-fn ruler_mouse_down(
-    cx: &mut App,
-    cursor_win: (f32, f32),
-    ruler_bounds: [f32; 4],
-    ruler_h: f32,
-    click_count: usize,
-) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let scroll_x = s.playlist_scroll_h.offset().x.as_f32();
-        let zoom_x = s.playlist_state.zoom_x;
-        let ppqn = s.playlist_state.ppqn.max(1);
-        let snap_val = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
-        let local_x = (cursor_win.0 - ruler_bounds[0] - scroll_x).max(0.0);
-        let local_y = cursor_win.1 - ruler_bounds[1];
-        let raw_tick = px_to_ticks(local_x, zoom_x);
-        let snapped_tick = snap_ticks(raw_tick, snap_val);
-
-        if local_y >= ruler_h - 9.0 {
-            if click_count >= 2 {
-                s.playlist_state.loop_region_active = !s.playlist_state.loop_region_active;
-                if s.playlist_state.loop_region_active {
-                    s.playlist_state.ensure_minimum_global_loop(true);
-                }
-                s.playlist_state.loop_dragging = false;
-                s.playlist_state.loop_drag_handle = LoopDragHandle::None;
-                cx.notify();
-                return;
-            }
-            let lx0 = ticks_to_px(s.playlist_state.loop_start_ticks, zoom_x);
-            let lx1 = ticks_to_px(s.playlist_state.loop_end_ticks, zoom_x);
-            let active = s.playlist_state.is_loop_region_valid();
-            if active && (local_x - lx0).abs() <= 7.0 {
-                s.playlist_state.loop_dragging = true;
-                s.playlist_state.loop_drag_handle = LoopDragHandle::Left;
-            } else if active && (local_x - lx1).abs() <= 7.0 {
-                s.playlist_state.loop_dragging = true;
-                s.playlist_state.loop_drag_handle = LoopDragHandle::Right;
-            } else if active && local_x > lx0 && local_x < lx1 {
-                s.playlist_state.loop_dragging = true;
-                s.playlist_state.loop_drag_handle = LoopDragHandle::Body;
-                s.playlist_state.loop_preview_start_ticks =
-                    raw_tick.saturating_sub(s.playlist_state.loop_start_ticks);
-                s.playlist_state.loop_preview_end_ticks = s.playlist_state.loop_length_ticks();
-            } else {
-                s.playlist_state.loop_start_ticks = snapped_tick;
-                s.playlist_state.loop_end_ticks = snapped_tick.saturating_add(snap_val.max(ppqn));
-                s.playlist_state.loop_region_active = true;
-                s.playlist_state.loop_dragging = true;
-                s.playlist_state.loop_drag_handle = LoopDragHandle::Right;
-            }
-            cx.notify();
-        } else {
-            let bpm = s.transport.bpm;
-            let sr = s.transport.sample_rate.get() as u32;
-            let target = ticks_to_samples_precise(raw_tick, ppqn, bpm, sr);
-            s.playlist_state.playhead_tick = raw_tick;
-            s.audio_proxy.send(GuiCommand::Seek { sample_count: target });
-            cx.notify();
-        }
-    });
-}
-
-fn ruler_mouse_move(cx: &mut App, cursor_win_x: f32, ruler_bounds: [f32; 4]) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        if !s.playlist_state.loop_dragging {
-            return;
-        }
-        let scroll_x = s.playlist_scroll_h.offset().x.as_f32();
-        let zoom_x = s.playlist_state.zoom_x;
-        let ppqn = s.playlist_state.ppqn.max(1);
-        let snap_val = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
-        let min_len = snap_val.max(ppqn);
-        let local_x = (cursor_win_x - ruler_bounds[0] - scroll_x).max(0.0);
-        let raw_tick = px_to_ticks(local_x, zoom_x);
-        let snapped = snap_ticks(raw_tick, snap_val);
-
-        match s.playlist_state.loop_drag_handle {
-            LoopDragHandle::Left => {
-                let end = s.playlist_state.loop_end_ticks;
-                s.playlist_state.loop_start_ticks = snapped.min(end.saturating_sub(min_len));
-            }
-            LoopDragHandle::Right => {
-                let start = s.playlist_state.loop_start_ticks;
-                s.playlist_state.loop_end_ticks = snapped.max(start.saturating_add(min_len));
-            }
-            LoopDragHandle::Body => {
-                let grab_off = s.playlist_state.loop_preview_start_ticks;
-                let len = s.playlist_state.loop_preview_end_ticks.max(min_len);
-                let new_start = snap_ticks(raw_tick.saturating_sub(grab_off), snap_val);
-                s.playlist_state.loop_start_ticks = new_start;
-                s.playlist_state.loop_end_ticks = new_start.saturating_add(len);
-            }
-            LoopDragHandle::None => {}
-        }
-        cx.notify();
-    });
-}
-
-fn finish_ruler_drag(cx: &mut App) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        if s.playlist_state.loop_dragging {
-            s.playlist_state.loop_dragging = false;
-            s.playlist_state.loop_drag_handle = LoopDragHandle::None;
-            s.playlist_state.loop_drag_completed_this_frame = true;
-            cx.notify();
-        }
-    });
-}
-
-/// Header de pista del Arranger de alta densidad visual:
-/// banda cromática lateral de alto completo, indicador de pista, nombre truncado,
-/// botonera compacta `[●][S][M]`, knob rotativo de paneo, fader horizontal ámbar
-/// con lectura en dB y vúmetro vertical integrado a ras del carril temporal.
-#[allow(clippy::too_many_arguments)]
-fn playlist_track_header_with_selected(
-    lane_idx: usize,
-    row: usize,
-    vec_idx: usize,
-    name: String,
-    muted: bool,
-    soloed: bool,
-    armed: bool,
-    volume: f32,
-    pan: f32,
-    peak_level: f32,
-    mix_drag: Option<MatrixMixTarget>,
-    selected_row: bool,
-    row_h: f32,
-) -> AnyElement {
-    let stripe_hex = theme::track_stripe_hex(lane_idx);
-    let meter_h = (row_h - 4.0).max(16.0);
-    let track_glyph = if lane_idx % 2 == 0 { "🎹" } else { "∿" };
-
-    h_flex()
-        .w_full()
-        .h(px(row_h))
-        .flex_shrink_0()
-        .items_center()
-        .bg(if selected_row {
-            rgb(theme::DAW_HEADER_SELECTED_BG)
-        } else {
-            rgb(theme::DAW_MAIN_BG)
-        })
-        .border_b_1()
-        .border_r_1()
-        .border_color(if selected_row {
-            rgb(theme::DAW_PLAYHEAD_BLUE)
-        } else {
-            rgb(theme::DAW_BORDER_SUBTLE)
-        })
-        .gap(px(3.0))
-        .pr(px(2.0))
-        .overflow_hidden()
-        .id(format!("pl_row_{}", vec_idx))
-        .test_support()
-        .on_click(move |_, _, cx| {
-            let st = state(cx);
-            st.update(cx, |state, cx| {
-                state.selected_track_index = vec_idx;
-                cx.notify();
-            });
-        })
-        // Banda lateral continua con el color asignado a la pista
-        .child(
-            div()
-                .w(px(5.0))
-                .h_full()
-                .flex_shrink_0()
-                .bg(rgb(stripe_hex)),
-        )
-        // Cuerpo central de dos niveles (Fila 1: Tipo + Nombre + [●][S][M] | Fila 2: Pan + Fader + dB)
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .justify_center()
-                .py(px(2.0))
-                .gap(px(2.0))
-                .overflow_hidden()
-                .child(
-                    h_flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(3.0))
-                        .flex_shrink_0()
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .items_center()
-                                .gap(px(4.0))
-                                .overflow_hidden()
-                                .child(
-                                    Label::new(track_glyph)
-                                        .text_size(px(9.0))
-                                        .text_color(rgb(stripe_hex)),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .child(
-                                            Label::new(name)
-                                                .text_size(px(10.5))
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(if selected_row {
-                                                    rgb(0xFFFFFF)
-                                                } else {
-                                                    rgb(0xE4E4E8)
-                                                })
-                                                .text_ellipsis(),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            h_flex()
-                                .gap(px(1.0))
-                                .flex_shrink_0()
-                                .child(ms_button_sized(
-                                    format!("pl_track_arm_{}", vec_idx),
-                                    "●",
-                                    16.0,
-                                    17.0,
-                                    armed,
-                                    rgb(theme::DAW_ARM_RED),
-                                    move |cx| toggle_playlist_arm(cx, row),
-                                ))
-                                .child(ms_button_sized(
-                                    format!("pl_track_solo_{}", vec_idx),
-                                    "S",
-                                    16.0,
-                                    17.0,
-                                    soloed,
-                                    rgb(theme::DAW_SOLO_GOLD),
-                                    move |cx| toggle_playlist_solo(cx, row),
-                                ))
-                                .child(ms_button_sized(
-                                    format!("pl_track_mute_{}", vec_idx),
-                                    "M",
-                                    16.0,
-                                    17.0,
-                                    muted,
-                                    rgb(theme::DAW_MUTE_AMBER),
-                                    move |cx| toggle_playlist_mute(cx, row),
-                                )),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap(px(2.0))
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .child(pan_knob_ex(
-                            SharedString::from(format!("pl_panknob_{}", vec_idx)),
-                            row,
-                            pan,
-                            mix_drag == Some(MatrixMixTarget::Pan(row)),
-                            apply_playlist_pan,
-                        ))
-                        .child(
-                            Label::new(matrix::pan_text(matrix::snap_center_pan(pan)))
-                                .text_size(px(8.5))
-                                .text_color(rgb(0xAEAEB4))
-                                .w(px(18.0)),
-                        )
-                        .child(h_mix_slider_ex(
-                            format!("pl_vol_{}", vec_idx),
-                            row,
-                            volume,
-                            mix_drag == Some(MatrixMixTarget::Volume(row)),
-                            matrix::VOLUME_RESET,
-                            apply_playlist_volume,
-                        ))
-                        .child(
-                            Label::new(matrix::db_text(volume))
-                                .text_size(px(8.5))
-                                .text_color(rgb(0xC8A882))
-                                .w(px(36.0)),
-                        ),
-                ),
-        )
-        // Vúmetro vertical lateral derecho a ras de la grilla
-        .child(compact_level_meter(peak_level, meter_h))
-        .into_any_element()
-}
-
-/// Cursor de recorte activo por clip: `clip_id` bajo el que hay un borde
-/// agarrable, o `None` para volver a la flecha.
-///
-/// Vive en `PlaylistState` porque el clip se reconstruye cada frame: el cursor
-/// se decide en el render desde acá (igual que `clip_drag`), no en un closure.
-fn set_clip_edge_cursor(cx: &mut App, clip_id: usize, edge: Option<TrimEdge>) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let next = edge.map(|e| (clip_id, e));
-        if s.playlist_state.trim_hover != next {
-            s.playlist_state.trim_hover = next;
-            cx.notify();
-        }
-    });
-}
-
-/// Playhead fantasma: fija (o borra) el tick bajo el puntero.
-///
-/// Sólo notifica cuando el valor **cambia**, igual que `set_clip_edge_cursor`:
-/// el puntero dispara `mousemove` a tasas de frame y sin este chequeo se
-/// re-renderizaría la playlist entera en cada movimiento aunque el tick sea el
-/// mismo (que es lo normal: muchos píxeles caen dentro del mismo tick).
-fn set_hover_tick(cx: &mut App, tick: Option<u64>) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        if s.playlist_state.hover_tick != tick {
-            s.playlist_state.hover_tick = tick;
-            cx.notify();
-        }
-    });
-}
-
-/// Borra el playhead fantasma (puntero fuera de la zona o gesto en curso).
-fn clear_hover_tick(cx: &mut App) {
-    set_hover_tick(cx, None);
-}
-
-/// Finaliza el gesto de arrastre activo, si lo hay.
-///
-/// Si hubo movimiento y es un clip de audio, sincroniza la nueva posición
-/// con el motor (`UpdateClipBounds`, un solo mensaje al soltar, no por
-/// frame). Siempre limpia el gesto, arma la supresión del click posterior y
-/// notifica (repaint inmediato).
-fn finish_clip_drag(cx: &mut App) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some(drag) = s.playlist_state.clip_drag.take() else {
-            return;
-        };
-        let clip_id = drag.clip_id;
-        if drag.moved {
-            s.playlist_state.clip_click_suppress = true;
-            let ppqn = s.playlist_state.ppqn.max(1);
-            let bpm = s.transport.bpm;
-            let found = s
-                .playlist_state
-                .clips
-                .iter()
-                .find(|(_, c)| c.id == clip_id)
-                .map(|(k, c)| (*k, c.start_tick, c.duration_ticks, c.clip_type.clone()));
-            if let Some((key, start, dur, clip_type)) = found {
-                if let ClipType::Audio {
-                    sample_offset_ticks,
-                    ..
-                } = clip_type
-                {
-                    s.audio_proxy.send(GuiCommand::UpdateClipBounds {
-                        clip_id,
-                        track_index: key,
-                        scene_index: 0,
-                        position_secs: ticks_to_secs_precise(start, ppqn, bpm),
-                        duration_secs: ticks_to_secs_precise(dur, ppqn, bpm),
-                        offset_secs: ticks_to_secs_precise(sample_offset_ticks, ppqn, bpm),
-                    });
-                }
-            }
-        }
-        cx.notify();
-    });
-}
-
-/// Aplica un paso del arrastre: nueva posición con snap + fila destino.
-///
-/// Traduce `cursor - grab` (coords de ventana) a ticks/fila con el origen
-/// medido de la zona (`zone`), reasigna el clip EN VIVO —el propio clip en
-/// movimiento con su borde de selección es la previsualización en tiempo
-/// real— y notifica (un frame por evento, como los faders).
-fn update_clip_drag(cx: &mut App, cursor: (f32, f32), zone: [f32; 4]) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        let Some(drag) = s.playlist_state.clip_drag else {
-            return;
-        };
-        let clip_id = drag.clip_id;
-        let ppqn = s.playlist_state.ppqn.max(1);
-        let zoom = s.playlist_state.zoom_x;
-        let row_h = s.playlist_state.track_height();
-        let grid_step = snap_step_ticks(ppqn, s.playlist_state.grid_denominator).max(1);
-        // Horizontal: cursor menos agarre → px relativos a la zona → ticks → snap.
-        let rel_x = (cursor.0 - drag.grab_dx_px - zone[0]).max(0.0);
-        let new_tick = snap_ticks(px_to_ticks(rel_x, zoom), grid_step);
-        // Vertical: fila bajo el punto de agarre, acotada a las existentes.
-        let rows = playlist_row_keys(s);
-        if rows.is_empty() {
-            return;
-        }
-        let rel_y = cursor.1 - drag.grab_dy_px - zone[1];
-        let row = ((rel_y / row_h).floor() as isize)
-            .clamp(0, rows.len() as isize - 1) as usize;
-        let new_key = rows[row];
-        let mut changed = false;
-        if let Some(entry) = s
-            .playlist_state
-            .clips
-            .iter_mut()
-            .find(|(_, c)| c.id == clip_id)
-        {
-            if entry.1.start_tick != new_tick {
-                entry.1.start_tick = new_tick;
-                changed = true;
-            }
-            if entry.0 != new_key {
-                entry.0 = new_key;
-                changed = true;
-            }
-        }
-        if changed {
-            if let Some(d) = s.playlist_state.clip_drag.as_mut() {
-                d.moved = true;
-            }
-        }
-        cx.notify();
-    });
-}
-
-/// Aplica un evento de rueda con modificadores como zoom de la Playlist.
-///
-/// - `Ctrl` + rueda (sin `Shift` ni `Alt`): zoom horizontal (`zoom_x`,
-///   acotado a `[MIN_ZOOM_X, MAX_ZOOM_X]`).
-/// - `Alt` + rueda o `Ctrl` + `Shift` + rueda: zoom vertical (`row_h`,
-///   acotado a `[MIN_ROW_H, MAX_ROW_H]`).
-/// - Sin modificadores: no hace nada (deja el scroll normal) → `false`.
-///
-/// Rueda arriba acerca/agranda y rueda abajo aleja/achica. El zoom es
-/// *continuo*: la magnitud del delta se normaliza con [`wheel_notches`] y se
-/// aplica como `ZOOM_STEP_FACTOR^notches`, de modo que un notch completo vale
-/// exactamente `×1.25` (igual que antes) pero un nudge de trackpad mueve el
-/// zoom de forma proporcional en vez de saltar el 25% entero.
-///
-/// El viewport se compensa con `anchor_*_offset` para que el tick y la fila
-/// bajo el cursor no se muevan (focus point en el cursor). Devuelve `true` si
-/// consumió el evento (el llamador debe frenar la propagación para que no
-/// scrollee). `total_ticks` / `header_width` / `ruler_h` / `row_count`
-/// describen el lienzo actual (los calcula `render`).
-fn apply_playlist_wheel_zoom(
-    s: &mut AppState,
-    delta: &ScrollDelta,
-    control: bool,
-    alt: bool,
-    shift: bool,
-    cursor_win: (f32, f32),
-    total_ticks: u64,
-    header_width: f32,
-    ruler_h: f32,
-    row_count: usize,
-) -> bool {
-    let vertical = alt || (control && shift);
-    let horizontal = control && !shift && !alt;
-    if !vertical && !horizontal {
-        return false;
-    }
-    let notches = wheel_notches(delta);
-    if horizontal {
-        let old_zoom = clamped_zoom(s.playlist_state.zoom_x);
-        let new_zoom = smooth_zoom(old_zoom, notches);
-        if (new_zoom - old_zoom).abs() <= f32::EPSILON {
-            // Ya en el límite: igual se consume para no scrollear de más.
-            return true;
-        }
-        let h = s.playlist_scroll_h.clone();
-        let bounds = h.bounds();
-        let viewport_w = bounds.size.width.as_f32();
-        let cursor_vx = cursor_win.0 - bounds.origin.x.as_f32();
-        let content_w = (header_width + total_ticks as f32 * new_zoom).max(800.0);
-        let new_offset_x = anchor_h_offset(
-            cursor_vx,
-            header_width,
-            old_zoom,
-            new_zoom,
-            h.offset().x.as_f32(),
-            viewport_w,
-            content_w,
-        );
-        h.set_offset(point(px(new_offset_x), h.offset().y));
-        s.playlist_state.zoom_x = new_zoom;
-    } else {
-        let old_h = s.playlist_state.track_height();
-        let new_h = smooth_row_h(old_h, notches);
-        if (new_h - old_h).abs() <= f32::EPSILON {
-            return true;
-        }
-        let v = s.playlist_scroll_v.clone();
-        let bounds = v.bounds();
-        let viewport_h = bounds.size.height.as_f32();
-        let cursor_vy = cursor_win.1 - bounds.origin.y.as_f32();
-        let content_h = ruler_h + row_count as f32 * new_h;
-        let new_offset_y = anchor_v_offset(
-            cursor_vy,
-            ruler_h,
-            old_h,
-            new_h,
-            v.offset().y.as_f32(),
-            viewport_h,
-            content_h,
-        );
-        v.set_offset(point(v.offset().x, px(new_offset_y)));
-        s.playlist_state.row_h = new_h;
-    }
-    true
-}
-
-/// Punto de entrada compartido del zoom con rueda (`Ctrl`/`Alt` + wheel).
-///
-/// Lo usan tanto la grilla temporal como la columna fija de headers (ambos
-/// están bajo el cursor en distintas zonas): traduce el evento a
-/// `apply_playlist_wheel_zoom` y frena la propagación sólo si se consumió
-/// (si no, la rueda sigue scrolleando normal).
-fn playlist_wheel_zoomed(
-    delta: ScrollDelta,
-    control: bool,
-    alt: bool,
-    shift: bool,
-    cursor_win: (f32, f32),
-    total_ticks: u64,
-    header_width: f32,
-    ruler_h: f32,
-    row_count: usize,
-    cx: &mut App,
-) -> bool {
-    let st = state(cx);
-    let mut consumed = false;
-    st.update(cx, |s, cx| {
-        consumed = apply_playlist_wheel_zoom(
-            s,
-            &delta,
-            control,
-            alt,
-            shift,
-            cursor_win,
-            total_ticks,
-            header_width,
-            ruler_h,
-            row_count,
-        );
-        if consumed {
-            cx.notify();
-        }
-    });
-    if consumed {
-        cx.stop_propagation();
-    }
-    consumed
-}
-
-pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
-    let app = state(cx).read(cx);
-    let pl = &app.playlist_state;
-    let ppqn = pl.ppqn.max(1);
-    let zoom_x = pl.zoom_x;
-    let header_width = pl.header_width;
-    let _grid_num = pl.grid_numerator;
-    let grid_den = pl.grid_denominator;
-    let playhead_tick = pl.playhead_tick;
-    let loop_start = pl.loop_start_ticks;
-    let loop_end = pl.loop_end_ticks;
-    let loop_active = pl.loop_region_active;
-    let loop_dragging = pl.loop_dragging;
-    let selected = pl.selected_clips.clone();
-    // El clipboard de la playlist habilita/deshabilita "Pegar" en el menú.
-    let clipboard_empty = pl.clipboard.is_empty();
-    let is_looping = app.is_looping;
-    let _audio_proxy = app.audio_proxy.clone();
-    let bpm = app.transport.bpm;
-    let sample_rate = app.transport.sample_rate.get() as u32;
-    let beats_per_bar = app.transport.beats_per_bar;
-    let beat_division = app.transport.beat_division;
-    let tracks = match app.mode {
-        crate::app::AppMode::OpenLive => &app.live_tracks,
-        crate::app::AppMode::OpenStudio => &app.studio_tracks,
-    };
-    let dragged_sample = app.dragged_sample.clone();
-    let selected_track = app.selected_track_index;
-    let playlist_scroll_h = app.playlist_scroll_h.clone();
-    let playlist_scroll_v = app.playlist_scroll_v.clone();
-    // Pan con botón central en curso (cursor oculto mientras dura).
-    let playlist_panning = app.playlist_pan.is_some();
-    // Gesto de mezcla en curso (compartido con la Session Matrix).
-    let mix_drag = app.matrix_mix_drag;
-
-    // Compás real según SIG (BPM sólo afecta a segundos, no a ticks).
-    let ticks_per_bar_val = ticks_per_bar(ppqn, beats_per_bar);
-    let display_tick = loop_display_tick(
-        playhead_tick,
-        loop_start,
-        loop_end,
-        is_looping && loop_active,
-    );
-
-    let non_master: Vec<(usize, &Track)> = tracks
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| !t.is_master)
-        .collect();
-    let non_master_count = non_master.len();
-    let track_ids_all: Vec<usize> = non_master.iter().map(|(tid, _)| *tid).collect();
-    let selected_lane_row: Option<usize> = non_master
-        .iter()
-        .position(|(vec_idx, _)| *vec_idx == selected_track);
-
-    // Snapshot de mezcla por fila (nombre, M, S, arm, vol, pan, peak) para los headers.
-    let rows_mix: Vec<(usize, String, bool, bool, bool, f32, f32, f32)> = non_master
-        .iter()
-        .map(|(idx, _)| {
-            let (name, muted, soloed, volume, pan) = playlist_row_mix(&app, *idx);
-            let (armed, peak) = playlist_row_arm_and_peak(&app, *idx);
-            (*idx, name, muted, soloed, armed, volume, pan, peak)
-        })
-        .collect();
-
-    let track_height = clamped_row_h(pl.row_h);
-    let ruler_h = RULER_H;
-    let row_count = non_master.len().max(1);
-    let lanes_h = row_count as f32 * track_height;
-    let quick_add_h = 26.0_f32;
-    let canvas_h = lanes_h + quick_add_h;
-    let total_ticks = (ticks_per_bar_val * 128).max(playhead_tick + ticks_per_bar_val * 16);
-    let canvas_w = (header_width + total_ticks as f32 * zoom_x).max(800.0);
-    let grid_w = (canvas_w - header_width).max(1.0);
-
-    let mut track_headers: Vec<AnyElement> = Vec::new();
-    for (lane_idx, (row, name, muted, soloed, armed, volume, pan, peak)) in
-        rows_mix.iter().enumerate()
-    {
-        let vec_idx = *row;
-        let selected_border = selected_track == vec_idx;
-        track_headers.push(
-            playlist_track_header_with_selected(
-                lane_idx,
-                *row,
-                vec_idx,
-                name.clone(),
-                *muted,
-                *soloed,
-                *armed,
-                *volume,
-                *pan,
-                *peak,
-                mix_drag,
-                selected_border,
-                track_height,
-            )
-            .into_any_element(),
-        );
-    }
-    // Fila rápida inferior `+` bajo el último TrackHeader (inserción directa de pista)
-    track_headers.push(
-        div()
-            .id("pl_quick_add_track")
-            .w_full()
-            .h(px(quick_add_h))
-            .flex_shrink_0()
-            .bg(rgb(theme::DAW_CANVAS_VOID))
-            .border_r_1()
-            .border_color(rgb(theme::DAW_BORDER_SUBTLE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|this| this.bg(rgb(0x1B1B1F)))
-            .on_click(move |_, _, cx| {
-                let st = state(cx);
-                st.update(cx, |state, cx| {
-                    let tracks = state.tracks_mut();
-                    let next_id = tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-                    let n = tracks.iter().filter(|t| !t.is_master).count();
-                    tracks.push(Track::new(next_id, format!("TRACK {:02}", n + 1), false));
-                    cx.notify();
-                });
-            })
-            .child(
-                Label::new("+")
-                    .text_size(px(13.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0x8A8A92)),
-            )
-            .into_any_element(),
-    );
-
-    let zone_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
-    let zone_bounds_clip = zone_bounds.clone();
-    let zone_bounds_move = zone_bounds.clone();
-    let zone_bounds_drop = zone_bounds.clone();
-    let zone_bounds_rec = zone_bounds.clone();
-    let zone_bounds_dnd = zone_bounds.clone();
-
-    let mut clip_elems: Vec<AnyElement> = Vec::new();
-    for (track_id, clip) in &pl.clips {
-        let is_sel = selected.contains(&clip.id);
-        let clip_name = clip.name.clone();
-        let clip_start = clip.start_tick;
-        let clip_dur = clip.duration_ticks;
-        let clip_x = ticks_to_px(clip_start, zoom_x);
-        let clip_w = ticks_to_px(clip_dur, zoom_x).max(12.0);
-        let track_row = non_master
-            .iter()
-            .position(|(i, _)| *i == *track_id)
-            .unwrap_or(0);
-        // La regla temporal vive fija arriba de `playlist_vscroll`, así que
-        // la fila 0 empieza en `y = 0.0` alineada píxel a píxel con `pl_row_1`.
-        let clip_y = track_row as f32 * track_height + 1.0;
-        let clip_h = track_height - 2.0;
-        let clip_id = clip.id;
-        let clip_x_for_edge = clip_x;
-        let clip_w_for_edge = clip_w;
-        let trim_state = pl.trim_drag.filter(|d| d.clip_id == clip_id);
-        let hover_edge = pl
-            .trim_hover
-            .filter(|(id, _)| *id == clip_id)
-            .map(|(_, e)| e);
-        let edge_cursor = match trim_state {
-            Some(d) => Some(d.edge.cursor()),
-            None => hover_edge.map(|e| e.cursor()),
-        };
-
-        let title_h = 15.0_f32;
-        let body_h = (clip_h - title_h).max(8.0);
-        let track_stripe_col = theme::track_stripe_hex(track_row);
-        let clip_bg: Hsla = if is_sel {
-            rgb(theme::DAW_CLIP_SELECTED_BG).into()
-        } else {
-            rgb(theme::DAW_CLIP_BODY_BG).into()
-        };
-        let clip_border = if is_sel {
-            rgb(0xFFFFFF)
-        } else {
-            rgb(0x101012)
-        };
-        let type_badge = match &clip.clip_type {
-            ClipType::Audio { .. } => "∿",
-            ClipType::Pattern { .. } => "▤",
-            ClipType::Automation { .. } => "⟿",
-        };
-        let title_text = clip_name.clone();
-        let dragging_this = pl
-            .clip_drag
-            .map(|d| d.clip_id == clip_id)
-            .unwrap_or(false);
-        let zone_down = zone_bounds_clip.clone();
-        let zone_move = zone_bounds_move.clone();
-        let base_clip = div()
-            .w(px(clip_w))
-            .h(px(clip_h))
-            .absolute()
-            .left(px(clip_x))
-            .top(px(clip_y))
-            .bg(clip_bg)
-            .border_1()
-            .border_color(clip_border)
-            .rounded(px(2.0))
-            .overflow_hidden()
-            .id(format!("pl_clip_{}", clip_id))
-            .test_support()
-            .cursor(if let Some(c) = edge_cursor {
-                c
-            } else if dragging_this {
-                CursorStyle::ClosedHand
-            } else {
-                CursorStyle::Arrow
-            })
-            .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                let zb = zone_down.get();
-                let cursor_x = event.position.x.as_f32();
-                let clip_left = zb[0] + clip_x_for_edge;
-                let clip_right = clip_left + clip_w_for_edge;
-                let hit = trim_edge_at(cursor_x, clip_left, clip_right - clip_left, TRIM_EDGE_PX);
-                let st = state(cx);
-                if let Some(edge) = hit {
-                    let edge_x = match edge {
-                        TrimEdge::Left => clip_left,
-                        TrimEdge::Right => clip_right,
-                    };
-                    start_clip_trim(cx, clip_id, edge, cursor_x, edge_x);
-                    return;
-                }
-                st.update(cx, |s, cx| {
-                    let (key, start) = match s
-                        .playlist_state
-                        .clips
-                        .iter()
-                        .find(|(_, c)| c.id == clip_id)
-                    {
-                        Some((k, c)) => (*k, c.start_tick),
-                        None => return,
-                    };
-                    let zoom = s.playlist_state.zoom_x;
-                    let row_h = s.playlist_state.track_height();
-                    let row = playlist_row_keys(s)
-                        .iter()
-                        .position(|k| *k == key)
-                        .unwrap_or(0);
-                    s.playlist_state.clip_drag = Some(PlaylistClipDrag {
-                        clip_id,
-                        orig_tick: start,
-                        orig_track: key,
-                        grab_dx_px: cursor_x - (zb[0] + ticks_to_px(start, zoom)),
-                        grab_dy_px: event.position.y.as_f32()
-                            - (zb[1] + row as f32 * row_h + 1.0),
-                        moved: false,
-                    });
-                    s.playlist_state.selected_clips = vec![clip_id];
-                    crate::views::clip_editor::select_target(
-                        s,
-                        Some(ClipEditorTarget::Playlist { clip_id }),
-                    );
-                    s.playlist_state.clip_click_suppress = false;
-                    cx.notify();
-                });
-            })
-            .on_mouse_move(move |event, _, cx| {
-                if state(cx).read(cx).playlist_state.trim_drag.is_some() {
-                    return;
-                }
-                if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
-                    return;
-                }
-                let zb = zone_move.get();
-                let hit = trim_edge_at(
-                    event.position.x.as_f32(),
-                    zb[0] + clip_x_for_edge,
-                    clip_w_for_edge,
-                    TRIM_EDGE_PX,
-                );
-                set_clip_edge_cursor(cx, clip_id, hit);
-            })
-            .on_click(move |event, _, cx| {
-                let shift = event.modifiers().shift;
-                let st = state(cx);
-                st.update(cx, |state, cx| {
-                    if state.playlist_state.clip_click_suppress {
-                        state.playlist_state.clip_click_suppress = false;
-                        return;
-                    }
-                    if shift {
-                        if state.playlist_state.selected_clips.contains(&clip_id) {
-                            state.playlist_state.selected_clips.retain(|&id| id != clip_id);
-                        } else {
-                            state.playlist_state.selected_clips.push(clip_id);
-                        }
-                    } else {
-                        state.playlist_state.selected_clips = vec![clip_id];
-                    }
-                    if let Some(id) = state.playlist_state.selected_clips.first().copied() {
-                        crate::views::clip_editor::select_target(
-                            state,
-                            Some(ClipEditorTarget::Playlist { clip_id: id }),
-                        );
-                    }
-                    cx.notify();
-                });
-            })
-            // Barra superior cromática del contenedor de clip (estilo Arranger de alta densidad)
-            .child(
-                div()
-                    .w_full()
-                    .h(px(title_h))
-                    .flex_shrink_0()
-                    .bg(if is_sel {
-                        rgb(theme::DAW_PLAYHEAD_BLUE)
-                    } else {
-                        rgb(track_stripe_col)
-                    })
-                    .px(px(4.0))
-                    .gap(px(3.0))
-                    .flex()
-                    .items_center()
-                    .overflow_hidden()
-                    .child(
-                        Label::new(type_badge)
-                            .text_size(px(8.5))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x111111)),
-                    )
-                    .child(
-                        Label::new(title_text)
-                            .text_size(px(9.5))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x111111))
-                            .truncate(),
-                    ),
-            );
-        if let ClipType::Audio {
-            peaks,
-            sample_offset_ticks,
-            total_sample_ticks,
-            ..
-        } = &clip.clip_type
-        {
-            let peaks = peaks.clone();
-            let soff = *sample_offset_ticks;
-            let ttot = (*sample_offset_ticks + *total_sample_ticks).max(1);
-            let clip_el = base_clip.child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        // Sutil cámara interior teñida con el color de pista
-                        let base_col: Hsla = rgb(track_stripe_col).into();
-                        window.paint_quad(PaintQuad {
-                            bounds,
-                            background: Hsla {
-                                a: 0.08,
-                                ..base_col
-                            }
-                            .into(),
-                            border_color: Hsla::default(),
-                            corner_radii: gpui_kit::Corners::default(),
-                            border_widths: gpui_kit::Edges::default(),
-                            border_style: BorderStyle::default(),
-                        });
-                        if peaks.is_empty() {
-                            return;
-                        }
-                        let start_ratio = (soff as f32 / ttot as f32).clamp(0.0, 1.0);
-                        let end_ratio = ((soff + clip_dur) as f32 / ttot as f32)
-                            .clamp(start_ratio + 0.0005, 1.0);
-                        let bright_col = Hsla {
-                            l: (base_col.l + 0.20).clamp(0.0, 0.95),
-                            ..base_col
-                        };
-                        crate::views::waveform::draw_waveform_peaks_bounds(
-                            window,
-                            bounds,
-                            &peaks,
-                            start_ratio,
-                            end_ratio,
-                            base_col,
-                            bright_col,
-                        );
-                    },
-                )
-                .w_full()
-                .h(px(body_h)),
-            );
-            let clip_el = clip_el
-                .child(clip_edge_handle(
-                    format!("pl_trim_left_{}", clip_id),
-                    TrimEdge::Left,
-                    hover_edge == Some(TrimEdge::Left)
-                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Left),
-                ))
-                .child(clip_edge_handle(
-                    format!("pl_trim_right_{}", clip_id),
-                    TrimEdge::Right,
-                    hover_edge == Some(TrimEdge::Right)
-                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Right),
-                ));
-            clip_elems.push(clip_el.into_any_element());
-        } else {
-            // Pattern / Automation / MIDI: miniatura vectorial multi-altura o curva con nodos
-            let auto_points: Vec<(f64, f32)> = match &clip.clip_type {
-                ClipType::Automation { points, .. } => points
-                    .iter()
-                    .map(|p| (p.rel_tick as f64, p.value))
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let is_pattern = matches!(clip.clip_type, ClipType::Pattern { .. });
-            let clip_el = base_clip.child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        let w = bounds.size.width.as_f32();
-                        let h = bounds.size.height.as_f32();
-                        if w <= 1.0 || h <= 1.0 {
-                            return;
-                        }
-                        let note_col: Hsla = rgb(track_stripe_col).into();
-                        window.paint_quad(PaintQuad {
-                            bounds,
-                            background: Hsla {
-                                a: 0.07,
-                                ..note_col
-                            }
-                            .into(),
-                            border_color: Hsla::default(),
-                            corner_radii: gpui_kit::Corners::default(),
-                            border_widths: gpui_kit::Edges::default(),
-                            border_style: BorderStyle::default(),
-                        });
-                        if is_pattern {
-                            const PITCH_ROWS: [f32; 8] =
-                                [0.72, 0.35, 0.55, 0.22, 0.68, 0.42, 0.28, 0.58];
-                            let steps = 16usize;
-                            let step_w = w / steps as f32;
-                            let bw = (step_w * 0.76).max(2.0);
-                            let bh = (h * 0.16).clamp(2.5, 6.0);
-                            for i in 0..steps {
-                                if i % 2 == 1 && i % 3 != 0 {
-                                    continue;
-                                }
-                                let x = bounds.origin.x + px(i as f32 * step_w + 1.0);
-                                let pitch = PITCH_ROWS[(i / 2) % PITCH_ROWS.len()];
-                                let y = bounds.origin.y + px((h - bh) * pitch);
-                                window.paint_quad(PaintQuad {
-                                    bounds: Bounds::new(point(x, y), size(px(bw), px(bh))),
-                                    background: note_col.into(),
-                                    border_color: Hsla::default(),
-                                    corner_radii: gpui_kit::Corners::all(px(1.0)),
-                                    border_widths: gpui_kit::Edges::default(),
-                                    border_style: BorderStyle::default(),
-                                });
-                            }
-                        } else if auto_points.len() >= 2 {
-                            let max_t = auto_points
-                                .iter()
-                                .map(|(t, _)| *t)
-                                .fold(clip_dur.max(1) as f64, f64::max);
-                            let mut curve = PathBuilder::stroke(px(1.5));
-                            for (idx, &(t, val)) in auto_points.iter().enumerate() {
-                                let nx = (t / max_t).clamp(0.0, 1.0) as f32;
-                                let ny = 1.0 - val.clamp(0.0, 1.0);
-                                let pt = point(
-                                    bounds.origin.x + px(nx * w),
-                                    bounds.origin.y + px(3.0 + ny * (h - 6.0).max(1.0)),
-                                );
-                                if idx == 0 {
-                                    curve.move_to(pt);
-                                } else {
-                                    curve.line_to(pt);
-                                }
-                            }
-                            if let Ok(p) = curve.build() {
-                                window.paint_path(p, note_col);
-                            }
-                        } else {
-                            let mut path = PathBuilder::stroke(px(1.5));
-                            let y = bounds.origin.y + bounds.size.height / 2.0;
-                            path.move_to(point(bounds.origin.x, y));
-                            path.line_to(point(bounds.origin.x + bounds.size.width, y));
-                            if let Ok(p) = path.build() {
-                                window.paint_path(p, note_col);
-                            }
-                        }
-                    },
-                )
-                .w_full()
-                .h(px(body_h)),
-            );
-            let clip_el = clip_el
-                .child(clip_edge_handle(
-                    format!("pl_trim_left_{}", clip_id),
-                    TrimEdge::Left,
-                    hover_edge == Some(TrimEdge::Left)
-                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Left),
-                ))
-                .child(clip_edge_handle(
-                    format!("pl_trim_right_{}", clip_id),
-                    TrimEdge::Right,
-                    hover_edge == Some(TrimEdge::Right)
-                        || trim_state.map(|d| d.edge) == Some(TrimEdge::Right),
-                ));
-            clip_elems.push(clip_el.into_any_element());
-        }
-    }
-
-    let playhead_x = ticks_to_px(display_tick, zoom_x);
-    let hover_x = pl.hover_tick.map(|t| ticks_to_px(t, zoom_x));
-    let snap_ticks_val = snap_step_ticks(ppqn, grid_den).max(1);
-    let beat_ticks_val = ppqn.max(1);
-    let loop_render = if loop_active && loop_end > loop_start {
-        let lx0 = ticks_to_px(loop_start, zoom_x);
-        let lx1 = ticks_to_px(loop_end, zoom_x);
-        Some((lx0, lx1))
-    } else {
-        None
-    };
-
-    // Lienzo vectorial único en GPU para los carriles de pistas + espacio vacío +
-    // líneas de compás/pulso/subdivisión con culling horizontal por viewport.
-    let scroll_h_for_grid = playlist_scroll_h.clone();
-    let loop_for_grid = loop_render;
-    let grid_backdrop_canvas = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let ox = bounds.origin.x.as_f32();
-            let oy = bounds.origin.y.as_f32();
-            let w = bounds.size.width.as_f32();
-            let h = bounds.size.height.as_f32();
-            if w <= 0.0 || h <= 0.0 {
-                return;
-            }
-
-            // 1. Vacío profundo bajo las pistas activas
-            window.paint_quad(PaintQuad {
-                bounds,
-                background: rgb(theme::DAW_CANVAS_VOID).into(),
-                border_color: Hsla::default(),
-                corner_radii: gpui_kit::Corners::default(),
-                border_widths: gpui_kit::Edges::default(),
-                border_style: BorderStyle::default(),
-            });
-
-            // 2. Carriles horizontales de pistas activas (contraste nítido par/impar/seleccionada)
-            let active_rows = non_master_count.max(1);
-            for r in 0..active_rows {
-                let ry = oy + r as f32 * track_height;
-                let lane_bg = if selected_lane_row == Some(r) {
-                    theme::DAW_LANE_SELECTED_BG
-                } else if r % 2 == 0 {
-                    theme::DAW_LANE_EVEN_BG
-                } else {
-                    theme::DAW_LANE_ODD_BG
-                };
-                window.paint_quad(PaintQuad {
-                    bounds: Bounds::new(
-                        point(px(ox), px(ry)),
-                        size(px(w), px((track_height - 1.0).max(1.0))),
-                    ),
-                    background: rgb(lane_bg).into(),
-                    border_color: Hsla::default(),
-                    corner_radii: gpui_kit::Corners::default(),
-                    border_widths: gpui_kit::Edges::default(),
-                    border_style: BorderStyle::default(),
-                });
-            }
-
-            // 3. Culling horizontal según el offset actual del ScrollHandle
-            let scroll_x = scroll_h_for_grid.offset().x.as_f32();
-            let vis_w = scroll_h_for_grid.bounds().size.width.as_f32().max(1400.0);
-            let vis_x0 = (-scroll_x - 32.0).max(0.0);
-            let vis_x1 = (vis_x0 + vis_w + 64.0).min(w);
-            let lanes_bottom = oy + lanes_h.min(h);
-
-            // Sutil realce de región de loop activa sobre los carriles
-            if let Some((lx0, lx1)) = loop_for_grid {
-                if is_looping {
-                    let cx0 = lx0.max(vis_x0);
-                    let cx1 = lx1.min(vis_x1);
-                    if cx1 > cx0 {
-                        window.paint_quad(PaintQuad {
-                            bounds: Bounds::new(
-                                point(px(ox + cx0), px(oy)),
-                                size(px(cx1 - cx0), px(lanes_h.min(h))),
-                            ),
-                            background: rgba(0xFFFFFF08).into(),
-                            border_color: Hsla::default(),
-                            corner_radii: gpui_kit::Corners::default(),
-                            border_widths: gpui_kit::Edges::default(),
-                            border_style: BorderStyle::default(),
-                        });
-                    }
-                }
-            }
-
-            // 4. Líneas verticales agrupadas en lote (Subdivisión / Beat / Compás)
-            let bar_ticks = ticks_per_bar_val.max(1);
-            let snap_px = ticks_to_px(snap_ticks_val, zoom_x);
-            let beat_px = ticks_to_px(beat_ticks_val, zoom_x);
-
-            if snap_px >= 7.0 && snap_ticks_val < beat_ticks_val {
-                let first_tick =
-                    (px_to_ticks(vis_x0, zoom_x) / snap_ticks_val) * snap_ticks_val;
-                let last_tick = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
-                let mut minor_pb = PathBuilder::stroke(px(1.0));
-                let mut has_minor = false;
-                let mut t = first_tick;
-                while t <= last_tick {
-                    if t % beat_ticks_val != 0 && t % bar_ticks != 0 {
-                        let gx = ox + ticks_to_px(t, zoom_x);
-                        minor_pb.move_to(point(px(gx), px(oy)));
-                        minor_pb.line_to(point(px(gx), px(lanes_bottom)));
-                        has_minor = true;
-                    }
-                    t = t.saturating_add(snap_ticks_val);
-                }
-                if has_minor {
-                    if let Ok(path) = minor_pb.build() {
-                        window.paint_path(path, rgb(0x202023));
-                    }
-                }
-            }
-
-            if beat_px >= 7.0 {
-                let first_beat =
-                    (px_to_ticks(vis_x0, zoom_x) / beat_ticks_val) * beat_ticks_val;
-                let last_tick = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
-                let mut beat_pb = PathBuilder::stroke(px(1.0));
-                let mut has_beat = false;
-                let mut t = first_beat;
-                while t <= last_tick {
-                    if t % bar_ticks != 0 {
-                        let gx = ox + ticks_to_px(t, zoom_x);
-                        beat_pb.move_to(point(px(gx), px(oy)));
-                        beat_pb.line_to(point(px(gx), px(lanes_bottom)));
-                        has_beat = true;
-                    }
-                    t = t.saturating_add(beat_ticks_val);
-                }
-                if has_beat {
-                    if let Ok(path) = beat_pb.build() {
-                        window.paint_path(path, rgb(0x1B1B1E));
-                    }
-                }
-            }
-
-            let bar_stride = if ticks_to_px(bar_ticks, zoom_x) >= 6.0 {
-                1
-            } else {
-                adaptive_bar_stride(bar_ticks, zoom_x)
-            };
-            let major_step = bar_ticks.saturating_mul(bar_stride).max(1);
-            let first_bar_tick = (px_to_ticks(vis_x0, zoom_x) / major_step) * major_step;
-            let last_tick = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
-            let mut bar_pb = PathBuilder::stroke(px(1.0));
-            let mut has_bar = false;
-            let mut t = first_bar_tick;
-            while t <= last_tick {
-                let gx = ox + ticks_to_px(t, zoom_x);
-                bar_pb.move_to(point(px(gx), px(oy)));
-                bar_pb.line_to(point(px(gx), px(lanes_bottom)));
-                has_bar = true;
-                t = t.saturating_add(major_step);
-            }
-            if has_bar {
-                if let Ok(path) = bar_pb.build() {
-                    window.paint_path(path, rgb(0x141416));
-                }
-            }
-        },
-    )
-    .absolute()
-    .left(px(0.0))
-    .top(px(0.0))
-    .w(px(grid_w))
-    .h(px(canvas_h))
-    .into_any_element();
-
-    let mut drop_zones: Vec<AnyElement> = Vec::new();
-    if let Some(ref path) = dragged_sample {
-        let file_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        drop_zones.push(
-            div()
-                .absolute()
-                .left(px(10.0))
-                .top(px(8.0))
-                .bg(rgba(0xE8782AD8))
-                .border_1()
-                .border_color(rgb(0x111111))
-                .rounded(px(2.0))
-                .px(px(6.0))
-                .py(px(3.0))
-                .child(
-                    Label::new(format!("∿ Soltar clip: {}", file_name))
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0x111111)),
-                )
-                .into_any_element(),
-        );
-    }
-
-    let drop_handler = if dragged_sample.is_some() {
-        let track_ids = track_ids_all.clone();
-        Some(
-            div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(0.0))
-                .w(px(grid_w))
-                .h(px(lanes_h))
-                .id("pl_drop_handler")
-                .on_click(move |event, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        if let Some(path) = state.dragged_sample.take() {
-                            if let Some(pos) = event.mouse_position() {
-                                let zb = zone_bounds_drop.get();
-                                drop_audio_at_grid_pos(
-                                    state,
-                                    &path,
-                                    pos.x.as_f32() - zb[0],
-                                    pos.y.as_f32() - zb[1],
-                                    &track_ids,
-                                );
-                            }
-                        }
-                        cx.notify();
-                    });
-                })
-                .into_any_element(),
-        )
-    } else {
-        None
-    };
-
-    let clip_rects: Vec<(usize, usize, f32, f32, f32, f32)> = pl
-        .clips
-        .iter()
-        .map(|(track_key, clip)| {
-            let track_row = non_master
-                .iter()
-                .position(|(i, _)| *i == *track_key)
-                .unwrap_or(0);
-            (
-                *track_key,
-                clip.id,
-                ticks_to_px(clip.start_tick, zoom_x),
-                track_row as f32 * track_height + 1.0,
-                ticks_to_px(clip.duration_ticks, zoom_x).max(12.0),
-                track_height - 2.0,
-            )
-        })
-        .collect();
-
-    let marquee_overlay = match pl.marquee {
-        Some(m) if m.is_drag() => {
-            let (x0, y0, x1, y1) = m.normalized();
-            Some(
-                div()
-                    .id("pl_marquee_overlay")
-                    .test_support()
-                    .absolute()
-                    .left(px(x0))
-                    .top(px(y0))
-                    .w(px((x1 - x0).max(1.0)))
-                    .h(px((y1 - y0).max(1.0)))
-                    .bg(rgba(0x3AA8E038))
-                    .border_1()
-                    .border_color(rgb(theme::DAW_PLAYHEAD_BLUE))
-                    .rounded(px(1.0))
-                    .into_any_element(),
-            )
-        }
-        _ => None,
-    };
-
-    let catcher_zone_right = zone_bounds.clone();
-    let catcher_zone_left = zone_bounds.clone();
-    let catcher_zone_move = zone_bounds.clone();
-    let catcher_rects_right: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> =
-        Rc::new(clip_rects.clone());
-    let catcher_rects_left = catcher_rects_right.clone();
-    let clip_rects_marquee_rc: Rc<Vec<(usize, usize, f32, f32, f32, f32)>> = Rc::new(clip_rects);
-
-    let zone_bounds_seek = zone_bounds.clone();
-    let zone_grid_move = zone_bounds.clone();
-    let zone_bounds_marquee = zone_bounds.clone();
-    let zone_bounds_marquee_up = zone_bounds_marquee.clone();
-    let seek_zone = div()
-        .absolute()
-        .left(px(0.0))
-        .top(px(0.0))
-        .w(px(grid_w))
-        .h(px(lanes_h))
-        .id("pl_seek_zone")
-        .child(
-            canvas(
-                move |bounds, _, _| {
-                    zone_bounds_rec.set([
-                        bounds.origin.x.as_f32(),
-                        bounds.origin.y.as_f32(),
-                        bounds.size.width.as_f32(),
-                        bounds.size.height.as_f32(),
-                    ]);
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0(),
-        )
-        .on_click(move |event, _, cx| {
-            let Some(pos) = event.mouse_position() else {
-                return;
-            };
-            let zb = zone_bounds_seek.get();
-            let rel_x = pos.x.as_f32() - zb[0];
-            let clicked = px_to_ticks(rel_x.max(0.0), zoom_x);
-            let st = state(cx);
-            st.update(cx, |state, cx| {
-                let target = ticks_to_samples_precise(clicked, ppqn, bpm, sample_rate);
-                state.playlist_state.playhead_tick = clicked;
-                state.audio_proxy.send(GuiCommand::Seek { sample_count: target });
-                cx.notify();
-            });
-        });
-
-    // Líneas verticales del Playhead y bordes de Loop sobre los carriles de pistas
-    let loop_win = loop_render;
-    let playhead_canvas = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let top = bounds.origin.y;
-            let bot = bounds.origin.y + px(lanes_h.min(bounds.size.height.as_f32()));
-            if let Some((lx0, lx1)) = loop_win {
-                let loop_line_col = if is_looping {
-                    rgba(0xE0E6EE70)
-                } else {
-                    rgba(0x78808A55)
-                };
-                for lx in [lx0, lx1] {
-                    let mut loop_path = PathBuilder::stroke(px(1.0));
-                    let lx = bounds.origin.x + px(lx);
-                    loop_path.move_to(point(lx, top));
-                    loop_path.line_to(point(lx, bot));
-                    if let Ok(p) = loop_path.build() {
-                        window.paint_path(p, loop_line_col);
-                    }
-                }
-            }
-
-            let x = bounds.origin.x + px(playhead_x);
-            let mut playhead_path = PathBuilder::stroke(px(1.5));
-            playhead_path.move_to(point(x, top));
-            playhead_path.line_to(point(x, bounds.origin.y + bounds.size.height));
-            if let Ok(p) = playhead_path.build() {
-                window.paint_path(p, rgb(0xEBF4FF));
-            }
-        },
-    )
-    .absolute()
-    .left(px(0.0))
-    .top(px(0.0))
-    .w(px(grid_w))
-    .h(px(canvas_h));
-
-    // Guía vertical del puntero sobre los carriles (playhead fantasma)
-    let hover_zone = zone_bounds.clone();
-    let hover_canvas = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let Some(x) = hover_x else {
-                return;
-            };
-            let m = window.mouse_position();
-            let zx = hover_zone.get()[0];
-            let zw = hover_zone.get()[2];
-            if m.x.as_f32() < zx || m.x.as_f32() > zx + zw {
-                return;
-            }
-            let x = bounds.origin.x + px(x);
-            let top = bounds.origin.y;
-            let bot = bounds.origin.y + bounds.size.height;
-            let mut body = PathBuilder::stroke(px(1.0));
-            body.move_to(point(x, top));
-            body.line_to(point(x, bot));
-            if let Ok(p) = body.build() {
-                window.paint_path(p, rgb(0xFFFFFF).opacity(0.26));
-            }
-        },
-    )
-    .absolute()
-    .left(px(0.0))
-    .top(px(0.0))
-    .w(px(grid_w))
-    .h(px(canvas_h));
-
-    let mut all: Vec<AnyElement> = Vec::new();
-
-    // =========================================================================
-    // FILA 1: CABECERA FIJA SUPERIOR (ESQUINA IZQUIERDA + REGLA DE TIEMPO GPU)
-    // =========================================================================
-    let ruler_bounds: Rc<Cell<[f32; 4]>> = Rc::new(Cell::new([0.0; 4]));
-    let ruler_bounds_rec = ruler_bounds.clone();
-    let ruler_bounds_down = ruler_bounds.clone();
-    let ruler_bounds_move = ruler_bounds.clone();
-    let ruler_bounds_catcher = ruler_bounds.clone();
-
-    let corner = h_flex()
-        .w(px(header_width))
-        .h(px(ruler_h))
-        .flex_none()
-        .px(px(6.0))
-        .items_center()
-        .justify_between()
-        .bg(rgb(theme::DAW_HEADER_DARK_BG))
-        .border_r_1()
-        .border_b_1()
-        .border_color(rgb(theme::DAW_BORDER_SUBTLE))
-        .child(
-            h_flex()
-                .items_center()
-                .gap(px(5.0))
-                .child(
-                    div()
-                        .w(px(14.0))
-                        .h(px(14.0))
-                        .rounded(px(2.0))
-                        .bg(rgb(theme::DAW_ACCENT_ORANGE))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            Label::new("≡")
-                                .text_size(px(10.0))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(0x111111)),
-                        ),
-                )
-                .child(
-                    Label::new("ARRANGE")
-                        .text_size(px(9.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0xDCDCE2)),
-                ),
-        )
-        .child(
-            div()
-                .id("pl_loop_toggle")
-                .px(px(5.0))
-                .py(px(1.5))
-                .rounded(px(2.0))
-                .cursor_pointer()
-                .bg(if loop_active && is_looping {
-                    rgb(theme::DAW_ACCENT_ORANGE)
-                } else if loop_active {
-                    rgb(0x36383E)
-                } else {
-                    rgb(0x27282C)
-                })
-                .border_1()
-                .border_color(rgb(theme::DAW_BORDER_LIGHT))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |s, cx| {
-                        s.playlist_state.loop_region_active = !s.playlist_state.loop_region_active;
-                        if s.playlist_state.loop_region_active {
-                            s.playlist_state.ensure_minimum_global_loop(true);
-                        }
-                        cx.notify();
-                    });
-                })
-                .child(
-                    Label::new("⟳ LOOP")
-                        .text_size(px(8.5))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(if loop_active && is_looping {
-                            rgb(0x111111)
-                        } else if loop_active {
-                            rgb(0xE2E6EC)
-                        } else {
-                            rgb(0x888C94)
-                        }),
-                ),
-        )
-        .into_any_element();
-
-    let scroll_h_for_ruler = playlist_scroll_h.clone();
-    let scroll_h_for_ruler_wheel = playlist_scroll_h.clone();
-    let hover_zone_for_ruler = zone_bounds.clone();
-    let ruler_bounds_for_hover = ruler_bounds.clone();
-    let ruler_bar = div()
-        .id("pl_ruler_bar")
-        .flex_1()
-        .min_w_0()
-        .h(px(ruler_h))
-        .relative()
-        .overflow_hidden()
-        .cursor_pointer()
-        .child(
-            canvas(
-                move |bounds, _, _| {
-                    ruler_bounds_rec.set([
-                        bounds.origin.x.as_f32(),
-                        bounds.origin.y.as_f32(),
-                        bounds.size.width.as_f32(),
-                        bounds.size.height.as_f32(),
-                    ]);
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0(),
-        )
-        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-            ruler_mouse_down(
-                cx,
-                (event.position.x.as_f32(), event.position.y.as_f32()),
-                ruler_bounds_down.get(),
-                ruler_h,
-                event.click_count,
-            );
-        })
-        .on_mouse_move(move |event, _, cx| {
-            let rb = ruler_bounds_move.get();
-            if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
-                ruler_mouse_move(cx, event.position.x.as_f32(), rb);
-            } else {
-                finish_ruler_drag(cx);
-                let scroll_x = state(cx).read(cx).playlist_scroll_h.offset().x.as_f32();
-                let local_x = (event.position.x.as_f32() - rb[0] - scroll_x).max(0.0);
-                set_hover_tick(cx, Some(px_to_ticks(local_x, zoom_x)));
-            }
-        })
-        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
-            finish_ruler_drag(cx);
-        })
-        .on_scroll_wheel(move |event, _, cx| {
-            let consumed = playlist_wheel_zoomed(
-                event.delta,
-                event.modifiers.control || event.modifiers.platform,
-                event.modifiers.alt,
-                event.modifiers.shift,
-                (event.position.x.as_f32(), event.position.y.as_f32()),
-                total_ticks,
-                header_width,
-                0.0,
-                row_count,
-                cx,
-            );
-            if !consumed {
-                let raw_px = match event.delta {
-                    ScrollDelta::Pixels(p) => {
-                        if p.x.as_f32().abs() > 0.1 {
-                            p.x.as_f32()
-                        } else {
-                            p.y.as_f32()
-                        }
-                    }
-                    ScrollDelta::Lines(p) => {
-                        let d = if p.x.abs() > 0.01 { p.x } else { p.y };
-                        d * 24.0
-                    }
-                };
-                if raw_px.abs() > 0.01 {
-                    let cur = scroll_h_for_ruler_wheel.offset().x.as_f32();
-                    let max = scroll_h_for_ruler_wheel.max_offset().x.as_f32();
-                    let next = clamp_scroll_offset(cur + raw_px, max);
-                    scroll_h_for_ruler_wheel
-                        .set_offset(point(px(next), scroll_h_for_ruler_wheel.offset().y));
-                    state(cx).update(cx, |_, cx| cx.notify());
-                }
-            }
-        })
-        .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, cx| {
-                    let ox = bounds.origin.x.as_f32();
-                    let oy = bounds.origin.y.as_f32();
-                    let w = bounds.size.width.as_f32();
-                    let h = bounds.size.height.as_f32();
-                    if w <= 0.0 || h <= 0.0 {
-                        return;
-                    }
-                    let loop_strip_h = 9.0_f32;
-                    let top_band_h = (h - loop_strip_h).max(1.0);
-
-                    // Banda superior de compases
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(point(px(ox), px(oy)), size(px(w), px(top_band_h))),
-                        background: rgb(theme::DAW_RULER_BG).into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
-                    // Carril inferior para la barra de Loop
-                    window.paint_quad(PaintQuad {
-                        bounds: Bounds::new(
-                            point(px(ox), px(oy + top_band_h)),
-                            size(px(w), px(loop_strip_h)),
-                        ),
-                        background: rgb(theme::DAW_LOOP_STRIP_BG).into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
-                    // Divisor sutil entre regla y carril de loop + borde inferior
-                    for line_y in [oy + top_band_h, oy + h - 1.0] {
-                        window.paint_quad(PaintQuad {
-                            bounds: Bounds::new(point(px(ox), px(line_y)), size(px(w), px(1.0))),
-                            background: rgb(theme::DAW_BORDER_SUBTLE).into(),
-                            border_color: Hsla::default(),
-                            corner_radii: gpui_kit::Corners::default(),
-                            border_widths: gpui_kit::Edges::default(),
-                            border_style: BorderStyle::default(),
-                        });
-                    }
-
-                    let scroll_x = scroll_h_for_ruler.offset().x.as_f32();
-                    let vis_x0 = (-scroll_x - 32.0).max(0.0);
-                    let vis_x1 = (vis_x0 + w + 64.0).min(grid_w);
-                    let bar_ticks = ticks_per_bar_val.max(1);
-                    let beat_px = ticks_to_px(beat_ticks_val, zoom_x);
-                    let snap_px = ticks_to_px(snap_ticks_val, zoom_x);
-
-                    // Ticks de subdivisión
-                    if snap_px >= 9.0 && snap_ticks_val < beat_ticks_val {
-                        let first_t =
-                            (px_to_ticks(vis_x0, zoom_x) / snap_ticks_val) * snap_ticks_val;
-                        let last_t = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
-                        let mut pb = PathBuilder::stroke(px(1.0));
-                        let mut any = false;
-                        let mut t = first_t;
-                        while t <= last_t {
-                            if t % beat_ticks_val != 0 && t % bar_ticks != 0 {
-                                let sx = ox + ticks_to_px(t, zoom_x) + scroll_x;
-                                if sx >= ox && sx <= ox + w {
-                                    pb.move_to(point(px(sx), px(oy + top_band_h - 3.0)));
-                                    pb.line_to(point(px(sx), px(oy + top_band_h)));
-                                    any = true;
-                                }
-                            }
-                            t = t.saturating_add(snap_ticks_val);
-                        }
-                        if any {
-                            if let Ok(p) = pb.build() {
-                                window.paint_path(p, rgb(0x3E4046));
-                            }
-                        }
-                    }
-
-                    // Ticks de pulso (beat)
-                    if beat_px >= 7.0 {
-                        let first_t =
-                            (px_to_ticks(vis_x0, zoom_x) / beat_ticks_val) * beat_ticks_val;
-                        let last_t = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
-                        let mut pb = PathBuilder::stroke(px(1.0));
-                        let mut any = false;
-                        let mut t = first_t;
-                        while t <= last_t {
-                            if t % bar_ticks != 0 {
-                                let sx = ox + ticks_to_px(t, zoom_x) + scroll_x;
-                                if sx >= ox && sx <= ox + w {
-                                    pb.move_to(point(px(sx), px(oy + top_band_h - 5.0)));
-                                    pb.line_to(point(px(sx), px(oy + top_band_h)));
-                                    any = true;
-                                }
-                            }
-                            t = t.saturating_add(beat_ticks_val);
-                        }
-                        if any {
-                            if let Ok(p) = pb.build() {
-                                window.paint_path(p, rgb(0x52555E));
-                            }
-                        }
-                    }
-
-                    // Ticks y numeración vectorial de compás sincronizados al sub-píxel
-                    let stride = adaptive_bar_stride(bar_ticks, zoom_x);
-                    let major_step = bar_ticks.saturating_mul(stride).max(1);
-                    let first_bar_t = (px_to_ticks(vis_x0, zoom_x) / major_step) * major_step;
-                    let last_bar_t = px_to_ticks(vis_x1, zoom_x).min(total_ticks);
-                    let mut bar_pb = PathBuilder::stroke(px(1.0));
-                    let mut has_bar = false;
-                    let mut font = window.text_style().font();
-                    font.weight = FontWeight::SEMIBOLD;
-
-                    let mut t = first_bar_t;
-                    while t <= last_bar_t {
-                        let sx = ox + ticks_to_px(t, zoom_x) + scroll_x;
-                        if sx >= ox - 1.0 && sx <= ox + w + 1.0 {
-                            bar_pb.move_to(point(px(sx), px(oy + 2.0)));
-                            bar_pb.line_to(point(px(sx), px(oy + top_band_h)));
-                            has_bar = true;
-                        }
-                        if sx + 4.0 >= ox - 20.0 && sx + 4.0 <= ox + w - 4.0 {
-                            let bar_num = bar_number_at_tick(t, bar_ticks);
-                            let label = SharedString::from(bar_num.to_string());
-                            let run = TextRun {
-                                len: label.len(),
-                                font: font.clone(),
-                                color: rgb(0xDADEE6).into(),
-                                ..Default::default()
-                            };
-                            let shaped =
-                                window.text_system().shape_line(label, px(9.5), &[run], None);
-                            let _ = shaped.paint(
-                                point(px(sx + 4.0), px(oy + 1.5)),
-                                px(13.0),
-                                TextAlign::Left,
-                                None,
-                                window,
-                                cx,
-                            );
-                        }
-                        t = t.saturating_add(major_step);
-                    }
-                    if has_bar {
-                        if let Ok(p) = bar_pb.build() {
-                            window.paint_path(p, rgb(0x767A84));
-                        }
-                    }
-
-                    // Barra horizontal de región de Loop en el carril inferior
-                    if let Some((lx0_raw, lx1_raw)) = loop_render {
-                        let lx0 = lx0_raw + scroll_x;
-                        let lx1 = lx1_raw + scroll_x;
-                        if lx1 > 0.0 && lx0 < w {
-                            let bx0 = lx0.max(0.0);
-                            let bx1 = lx1.min(w);
-                            let bar_col = if is_looping {
-                                theme::DAW_LOOP_ACTIVE_BAR
-                            } else {
-                                theme::DAW_LOOP_INACTIVE_BAR
-                            };
-                            let cap_col = if is_looping { 0xF0F4FA } else { 0x7A8088 };
-                            let ly = oy + top_band_h + 1.5;
-                            let lh = (loop_strip_h - 3.0).max(3.0);
-                            window.paint_quad(PaintQuad {
-                                bounds: Bounds::new(
-                                    point(px(ox + bx0), px(ly)),
-                                    size(px((bx1 - bx0).max(2.0)), px(lh)),
-                                ),
-                                background: rgb(bar_col).into(),
-                                border_color: Hsla::default(),
-                                corner_radii: gpui_kit::Corners::all(px(1.0)),
-                                border_widths: gpui_kit::Edges::default(),
-                                border_style: BorderStyle::default(),
-                            });
-                            if lx0 >= 0.0 && lx0 <= w - 2.0 {
-                                window.paint_quad(PaintQuad {
-                                    bounds: Bounds::new(
-                                        point(px(ox + lx0), px(ly)),
-                                        size(px(2.0), px(lh)),
-                                    ),
-                                    background: rgb(cap_col).into(),
-                                    border_color: Hsla::default(),
-                                    corner_radii: gpui_kit::Corners::default(),
-                                    border_widths: gpui_kit::Edges::default(),
-                                    border_style: BorderStyle::default(),
-                                });
-                            }
-                            if lx1 >= 2.0 && lx1 <= w {
-                                window.paint_quad(PaintQuad {
-                                    bounds: Bounds::new(
-                                        point(px(ox + lx1 - 2.0), px(ly)),
-                                        size(px(2.0), px(lh)),
-                                    ),
-                                    background: rgb(cap_col).into(),
-                                    border_color: Hsla::default(),
-                                    corner_radii: gpui_kit::Corners::default(),
-                                    border_widths: gpui_kit::Edges::default(),
-                                    border_style: BorderStyle::default(),
-                                });
-                            }
-                        }
-                    }
-
-                    // Bandera fantasma en hover
-                    if let Some(hx_raw) = hover_x {
-                        let m = window.mouse_position();
-                        let zb = hover_zone_for_ruler.get();
-                        let rb = ruler_bounds_for_hover.get();
-                        let in_x =
-                            (m.x.as_f32() >= zb[0] && m.x.as_f32() <= zb[0] + zb[2])
-                            || (m.x.as_f32() >= rb[0] && m.x.as_f32() <= rb[0] + rb[2]);
-                        let hx = hx_raw + scroll_x;
-                        if in_x && hx >= -6.0 && hx <= w + 6.0 {
-                            let cx_pt = ox + hx;
-                            let mut ghost = PathBuilder::fill();
-                            ghost.move_to(point(px(cx_pt - 3.5), px(oy + 1.0)));
-                            ghost.line_to(point(px(cx_pt + 3.5), px(oy + 1.0)));
-                            ghost.line_to(point(px(cx_pt), px(oy + 7.5)));
-                            ghost.close();
-                            if let Ok(p) = ghost.build() {
-                                window.paint_path(p, rgb(0xFFFFFF).opacity(0.32));
-                            }
-                        }
-                    }
-
-                    // Cabezal triangular azul de reproducción (Playhead Flag)
-                    let ph_sx = playhead_x + scroll_x;
-                    if ph_sx >= -8.0 && ph_sx <= w + 8.0 {
-                        let cx_pt = ox + ph_sx;
-                        let mut stem = PathBuilder::stroke(px(1.5));
-                        stem.move_to(point(px(cx_pt), px(oy + 6.0)));
-                        stem.line_to(point(px(cx_pt), px(oy + h)));
-                        if let Ok(p) = stem.build() {
-                            window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
-                        }
-                        let mut flag = PathBuilder::fill();
-                        flag.move_to(point(px(cx_pt - 4.5), px(oy + 1.0)));
-                        flag.line_to(point(px(cx_pt + 4.5), px(oy + 1.0)));
-                        flag.line_to(point(px(cx_pt + 4.5), px(oy + 5.5)));
-                        flag.line_to(point(px(cx_pt), px(oy + 10.5)));
-                        flag.line_to(point(px(cx_pt - 4.5), px(oy + 5.5)));
-                        flag.close();
-                        if let Ok(p) = flag.build() {
-                            window.paint_path(p, rgb(theme::DAW_PLAYHEAD_BLUE));
-                        }
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
-        )
-        .into_any_element();
-
-    all.push(
-        h_flex()
-            .w_full()
-            .h(px(ruler_h))
-            .flex_shrink_0()
-            .bg(rgb(theme::DAW_RULER_BG))
-            .child(corner)
-            .child(ruler_bar)
-            .into_any_element(),
-    );
-
-    // =========================================================================
-    // FILA 2: CUERPO DE PISTAS Y CARRILES SINCRONIZADOS (V-SCROLL + H-SCROLL)
-    // =========================================================================
-    let dnd_track_ids = track_ids_all.clone();
-    all.push(
-        div()
-            .flex_1()
-            .min_h_0()
-            .relative()
-            .bg(rgb(theme::DAW_CANVAS_VOID))
-            .vertical_scrollbar(&playlist_scroll_v)
-            .child(
-                div()
-                    .id("playlist_vscroll")
-                    .size_full()
-                    .bg(rgb(theme::DAW_CANVAS_VOID))
-                    .overflow_y_scroll()
-                    .track_scroll(&playlist_scroll_v)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .w_full()
-                            .child(
-                                v_flex()
-                                    .flex_none()
-                                    .w(px(header_width))
-                                    .bg(rgb(theme::DAW_CANVAS_VOID))
-                                    .id("playlist_headers")
-                                    .on_scroll_wheel(move |event, _, cx| {
-                                        playlist_wheel_zoomed(
-                                            event.delta,
-                                            event.modifiers.control || event.modifiers.platform,
-                                            event.modifiers.alt,
-                                            event.modifiers.shift,
-                                            (
-                                                event.position.x.as_f32(),
-                                                event.position.y.as_f32(),
-                                            ),
-                                            total_ticks,
-                                            header_width,
-                                            0.0,
-                                            row_count,
-                                            cx,
-                                        );
-                                    })
-                                    .context_menu(move |menu: PopupMenu, _window, _cx| {
-                                        let has_sel = !selected.is_empty();
-                                        let has_clip = !clipboard_empty;
-                                        menu.item(
-                                            PopupMenuItem::new("Copiar")
-                                                .disabled(!has_sel)
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |s, cx| {
-                                                        copy_selected_clips(&mut s.playlist_state);
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("Cortar")
-                                                .disabled(!has_sel)
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |s, cx| {
-                                                        if cut_selected_clips(
-                                                            &mut s.playlist_state,
-                                                        ) > 0
-                                                        {
-                                                            sync_clips_to_engine(s, cx);
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("Pegar")
-                                                .disabled(!has_clip)
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |s, cx| {
-                                                        let grid = snap_step_ticks(
-                                                            s.playlist_state.ppqn,
-                                                            s.playlist_state.grid_denominator,
-                                                        )
-                                                        .max(1);
-                                                        let at = s.playlist_state.paste_tick();
-                                                        let keys = playlist_row_keys(s);
-                                                        let ids = paste_clips(
-                                                            &mut s.playlist_state,
-                                                            at,
-                                                            grid,
-                                                            &keys,
-                                                        );
-                                                        if !ids.is_empty() {
-                                                            sync_clips_to_engine(s, cx);
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("Duplicar")
-                                                .disabled(!has_sel)
-                                                .on_click(move |_, _, cx| {
-                                                    let st = state(cx);
-                                                    st.update(cx, |s, cx| {
-                                                        let grid = snap_step_ticks(
-                                                            s.playlist_state.ppqn,
-                                                            s.playlist_state.grid_denominator,
-                                                        )
-                                                        .max(1);
-                                                        let ids = duplicate_selected_clips(
-                                                            &mut s.playlist_state,
-                                                            grid,
-                                                        );
-                                                        if !ids.is_empty() {
-                                                            sync_clips_to_engine(s, cx);
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .item(PopupMenuItem::new("Deseleccionar").on_click(
-                                            move |_, _, cx| {
-                                                let st = state(cx);
-                                                st.update(cx, |s, cx| {
-                                                    s.playlist_state.selected_clips.clear();
-                                                    cx.notify();
-                                                });
-                                            },
-                                        ))
-                                    })
-                                    .children(track_headers),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .relative()
-                                    .bg(rgb(theme::DAW_CANVAS_VOID))
-                                    .horizontal_scrollbar(&playlist_scroll_h)
-                                    .child(
-                                        div()
-                                            .id("playlist_scroll")
-                                            .w_full()
-                                            .overflow_x_scroll()
-                                            .track_scroll(&playlist_scroll_h)
-                                            .child(
-                                                div()
-                                                    .id("playlist_grid")
-                                                    .test_support()
-                                                    .w(px(grid_w))
-                                                    .h(px(canvas_h))
-                                                    .relative()
-                                                    .can_drop(|payload: &dyn std::any::Any, _, _| {
-                                                        payload.is::<crate::views::explorer::ExplorerAudioDrag>()
-                                                    })
-                                                    .on_drop(
-                                                        move |payload: &crate::views::explorer::ExplorerAudioDrag,
-                                                              window,
-                                                              cx| {
-                                                            let path = payload.0.clone();
-                                                            let pos = window.mouse_position();
-                                                            let zb = zone_bounds_dnd.get();
-                                                            let rel_x = pos.x.as_f32() - zb[0];
-                                                            let rel_y = pos.y.as_f32() - zb[1];
-                                                            let tids = dnd_track_ids.clone();
-                                                            let st = state(cx);
-                                                            st.update(cx, |s, cx| {
-                                                                s.dragged_sample = None;
-                                                                drop_audio_at_grid_pos(
-                                                                    s, &path, rel_x, rel_y, &tids,
-                                                                );
-                                                                cx.notify();
-                                                            });
-                                                        },
-                                                    )
-                                                    .cursor(if playlist_panning {
-                                                        CursorStyle::Hidden
-                                                    } else {
-                                                        CursorStyle::Crosshair
-                                                    })
-                                                    .on_mouse_move(move |event, _, cx| {
-                                                        {
-                                                            let st = state(cx).read(cx);
-                                                            let ps = &st.playlist_state;
-                                                            let gesturing = ps.trim_drag.is_some()
-                                                                || ps.clip_drag.is_some()
-                                                                || ps.marquee.is_some()
-                                                                || ps.loop_dragging
-                                                                || st.playlist_pan.is_some();
-                                                            if gesturing {
-                                                                clear_hover_tick(cx);
-                                                            } else {
-                                                                let zb = zone_grid_move.get();
-                                                                let rel_x =
-                                                                    event.position.x.as_f32()
-                                                                        - zb[0];
-                                                                set_hover_tick(
-                                                                    cx,
-                                                                    Some(px_to_ticks(
-                                                                        rel_x.max(0.0),
-                                                                        zoom_x,
-                                                                    )),
-                                                                );
-                                                            }
-                                                        }
-                                                        if state(cx)
-                                                            .read(cx)
-                                                            .playlist_state
-                                                            .trim_drag
-                                                            .is_some()
-                                                        {
-                                                            let zb = zone_grid_move.get();
-                                                            update_clip_trim(
-                                                                cx,
-                                                                event.position.x.as_f32(),
-                                                                zb,
-                                                            );
-                                                            return;
-                                                        }
-                                                        if event.pressed_button
-                                                            == Some(gpui_kit::MouseButton::Middle)
-                                                        {
-                                                            if is_playlist_panning(cx) {
-                                                                update_playlist_pan(
-                                                                    cx,
-                                                                    event.position,
-                                                                );
-                                                            }
-                                                            return;
-                                                        }
-                                                        if event.pressed_button
-                                                            != Some(gpui_kit::MouseButton::Left)
-                                                        {
-                                                            finish_clip_drag(cx);
-                                                            finish_clip_trim(cx);
-                                                            stop_playlist_pan(cx);
-                                                            return;
-                                                        }
-                                                        if state(cx)
-                                                            .read(cx)
-                                                            .playlist_state
-                                                            .clip_drag
-                                                            .is_none()
-                                                        {
-                                                            return;
-                                                        }
-                                                        let zb = zone_grid_move.get();
-                                                        update_clip_drag(
-                                                            cx,
-                                                            (
-                                                                event.position.x.as_f32(),
-                                                                event.position.y.as_f32(),
-                                                            ),
-                                                            zb,
-                                                        );
-                                                    })
-                                                    .on_mouse_up(
-                                                        gpui_kit::MouseButton::Left,
-                                                        move |_, _, cx| {
-                                                            finish_clip_drag(cx);
-                                                            finish_clip_trim(cx);
-                                                        },
-                                                    )
-                                                    .on_mouse_down(
-                                                        gpui_kit::MouseButton::Middle,
-                                                        move |event, _, cx| {
-                                                            start_playlist_pan(
-                                                                cx,
-                                                                event.position,
-                                                                PlaylistNavGeometry {
-                                                                    header_width,
-                                                                    ruler_h: 0.0,
-                                                                    total_ticks,
-                                                                    row_count,
-                                                                },
-                                                            );
-                                                        },
-                                                    )
-                                                    .on_mouse_up(
-                                                        gpui_kit::MouseButton::Middle,
-                                                        move |_, _, cx| stop_playlist_pan(cx),
-                                                    )
-                                                    .on_mouse_down(
-                                                        gpui_kit::MouseButton::Right,
-                                                        move |event, _, cx| {
-                                                            let (gx, gy) = grid_origin_from_zone(
-                                                                zone_bounds_marquee.get(),
-                                                                0.0,
-                                                            );
-                                                            let st = state(cx);
-                                                            st.update(cx, |s, cx| {
-                                                                let px = event.position.x.as_f32()
-                                                                    - gx;
-                                                                let py = event.position.y.as_f32()
-                                                                    - gy;
-                                                                s.playlist_state.marquee =
-                                                                    Some(MarqueeState {
-                                                                        start_x: px,
-                                                                        start_y: py,
-                                                                        cur_x: px,
-                                                                        cur_y: py,
-                                                                    });
-                                                                cx.notify();
-                                                            });
-                                                        },
-                                                    )
-                                                    .on_mouse_move(move |event, _, cx| {
-                                                        if state(cx)
-                                                            .read(cx)
-                                                            .playlist_state
-                                                            .marquee
-                                                            .is_some()
-                                                        {
-                                                            return;
-                                                        }
-                                                        let st = state(cx);
-                                                        st.update(cx, |s, cx| {
-                                                            if s.playlist_state.marquee.is_none() {
-                                                                return;
-                                                            }
-                                                            if event.pressed_button.is_none() {
-                                                                s.playlist_state.marquee = None;
-                                                                cx.notify();
-                                                            }
-                                                        });
-                                                    })
-                                                    .on_mouse_up(
-                                                        gpui_kit::MouseButton::Right,
-                                                        move |event, _, cx| {
-                                                            finish_marquee(
-                                                                (
-                                                                    event.position.x.as_f32(),
-                                                                    event.position.y.as_f32(),
-                                                                ),
-                                                                zone_bounds_marquee_up.get(),
-                                                                0.0,
-                                                                clip_rects_marquee_rc.as_ref(),
-                                                                event.modifiers.shift,
-                                                                cx,
-                                                            );
-                                                        },
-                                                    )
-                                                    .on_scroll_wheel(move |event, _, cx| {
-                                                        playlist_wheel_zoomed(
-                                                            event.delta,
-                                                            event.modifiers.control
-                                                                || event.modifiers.platform,
-                                                            event.modifiers.alt,
-                                                            event.modifiers.shift,
-                                                            (
-                                                                event.position.x.as_f32(),
-                                                                event.position.y.as_f32(),
-                                                            ),
-                                                            total_ticks,
-                                                            header_width,
-                                                            0.0,
-                                                            row_count,
-                                                            cx,
-                                                        );
-                                                    })
-                                                    // Orden de capas (z-ordering):
-                                                    //   1. Carriles + líneas verticales agrupadas en GPU.
-                                                    //   2. Contenedores vectoriales de clips (tapan la grilla).
-                                                    //   3. Overlays de drop/seek, playhead, guía hover y marquee.
-                                                    .child(grid_backdrop_canvas)
-                                                    .children(clip_elems)
-                                                    .children(drop_zones)
-                                                    .when_some(drop_handler, |v, h| v.child(h))
-                                                    .child(seek_zone.into_any_element())
-                                                    .child(playhead_canvas.into_any_element())
-                                                    .child(hover_canvas.into_any_element())
-                                                    .when_some(marquee_overlay, |v, h| v.child(h)),
-                                            ),
-                                    ),
-                            ),
-                    ),
-            )
-            .into_any_element(),
-    );
-
-    // =========================================================================
-    // FILA 3: BARRA INFERIOR COMPACTA DEL ARRANGER (PISTAS • TELEMETRÍA • SNAP/ZOOM)
-    // =========================================================================
-    let current_bar = bar_number_at_tick(playhead_tick, ticks_per_bar_val);
-    all.push(
-        h_flex()
-            .w_full()
-            .h(px(24.0))
-            .flex_shrink_0()
-            .items_center()
-            .bg(rgb(theme::DAW_STATUS_BG))
-            .border_t_1()
-            .border_color(rgb(theme::DAW_BORDER_SUBTLE))
-            .child(
-                h_flex()
-                    .w(px(header_width))
-                    .h_full()
-                    .flex_none()
-                    .px(px(6.0))
-                    .gap(px(4.0))
-                    .items_center()
-                    .justify_between()
-                    .border_r_1()
-                    .border_color(rgb(theme::DAW_BORDER_SUBTLE))
-                    .child(
-                        h_flex()
-                            .gap(px(3.0))
-                            .items_center()
-                            .child(
-                                Button::new("pl_add_track")
-                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
-                                    .label("+")
-                                    .compact()
-                                    .bg(rgb(0x28292E))
-                                    .text_color(rgb(0xE0E0E4))
-                                    .on_click(move |_, _, cx| {
-                                        let st = state(cx);
-                                        st.update(cx, |state, cx| {
-                                            let tracks = state.tracks_mut();
-                                            let next_id = tracks
-                                                .iter()
-                                                .map(|t| t.id)
-                                                .max()
-                                                .unwrap_or(0)
-                                                + 1;
-                                            let n = tracks.iter().filter(|t| !t.is_master).count();
-                                            tracks.push(Track::new(
-                                                next_id,
-                                                format!("TRACK {:02}", n + 1),
-                                                false,
-                                            ));
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("pl_remove_track")
-                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
-                                    .label("-")
-                                    .compact()
-                                    .bg(rgb(0x28292E))
-                                    .text_color(rgb(0xB8BAC0))
-                                    .on_click(move |_, _, cx| {
-                                        let st = state(cx);
-                                        st.update(cx, |state, cx| {
-                                            let tracks = state.tracks_mut();
-                                            if let Some(pos) =
-                                                tracks.iter().rposition(|t| !t.is_master)
-                                            {
-                                                tracks.remove(pos);
-                                            }
-                                            cx.notify();
-                                        });
-                                    }),
-                            ),
-                    )
-                    .child(
-                        Label::new(format!("{} TRK", non_master_count))
-                            .text_size(px(9.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x8E929A)),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .px(px(8.0))
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap(px(10.0))
-                            .overflow_hidden()
-                            .child(
-                                Label::new(format!(
-                                    "BAR {}  •  TICK {}",
-                                    current_bar, playhead_tick
-                                ))
-                                .text_size(px(9.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0xD2D6DE)),
-                            )
-                            .child(
-                                Label::new(format!(
-                                    "{}/{}  •  {:.1} BPM  •  {} PPQN",
-                                    beats_per_bar, beat_division, bpm, ppqn
-                                ))
-                                .text_size(px(9.0))
-                                .text_color(rgb(0x888C94)),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .flex_shrink_0()
-                            .child(
-                                h_flex()
-                                    .id("pl_grid_header")
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .px(px(6.0))
-                                    .py(px(1.5))
-                                    .bg(rgb(0x26282E))
-                                    .border_1()
-                                    .border_color(rgb(theme::DAW_BORDER_LIGHT))
-                                    .rounded(px(2.0))
-                                    .cursor_pointer()
-                                    .on_click(move |_, _, cx| {
-                                        let st = state(cx);
-                                        st.update(cx, |state, cx| {
-                                            state.playlist_state.grid_denominator =
-                                                match state.playlist_state.grid_denominator {
-                                                    2 => 4,
-                                                    4 => 8,
-                                                    8 => 16,
-                                                    _ => 2,
-                                                };
-                                            cx.notify();
-                                        });
-                                    })
-                                    .child(
-                                        Label::new("⊞")
-                                            .text_size(px(9.5))
-                                            .text_color(rgb(theme::DAW_ACCENT_ORANGE)),
-                                    )
-                                    .child(
-                                        Label::new(format!("1/{}", grid_den))
-                                            .text_size(px(9.5))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(rgb(0xE8ECEF)),
-                                    ),
-                            )
-                            .child(
-                                Button::new("pl_zoom_out")
-                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
-                                    .label("-")
-                                    .compact()
-                                    .bg(rgb(0x28292E))
-                                    .text_color(rgb(0xE0E0E4))
-                                    .on_click(move |_, _, cx| {
-                                        let st = state(cx);
-                                        st.update(cx, |state, cx| {
-                                            state.playlist_state.zoom_x =
-                                                step_zoom(state.playlist_state.zoom_x, false);
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("pl_zoom_in")
-                                    .rounded(gpui_kit::component::button::ButtonRounded::None)
-                                    .label("+")
-                                    .compact()
-                                    .bg(rgb(0x28292E))
-                                    .text_color(rgb(0xE0E0E4))
-                                    .on_click(move |_, _, cx| {
-                                        let st = state(cx);
-                                        st.update(cx, |state, cx| {
-                                            state.playlist_state.zoom_x =
-                                                step_zoom(state.playlist_state.zoom_x, true);
-                                            cx.notify();
-                                        });
-                                    }),
-                            ),
-                    ),
-            )
-            .into_any_element(),
-    );
-
-    // =========================================================================
-    // OVERLAYS GLOBALES DE CAPTURA DE GESTOS (PAN / MARQUEE / MIX / LOOP)
-    // =========================================================================
-    if playlist_panning {
-        all.push(
-            div()
-                .id("playlist_pan_catcher")
-                .test_support()
-                .absolute()
-                .inset_0()
-                .cursor(CursorStyle::Hidden)
-                .on_mouse_move(move |event, _, cx| {
-                    if event.pressed_button != Some(gpui_kit::MouseButton::Middle) {
-                        stop_playlist_pan(cx);
-                        return;
-                    }
-                    if is_playlist_panning(cx) {
-                        update_playlist_pan(cx, event.position);
-                    }
-                })
-                .on_mouse_up(gpui_kit::MouseButton::Middle, move |_, _, cx| {
-                    stop_playlist_pan(cx);
-                })
-                .into_any_element(),
-        );
-    }
-
-    if pl.marquee.is_some() {
-        all.push(
-            div()
-                .id("playlist_marquee_catcher")
-                .test_support()
-                .absolute()
-                .inset_0()
-                .on_mouse_move(move |event, _, cx| {
-                    let zone = catcher_zone_move.get();
-                    update_marquee(
-                        event.position.x.as_f32(),
-                        event.position.y.as_f32(),
-                        zone,
-                        0.0,
-                        cx,
-                    );
-                })
-                .on_mouse_up(gpui_kit::MouseButton::Right, move |event, _, cx| {
-                    let zone = catcher_zone_right.get();
-                    let rects = catcher_rects_right.clone();
-                    finish_marquee(
-                        (event.position.x.as_f32(), event.position.y.as_f32()),
-                        zone,
-                        0.0,
-                        &rects,
-                        event.modifiers.shift,
-                        cx,
-                    );
-                })
-                .on_mouse_up(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                    let zone = catcher_zone_left.get();
-                    let rects = catcher_rects_left.clone();
-                    finish_marquee(
-                        (event.position.x.as_f32(), event.position.y.as_f32()),
-                        zone,
-                        0.0,
-                        &rects,
-                        event.modifiers.shift,
-                        cx,
-                    );
-                })
-                .into_any_element(),
-        );
-    }
-
-    if mix_drag.is_some() {
-        all.push(
-            div()
-                .absolute()
-                .inset_0()
-                .id("playlist_mix_drag_catcher")
-                .cursor_grabbing()
-                .on_mouse_move(move |event, _, cx| {
-                    if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
-                        end_mix_drag(cx);
-                        return;
-                    }
-                    let drag = state(cx).read(cx).matrix_mix_drag;
-                    match drag {
-                        Some(MatrixMixTarget::Volume(idx)) => step_mix_slider_gesture(
-                            cx,
-                            idx,
-                            event.position.x.as_f32(),
-                            apply_playlist_volume,
-                        ),
-                        Some(MatrixMixTarget::Pan(idx)) => step_mix_pan_gesture(
-                            cx,
-                            idx,
-                            event.position.y.as_f32(),
-                            apply_playlist_pan,
-                        ),
-                        None => {}
-                    }
-                })
-                .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                    end_mix_drag(cx);
-                })
-                .into_any_element(),
-        );
-    }
-
-    if loop_dragging {
-        all.push(
-            div()
-                .absolute()
-                .inset_0()
-                .id("playlist_loop_drag_catcher")
-                .cursor(CursorStyle::ResizeLeftRight)
-                .on_mouse_move(move |event, _, cx| {
-                    if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
-                        finish_ruler_drag(cx);
-                        return;
-                    }
-                    ruler_mouse_move(cx, event.position.x.as_f32(), ruler_bounds_catcher.get());
-                })
-                .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                    finish_ruler_drag(cx);
-                })
-                .into_any_element(),
-        );
-    }
-
-    v_flex()
-        .id("playlist")
-        .test_support()
-        .relative()
-        .size_full()
-        .gap(px(0.0))
-        .bg(rgb(theme::DAW_CANVAS_VOID))
-        .children(all)
-        .into_any_element()
+/// Render the Playlist / Arranger view in immediate mode using the unified Bitwig 5.1.7 Arrange Workspace.
+pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
+    crate::views::matrix::render(ui, app);
 }

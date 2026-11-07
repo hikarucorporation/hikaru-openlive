@@ -59,17 +59,20 @@ impl GpuContext {
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(ContextError::Adapter)?;
+            .ok_or(ContextError::AdapterNotFound)?;
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("hikaru_render::device"),
-                // Sin features opcionales: sólo lo básico, soportado por todos
-                // los backends. Se agregan explícitamente si hacen falta.
-                required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
-                ..Default::default()
-            })
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("hikaru_render::device"),
+                    // Sin features opcionales: sólo lo básico, soportado por todos
+                    // los backends. Se agregan explícitamente si hacen falta.
+                    required_features: wgpu::Features::empty(),
+                    required_limits: adapter.limits(),
+                    ..Default::default()
+                },
+                None,
+            )
             .await
             .map_err(ContextError::Device)?;
 
@@ -272,15 +275,15 @@ impl GpuContext {
             label: Some("hikaru_render::readback::copy"),
         });
         encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
+            wgpu::ImageCopyTexture {
                 texture: &target.color,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::TexelCopyBufferInfo {
+            wgpu::ImageCopyBuffer {
                 buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
+                layout: wgpu::ImageDataLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row as u32),
                     rows_per_image: Some(height),
@@ -295,18 +298,12 @@ impl GpuContext {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
             // Si el poll cortó antes por timeout, el receiver ya no está y el
-            // envío falla: se ignora, el error de abajo ya se/reportó.
+            // envío falla: se ignora, el error de abajo ya se reportó.
             let _ = sender.send(result);
         });
 
-        // El timeout es lo que evita que un driver colgado congele la GUI de
-        // forma indefinida: peor un frame sin la imagen 3D que un freeze.
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(MAP_TIMEOUT),
-            })
-            .map_err(ReadbackError::Poll)?;
+        // Forzar el device a procesar hasta que el map esté listo.
+        self.device.poll(wgpu::Maintain::Wait);
 
         // Tras un poll OK los callbacks ya se invocaron, así que el recv no
         // debería bloquear; el timeout es sólo una red por si el backend
@@ -363,8 +360,6 @@ pub enum ReadbackError {
         /// Alto del target.
         height: u32,
     },
-    /// El device no terminó el trabajo pendiente.
-    Poll(wgpu::PollError),
     /// El map del buffer falló.
     Map(wgpu::BufferAsyncError),
     /// El device terminó el poll sin que el map se completara.
@@ -377,7 +372,6 @@ impl std::fmt::Display for ReadbackError {
             ReadbackError::DegenerateSize { width, height } => {
                 write!(f, "el target mide {width}x{height}, no se puede leer")
             }
-            ReadbackError::Poll(error) => write!(f, "el poll del device falló: {error}"),
             ReadbackError::Map(error) => write!(f, "no se pudo mapear el buffer: {error}"),
             ReadbackError::MapAborted => {
                 write!(f, "el map se abortó antes de completarse")
@@ -398,7 +392,7 @@ const MAP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 pub enum ContextError {
     /// No se encontró ningún adapter usable (GPU ausente, drivers faltantes o
     /// Vulkan deshabilitado en el entorno).
-    Adapter(wgpu::RequestAdapterError),
+    AdapterNotFound,
     /// El adapter existe pero rechazó el `DeviceDescriptor` pedido.
     Device(wgpu::RequestDeviceError),
 }
@@ -406,7 +400,7 @@ pub enum ContextError {
 impl std::fmt::Display for ContextError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ContextError::Adapter(e) => write!(f, "no se encontró un adapter de GPU: {e}"),
+            ContextError::AdapterNotFound => write!(f, "no se encontró un adapter de GPU usable"),
             ContextError::Device(e) => write!(f, "el adapter rechazó el device pedido: {e}"),
         }
     }

@@ -38,7 +38,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use gpui_kit::{App, Global, RenderImage};
+use egui::ColorImage;
 use hikaru_render::{
     terrain_view_proj_angled, upload_knob, Camera, GpuContext, GpuMesh,
     KnobMesh, KnobRenderer, KnobUniforms, MeshRenderer, MeshUniforms, QuadInstance, QuadRenderer,
@@ -353,7 +353,7 @@ impl HikaruRenderer {
     pub fn render_phaser_scope(
         &mut self,
         magnitudes: &[f32],
-    ) -> Result<Arc<RenderImage>, RendererError> {
+    ) -> Result<Arc<ColorImage>, RendererError> {
         let (width, height) = TargetId::PhaserScope.resolution();
         self.clear(wgpu::Color::TRANSPARENT, TargetId::PhaserScope)?;
         self.target(TargetId::PhaserScope)?;
@@ -574,7 +574,6 @@ impl HikaruRenderer {
                 label: Some("hikaru::clear::pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.color_view,
-                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(background),
@@ -596,7 +595,6 @@ impl HikaruRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
         }
 
@@ -629,8 +627,8 @@ pub fn knob_angle(fill: f32) -> f32 {
 struct CachedImage {
     /// Firma de lo que se dibujó. `None` hasta el primer render.
     key: Option<u64>,
-    /// La imagen, lista para el `img` de GPUI.
-    image: Option<Arc<RenderImage>>,
+    /// La imagen, lista para pintar con egui.
+    image: Option<Arc<ColorImage>>,
 }
 
 impl CachedImage {
@@ -641,11 +639,11 @@ impl CachedImage {
     /// Es el caso normal: el panel se redibuja en cada frame por culpa de los
     /// medidores de audio del resto de la app, y sin esto habría un readback por
     /// frame.
-    fn get(&self, key: u64) -> Option<Arc<RenderImage>> {
+    fn get(&self, key: u64) -> Option<Arc<ColorImage>> {
         if self.key == Some(key) { self.image.clone() } else { None }
     }
 
-    fn store(&mut self, key: u64, image: Arc<RenderImage>) {
+    fn store(&mut self, key: u64, image: Arc<ColorImage>) {
         // La imagen que queda acá se sube al atlas de texturas de GPUI, y el
         // atlas tiene un presupuesto finito. Reemplazar la firma sin soltar la
         // imagen anterior dejaba la vieja ocupando atlas para siempre, y como la
@@ -819,7 +817,7 @@ impl WavetableViewport {
     /// scope, draw de quads, readback, `RenderImage`, con cache por firma de
     /// las magnitudes. Devuelve `None` cuando no hay renderer conectado (la
     /// vista muestra su placeholder).
-    pub fn render_phaser_scope(&mut self, magnitudes: &[f32]) -> Option<Arc<RenderImage>> {
+    pub fn render_phaser_scope(&mut self, magnitudes: &[f32]) -> Option<Arc<ColorImage>> {
         let key = phaser_scope_key(magnitudes);
         if let Some(image) = self.phaser_scope.get(key) {
             return Some(image);
@@ -954,7 +952,7 @@ impl WavetableViewport {
         &mut self,
         renderer: &mut HikaruRenderer,
         request: &WavetableViewRequest<'_>,
-    ) -> Result<Arc<RenderImage>, RendererError> {
+    ) -> Result<Arc<ColorImage>, RendererError> {
         let viewer = &request.viewer;
         let (width, height) = viewer.size;
         let aspect = if height > 0 { width as f32 / height as f32 } else { 1.0 };
@@ -1059,7 +1057,7 @@ impl WavetableViewport {
         &mut self,
         renderer: &mut HikaruRenderer,
         request: &WavetableViewRequest<'_>,
-    ) -> Result<Arc<RenderImage>, RendererError> {
+    ) -> Result<Arc<ColorImage>, RendererError> {
         let camera = request.knob_camera;
         let target = TargetId::WtPosKnob;
 
@@ -1144,9 +1142,9 @@ impl WavetableViewport {
 #[derive(Debug, Default, Clone)]
 pub struct WavetableView {
     /// La pila 3D de ciclos.
-    pub viewer: Option<Arc<RenderImage>>,
+    pub viewer: Option<Arc<ColorImage>>,
     /// El knob de `WT POS`.
-    pub knob: Option<Arc<RenderImage>>,
+    pub knob: Option<Arc<ColorImage>>,
     /// Error del render, si lo hubo.
     pub error: Option<String>,
 }
@@ -1344,8 +1342,6 @@ mod tests {
 #[derive(Clone)]
 pub struct WavetableViewportHandle(Arc<Mutex<WavetableViewport>>);
 
-impl Global for WavetableViewportHandle {}
-
 impl Default for WavetableViewportHandle {
     fn default() -> Self {
         Self(Arc::new(Mutex::new(WavetableViewport::pending())))
@@ -1361,11 +1357,11 @@ impl WavetableViewportHandle {
     /// Pide la inicialización asíncrona del renderer, una sola vez.
     ///
     /// Pedir adapter y device a wgpu no se puede hacer sin bloquear, así que va
-    /// en un `spawn`. Al terminar pide un redibujado de las ventanas para que
+    /// en un hilo aparte. Al terminar pide un redibujado de egui para que
     /// las vistas que ya muestran el placeholder se actualicen con la imagen.
     ///
     /// Es seguro llamarlo en cada frame: el segundo intento es un no-op.
-    pub fn spawn_connect(&self, cx: &mut App) {
+    pub fn spawn_connect(&self, ctx: Option<egui::Context>) {
         {
             let Ok(mut viewport) = self.0.lock() else {
                 return;
@@ -1379,8 +1375,8 @@ impl WavetableViewportHandle {
         }
 
         let handle = self.clone();
-        cx.spawn(async move |cx| {
-            let result = WavetableViewport::connect().await;
+        std::thread::spawn(move || {
+            let result = pollster::block_on(WavetableViewport::connect());
 
             match handle.0.lock() {
                 Ok(mut viewport) => match result {
@@ -1397,11 +1393,10 @@ impl WavetableViewportHandle {
                 Err(_) => eprintln!("[Hikaru] el lock del viewport 3D quedó envenenado"),
             }
 
-            // `AsyncApp` no puede pedir el redibujado directo: el refresh va
-            // dentro de un `update` al hilo de la app.
-            cx.update(|cx| cx.refresh_windows());
-        })
-        .detach();
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// Pide las tres imágenes del panel.
@@ -1434,46 +1429,19 @@ impl WavetableViewportHandle {
     /// Va por el [`WavetableViewport`] porque es el dueño del renderer offscreen
     /// (`HikaruRenderer`); el alcance del render es del phaser y no del visor 3D,
     /// pero los recursos (contexto, pipeline de quads, targets) se comparten.
-    pub fn render_phaser_scope(&self, magnitudes: &[f32]) -> Option<Arc<RenderImage>> {
+    pub fn render_phaser_scope(&self, magnitudes: &[f32]) -> Option<Arc<ColorImage>> {
         self.0.lock().ok().and_then(|mut viewport| viewport.render_phaser_scope(magnitudes))
     }
 }
 
-/// Empaqueta píxeles RGBA8 en un [`RenderImage`] que GPUI pueda pintar.
-///
-/// # Por qué BGRA
-///
-/// `RenderImage` no documenta el orden de bytes, pero es lo que espera el atlas:
-/// `WgpuAtlas` sube los bytes tal cual a una textura `Bgra8Unorm` y sólo
-/// interchangea R y B cuando el atlas cayó a `Rgba8Unorm`. O sea, el contrato
-/// real es BGRA, y mandar RGBA produce una imagen con los canales rojo y azul
-/// cambiados. GPUI no normaliza: su propio decoder de imágenes hace el
-/// `swap(0, 2)` antes de armar el `Frame`.
-///
-/// `frame.buffer().as_raw()` no distingue RGBA de BGRA: son los mismos cuatro
-/// bytes con otro nombre, así que el `RgbaImage` de acá lleva BGRA adentro a
-/// propósito.
-pub fn render_image_from_rgba(width: u32, height: u32, mut rgba: Vec<u8>) -> RenderImage {
+/// Empaqueta píxeles RGBA8 en un [`ColorImage`] que egui pueda pintar.
+pub fn render_image_from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> ColorImage {
     debug_assert_eq!(
         rgba.len(),
         (width * height * 4) as usize,
         "el readback y las dimensiones del frame no coinciden"
     );
-
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-
-    let buffer = image::RgbaImage::from_raw(width, height, rgba)
-        .expect("el readback ya validó el tamaño; un `None` acá es un bug de bytes");
-    let frame = image::Frame::from_parts(
-        buffer,
-        0,
-        0,
-        image::Delay::from_numer_denom_ms(100, 1),
-    );
-
-    RenderImage::new([frame])
+    ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba)
 }
 
 /// Hash estable de un waveform, para decidir si hay que re-subir la malla.

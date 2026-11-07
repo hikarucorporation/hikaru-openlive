@@ -1,8 +1,8 @@
-# Clean-Room UI & DSP Re-implementation Spec: Rust + GPUI
+# Clean-Room UI & DSP Re-implementation Spec: Rust + egui/wgpu
 
 ## 0. Alcance y Método (leer primero)
 
-Esta especificación describe cómo re-implementar el **comportamiento y layout** de un panel DAW propietario (ejemplo: Detail Editor y Audio Clip Inspector de Bitwig) como código Rust libre y open-source para **Hikaru OpenLive** usando **GPUI**.
+Esta especificación describe cómo re-implementar el **comportamiento y layout** de un panel DAW propietario (ejemplo: Detail Editor y Audio Clip Inspector de Bitwig) como código Rust libre y open-source para **Hikaru OpenLive** usando **egui + wgpu** (eframe).
 
 Utiliza deliberadamente un método **clean-room, black-box**:
 
@@ -16,10 +16,11 @@ Cada ítem de la especificación debe citar su **fuente observada** (por ejemplo
 
 ## 1. Objetivo
 
-Producir modelos Rust idiomáticos y thread-safe, y vistas GPUI que:
+Producir modelos Rust idiomáticos y thread-safe, y vistas egui que:
 
 1. Coincidan con el layout observado y el comportamiento de interacción del panel objetivo.
 2. Usen el modelo de datos propio de Hikaru, nomenclatura propia y tokens de estilo propios.
+3. Rendericen a 60 fps estables en hardware modesto (el framework anterior, GPUI, fue descartado por lag).
 3. Mantengan el hilo de audio libre de allocations, locks y llamadas bloqueantes.
 
 Esto **no** es una traducción línea por línea. La unidad de trabajo es un **comportamiento observado**, no un archivo fuente.
@@ -35,7 +36,7 @@ Para cada panel, deben existir los siguientes artefactos antes de comenzar la im
 | `SPEC-<panel>.md` | Markdown | Layout observado, estados, interacciones, con fuentes |
 | `model.rs` | Rust | Tipos de datos propiedad de Hikaru, derivados solo de la spec |
 | `events.rs` | Rust | Enum explícito de eventos para mensajes UI-to-engine |
-| `view.rs` | Rust (GPUI) | Árbol de renderizado que coincida con la spec |
+| `view.rs` | Rust (egui) | Árbol de renderizado que coincida con la spec |
 | `tests/` | Rust | Tests de comportamiento (transiciones de estado, valores límite) |
 | `SCREENSHOTS/` | PNG | Capturas de referencia, con la fuente anotada |
 
@@ -52,14 +53,20 @@ Describir el panel como un árbol de regiones, no como código:
 - Controles: tipo (slider, toggle, botón, campo numérico), rango, default, y comportamiento de teclas modificadoras (Shift, Alt, doble-click).
 - Roles de color: dar a cada color un nombre semántico (`track.accent`, `canvas.background`). No reutilizar los valores de la paleta del vendor a menos que sean re-medidos y mapeados a tokens de Hikaru.
 
-### 3.2 Mapeo a GPUI
+### 3.2 Mapeo a egui/wgpu
 
-| Región observada | Constructo GPUI |
+| Región observada | Constructo egui |
 |---|---|
-| Splitter / pane | `div().flex()` con `.flex_col()` o `.flex_row()` |
-| Waveform / ruler / grid | Elemento `canvas()` con callback de paint |
-| Controles numéricos y toggles | Vistas hijas stateful vinculadas a entidades del modelo |
-| Iconos vectoriales | Assets SVG autoreados para Hikaru (sin iconos del vendor) |
+| Splitter / pane | `egui::SidePanel` / `egui::TopBottomPanel` / `egui::containers::ScrollArea` con `ui.horizontal()` / `ui.vertical()` |
+| Waveform / ruler / grid | `egui::Painter` (o `epaint::Mesh` para paths grandes) dentro de un `ui.allocate_rect()`; el paint ocurre cada frame en immediate mode |
+| Controles numéricos y toggles | Widgets nativos (`egui::Slider`, `egui::DragValue`, `egui::Checkbox`) más widgets custom propios; el estado vive en el struct `App`, no en vistas |
+| Iconos vectoriales | `egui::epaint::Shape` / meshes vectoriales autoreados para Hikaru (sin iconos del vendor) |
+
+Notas de immediate mode:
+
+- egui re-renderiza todo el árbol cada frame; no hay diffing. El costo de un panel complejo se controla subdividiendo con `ScrollArea`, caché de meshes de waveform (la forma no cambia por frame) y `ctx.request_repaint_after()` cuando nada cambia.
+- El estado mutable vive en un único struct `App` (tu fuente de verdad), no en un sistema de entidades. Las vistas reciben `&mut App` y emiten eventos.
+- Los colores se definen una vez como `egui::Color32` en un struct de tema propio (`HikaruTheme`) y se referencian por nombre semántico, nunca literales sueltos en la vista.
 
 ---
 
@@ -69,7 +76,25 @@ Describir el panel como un árbol de regiones, no como código:
 
 Cada valor mutable en la UI vive en una entidad Rust. Las vistas leen de ella y emiten eventos. Las vistas nunca mutan el engine de audio directamente.
 
-Usar la API actual de GPUI: `Entity<T>`, `Context<Self>`, `Window`, `cx.notify()`. Los nombres antiguos (`Model<T>`, `ViewContext`) están deprecados y no deben usarse en código nuevo.
+En egui no hay sistema de entidades: el estado vive en un struct `App` que implementa `eframe::App`. Las vistas son funciones que reciben `&mut App` y un `&egui::Context`, leen el estado y emiten eventos hacia el engine por un canal. Cuando el engine confirma un cambio (o cuando un valor atómico compartido se actualiza), se llama `ctx.request_repaint()` para el siguiente frame.
+
+```rust
+pub struct HikaruApp {
+    pub state: AppState,               // fuente de verdad, propiedad de Hikaru
+    pub ui_tx: rtrb::Producer<UiEvent>,       // hacia el engine (lock-free, ver §6)
+    pub engine_rx: rtrb::Consumer<EngineEvent>, // confirmaciones del engine
+}
+
+impl eframe::App for HikaruApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        while let Ok(ev) = self.engine_rx.pop() {   // drena confirmaciones
+            self.state.apply(ev);
+        }
+        // ... dibujar paneles; al final, si algo cambió:
+        // ctx.request_repaint();
+    }
+}
+```
 
 ### 4.2 Enum de eventos
 
@@ -83,7 +108,7 @@ pub enum DetailEditorEvent {
 
 Reglas:
 
-- Los eventos transportan valores, nunca referencias ni closures.
+- Los eventos transportan valores, nunca referencias ni closures (egui tampoco permite capturar referencias en closures de widgets que outliven el frame, así que esto alinea bien).
 - Las unidades son explícitas en los nombres (`gain_db`, `sample_index`). Evitar `f64` desnudo para tiempo; usar newtypes `SampleIndex(u64)` o `Beats(f64)`.
 - Cada evento que cambia estado de audio tiene un test de cambio de estado correspondiente.
 
@@ -142,25 +167,34 @@ Estas reglas son mandatorias y se hacen cumplir en code review.
 - No abrir el binario del vendor para este paso.
 - Revisión: cualquier nombre de tipo o campo que solo pudiera venir de los internals del vendor se renombra.
 
-### Paso 3: Construcción de la vista GPUI
+### Paso 3: Construcción de la vista egui
 
 ```rust
-impl Render for DetailEditorPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .h_64()
-            .bg(rgb(0x1e1e1e)) // reemplazar con un token del tema Hikaru
-            .child(self.waveform_canvas(cx))
-            .child(self.controls(cx))
-    }
+pub fn detail_editor_panel(app: &mut HikaruApp, ctx: &egui::Context) {
+    egui::TopBottomPanel::bottom("detail_editor")
+        .resizable(true)
+        .default_height(256.0)
+        .show(ctx, |ui| {
+            ui.vertical(|ui| {
+                let theme = app.state.theme; // tokens Hikaru, no literales
+                let bg: egui::Color32 = theme.canvas_background;
+                let rect = ui.available_rect_before_wrap();
+                ui.painter().rect_filled(rect, 0.0, bg);
+
+                waveform_canvas(ui, &mut app.state); // Painter/mesh custom
+                controls_row(ui, &mut app.state);    // sliders, toggles, DragValue
+            });
+        });
 }
 ```
 
+Notas:
+
+- El alto del panel se persiste en `app.state` (egui guarda el tamaño de paneles resizable en su propio storage, pero la fuente de verdad debe ser `AppState` para poder testearlo).
+- Si el contenido del canvas es estático entre frames, cachear el `epaint::Mesh` en `AppState` y solo re-pintarlo cuando cambie el zoom/scroll/clip.
+
 ### Paso 4: Verificación
-- Comparar la salida GPUI contra los screenshots de referencia a la misma escala y anotar deltas de píxeles en la spec.
+- Comparar la salida renderizada contra los screenshots de referencia a la misma escala y anotar deltas de píxeles en la spec.
 - Cada interacción en la spec tiene un test que maneja la vista y afirma el evento emitido.
 - Marcar el ítem de la spec `DONE` solo cuando pasen tanto el test visual como el de comportamiento.
 
@@ -172,7 +206,8 @@ impl Render for DetailEditorPanel {
 - [ ] Sin identificadores, iconos, fuentes ni código copiado del vendor en el repositorio.
 - [ ] `model.rs` compila sin nombres derivados del vendor.
 - [ ] El código del hilo de audio pasa las reglas de la sección 6.
-- [ ] El código GPUI usa la API actual (`Entity`, `Context`, `Window`).
+- [ ] El código usa egui/eframe con el modelo `App` + `Context` (sin APIs GPUI).
+- [ ] El panel mantiene 60 fps en la máquina de referencia (medir con `egui::Context::debug_painter` / frame time overlay).
 - [ ] Las notas de comparación visual están adjuntas.
 - [ ] Los headers de licencia del repositorio son compatibles con GPL.
 
@@ -183,3 +218,4 @@ impl Render for DetailEditorPanel {
 - ¿Qué panel de Hikaru es el primer objetivo, y qué screenshots o manuales lo cubren?
 - ¿Qué comportamiento de warp-marker está documentado públicamente y cuál debe testearse por observación?
 - ¿Cuál es la sample rate objetivo y el tamaño de buffer para los tests del engine de audio?
+- ¿Cuál es la máquina de referencia mínima para el objetivo de 60 fps (GPU, resolución)?

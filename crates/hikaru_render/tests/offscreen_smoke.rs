@@ -102,7 +102,7 @@ fn quad_pipeline_draws_without_validation_errors() {
 
     // Todo el bloque va dentro del error scope: si el layout del bind group, el
     // pipeline o el draw call no son válidos, el error aparece en `pop()`.
-    let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let sheets = SpriteSheetResources::new(&ctx);
     let sheet = SpriteSheet::from_rgba8(
@@ -138,11 +138,8 @@ fn quad_pipeline_draws_without_validation_errors() {
 
     // Forzar la ejecución para que el driver reporte los errores ahora y no en
     // algún momento posterior del test.
-    ctx.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("el poll del device debería completar");
-
-    let error = block_on(scope.pop());
+    ctx.device.poll(wgpu::Maintain::Wait);
+    let error = block_on(ctx.device.pop_error_scope());
     assert!(error.is_none(), "wgpu reportó un error de validación: {error:?}");
 }
 
@@ -151,7 +148,7 @@ fn quad_pipeline_draws_without_validation_errors() {
 fn mesh_pipeline_draws_without_validation_errors() {
     let Some(ctx) = context() else { return };
 
-    let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     // Sine de una sola etapa: sirve para probar el layout, no la música.
     let waveform: Vec<f32> = (0..256)
@@ -175,11 +172,8 @@ fn mesh_pipeline_draws_without_validation_errors() {
 
     renderer.draw(&ctx, &target, &mesh, &MeshUniforms::default());
 
-    ctx.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("el poll del device debería completar");
-
-    let error = block_on(scope.pop());
+    ctx.device.poll(wgpu::Maintain::Wait);
+    let error = block_on(ctx.device.pop_error_scope());
     assert!(error.is_none(), "wgpu reportó un error de validación: {error:?}");
 }
 
@@ -208,7 +202,7 @@ fn a_perspective_camera_makes_the_wavetable_land_inside_the_viewport() {
     // de wgpu que lo explique.
     let Some(ctx) = context() else { return };
 
-    let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let (width, height) = (320u32, 200u32);
     let target = ctx.create_render_target("test_camera_target", width, height, true);
@@ -242,10 +236,8 @@ fn a_perspective_camera_makes_the_wavetable_land_inside_the_viewport() {
 
     let pixels = ctx.read_color_rgba8(&target).expect("el readback debería completar");
 
-    ctx.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("el poll del device debería completar");
-    let error = block_on(scope.pop());
+    ctx.device.poll(wgpu::Maintain::Wait);
+    let error = block_on(ctx.device.pop_error_scope());
     assert!(error.is_none(), "wgpu reportó un error de validación: {error:?}");
 
     assert_eq!(
@@ -273,7 +265,7 @@ fn the_knob_renders_and_rotates_with_its_value() {
     // la misma posición y los dos valores darían frames idénticos.
     let Some(ctx) = context() else { return };
 
-    let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let size = hikaru_render::KNOB_RESOLUTION;
     let target = ctx.create_render_target("test_knob_target", size, size, true);
@@ -324,10 +316,8 @@ fn the_knob_renders_and_rotates_with_its_value() {
     // cambio va de un borde del disco al otro.
     assert_ne!(low, high, "el ángulo del knob no llegó al shader");
 
-    ctx.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("el poll del device debería completar");
-    let error = block_on(scope.pop());
+    ctx.device.poll(wgpu::Maintain::Wait);
+    let error = block_on(ctx.device.pop_error_scope());
     assert!(error.is_none(), "wgpu reportó un error de validación: {error:?}");
 }
 
@@ -358,7 +348,6 @@ fn clear(ctx: &GpuContext, target: &hikaru_render::RenderTarget) {
             label: Some("test_clear::pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target.color_view,
-                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -377,7 +366,6 @@ fn clear(ctx: &GpuContext, target: &hikaru_render::RenderTarget) {
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
-            multiview_mask: None,
         });
     }
     ctx.queue.submit(Some(encoder.finish()));
@@ -390,7 +378,7 @@ fn drawing_more_quads_than_the_initial_capacity_grows_the_buffer() {
     // capacidad inicial (256): ahí se recrea el storage buffer y su bind group.
     let Some(ctx) = context() else { return };
 
-    let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let sheets = SpriteSheetResources::new(&ctx);
     let sheet = SpriteSheet::from_rgba8(
@@ -424,10 +412,7 @@ fn drawing_more_quads_than_the_initial_capacity_grows_the_buffer() {
 
     renderer.draw(&ctx, &target.color_view, 64.0, 64.0, &quads, &sheet);
 
-    ctx.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("el poll del device debería completar");
-
-    let error = block_on(scope.pop());
+    ctx.device.poll(wgpu::Maintain::Wait);
+    let error = block_on(ctx.device.pop_error_scope());
     assert!(error.is_none(), "wgpu reportó un error de validación: {error:?}");
 }

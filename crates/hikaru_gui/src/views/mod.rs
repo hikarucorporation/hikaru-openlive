@@ -40,6 +40,3 @@ pub mod mcp_port_settings;
 pub mod control_panel;
 pub mod modal;
 pub mod hikaru_native_plugins;
-mod live_canvas;
-
-pub use live_canvas::LiveCanvas;

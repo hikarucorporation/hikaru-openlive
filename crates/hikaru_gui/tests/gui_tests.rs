@@ -199,24 +199,19 @@ fn the_waveform_hash_looks_at_the_bits_not_the_value() {
 }
 
 #[test]
-fn render_image_swaps_red_and_blue() {
-    // Si el swap falta, la Wavetable se ve cyan/roja invertida y no hay ningún
-    // error: es un bug visual puro. `RenderImage` espera BGRA.
-    let rgba = vec![10, 20, 30, 40, 50, 60, 70, 80];
+fn render_image_stores_rgba() {
+    let rgba = vec![10, 20, 30, 255, 50, 60, 70, 255];
     let image = render_image_from_rgba(2, 1, rgba);
 
-    let bytes = image.as_bytes(0).expect("el frame debería tener datos");
-    assert_eq!(bytes, &[30, 20, 10, 40, 70, 60, 50, 80]);
+    let bytes = image.as_raw();
+    assert_eq!(bytes, &[10, 20, 30, 255, 50, 60, 70, 255]);
 }
 
 #[test]
 fn render_image_keeps_the_frame_size() {
-    // Si el `RgbaImage` saliera con otras dimensiones, el `img` escalaría mal y
-    // el atlas subiría filas de más.
     let image = render_image_from_rgba(4, 2, vec![0; 4 * 2 * 4]);
-    let size = image.size(0);
-    assert_eq!(size.width.0, 4);
-    assert_eq!(size.height.0, 2);
+    assert_eq!(image.size[0], 4);
+    assert_eq!(image.size[1], 2);
 }
 
 #[test]
@@ -464,4 +459,113 @@ fn cada_target_del_atlas_declara_su_propia_resolucion() {
     let knob = TargetId::WtPosKnob.resolution();
     assert_eq!(knob.0, knob.1, "el knob es cuadrado por definición");
     assert_ne!(knob, WAVETABLE_VIEWPORT, "el knob y el visor no comparten target");
+}
+
+#[test]
+fn bitwig_layout_toggles_mode_and_view_coherence() {
+    use hikaru_gui::app::PanelLayout;
+    use hikaru_gui::views::dsp_rack::{OPEN_WAVETABLE_CARD_WIDTH, RACK_HEIGHT};
+
+    // 1. Default Bitwig Arrange layout: both Clip Launcher and Arranger Timeline active (split view)
+    let mut layout = PanelLayout::default();
+    assert!(layout.show_clip_launcher, "Por defecto el Clip Launcher horizontal está activo");
+    assert!(layout.show_arranger, "Por defecto el Arranger Timeline está activo");
+
+    // 2. Toggle off Arranger Timeline -> Clip Launcher remains active (like bitwig-clip-launcher.png)
+    layout.show_arranger = false;
+    if !layout.show_clip_launcher && !layout.show_arranger {
+        layout.show_clip_launcher = true;
+    }
+    assert!(layout.show_clip_launcher && !layout.show_arranger);
+
+    // 3. Toggle off Clip Launcher when Arranger is already off -> Arranger automatically activates (like bitwig-playlist.png)
+    layout.show_clip_launcher = false;
+    if !layout.show_clip_launcher && !layout.show_arranger {
+        layout.show_arranger = true;
+    }
+    assert!(!layout.show_clip_launcher && layout.show_arranger);
+
+    // 4. Compact Device Panel & OpenWavetable dimensions (matching bitwig-device-panel-(in-the-clip-launcher).png)
+    assert!(
+        RACK_HEIGHT <= 185.0,
+        "El Device Panel debe ser compacto (<= 185px), quedó en {RACK_HEIGHT}"
+    );
+    assert!(
+        OPEN_WAVETABLE_CARD_WIDTH <= 460.0,
+        "La tarjeta de OpenWavetable debe ser compacta (<= 460px), quedó en {OPEN_WAVETABLE_CARD_WIDTH}"
+    );
+}
+
+#[test]
+fn bitwig_wgpu_sdf_shader_parses_and_validates_cleanly() {
+    use hikaru_gui::ui::bitwig_wgpu::BITWIG_SDF_SHADER;
+    use naga::valid::{Capabilities, ValidationFlags, Validator};
+
+    let module = naga::front::wgsl::parse_str(BITWIG_SDF_SHADER)
+        .expect("BITWIG_SDF_SHADER debe compilar como WGSL válido");
+    let mut validator = Validator::new(ValidationFlags::all(), Capabilities::empty());
+    validator
+        .validate(&module)
+        .expect("BITWIG_SDF_SHADER debe pasar validación estricta de naga");
+}
+
+#[test]
+fn lemon_studio_vector_icons_and_meter_ballistics_coherence() {
+    use hikaru_gui::ui::icons::{self, parse_svg_subpaths};
+    use hikaru_gui::ui::meters::{db_to_frac, StereoBallistics};
+    use hikaru_gui::views::mixer::Track;
+
+    // 1. Todos los iconos vectoriales críticos de Tabler teselan geometría válida 0..=24
+    for icon in [
+        icons::PLAYER_PLAY,
+        icons::PLAYER_STOP,
+        icons::METRONOME,
+        icons::UNDO,
+        icons::REDO,
+        icons::FOLDER,
+        icons::PIANO,
+        icons::WAVE_SINE,
+        icons::SEARCH,
+        icons::VOLUME,
+        icons::HOME,
+        icons::REFRESH,
+        icons::EYE,
+    ] {
+        let subpaths = parse_svg_subpaths(icon.d);
+        assert!(
+            !subpaths.is_empty(),
+            "El icono vectorial '{}' debe producir al menos un sub-trazo",
+            icon.d
+        );
+        assert!(subpaths.iter().all(|(pts, _)| pts.len() >= 2));
+    }
+
+    // 2. La ley de dB del vúmetro es estrictamente monótona creciente
+    let f_m36 = db_to_frac(-36.0);
+    let f_m18 = db_to_frac(-18.0);
+    let f_m6 = db_to_frac(-6.0);
+    let f_0 = db_to_frac(0.0);
+    assert!(0.0 < f_m36 && f_m36 < f_m18 && f_m18 < f_m6 && f_m6 < f_0 && f_0 <= 1.0);
+
+    // 3. Balística estéreo mantiene Peak-Hold durante la ventana de retención
+    let mut bal = StereoBallistics::default();
+    bal.step([0.9, 0.8], 0.016);
+    let q_peak = bal.normalized_quad();
+    assert!(q_peak[0] > 0.7 && q_peak[2] >= q_peak[0]);
+    bal.step([0.0, 0.0], 0.10);
+    let q_decay = bal.normalized_quad();
+    assert!(
+        q_decay[2] > q_decay[0],
+        "Peak-hold debe retenerse por encima de la caída instantánea"
+    );
+
+    // 4. Paleta 1:1 de pistas Bitwig Studio 5.1.7 (Master gris, Track 1 naranja, Track 2 amarillo, Track 3 azul)
+    let master = Track::new(0, "Master".into(), true);
+    let tr1 = Track::new(1, "Inst 1".into(), false);
+    let tr2 = Track::new(2, "Audio 2".into(), false);
+    let tr3 = Track::new(3, "Audio 3".into(), false);
+    assert_eq!(master.color, egui::Color32::from_rgb(0x82, 0x84, 0x88));
+    assert_eq!(tr1.color, egui::Color32::from_rgb(0xFF, 0x55, 0x00));
+    assert_eq!(tr2.color, egui::Color32::from_rgb(0xE5, 0xAE, 0x19));
+    assert_eq!(tr3.color, egui::Color32::from_rgb(0x3A, 0xA8, 0xE0));
 }

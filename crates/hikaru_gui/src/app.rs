@@ -1,4 +1,4 @@
-// Hikaru OpenLive - App
+// Hikaru OpenLive - App (Immediate-mode egui + eframe)
 // GNU AGPLv3
 // crates/hikaru_gui/src/app.rs
 
@@ -6,24 +6,20 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use gpui_kit::component::*;
-use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::label::Label;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::*;
 use hikaru_audio_engine::AudioEngine;
 use hikaru_core::SampleRate;
 use hikaru_transport::{TransportPlaybackState, TransportPosition};
-use hikaru_plugin_host::{spawn_floating_gui, PluginFormat, PluginInstance};
+use hikaru_plugin_host::PluginInstance;
 
 use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::render::WavetableViewportHandle;
+use crate::theme;
 use crate::views::{
     about, arranger_view, audio_settings, clip_editor, detail_editor_panel, control_panel, dsp_rack, explorer,
     external_plugins_settings, footer,
-    header, matrix, mcp_port_settings, menu_bar, mixer, modal, piano_roll, playlist,
+    header, matrix, mcp_port_settings, mixer, modal, piano_roll, playlist,
 };
 
 pub fn sync_matrix_mixer_bidirectional(
@@ -150,11 +146,6 @@ pub enum OpenLiveView {
     ArrangerView,
 }
 
-/// Vista central del modo OpenStudio (flujo producción / timeline).
-///
-/// Son dos vistas independientes sobre el mismo `studio_tracks`: la Playlist
-/// compone clips en tiempo y el Arranger/Mixer mezcla canales. `Tab` / `F9`
-/// conmutan entre ambas sin salir nunca de OpenStudio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenStudioView {
     Playlist,
@@ -167,14 +158,9 @@ pub enum PanMode {
     MidSide,
 }
 
-/// Rango del BPM del transport. El motor descarta valores `<= 0.0`
-/// (`TransportPosition::set_bpm`) y toda la matemática de ticks asume un
-/// tempo positivo, así que la caja numérica se acota aquí.
 pub const BPM_MIN: f64 = 40.0;
 pub const BPM_MAX: f64 = 300.0;
 
-/// Texto de la caja numérica de BPM: enteros sin decimales, fracciones con
-/// los ceros sobrantes recortados (`140`, `87.5`).
 pub fn format_bpm(bpm: f64) -> String {
     if !bpm.is_finite() {
         return format!("{BPM_MIN:.0}");
@@ -188,20 +174,13 @@ pub fn format_bpm(bpm: f64) -> String {
     }
 }
 
-/// Métricas estándar que recorre el stepper de compás (SIG) con `-` / `+`.
 pub const STANDARD_SIGS: [(u32, u32); 7] =
     [(2, 4), (3, 4), (4, 4), (5, 4), (6, 8), (7, 8), (12, 8)];
 
-/// Texto de la caja de compás: siempre `numerador/denominador` (`4/4`).
 pub fn format_sig(num: u32, den: u32) -> String {
     format!("{}/{}", num.max(1), den.max(1))
 }
 
-/// Parsea lo que el usuario escribe en la caja de compás.
-///
-/// Acepta `N/D` (`6/8`) y número suelto (`3` → `3/4`). El numerador se acota
-/// a 1..=16 y el denominador a potencias de 2 musicales (2, 4, 8, 16); en otro
-/// caso devuelve `None` y la caja revierte al valor del transporte.
 pub fn parse_sig(text: &str) -> Option<(u32, u32)> {
     let text = text.trim();
     if text.is_empty() {
@@ -232,10 +211,6 @@ pub fn parse_sig(text: &str) -> Option<(u32, u32)> {
     Some((num, den))
 }
 
-/// Paso del stepper de compás sobre la lista estándar.
-///
-/// Si el compás actual no está en la lista (edición directa libre), se parte
-/// de `4/4` para que `-` / `+` siempre caigan en una métrica conocida.
 pub fn step_sig(num: u32, den: u32, delta: i32) -> (u32, u32) {
     let idx = STANDARD_SIGS
         .iter()
@@ -247,37 +222,18 @@ pub fn step_sig(num: u32, den: u32, delta: i32) -> (u32, u32) {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanelLayout {
-    /// Fraccion [0..1] del splitter `touch_keyboard_and_main_splitter`
-    /// (teclado vs main).
     pub keyboard_main_splitter: f32,
-    /// Fraccion [0..1] del splitter `inspector_and_main_splitter`.
     pub inspector_main_splitter: f32,
-    /// Fraccion [0..1] del splitter `main_and_browser_splitter`.
     pub main_browser_splitter: f32,
-    /// Fraccion [0..1] del splitter `main.1.arranger_detail_splitter`
-    /// (arranger vs complementary: mixer / clip launcher / note editor).
     pub arranger_detail_splitter: f32,
-    /// Fraccion [0..1] del splitter `main.2.mixer_detail_editor_splitter`.
     pub mixer_detail_editor_splitter: f32,
-    /// Fraccion [0..1] del splitter `main.3.editor_other_splitter`.
     pub editor_other_splitter: f32,
-    /// Visibilidad del teclado (Bitwig: parte del `touch_keyboard_and_main_splitter`).
     pub show_keyboard: bool,
-    /// Visibilidad del inspector lateral (Bitwig: `inspector_and_main_splitter`).
     pub show_inspector: bool,
-    /// Visibilidad de la vista Arranger / Playlist / Clip Launcher.
     pub show_arranger: bool,
-    /// Visibilidad del Clip Launcher (Bitwig:
-    /// `main.1.arranger_detail_splitter.complementary_panel.mixer.is_clip_launcher_visible`).
     pub show_clip_launcher: bool,
-    /// Visibilidad del mixer / device chain (Bitwig:
-    /// `...complementary_panel.mixer.is_device_chain_visible` /
-    /// `is_crossfade_visible`).
     pub show_mixer: bool,
-    /// Visibilidad del editor de notas.
     pub show_note_editor: bool,
-    /// Visibilidad de la sección de automatización (Bitwig:
-    /// `...complementary_panel.note_editor.Is Automation Section Visible`).
     pub show_automation: bool,
 }
 
@@ -301,245 +257,16 @@ impl Default for PanelLayout {
     }
 }
 
-pub struct AppState {
-    pub mode: AppMode,
-    pub transport: TransportPosition,
-    pub position_clock: Arc<AtomicU64>,
-    pub output_level_bits: Arc<AtomicU32>,
-    pub audio_proxy: AudioProxy,
-    pub is_looping: bool,
-    pub cpu_usage: f32,
-    pub bpm_synced_to_engine: f64,
-    /// Caja numérica de BPM del transport. Es la fuente de la edición del
-    /// usuario; `transport.bpm` sigue siendo el valor con el que trabaja el
-    /// resto de la app.
-    pub bpm_input: Entity<InputState>,
-    /// Caja de compás del transport (`4/4`). Igual que la de BPM: el usuario
-    /// edita texto y los botones `-` / `+` recorren `STANDARD_SIGS`;
-    /// `transport.beats_per_bar` / `beat_division` siguen siendo el valor con
-    /// el que trabaja el resto de la app.
-    pub sig_input: Entity<InputState>,
-    pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
-    pub show_dsp_rack: bool,
-    /// Vista central activa en OpenStudio (`Tab` / `F9` conmutan entre la
-    /// Playlist / Timeline y el Arranger / Mixer sin cambiar de modo).
-    pub openstudio_view: OpenStudioView,
-    pub show_about: bool,
-    pub is_recording: bool,
-    pub show_explorer: bool,
-    pub show_piano_roll: bool,
-    /// Layout de paneles estilo Bitwig Studio (arbol de splitters + flags).
-    pub panel_layout: PanelLayout,
-    pub piano_roll_state: piano_roll::PianoRollState,
-    pub explorer_state: explorer::FileExplorerState,
-
-    pub audio_settings_state: audio_settings::AudioSettingsState,
-    pub plugin_settings_state: external_plugins_settings::PluginSettingsState,
-    /// El panel `Hikaru MCP Port Settings...`: los slots de puerto por los
-    /// que los agentes de IA se enganchan al DAW.
-    pub mcp_port_settings_state: mcp_port_settings::McpPortSettingsState,
-    /// El Panel de Control / Dashboard estilo Bitwig Studio que se abre desde
-    /// el botón Energy Core de la barra de transporte.
-    pub control_panel_state: control_panel::ControlPanelState,
-    /// El desplazamiento y el gesto de arrastre de cada ventana modal.
-    ///
-    /// Vive en el estado global (y no en cada panel) porque el gesto tiene
-    /// que sobrevivir a los `notify` del render: las modales se reconstruyen
-    /// en cada frame y un flag local moriría con el primer `notify`, cortando
-    /// el arrastre tras un solo paso. Ver `views::modal`.
-    pub modal_drags: modal::ModalDrags,
-    pub playlist_state: playlist::PlaylistState,
-    pub matrix_state: matrix::SessionMatrixState,
-    /// Estado del Clip Editor (visualizador + sidebar). Es una entidad
-    /// propia —y no un campo de la matriz— porque lo alimentan TANTO la
-    /// Session Matrix como la Playlist/Timeline.
-    pub clip_editor: clip_editor::ClipEditorState,
-    pub matrix_clipboard: matrix::MatrixClipboard,
-    pub dragged_sample: Option<PathBuf>,
-    /// Slot del rack al que va la próxima wavetable que se elija en el
-    /// explorer, como `(pista, slot)`.
-    ///
-    /// Es un par de índices y no un flag porque el explorer es el que decide si
-    /// el click sobre un archivo arma un clip o carga una tabla, y para eso
-    /// necesita saber en qué slot del rack escribir. Vive en el estado y no en
-    /// la vista porque el click se resuelve en otro módulo.
-    pub pending_wavetable_slot: Option<(usize, usize)>,
-
-    pub live_tracks: Vec<mixer::Track>,
-    pub studio_tracks: Vec<mixer::Track>,
-    pub fx_tracks: Vec<mixer::Track>,
-
-    pub selected_track_index: usize,
-    pub selected_slot_index: usize,
-    /// Mensaje de ayuda contextual dinámico de la barra inferior (Bitwig Status Bar):
-    /// (Acción en cyan/blanco como "CLICK" o "DRAG", Descripción en gris como "Show Detail Editor Panel").
-    pub footer_context_help: Option<(String, String)>,
-    /// Lista completa de pistas de interacción contextual estilo Bitwig 5.1.7
-    /// (ej: `[("CLICK:", "Select Audio Track"), ("DRAG:", "Drag Audio Track"), ...]`).
-    pub footer_context_cues: Vec<(String, String)>,
-    /// Modificadores de teclado activos actualmente (`Shift`, `Ctrl`, `Alt`)
-    /// para resaltar en tiempo real las acciones disponibles en el Footer.
-    pub active_modifiers: gpui_kit::Modifiers,
-    pub add_slot_menu_open: bool,
-    /// Texto del buscador del navegador de plugins del DSP rack.
-    ///
-    /// Vive en el estado global (y no en la vista) por el mismo motivo que
-    /// `open_menu`: el navegador se reconstruye en cada frame y un flag
-    /// local moriría con el primer `notify`, perdiendo lo tecleado.
-    pub plugin_browser_query: String,
-    /// Filtro de formato/categoría del navegador de plugins.
-    pub plugin_browser_filter: dsp_rack::PluginBrowserFilter,
-    /// Caja de texto del buscador. Entidad creada al arrancar (como
-    /// `bpm_input`): el `Input` de gpui-kit la necesita para existir.
-    pub plugin_search_input: Entity<InputState>,
-    /// Gesto de knob de parámetro externo en curso (arrastre sobre la barra del
-    /// parámetro, en X o en Y según el eje que fije el primer movimiento).
-    /// Global como `mixer_bar_drag`: la tarjeta se reconstruye cada frame y un
-    /// flag local moriría con el primer `notify`, cortando el gesto tras un solo
-    /// paso. `None` = sin drag.
-    pub param_drag: Option<ParamDragState>,
-    /// Resultados del sondeo de parámetros pendientes de aplicar. El sondeo
-    /// corre en hilos aparte (un `dlopen` en el hilo de la GUI congelaría la
-    /// ventana); `drain_param_probes` los vuelca a los slots en el hilo
-    /// principal, llamado desde `sync_frame`.
-    param_probe_tx: Sender<ParamProbeResult>,
-    param_probe_rx: Receiver<ParamProbeResult>,
-    /// Ids de descriptores con sondeo en vuelo (no relanzar uno por frame).
-    param_probing: HashSet<String>,
-
-    pub track_peak_bits: Vec<Arc<AtomicU32>>,
-    pub smoothed_track_peaks: [f32; 16],
-    pub smoothed_master_peak: f32,
-
-    pub openlive_view: OpenLiveView,
-    pub arranger_fader_drag: Option<arranger_view::FaderTarget>,
-    /// Handles de scroll del área de columnas del Arranger/Mixer.
-    ///
-    /// Son explícitos (viven en el estado y no en el `Scrollable` implícito)
-    /// para que el gesto de pan con botón central pueda mover el viewport
-    /// directamente con `ScrollHandle::set_offset`.
-    pub mixer_scroll_h: ScrollHandle,
-    pub mixer_scroll_v: ScrollHandle,
-    /// Handles de scroll de la Playlist/Timeline (OpenStudio).
-    ///
-    /// Son explícitos (viven en el estado y no en el `Scrollable` implícito,
-    /// como los del mixer) para que el zoom con rueda anclado al cursor
-    /// (`Ctrl`/`Alt` + wheel) pueda compensar el viewport con
-    /// `ScrollHandle::set_offset` y el tick bajo el cursor no se mueva al
-    /// cambiar `zoom_x` / `row_h`.
-    pub playlist_scroll_h: ScrollHandle,
-    pub playlist_scroll_v: ScrollHandle,
-    /// Gesto de navegación con botón central (ruedita) sobre la Playlist.
-    /// Mismo patrón que `mixer_pan`: vive global porque el área se reconstruye
-    /// cada frame (un flag local moriría con el primer `notify`).
-    pub playlist_pan: Option<playlist::PlaylistPanState>,
-    /// Gesto de pan de navegación con botón central (MMB) sobre el Mixer /
-    /// Arranger. Global —y no flag local del widget— por el mismo motivo que
-    /// `arranger_fader_drag`: el área se reconstruye en cada frame.
-    pub mixer_pan: Option<arranger_view::MixerPanState>,
-    /// Arrastre del thumb de la scrollbar horizontal explícita del Mixer con
-    /// botón izquierdo: guarda el agarre (`click_x - thumb_x`, px) para que
-    /// el thumb no salte al agarrarlo fuera del centro. `None` = sin drag.
-    pub mixer_bar_drag: Option<f32>,
-    /// Gesto de mezcla en curso en los headers de la Session Matrix
-    /// (volumen/pan por pista). Global —y no flag local del widget— porque
-    /// el header se reconstruye en cada frame y el primer `notify` del drag
-    /// mataría un flag local, cortando el gesto tras un solo paso.
-    pub matrix_mix_drag: Option<matrix::MatrixMixTarget>,
-    /// Base del gesto relativo del knob de pan: `(y_inicial, pan_inicial)`.
-    pub matrix_pan_gesture: Option<(f32, f32)>,
-    /// Bounds del riel congelados en `mouse_down` para mapear el overlay.
-    pub matrix_mix_bounds: [f32; 4],
-
-    /// Alto del Mixer Panel inferior (Bitwig bottom Mix Panel).
-    pub bottom_mixer_height: f32,
-    /// Arrastre del splitter del Mixer Panel inferior: `(y_inicial, alto_inicial)`.
-    pub bottom_mixer_splitter_drag: Option<(f32, f32)>,
-    /// Visibilidad de la sección de Devices en el Mixer Panel inferior.
-    pub bottom_mixer_show_devices: bool,
-    /// Visibilidad de la sección de Sends en el Mixer Panel inferior.
-    pub bottom_mixer_show_sends: bool,
-    /// Visibilidad de la sección de I/O en el Mixer Panel inferior.
-    pub bottom_mixer_show_io: bool,
-    /// Scroll horizontal del panel de mezcla inferior.
-    pub bottom_mixer_scroll_h: ScrollHandle,
-
-    /// Ancho dinámico de las columnas de pista en el Arranger View (Bitwig parity).
-    pub arranger_track_width: f32,
-    /// Arrastre del separador horizontal de columnas de pista: `(track_target, x_inicial, ancho_inicial)`.
-    pub arranger_track_width_drag: Option<(arranger_view::StripTarget, f32, f32)>,
-    /// Dispositivo arrastrado actualmente entre pistas (para feedback visual de drop targets).
-    pub dragging_device: Option<crate::views::mixer::MixerDeviceDrag>,
-
-    pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
-    pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
-
-    /// Archivo de proyecto abierto (`None` = sesión sin guardar, la que
-    /// arranca al abrir la app).
-    ///
-    /// Vive en el estado y no en el módulo de proyecto porque es lo que
-    /// decide si `File > Save` escribe donde ya estaba o abre el diálogo de
-    /// "Save As...", y porque el título de la ventana lo muestra.
-    pub project_path: Option<PathBuf>,
-    /// Si el proyecto tiene cambios sin guardar.
-    ///
-    /// Es una bandera de cortesía, no un sistema de undo: la pone el gesto que
-    /// edita algo y la limpia un save exitoso.
-    pub project_dirty: bool,
-
-    /// Menú de la barra superior que está desplegado (`None` = todos cerrados).
-    ///
-    /// Va en el estado y no en una entidad creada dentro de `menu_bar::render`
-    /// porque la barra se REDIBUJA en cada frame: una entidad creada por render
-    /// moriría con el primer `notify` y el menú no llegaría a abrirse nunca.
-    /// El índice es la posición en la lista de menús (`FILE` = 0, `EDIT` = 1,
-    /// `VIEW` = 2, `SETTINGS` = 3, `HELP` = 4).
-    pub open_menu: Option<usize>,
-}
-
-#[derive(Clone)]
-pub struct AppStateHandle(pub Entity<AppState>);
-
-impl Global for AppStateHandle {}
-
-/// Píxeles de arrastre para recorrer el rango completo de un parámetro.
-///
-/// 160px es el mismo recorrido que usan los sliders del panel del OpenWavetable
-/// (`SETTING_DRAG_PX`): el gesto completo tiene que caber en un movimiento
-/// cómodo de muñeca sin que un error de agarre salte de un extremo al otro.
 pub const PARAM_DRAG_RANGE_PX: f32 = 160.0;
-
-/// Multiplicador de `Shift`: el mismo gesto, cuatro veces más fino.
 const PARAM_DRAG_FINE: f32 = 0.25;
-
-/// Movimiento mínimo, en px, antes de fijar el eje del gesto.
-///
-/// Sin este umbral el eje se decide con el primer píxel de vibración del mouse y
-/// un gesto diagonal de verdad va a ir alternando entre los dos ejes, con lo que
-/// el valor sube y baja mientras el cursor avanza en una sola dirección.
 const PARAM_DRAG_AXIS_LOCK_PX: f32 = 2.0;
 
-/// Eje que gobierna un arrastre de parámetro.
-///
-/// La barra de parámetro del rack es **horizontal**, así que el gesto natural
-/// sobre ella es en X. Se acepta también en Y porque es lo que todo el mundo
-/// hace por costumbre con un fader, pero el gesto manda en un solo eje: mezclar
-/// los dos sumaría el delta de X con el de Y y el control se iría al extremo con
-/// un movimiento diagonal de unos pocos píxeles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParamDragAxis {
     Horizontal,
     Vertical,
 }
 
-/// Gesto de knob de parámetro externo en curso.
-///
-/// Relativo al punto de agarre: `origin_x`/`origin_y` son las coordenadas de
-/// ventana (px) del `mouse_down` y `start_value` el valor normalizado de
-/// entonces, así que agarrar el fader en cualquier punto del recorrido no lo
-/// teletransporta. El seguimiento vive en el estado global porque la tarjeta se
-/// reconstruye cada frame, y los listeners de `mouse_move` se re-registran en
-/// cada paint (ver `dsp_rack::param_drag_keepalive`).
 #[derive(Clone, Copy, Debug)]
 pub struct ParamDragState {
     pub track: usize,
@@ -548,14 +275,10 @@ pub struct ParamDragState {
     pub origin_x: f32,
     pub origin_y: f32,
     pub start_value: f32,
-    /// Eje ya fijado. `None` hasta que el gesto pasa el umbral de
-    /// [`PARAM_DRAG_AXIS_LOCK_PX`]: mientras tanto el valor no se mueve.
     axis: Option<ParamDragAxis>,
 }
 
 impl ParamDragState {
-    /// Gesto recién armado en el punto de agarre `(x, y)`, con el eje sin
-    /// fijar todavía: lo decide el primer movimiento real.
     pub fn new(
         track: usize,
         slot: usize,
@@ -567,10 +290,6 @@ impl ParamDragState {
         Self { track, slot, param_id, origin_x: x, origin_y: y, start_value, axis: None }
     }
 
-    /// Eje que ganaría el gesto en `(x, y)`: el de mayor desplazamiento desde
-    /// el agarre. Devuelve el que manda aunque el eje todavía no esté fijado;
-    /// es lo que hace que el primer movimiento real del gesto ya vaya por donde
-    /// va.
     fn axis_for(&self, x: f32, y: f32) -> ParamDragAxis {
         let dx = (x - self.origin_x).abs();
         let dy = (y - self.origin_y).abs();
@@ -581,13 +300,6 @@ impl ParamDragState {
         }
     }
 
-    /// Avanza el gesto hasta `(x, y)` y devuelve el valor a aplicar.
-    ///
-    /// `None` = "no apliques nada": coordenadas no finitas (un evento con
-    /// posición corrupta), o el gesto todavía no se movió lo suficiente como
-    /// para decidir en qué eje va. Devolver el valor en vez de aplicarlo es lo
-    /// que permite que el llamador no pague un `cx.notify()` por vibración del
-    /// mouse.
     pub fn advance(&mut self, x: f32, y: f32, fine: bool) -> Option<f32> {
         if !x.is_finite() || !y.is_finite() || !self.start_value.is_finite() {
             return None;
@@ -595,9 +307,7 @@ impl ParamDragState {
         let axis = match self.axis {
             Some(axis) => axis,
             None => {
-                if (x - self.origin_x).abs().max((y - self.origin_y).abs())
-                    < PARAM_DRAG_AXIS_LOCK_PX
-                {
+                if (x - self.origin_x).abs().max((y - self.origin_y).abs()) < PARAM_DRAG_AXIS_LOCK_PX {
                     return None;
                 }
                 let locked = self.axis_for(x, y);
@@ -605,7 +315,6 @@ impl ParamDragState {
                 locked
             }
         };
-        // Vertical hacia arriba = más, como el knob de siempre.
         let delta = match axis {
             ParamDragAxis::Horizontal => x - self.origin_x,
             ParamDragAxis::Vertical => self.origin_y - y,
@@ -615,44 +324,16 @@ impl ParamDragState {
     }
 }
 
-/// Resultado del sondeo de parámetros de un plugin externo.
-///
-/// Lo produce el hilo de sondeo (que instancia el plugin fuera del hilo de
-/// la GUI) y lo consume `drain_param_probes` en el hilo principal.
-/// `params` trae `(info, valor_actual)`; `error` explica por qué no hay nada
-/// que mostrar (el rack lo pinta en la tarjeta en vez de dejarla vacía).
 pub struct ParamProbeResult {
     pub descriptor_id: String,
     pub params: Vec<(hikaru_plugin_host::PluginParamInfo, f32)>,
     pub error: Option<String>,
-    /// Si el plugin declara editor gráfico.
-    ///
-    /// El escaneo de disco no puede saberlo: `registry::inspect_candidate`
-    /// instancia **nada** a propósito, así que deja `descriptor.has_gui` en
-    /// `false` siempre. Sin este campo el botón "Abrir editor" no se dibuja
-    /// nunca, porque `can_open_editor` mira el descriptor.
-    ///
-    /// El sondeo sí crea una instancia real, así que es el primer momento en
-    /// que la respuesta es honesta.
     pub has_gui: bool,
 }
 
-/// Sondea los parámetros de un plugin externo en un hilo aparte (ver
-/// `AppState::request_external_params`).
-///
-/// Instancia el plugin SIN audio ni GUI, lee `snapshot_params` y lo suelta:
-/// la instancia es temporal, la caché del slot es lo que vive. CLAP no se
-/// instancia siquiera: sin API segura de `params` no hay nada honesto que
-/// leer, y un `dlopen` para volver vacío sería espera regalada.
-fn probe_external_params(
-    descriptor: &hikaru_plugin_host::PluginDescriptor,
-) -> ParamProbeResult {
+fn probe_external_params(descriptor: &hikaru_plugin_host::PluginDescriptor) -> ParamProbeResult {
     use hikaru_plugin_host::{ClapInstance, PluginInstance, Vst3Instance};
 
-    // Ambos formatos se instancian y se leen. Antes el CLAP devolvía
-    // `Ok(vec![])` sin instanciar nada, así que el rack caía en "CLAP:
-    // parámetros no vinculados por el host" aunque el plugin los expusiera
-    // (Dragonfly tiene 18, LSP varios cientos).
     let load_result = match descriptor.format {
         hikaru_plugin_host::PluginFormat::VST3 => {
             Vst3Instance::load(&descriptor.path).map(|i| Box::new(i) as Box<dyn PluginInstance>)
@@ -688,639 +369,104 @@ fn probe_external_params(
         descriptor_id: descriptor.id.clone(),
         params,
         error: None,
-        // Antes de leer los parámetros: si `snapshot_params` falla igual
-        // sabemos si hay editor que abrir.
         has_gui: instance.has_gui(),
     }
 }
 
-/// Las pistas del modo activo.
-impl AppState {
-    /// Las pistas según el modo: el rack, el mixer y el editor de plugins
-    /// siempre trabajan sobre el set que se está viendo.
-    pub fn tracks(&self) -> &Vec<mixer::Track> {
-        match self.mode {
-            AppMode::OpenLive => &self.live_tracks,
-            AppMode::OpenStudio => &self.studio_tracks,
-        }
-    }
+pub struct AppState {
+    pub mode: AppMode,
+    pub transport: TransportPosition,
+    pub position_clock: Arc<AtomicU64>,
+    pub output_level_bits: Arc<AtomicU32>,
+    pub audio_proxy: AudioProxy,
+    pub is_looping: bool,
+    pub cpu_usage: f32,
+    pub bpm_synced_to_engine: f64,
+    pub bpm_input: String,
+    pub sig_input: String,
+    pub global_loop_synced_to_engine: Option<(bool, u64, u64)>,
+    pub show_dsp_rack: bool,
+    pub openstudio_view: OpenStudioView,
+    pub show_about: bool,
+    pub is_recording: bool,
+    pub show_explorer: bool,
+    pub show_piano_roll: bool,
+    pub panel_layout: PanelLayout,
+    pub piano_roll_state: piano_roll::PianoRollState,
+    pub explorer_state: explorer::FileExplorerState,
 
-    /// Lo mismo, para escritura.
-    pub fn tracks_mut(&mut self) -> &mut Vec<mixer::Track> {
-        match self.mode {
-            AppMode::OpenLive => &mut self.live_tracks,
-            AppMode::OpenStudio => &mut self.studio_tracks,
-        }
-    }
+    pub audio_settings_state: audio_settings::AudioSettingsState,
+    pub plugin_settings_state: external_plugins_settings::PluginSettingsState,
+    pub mcp_port_settings_state: mcp_port_settings::McpPortSettingsState,
+    pub control_panel_state: control_panel::ControlPanelState,
+    pub modal_drags: modal::ModalDrags,
+    pub playlist_state: playlist::PlaylistState,
+    pub matrix_state: matrix::SessionMatrixState,
+    pub clip_editor: clip_editor::ClipEditorState,
+    pub matrix_clipboard: matrix::MatrixClipboard,
+    pub dragged_sample: Option<PathBuf>,
+    pub pending_wavetable_slot: Option<(usize, usize)>,
 
-    /// Índice de pista seguro: el layout trabaja con un índice guardado que
-    /// puede quedar fuera de rango al borrar pistas.
-    pub fn safe_track_index(&self) -> usize {
-        self.selected_track_index.min(self.tracks().len().saturating_sub(1))
-    }
+    pub live_tracks: Vec<mixer::Track>,
+    pub studio_tracks: Vec<mixer::Track>,
+    pub fx_tracks: Vec<mixer::Track>,
 
-    /// Índice de la pista seleccionada en el **motor de audio**.
-    ///
-    /// Hay dos espacios de índices distintos y confundirlos rompe el audio:
-    ///
-    /// - El mixer (`tracks()`, y por lo tanto `selected_track_index`) mete un
-    ///   MASTER en la posición 0. La pista visible N vive en `tracks()[N + 1]`.
-    /// - El motor no tiene noción de master: sus 16 pistas son 0..=15 y la
-    ///   primera es una pista normal. El clip de la pista visible N se mezcla
-    ///   en `track_output_bufs[N]`.
-    ///
-    /// Todo comando con `track_idx` que cruce al motor tiene que pasar por acá.
-    /// El que no lo hacía era el rack de DSP: mandaba `selected_track_index`
-    /// crudo, así que un plugin asignado a la pista visible N se insertaba en
-    /// `track_effects[N + 1]` mientras el clip de esa pista se mezclaba en
-    /// `track_output_bufs[N]`. La cadena de efectos quedaba una pista más
-    /// abajo, recibiendo siempre un buffer mudo: el plugin se cargaba, corría y
-    /// sonaba el audio seco, indistinguible de un track muteado.
-    ///
-    /// Devuelve `None` para el master, que no tiene pista equivalente en el
-    /// motor: una cadena de insert no tiene dónde insertarse.
-    pub fn engine_track_index(&self) -> Option<usize> {
-        self.safe_track_index().checked_sub(1)
-    }
+    pub selected_track_index: usize,
+    pub selected_slot_index: usize,
+    pub footer_context_help: Option<(String, String)>,
+    pub footer_context_cues: Vec<(String, String)>,
+    pub active_modifiers: egui::Modifiers,
+    pub add_slot_menu_open: bool,
+    pub plugin_browser_query: String,
+    pub plugin_browser_filter: dsp_rack::PluginBrowserFilter,
+    pub plugin_search_input: String,
+    pub param_drag: Option<ParamDragState>,
+    pub param_probe_tx: Sender<ParamProbeResult>,
+    pub param_probe_rx: Receiver<ParamProbeResult>,
+    pub param_probing: HashSet<String>,
 
-    /// El slot de DSP que está seleccionado, si existe.
-    ///
-    /// Es el acceso canónico al slot desde cualquier vista: todas pasan por acá
-    /// en vez de repetir el `tracks()` + `get()` + `get()`, que es donde aparece
-    /// el `unwrap` que rompe la ventana cuando el índice quedó viejo.
-    pub fn selected_slot(&self) -> Option<&mixer::DspSlot> {
-        self.tracks().get(self.safe_track_index())?.effects.get(self.selected_slot_index)
-    }
+    pub track_peak_bits: Vec<Arc<AtomicU32>>,
+    pub smoothed_track_peaks: [f32; 16],
+    pub smoothed_master_peak: f32,
 
-    /// El slot de DSP seleccionado, para escritura.
-    pub fn selected_slot_mut(&mut self) -> Option<&mut mixer::DspSlot> {
-        // El índice se copia antes de tomar el `&mut`: si se leyera después, el
-        // borrow del vector impediría volver a tocar `self`.
-        let track = self.selected_track_index.min(self.tracks().len().saturating_sub(1));
-        let slot = self.selected_slot_index;
-        self.tracks_mut().get_mut(track)?.effects.get_mut(slot)
-    }
+    pub openlive_view: OpenLiveView,
+    pub arranger_fader_drag: Option<arranger_view::FaderTarget>,
+    pub mixer_scroll_offset_x: f32,
+    pub mixer_scroll_offset_y: f32,
+    pub playlist_pan: Option<playlist::PlaylistPanState>,
+    pub mixer_pan: Option<arranger_view::MixerPanState>,
+    pub mixer_bar_drag: Option<f32>,
+    pub matrix_mix_drag: Option<matrix::MatrixMixTarget>,
+    pub matrix_pan_gesture: Option<(f32, f32)>,
+    pub matrix_mix_bounds: [f32; 4],
 
-    /// El slot de un track y un índice concretos, para lectura.
-    ///
-    /// Los editores reciben `track_idx` y `slot_idx` en vez de leer el estado
-    /// global: así el panel sigue siendo correcto si el rack cambia de pista
-    /// mientras se dibuja.
-    pub fn slot(&self, track_idx: usize, slot_idx: usize) -> Option<&mixer::DspSlot> {
-        self.tracks().get(track_idx)?.effects.get(slot_idx)
-    }
+    pub bottom_mixer_height: f32,
+    pub bottom_mixer_splitter_drag: Option<(f32, f32)>,
+    pub bottom_mixer_show_devices: bool,
+    pub bottom_mixer_show_sends: bool,
+    pub bottom_mixer_show_io: bool,
+    pub bottom_mixer_scroll_offset_x: f32,
 
-    /// Igual que [`AppState::slot`], para escritura.
-    pub fn slot_mut(&mut self, track_idx: usize, slot_idx: usize) -> Option<&mut mixer::DspSlot> {
-        self.tracks_mut().get_mut(track_idx)?.effects.get_mut(slot_idx)
-    }
+    pub arranger_track_width: f32,
+    pub arranger_track_width_drag: Option<(arranger_view::StripTarget, f32, f32)>,
+    pub dragging_device: Option<crate::views::mixer::MixerDeviceDrag>,
 
-    pub fn target_effects_mut(
-        &mut self,
-        target: arranger_view::StripTarget,
-    ) -> Option<&mut Vec<mixer::DspSlot>> {
-        use arranger_view::StripTarget;
-        match target {
-            StripTarget::Master => self.tracks_mut().first_mut().map(|t| &mut t.effects),
-            StripTarget::Live(idx) => self.live_tracks.get_mut(idx + 1).map(|t| &mut t.effects),
-            StripTarget::Studio(idx) => self.studio_tracks.get_mut(idx).map(|t| &mut t.effects),
-            StripTarget::Fx(idx) => self.fx_tracks.get_mut(idx).map(|t| &mut t.effects),
-        }
-    }
-
-    /// Obtiene el ancho individual de un canal en Arranger View (Bitwig Studio parity).
-    pub fn track_width(&self, target: arranger_view::StripTarget) -> f32 {
-        use arranger_view::StripTarget;
-        match target {
-            StripTarget::Master => match self.mode {
-                AppMode::OpenLive => self.live_tracks.first().map(|t| t.width).unwrap_or(self.arranger_track_width),
-                AppMode::OpenStudio => self.studio_tracks.first().map(|t| t.width).unwrap_or(self.arranger_track_width),
-            },
-            StripTarget::Live(idx) => self.live_tracks.get(idx + 1).map(|t| t.width).unwrap_or(self.arranger_track_width),
-            StripTarget::Studio(idx) => self.studio_tracks.get(idx).map(|t| t.width).unwrap_or(self.arranger_track_width),
-            StripTarget::Fx(idx) => self.fx_tracks.get(idx).map(|t| t.width).unwrap_or(self.arranger_track_width),
-        }
-    }
-
-    /// Ajusta el ancho individual de un canal en Arranger View (Bitwig Studio parity),
-    /// aislándolo al canal objetivo y respetando los límites mínimo y máximo.
-    pub fn set_track_width(&mut self, target: arranger_view::StripTarget, width: f32) {
-        use arranger_view::StripTarget;
-        let clamped = width.clamp(
-            arranger_view::MIN_TRACK_WIDTH,
-            arranger_view::MAX_TRACK_WIDTH,
-        );
-        match target {
-            StripTarget::Master => match self.mode {
-                AppMode::OpenLive => {
-                    if let Some(t) = self.live_tracks.first_mut() {
-                        t.width = clamped;
-                    }
-                }
-                AppMode::OpenStudio => {
-                    if let Some(t) = self.studio_tracks.first_mut() {
-                        t.width = clamped;
-                    }
-                }
-            },
-            StripTarget::Live(idx) => {
-                if let Some(t) = self.live_tracks.get_mut(idx + 1) {
-                    t.width = clamped;
-                }
-            }
-            StripTarget::Studio(idx) => {
-                if let Some(t) = self.studio_tracks.get_mut(idx) {
-                    t.width = clamped;
-                }
-            }
-            StripTarget::Fx(idx) => {
-                if let Some(t) = self.fx_tracks.get_mut(idx) {
-                    t.width = clamped;
-                }
-            }
-        }
-    }
-
-    /// Mueve un dispositivo (DSP Slot) de una pista/slot a otra pista/slot.
-    ///
-    /// Mueve el `DspSlot` en el State Graph de la GUI, ajusta los índices de
-    /// selección y, si el slot contiene un plugin externo, envía el comando
-    /// `MoveExternalPlugin` al `AudioEngine` para reubicar el nodo y los taps
-    /// en la cadena de audio de forma atómica y segura.
-    pub fn move_device(
-        &mut self,
-        from_target: arranger_view::StripTarget,
-        from_slot: usize,
-        to_target: arranger_view::StripTarget,
-        to_slot: usize,
-    ) {
-        use arranger_view::StripTarget;
-
-        self.dragging_device = None;
-
-        // No-op si el origen y destino coinciden exactamente en la misma posición
-        let current_len = self.target_effects_mut(from_target).map(|e| e.len()).unwrap_or(0);
-        if from_target == to_target && (from_slot == to_slot || (to_slot == usize::MAX && from_slot + 1 >= current_len)) {
-            return;
-        }
-
-        // 1. Extraer slot
-        let slot = {
-            let Some(effects) = self.target_effects_mut(from_target) else { return; };
-            if from_slot >= effects.len() { return; }
-            effects.remove(from_slot)
-        };
-
-        let has_external = slot.external.is_some();
-
-        // 2. Insertar en destino
-        let dest_inserted = {
-            let Some(effects) = self.target_effects_mut(to_target) else {
-                if let Some(orig) = self.target_effects_mut(from_target) {
-                    orig.insert(from_slot.min(orig.len()), slot);
-                }
-                return;
-            };
-            let dest = to_slot.min(effects.len());
-            effects.insert(dest, slot);
-            dest
-        };
-
-        // 3. Selección coherente
-        let from_mixer = match from_target {
-            StripTarget::Master | StripTarget::Fx(_) => 0,
-            StripTarget::Live(idx) => idx + 1,
-            StripTarget::Studio(idx) => idx,
-        };
-        let to_mixer = match to_target {
-            StripTarget::Master | StripTarget::Fx(_) => 0,
-            StripTarget::Live(idx) => idx + 1,
-            StripTarget::Studio(idx) => idx,
-        };
-        if self.selected_track_index == from_mixer && self.selected_slot_index == from_slot {
-            self.selected_track_index = to_mixer;
-            self.selected_slot_index = dest_inserted;
-        }
-
-        // 4. Si es externo, mover en el AudioEngine
-        if has_external {
-            let to_engine_track = |target: StripTarget| match target {
-                StripTarget::Live(idx) => Some(idx),
-                StripTarget::Studio(idx) => idx.checked_sub(1),
-                StripTarget::Fx(_) => Some(15),
-                _ => None,
-            };
-            if let (Some(f_tr), Some(t_tr)) = (to_engine_track(from_target), to_engine_track(to_target)) {
-                self.audio_proxy.send(GuiCommand::MoveExternalPlugin {
-                    from_track: f_tr,
-                    from_slot,
-                    to_track: t_tr,
-                    to_slot: dest_inserted,
-                });
-            }
-        }
-    }
-
-    /// Pide el sondeo de parámetros de un plugin externo.
-    ///
-    /// Marca el slot como `Probing` e instancia el plugin en un hilo aparte:
-    /// un `dlopen` + init en el hilo de la GUI congelaría la ventana cientos
-    /// de ms. Es idempotente por descriptor (no relanza uno en vuelo) y no
-    /// hace nada para slots sin externo. El resultado aterriza vía
-    /// `drain_param_probes`, que corre en el hilo principal desde
-    /// `sync_frame`.
-    pub fn request_external_params(
-        &mut self,
-        descriptor: &hikaru_plugin_host::PluginDescriptor,
-    ) {
-        if !self.param_probing.insert(descriptor.id.clone()) {
-            return;
-        }
-        let marked = if let Some(slot) = self
-            .tracks_mut()
-            .iter_mut()
-            .flat_map(|track| track.effects.iter_mut())
-            .find(|slot| {
-                slot.external
-                    .as_ref()
-                    .is_some_and(|ext| ext.id == descriptor.id)
-            }) {
-            slot.params_status = mixer::ExternalParamsStatus::Probing;
-            true
-        } else {
-            false
-        };
-        if !marked {
-            self.param_probing.remove(&descriptor.id);
-            return;
-        }
-
-        let descriptor = descriptor.clone();
-        let tx = self.param_probe_tx.clone();
-        std::thread::spawn(move || {
-            let result = probe_external_params(&descriptor);
-            let _ = tx.send(result);
-        });
-    }
-
-    /// Vuelca los sondeos terminados a sus slots. Corre en el hilo principal.
-    ///
-    /// Empareja por `descriptor.id` (estable entre escaneos): si el usuario
-    /// cambió el slot mientras el hilo trabajaba, el resultado igual llega
-    /// al slot correcto, y si el slot ya no existe se descarta sin ruido.
-    pub fn drain_param_probes(&mut self) {
-        let mut results = Vec::new();
-        while let Ok(result) = self.param_probe_rx.try_recv() {
-            results.push(result);
-        }
-        if results.is_empty() {
-            return;
-        }
-        for result in results {
-            self.param_probing.remove(&result.descriptor_id);
-            let slots = self
-                .tracks_mut()
-                .iter_mut()
-                .flat_map(|track| track.effects.iter_mut())
-                .filter(|slot| {
-                    slot.external
-                        .as_ref()
-                        .is_some_and(|ext| ext.id == result.descriptor_id)
-                });
-            for slot in slots {
-                // El sondeo creó una instancia real: es el primer momento en el
-                // que sabemos si hay editor que abrir. Va antes del `match` para
-                // que quede puesto incluso si el plugin no expone parámetros.
-                slot.has_gui = Some(result.has_gui);
-                match &result.error {
-                    Some(message) => {
-                        slot.params_status =
-                            mixer::ExternalParamsStatus::Failed(message.clone());
-                    }
-                    None => {
-                        slot.external_params = result
-                            .params
-                            .iter()
-                            .map(|(info, value)| mixer::ExternalParamState {
-                                info: info.clone(),
-                                value: *value,
-                            })
-                            .collect();
-                        slot.params_status = mixer::ExternalParamsStatus::Ready;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Aplica el feedback del editor nativo (el usuario movió un knob del
-    /// plugin) a los slots. Corre en el hilo principal desde `sync_frame`.
-    ///
-    /// Respeta el gesto en curso: si el usuario está arrastrando ese mismo
-    /// parámetro en el rack, manda el rack (el feedback se descarta para ese
-    /// id hasta soltar, evitando que el knob pelee bajo el dedo).
-    ///
-    /// Lo aplicado queda en la cola de pendientes del slot, que se drena en
-    /// [`Self::flush_pending_external_params`] para que el motor lo lleve a su
-    /// instancia de audio aunque el cambio naciera en la ventana nativa.
-    ///
-    /// # Por qué `origin` no cambia casi nada acá
-    ///
-    /// La ventana manda dos cosas y este código las trata igual a propósito:
-    ///
-    /// - `FeedbackOrigin::Editor`: el plugin cambió el valor por su cuenta.
-    ///   El motor no lo tiene, así que sí tiene que mandárselo.
-    /// - `FeedbackOrigin::Host`: el editor confirmó un valor que el rack le
-    ///   mandó. Casi siempre `set_external_param` devuelve `None` (el valor
-    ///   ya era ese) y no hay nada que hacer. Cuando sí converge —porque el
-    ///   plugin recorta o cuantiza a un escalón distinto al del host— mandarlo
-    ///   al motor es lo correcto: el motor tiene que recibir el valor que el
-    ///   plugin realmente terminó usando.
-    ///
-    /// Lo que `origin` sí protege está aguas arriba, en el envío: evita que
-    /// el bucle reenvíe como `Editor` el eco de su propio `SetParam`, que
-    /// provocaría un ciclo rack → editor → rack en cada knob.
-    ///
-    /// Devuelve `true` si algún knob del rack cambió de valor: el llamador
-    /// lo usa para repintar (el feedback llega por un canal, así que nada lo
-    /// repinta solo).
-    pub fn apply_param_feedback(
-        &mut self,
-        events: Vec<external_plugins_settings::ParamFeedbackEvent>,
-    ) -> bool {
-        if events.is_empty() {
-            return false;
-        }
-        let drag = self.param_drag;
-        let mut changed = false;
-
-        for event in events {
-            for (track_idx, track) in self.tracks_mut().iter_mut().enumerate() {
-                for (slot_idx, slot) in track.effects.iter_mut().enumerate() {
-                    if !slot
-                        .external
-                        .as_ref()
-                        .is_some_and(|ext| ext.id == event.descriptor_id)
-                    {
-                        continue;
-                    }
-                    for (id, value) in &event.changes {
-                        // El gesto del rack manda: si el usuario está moviendo
-                        // ese parámetro en **ese** slot, el feedback no lo pisa
-                        // (el knob pelearía bajo el dedo).
-                        if drag.is_some_and(|drag| {
-                            drag.param_id == *id && drag.track == track_idx && drag.slot == slot_idx
-                        }) {
-                            continue;
-                        }
-                        // La caché del rack, si el rack conoce el parámetro.
-                        if slot.set_external_param(*id, *value).is_some() {
-                            changed = true;
-                        }
-                        // Y el motor, siempre: aunque el rack ya tuviera ese
-                        // valor, la instancia de audio del motor es **otra**
-                        // instancia del plugin y puede no tenerlo. Y si el rack
-                        // no muestra el parámetro (el editor suele tener más
-                        // controles), es el único camino que llega al audio.
-                        slot.enqueue_external_param(*id, *value);
-                    }
-                }
-            }
-        }
-
-        changed
-    }
-
-    /// Manda al motor los cambios de parámetros externos que todavía no
-    /// llegaron a su instancia de audio.
-    ///
-    /// Corre en el hilo principal desde `sync_frame`, después de
-    /// [`Self::apply_param_feedback`]: así un cambio que nació en el editor
-    /// nativo sale en el mismo frame en que se aplicó, sin esperar al
-    /// siguiente.
-    ///
-    /// El envío es lock-free hacia el hilo de audio: cada cambio viaja por el
-    /// anillo de la instancia del plugin.
-    pub fn flush_pending_external_params(&mut self) {
-        // El mixer mete un MASTER en la posición 0 y el motor no tiene master:
-        // la pista visible N vive en `tracks()[N + 1]` y en el motor es N - 1.
-        let mut pending: Vec<(usize, usize, Vec<(u32, f32)>)> = Vec::new();
-        for (track_idx, track) in self.tracks_mut().iter_mut().enumerate() {
-            let Some(engine_track_idx) = track_idx.checked_sub(1) else {
-                // El MASTER no está en el motor.
-                continue;
-            };
-            for (slot_idx, slot) in track.effects.iter_mut().enumerate() {
-                if slot.external.is_none() {
-                    continue;
-                }
-                let params = slot.take_pending_external_params();
-                if !params.is_empty() {
-                    pending.push((engine_track_idx, slot_idx, params));
-                }
-            }
-        }
-
-        for (track_idx, slot_idx, params) in pending {
-            self.audio_proxy
-                .send(crate::audio_proxy::GuiCommand::SyncExternalPluginParams {
-                    track_idx,
-                    slot_idx,
-                    params,
-                });
-        }
-    }
-
-    /// Pad del sampler que está seleccionado en un slot dado.
-    ///
-    /// El diálogo de carga de WAV se abre desde un handler y necesita el pad
-    /// destino *antes* de tomar el lock de escritura. Además el índice se
-    /// acota al rango real de pads: el layout 16/32/64 puede dejar
-    /// `selected_pad` apuntando más allá del vector de pads.
-    pub fn selected_slot_pad(&self, track_idx: usize, slot_idx: usize) -> usize {
-        self.slot(track_idx, slot_idx)
-            .and_then(|slot| slot.dms_state.as_ref())
-            .map(|dms| dms.selected_pad.min(dms.pads.len().saturating_sub(1)))
-            .unwrap_or(0)
-    }
-}
-
-pub fn state(cx: &App) -> Entity<AppState> {
-    cx.global::<AppStateHandle>().0.clone()
-}
-
-pub fn update_state(cx: &mut App, f: impl FnOnce(&mut AppState)) {
-    let state = state(cx);
-    let id = state.entity_id();
-    state.update(cx, |s, _| f(s));
-    cx.notify(id);
-}
-
-/// Actualiza una pista simple `(acción, descripción)` en la barra de estado
-/// inferior **solo si cambió**, evitando disparar `cx.notify` en cada píxel de
-/// movimiento del puntero.
-pub fn set_footer_help(cx: &mut App, action: &str, desc: &str) {
-    set_footer_cues(cx, None, &[(action, desc)]);
-}
-
-/// Actualiza múltiples pistas contextuales estilo Bitwig Studio 5.1.7 en el
-/// Footer junto con los modificadores de teclado activos (`Shift`, `Ctrl`, `Alt`),
-/// notificando únicamente cuando hay un cambio real.
-pub fn set_footer_cues(
-    cx: &mut App,
-    mods: Option<gpui_kit::Modifiers>,
-    cues: &[(&str, &str)],
-) {
-    let st = state(cx);
-    let needs_update = {
-        let s = st.read(cx);
-        let mods_changed = mods.map(|m| m != s.active_modifiers).unwrap_or(false);
-        let cues_same = s.footer_context_cues.len() == cues.len()
-            && s.footer_context_cues
-                .iter()
-                .zip(cues.iter())
-                .all(|((a1, d1), (a2, d2))| a1 == a2 && d1 == d2);
-        mods_changed || !cues_same
-    };
-    if needs_update {
-        let id = st.entity_id();
-        st.update(cx, |s, _| {
-            if let Some(m) = mods {
-                s.active_modifiers = m;
-            }
-            s.footer_context_cues = cues
-                .iter()
-                .map(|(a, d)| ((*a).to_string(), (*d).to_string()))
-                .collect();
-            s.footer_context_help = cues
-                .first()
-                .map(|(a, d)| ((*a).to_string(), (*d).to_string()));
-        });
-        cx.notify(id);
-    }
-}
-
-/// Limpia la ayuda contextual del Footer solo cuando había contenido activo.
-pub fn clear_footer_help(cx: &mut App) {
-    let st = state(cx);
-    let has_any = {
-        let s = st.read(cx);
-        s.footer_context_help.is_some() || !s.footer_context_cues.is_empty()
-    };
-    if has_any {
-        let id = st.entity_id();
-        st.update(cx, |s, _| {
-            s.footer_context_help = None;
-            s.footer_context_cues.clear();
-        });
-        cx.notify(id);
-    }
-}
-
-pub struct HikaruApp {
-    pub state: Entity<AppState>,
-    pub focus_handle: FocusHandle,
-    pub _audio_stream: Option<cpal::Stream>,
-    /// Mantiene viva la suscripción a `InputEvent` de la caja de BPM.
-    _bpm_input_sub: Subscription,
-    /// Mantiene viva la suscripción a `InputEvent` de la caja de compás.
-    _sig_input_sub: Subscription,
-    /// Mantiene viva la suscripción al buscador del navegador de plugins.
-    _plugin_search_sub: Subscription,
-    /// Mantiene viva la suscripción a la activación/desactivación de la ventana.
-    ///
-    /// Es lo que re-eleva los editores nativos de plugin cuando el DAW vuelve
-    /// al frente: ver `views::dsp_rack::keep_plugin_editors_above`.
-    _window_activation_sub: Subscription,
-    /// Viewport 3D de la Wavetable. Se guarda como campo además de publicarse
-    /// como `Global` para que quede atado al ciclo de vida de la entidad: si
-    /// sólo fuera un global, el renderer offscreen sobreviviría a la ventana.
+    pub active_external_plugins: Vec<Box<dyn PluginInstance>>,
+    pub engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
     pub wavetable_viewport: WavetableViewportHandle,
+
+    pub project_path: Option<PathBuf>,
+    pub project_dirty: bool,
+    pub open_menu: Option<usize>,
 }
 
-/// Conmuta la vista central según el modo activo, sin cambiar de modo:
-///
-/// - OpenLive: Session Matrix ↔ Arranger View.
-/// - OpenStudio: Playlist / Timeline ↔ Arranger / Mixer.
-///
-/// `Tab` y `F9` comparten este comportamiento contextual.
-pub fn toggle_central_view(state: &mut AppState) {
-    match state.mode {
-        AppMode::OpenLive => {
-            state.openlive_view = match state.openlive_view {
-                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
-                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
-            };
-        }
-        AppMode::OpenStudio => {
-            state.openstudio_view = match state.openstudio_view {
-                OpenStudioView::Playlist => OpenStudioView::ArrangerMixer,
-                OpenStudioView::ArrangerMixer => OpenStudioView::Playlist,
-            };
-        }
-    }
-}
-
-pub fn handle_global_key(key: &str, cx: &mut App) {
-    handle_global_key_mod(key, gpui_kit::Modifiers::default(), cx);
-}
-
-/// Igual que `handle_global_key` pero con los modificadores de la tecla, para
-/// los atajos de edición con `Ctrl` (copiar/cortar/pegar/duplicar).
-pub fn handle_global_key_mod(key: &str, mods: gpui_kit::Modifiers, cx: &mut App) {
-    // `Ctrl` o `Super` (Cmd en macOS) count como modificador de comando.
-    let cmd = mods.control || mods.platform;
-    if cmd {
-            let handled = playlist::handle_edit_shortcut(key, mods.shift, cx);
-        if handled {
-            update_state(cx, |_| {});
-            let st = state(cx);
-            st.update(cx, |_, cx| cx.notify());
-            return;
-        }
-    }
-    match key {
-        "tab" | "f9" => {
-            update_state(cx, toggle_central_view);
-        }
-        "f10" => {
-            update_state(cx, |state| {
-                state.show_dsp_rack = !state.show_dsp_rack;
-            });
-        }
-        "f11" => {
-            update_state(cx, |state| {
-                // Bitwig: el inspector lateral se oculta/ muestra desde el flag
-                // del splitter `inspector_and_main_splitter`
-                // (`inspector.is_shown` en el view-settings).
-                state.show_explorer = !state.show_explorer;
-                state.panel_layout.show_inspector = state.show_explorer;
-            });
-        }
-        "delete" | "backspace" => {
-            update_state(cx, |state| {
-                if !state.playlist_state.selected_clips.is_empty() {
-                    state.playlist_state.clips.retain(|(_, c)| {
-                        !state.playlist_state.selected_clips.contains(&c.id)
-                    });
-                    state.playlist_state.selected_clips.clear();
-                }
-            });
-        }
-        _ => {}
-    }
-}
-
-impl HikaruApp {
-    pub fn build(
-        window: &mut Window,
-        cx: &mut Context<HikaruApp>,
+impl AppState {
+    pub fn new(
         audio_proxy: AudioProxy,
-        audio_stream: Option<cpal::Stream>,
         position_clock: Arc<AtomicU64>,
         output_level_bits: Arc<AtomicU32>,
         engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
-    ) -> HikaruApp {
+    ) -> Self {
         let sample_rate = SampleRate::new(48000.0);
         let transport = TransportPosition::new(sample_rate, 140.0);
 
@@ -1366,40 +512,10 @@ impl HikaruApp {
                 .collect()
         };
 
-        // Caja numérica de BPM (el sustituto moderno del `egui::DragValue` que
-        // usaba la UI legacy): se escribe con el teclado, con las flechas
-        // arriba/abajo o con los botones +/-, y se acota al perder el foco.
-        let initial_bpm = transport.bpm;
-        let bpm_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .step(1.0)
-                .min(BPM_MIN)
-                .max(BPM_MAX)
-        });
-        bpm_input.update(cx, |input, cx| {
-            input.set_value(format_bpm(initial_bpm), window, cx)
-        });
-
-        // Caja de compás (`4/4`): texto libre `N/D` con los mismos gestos que
-        // la de BPM (teclado, botones `-` / `+`, acote al perder el foco).
-        let sig_input = cx.new(|cx| InputState::new(window, cx));
-        sig_input.update(cx, |input, cx| {
-            input.set_value(
-                format_sig(transport.beats_per_bar, transport.beat_division),
-                window,
-                cx,
-            )
-        });
-
-        // Buscador del navegador de plugins del DSP rack: arranca vacío y
-        // vuelca cada cambio a `plugin_browser_query` (ver suscripción abajo).
-        let plugin_search_input = cx.new(|cx| InputState::new(window, cx));
-
-        // Sondeo de parámetros externos: el canal lo comparte el estado con
-        // los hilos de sondeo (ver `AppState::request_external_params`).
         let (param_probe_tx, param_probe_rx) = std::sync::mpsc::channel();
+        let initial_bpm = transport.bpm;
 
-        let state = cx.new(|_| AppState {
+        Self {
             mode: AppMode::OpenLive,
             transport,
             position_clock,
@@ -1408,14 +524,14 @@ impl HikaruApp {
             is_looping: false,
             cpu_usage: 0.12,
             bpm_synced_to_engine: -1.0,
-            bpm_input: bpm_input.clone(),
-            sig_input: sig_input.clone(),
+            bpm_input: format_bpm(initial_bpm),
+            sig_input: "4/4".to_string(),
             global_loop_synced_to_engine: None,
-            show_dsp_rack: false,
+            show_dsp_rack: true,
             openstudio_view: OpenStudioView::Playlist,
             show_about: false,
             is_recording: false,
-            show_explorer: false,
+            show_explorer: true,
             show_piano_roll: false,
             panel_layout: PanelLayout::default(),
             piano_roll_state: piano_roll::PianoRollState::default(),
@@ -1438,24 +554,22 @@ impl HikaruApp {
             selected_slot_index: 0,
             footer_context_help: None,
             footer_context_cues: Vec::new(),
-            active_modifiers: gpui_kit::Modifiers::default(),
+            active_modifiers: egui::Modifiers::default(),
             add_slot_menu_open: false,
             plugin_browser_query: String::new(),
             plugin_browser_filter: dsp_rack::PluginBrowserFilter::default(),
-            plugin_search_input: plugin_search_input.clone(),
+            plugin_search_input: String::new(),
             param_drag: None,
-            param_probe_tx: param_probe_tx,
-            param_probe_rx: param_probe_rx,
+            param_probe_tx,
+            param_probe_rx,
             param_probing: HashSet::new(),
             track_peak_bits,
             smoothed_track_peaks: [0.0; 16],
             smoothed_master_peak: 0.0,
             openlive_view: OpenLiveView::SessionMatrix,
             arranger_fader_drag: None,
-            mixer_scroll_h: ScrollHandle::new(),
-            mixer_scroll_v: ScrollHandle::new(),
-            playlist_scroll_h: ScrollHandle::new(),
-            playlist_scroll_v: ScrollHandle::new(),
+            mixer_scroll_offset_x: 0.0,
+            mixer_scroll_offset_y: 0.0,
             playlist_pan: None,
             mixer_pan: None,
             mixer_bar_drag: None,
@@ -1467,819 +581,623 @@ impl HikaruApp {
             bottom_mixer_show_devices: true,
             bottom_mixer_show_sends: true,
             bottom_mixer_show_io: true,
-            bottom_mixer_scroll_h: ScrollHandle::new(),
+            bottom_mixer_scroll_offset_x: 0.0,
             arranger_track_width: 132.0,
             arranger_track_width_drag: None,
             dragging_device: None,
             active_external_plugins: Vec::new(),
             engine_handle,
+            wavetable_viewport: WavetableViewportHandle::new(),
             project_path: None,
             project_dirty: false,
             open_menu: None,
-        });
+        }
+    }
 
-        cx.set_global(AppStateHandle(state.clone()));
-        let _ = cx.observe(&state, |_, _, cx| {
-            cx.notify();
-        });
+    pub fn tracks(&self) -> &Vec<mixer::Track> {
+        match self.mode {
+            AppMode::OpenLive => &self.live_tracks,
+            AppMode::OpenStudio => &self.studio_tracks,
+        }
+    }
 
-        // La caja escribe el BPM; el transport lo propaga al motor. `Blur`
-        // hace falta porque al perder el foco el input reescribe el texto con
-        // el valor acotado, y ese `Change` no lo emite el setter.
-        let bpm_input_sub = cx.subscribe(&bpm_input, |_, input, event, cx| {
-            if !matches!(event, InputEvent::Change | InputEvent::Blur) {
-                return;
-            }
-            let text = input.read(cx).value();
-            let Ok(parsed) = text.trim().parse::<f64>() else {
-                return;
-            };
-            if !parsed.is_finite() {
-                return;
-            }
-            let bpm = parsed.clamp(BPM_MIN, BPM_MAX);
-            update_state(cx, |state| {
-                if (state.transport.bpm - bpm).abs() > f64::EPSILON {
-                    state.transport.bpm = bpm;
-                    state.audio_proxy.send(GuiCommand::SetBpm(bpm as f32));
+    pub fn tracks_mut(&mut self) -> &mut Vec<mixer::Track> {
+        match self.mode {
+            AppMode::OpenLive => &mut self.live_tracks,
+            AppMode::OpenStudio => &mut self.studio_tracks,
+        }
+    }
+
+    pub fn current_tracks(&self) -> &Vec<mixer::Track> {
+        self.tracks()
+    }
+
+    pub fn current_tracks_mut(&mut self) -> &mut Vec<mixer::Track> {
+        self.tracks_mut()
+    }
+
+    pub fn safe_track_index(&self) -> usize {
+        self.selected_track_index.min(self.tracks().len().saturating_sub(1))
+    }
+
+    pub fn engine_track_index(&self) -> Option<usize> {
+        self.safe_track_index().checked_sub(1)
+    }
+
+    pub fn selected_slot(&self) -> Option<&mixer::DspSlot> {
+        self.tracks().get(self.safe_track_index())?.effects.get(self.selected_slot_index)
+    }
+
+    pub fn selected_slot_mut(&mut self) -> Option<&mut mixer::DspSlot> {
+        let track = self.selected_track_index.min(self.tracks().len().saturating_sub(1));
+        let slot = self.selected_slot_index;
+        self.tracks_mut().get_mut(track)?.effects.get_mut(slot)
+    }
+
+    pub fn slot(&self, track_idx: usize, slot_idx: usize) -> Option<&mixer::DspSlot> {
+        self.tracks().get(track_idx)?.effects.get(slot_idx)
+    }
+
+    pub fn slot_mut(&mut self, track_idx: usize, slot_idx: usize) -> Option<&mut mixer::DspSlot> {
+        self.tracks_mut().get_mut(track_idx)?.effects.get_mut(slot_idx)
+    }
+
+    pub fn target_effects_mut(
+        &mut self,
+        target: arranger_view::StripTarget,
+    ) -> Option<&mut Vec<mixer::DspSlot>> {
+        use arranger_view::StripTarget;
+        match target {
+            StripTarget::Master => self.tracks_mut().first_mut().map(|t| &mut t.effects),
+            StripTarget::Live(idx) => self.live_tracks.get_mut(idx + 1).map(|t| &mut t.effects),
+            StripTarget::Studio(idx) => self.studio_tracks.get_mut(idx).map(|t| &mut t.effects),
+            StripTarget::Fx(idx) => self.fx_tracks.get_mut(idx).map(|t| &mut t.effects),
+        }
+    }
+
+    pub fn track_width(&self, target: arranger_view::StripTarget) -> f32 {
+        use arranger_view::StripTarget;
+        match target {
+            StripTarget::Master => match self.mode {
+                AppMode::OpenLive => self.live_tracks.first().map(|t| t.width).unwrap_or(self.arranger_track_width),
+                AppMode::OpenStudio => self.studio_tracks.first().map(|t| t.width).unwrap_or(self.arranger_track_width),
+            },
+            StripTarget::Live(idx) => self.live_tracks.get(idx + 1).map(|t| t.width).unwrap_or(self.arranger_track_width),
+            StripTarget::Studio(idx) => self.studio_tracks.get(idx).map(|t| t.width).unwrap_or(self.arranger_track_width),
+            StripTarget::Fx(idx) => self.fx_tracks.get(idx).map(|t| t.width).unwrap_or(self.arranger_track_width),
+        }
+    }
+
+    pub fn set_track_width(&mut self, target: arranger_view::StripTarget, width: f32) {
+        use arranger_view::StripTarget;
+        let clamped = width.clamp(
+            arranger_view::MIN_TRACK_WIDTH,
+            arranger_view::MAX_TRACK_WIDTH,
+        );
+        match target {
+            StripTarget::Master => match self.mode {
+                AppMode::OpenLive => {
+                    if let Some(t) = self.live_tracks.first_mut() {
+                        t.width = clamped;
+                    }
                 }
-            });
-        });
-
-        // La caja escribe el compás; el transport lo consumen el timecode y
-        // las grillas. Ante texto inválido no se toca nada (igual que BPM):
-        // el render del header reescribe la caja con el valor del transporte
-        // en cuanto pierde el foco.
-        let sig_input_sub = cx.subscribe(&sig_input, |_, input, event, cx| {
-            if !matches!(event, InputEvent::Change | InputEvent::Blur) {
-                return;
+                AppMode::OpenStudio => {
+                    if let Some(t) = self.studio_tracks.first_mut() {
+                        t.width = clamped;
+                    }
+                }
+            },
+            StripTarget::Live(idx) => {
+                if let Some(t) = self.live_tracks.get_mut(idx + 1) {
+                    t.width = clamped;
+                }
             }
-            let text = input.read(cx).value().as_ref().to_string();
-            let Some((num, den)) = parse_sig(&text) else {
+            StripTarget::Studio(idx) => {
+                if let Some(t) = self.studio_tracks.get_mut(idx) {
+                    t.width = clamped;
+                }
+            }
+            StripTarget::Fx(idx) => {
+                if let Some(t) = self.fx_tracks.get_mut(idx) {
+                    t.width = clamped;
+                }
+            }
+        }
+    }
+
+    pub fn move_device(
+        &mut self,
+        from_target: arranger_view::StripTarget,
+        from_slot: usize,
+        to_target: arranger_view::StripTarget,
+        to_slot: usize,
+    ) {
+        use arranger_view::StripTarget;
+
+        self.dragging_device = None;
+
+        let current_len = self.target_effects_mut(from_target).map(|e| e.len()).unwrap_or(0);
+        if from_target == to_target && (from_slot == to_slot || (to_slot == usize::MAX && from_slot + 1 >= current_len)) {
+            return;
+        }
+
+        let slot = {
+            let Some(effects) = self.target_effects_mut(from_target) else { return; };
+            if from_slot >= effects.len() { return; }
+            effects.remove(from_slot)
+        };
+
+        let has_external = slot.external.is_some();
+
+        let dest_inserted = {
+            let Some(effects) = self.target_effects_mut(to_target) else {
+                if let Some(orig) = self.target_effects_mut(from_target) {
+                    orig.insert(from_slot.min(orig.len()), slot);
+                }
                 return;
             };
-            update_state(cx, |state| {
-                state.transport.beats_per_bar = num;
-                state.transport.beat_division = den;
-            });
-        });
+            let dest = to_slot.min(effects.len());
+            effects.insert(dest, slot);
+            dest
+        };
 
-        // Buscador del navegador de plugins: vuelca el texto a
-        // `plugin_browser_query` para que el listado filtre en el acto.
-        let plugin_search_sub = cx.subscribe(&plugin_search_input, |_, input, event, cx| {
-            if !matches!(event, InputEvent::Change) {
-                return;
-            }
-            let text = input.read(cx).value().as_ref().to_string();
-            update_state(cx, |state| {
-                state.plugin_browser_query = text;
-            });
-        });
+        let from_mixer = match from_target {
+            StripTarget::Master | StripTarget::Fx(_) => 0,
+            StripTarget::Live(idx) => idx + 1,
+            StripTarget::Studio(idx) => idx,
+        };
+        let to_mixer = match to_target {
+            StripTarget::Master | StripTarget::Fx(_) => 0,
+            StripTarget::Live(idx) => idx + 1,
+            StripTarget::Studio(idx) => idx,
+        };
+        if self.selected_track_index == from_mixer && self.selected_slot_index == from_slot {
+            self.selected_track_index = to_mixer;
+            self.selected_slot_index = dest_inserted;
+        }
 
-        // Re-elevación de los editores nativos cuando el DAW vuelve al frente.
-        //
-        // GPUI no baja la ventana de un plugin: lo hace el gestor de ventanas
-        // del sistema, reacting al click sobre el DAW. Lo único que se puede
-        // hacer desde acá es re-apilar el editor después del click, y sólo si
-        // el DAW recuperó la activación.
-        //
-        // Se dispara también al perderla, y a propósito:
-        // `keep_plugin_editors_above` no enfoca el editor, así que el gesto de
-        // "clickear el plugin" produce un no-op inocuo en vez de pelear con el
-        // WM. Filtrar por "recién activada" exigiría leer el estado de
-        // activación desde acá, y la API de GPUI no lo expone en `Window`.
-        let window_activation_sub = cx.observe_window_activation(window, |_, _, cx| {
-            crate::views::dsp_rack::keep_plugin_editors_above(cx);
-        });
-
-        let wavetable_viewport = WavetableViewportHandle::new();
-        // El renderer offscreen se levanta una vez por sesión. La conexión es
-        // asíncrona (pedir adapter y device a wgpu lo es) y va en un `spawn`
-        // desde el arranque: si se hiciera acá, la ventana no abriría hasta que
-        // el driver respondiera, y en una máquina sin GPU no abriría nunca.
-        // La vista del editor pide la imagen y, si todavía no está, muestra su
-        // placeholder.
-        cx.set_global(wavetable_viewport.clone());
-        wavetable_viewport.spawn_connect(cx);
-
-        // Latido para el feedback de los editores nativos.
-        //
-        // El feedback de un plugin (el usuario movió un knob **dentro** de su
-        // editor) llega por un canal y se drena en `sync_frame`, que corre en
-        // el render. Con el transporte parado la app no redibuja sola —sólo
-        // redibuja cuando algo la notifica—, así que el feedback se quedaría
-        // en el canal hasta que el usuario tocara algo en el DAW. El knob del
-        // rack dejaría de seguir al del plugin y el motor de audio no se
-        // enteraría del cambio.
-        //
-        // Este latido despierta la app mientras haya un editor de plugin
-        // abierto. Con el transporte sonando ya hay redibujado continuo, así
-        // que el latido no agrega trabajo: sólo cubre el caso parado, que es
-        // el que importa (el usuario toqueteando el plugin con el
-        // transporte quieto).
-        let heartbeat_state = state.clone();
-        cx.spawn(async move |_app, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(33))
-                    .await;
-                let hay_editor = cx.update(|cx| {
-                    heartbeat_state
-                        .read(cx)
-                        .plugin_settings_state
-                        .any_plugin_open()
+        if has_external {
+            let to_engine_track = |target: StripTarget| match target {
+                StripTarget::Live(idx) => Some(idx),
+                StripTarget::Studio(idx) => idx.checked_sub(1),
+                StripTarget::Fx(_) => Some(15),
+                _ => None,
+            };
+            if let (Some(f_tr), Some(t_tr)) = (to_engine_track(from_target), to_engine_track(to_target)) {
+                self.audio_proxy.send(GuiCommand::MoveExternalPlugin {
+                    from_track: f_tr,
+                    from_slot,
+                    to_track: t_tr,
+                    to_slot: dest_inserted,
                 });
-                if hay_editor {
-                    cx.update(|cx| cx.refresh_windows());
+            }
+        }
+    }
+
+    pub fn request_external_params(
+        &mut self,
+        descriptor: &hikaru_plugin_host::PluginDescriptor,
+    ) {
+        if !self.param_probing.insert(descriptor.id.clone()) {
+            return;
+        }
+        if let Some(slot) = self
+            .tracks_mut()
+            .iter_mut()
+            .flat_map(|track| track.effects.iter_mut())
+            .find(|slot| {
+                slot.external
+                    .as_ref()
+                    .is_some_and(|ext| ext.id == descriptor.id)
+            }) {
+            slot.params_status = mixer::ExternalParamsStatus::Probing;
+        }
+
+        let desc = descriptor.clone();
+        let tx = self.param_probe_tx.clone();
+        std::thread::spawn(move || {
+            let res = probe_external_params(&desc);
+            let _ = tx.send(res);
+        });
+    }
+
+    pub fn drain_param_probes(&mut self) {
+        while let Ok(res) = self.param_probe_rx.try_recv() {
+            self.param_probing.remove(&res.descriptor_id);
+            for track in self.tracks_mut() {
+                for slot in &mut track.effects {
+                    if let Some(ref ext) = slot.external {
+                        if ext.id == res.descriptor_id {
+                            if let Some(ref err) = res.error {
+                                slot.params_status = mixer::ExternalParamsStatus::Error(err.clone());
+                            } else {
+                                slot.cached_params = res
+                                    .params
+                                    .iter()
+                                    .cloned()
+                                    .map(|(info, val)| mixer::ExternalParamState {
+                                        info,
+                                        value: val,
+                                        pending_to_engine: false,
+                                    })
+                                    .collect();
+                                slot.params_status = mixer::ExternalParamsStatus::Ready;
+                            }
+                        }
+                    }
                 }
             }
-        })
-        .detach();
+        }
+    }
 
-        HikaruApp {
+    pub fn apply_param_feedback(
+        &mut self,
+        feedback: Vec<crate::views::external_plugins_settings::ParamFeedbackEvent>,
+    ) -> bool {
+        let mut changed = false;
+        for ev in feedback {
+            for track in self.tracks_mut() {
+                for slot in &mut track.effects {
+                    if let Some(ref ext) = slot.external {
+                        if ext.id == ev.descriptor_id {
+                            for &(param_id, val) in &ev.changes {
+                                if let Some(p) = slot.cached_params.iter_mut().find(|p| p.info.id == param_id) {
+                                    p.value = val;
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    pub fn flush_pending_external_params(&mut self) {
+        for (tr_idx, track) in self.tracks().iter().enumerate() {
+            let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
+            for (sl_idx, slot) in track.effects.iter().enumerate() {
+                for p in &slot.cached_params {
+                    if p.pending_to_engine {
+                        self.audio_proxy.send(GuiCommand::SetExternalPluginParam {
+                            track_idx: eng_track,
+                            slot_idx: sl_idx,
+                            param_id: p.info.id,
+                            value: p.value,
+                        });
+                    }
+                }
+            }
+        }
+        for track in self.tracks_mut() {
+            for slot in &mut track.effects {
+                for p in &mut slot.cached_params {
+                    p.pending_to_engine = false;
+                }
+            }
+        }
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.transport.playback_state == TransportPlaybackState::Playing
+    }
+
+    pub fn play(&mut self) {
+        self.transport.playback_state = TransportPlaybackState::Playing;
+        self.audio_proxy.send(GuiCommand::Play);
+    }
+
+    pub fn pause(&mut self) {
+        self.transport.playback_state = TransportPlaybackState::Paused;
+        self.audio_proxy.send(GuiCommand::Pause);
+    }
+
+    pub fn stop(&mut self) {
+        self.transport.playback_state = TransportPlaybackState::Stopped;
+        self.transport.sample_count = 0;
+        self.audio_proxy.send(GuiCommand::Stop);
+    }
+
+    pub fn toggle_play(&mut self) {
+        if self.is_playing() {
+            self.stop();
+        } else {
+            self.play();
+        }
+    }
+
+    pub fn set_bpm(&mut self, bpm: f64) {
+        let clamped = bpm.clamp(BPM_MIN, BPM_MAX);
+        self.transport.bpm = clamped;
+        self.bpm_input = format_bpm(clamped);
+        self.audio_proxy.send(GuiCommand::SetBpm(clamped as f32));
+    }
+
+    pub fn set_sig(&mut self, num: u32, den: u32) {
+        self.transport.beats_per_bar = num.max(1);
+        self.transport.beat_division = den.max(1);
+        self.sig_input = format_sig(num, den);
+    }
+}
+
+pub fn set_footer_cues(
+    state: &mut AppState,
+    single_help: Option<(&str, &str)>,
+    cues: &[(&str, &str)],
+) {
+    state.footer_context_help = single_help.map(|(a, d)| (a.to_string(), d.to_string()));
+    state.footer_context_cues = cues
+        .iter()
+        .map(|&(a, d)| (a.to_string(), d.to_string()))
+        .collect();
+}
+
+pub fn clear_footer_help(state: &mut AppState) {
+    state.footer_context_help = None;
+    state.footer_context_cues.clear();
+}
+
+pub fn toggle_central_view(state: &mut AppState) {
+    match state.mode {
+        AppMode::OpenLive => {
+            state.openlive_view = match state.openlive_view {
+                OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
+                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+            };
+        }
+        AppMode::OpenStudio => {
+            state.openstudio_view = match state.openstudio_view {
+                OpenStudioView::Playlist => OpenStudioView::ArrangerMixer,
+                OpenStudioView::ArrangerMixer => OpenStudioView::Playlist,
+            };
+        }
+    }
+}
+
+pub struct HikaruApp {
+    pub state: AppState,
+    pub _audio_stream: Option<cpal::Stream>,
+    pub wavetable_viewport: WavetableViewportHandle,
+}
+
+impl HikaruApp {
+    pub fn build(
+        audio_proxy: AudioProxy,
+        audio_stream: Option<cpal::Stream>,
+        position_clock: Arc<AtomicU64>,
+        output_level_bits: Arc<AtomicU32>,
+        engine_handle: Option<Arc<Mutex<AudioEngine<'static>>>>,
+    ) -> Self {
+        let wavetable_viewport = WavetableViewportHandle::new();
+        let state = AppState::new(
+            audio_proxy,
+            position_clock,
+            output_level_bits,
+            engine_handle,
+        );
+
+        Self {
             state,
-            focus_handle: cx.focus_handle(),
             _audio_stream: audio_stream,
-            _bpm_input_sub: bpm_input_sub,
-            _sig_input_sub: sig_input_sub,
-            _plugin_search_sub: plugin_search_sub,
-            _window_activation_sub: window_activation_sub,
             wavetable_viewport,
         }
     }
 
-    pub fn open_plugin_floating_gui(
-        &mut self,
-        cx: &mut Context<HikaruApp>,
-        path: &Path,
-        format: PluginFormat,
-    ) {
-        match spawn_floating_gui(path, format) {
-            Ok(plugin_instance) => {
-                println!(
-                    "[HikaruApp] Plugin cargado y lanzado en ventana flotante: {}",
-                    plugin_instance.get_name()
-                );
-                self.state.update(cx, |s, _| {
-                    s.active_external_plugins.push(plugin_instance);
-                });
-            }
-            Err(err) => {
-                eprintln!("[HikaruApp] Error al abrir la GUI flotante del plugin: {}", err);
-            }
-        }
-    }
-
-    pub fn sync_hardware_sample_rate(&mut self, cx: &mut Context<HikaruApp>, hardware_sr: f32) {
+    pub fn sync_hardware_sample_rate(&mut self, hardware_sr: f32) {
         if hardware_sr > 0.0 {
-            self.state.update(cx, |s, _| {
-                s.transport.sample_rate = SampleRate::new(hardware_sr);
-            });
+            self.state.transport.sample_rate = SampleRate::new(hardware_sr);
         }
     }
 
-    pub fn current_bar(&self, cx: &mut Context<HikaruApp>) -> f32 {
-        let s = self.state.read(cx);
-        let samples_per_bar = s.transport.samples_per_bar();
-        if samples_per_bar <= 0.0 {
-            return 1.0;
+    pub fn sync_frame(&mut self, ctx: &egui::Context) {
+        self.state.plugin_settings_state.poll_updates();
+        self.state.drain_param_probes();
+        let param_feedback = self.state.plugin_settings_state.take_param_feedback();
+        let _feedback_changed = self.state.apply_param_feedback(param_feedback);
+        self.state.flush_pending_external_params();
+
+        for plugin in self.state.active_external_plugins.iter_mut() {
+            plugin.poll_editor_resize();
         }
-        (1.0 + s.transport.sample_count as f64 / samples_per_bar) as f32
+
+        self.state.transport.sample_count = self.state.position_clock.load(Ordering::Relaxed);
+        self.state.playlist_state.ppqn = self.state.transport.ppqn();
+        self.state.playlist_state.playhead_tick = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
+
+        // Smooth peaks
+        let raw_master = f32::from_bits(self.state.output_level_bits.load(Ordering::Relaxed));
+        self.state.smoothed_master_peak = mixer::smooth_peak(self.state.smoothed_master_peak, raw_master);
+        for (i, slot) in self.state.smoothed_track_peaks.iter_mut().enumerate() {
+            if let Some(bits) = self.state.track_peak_bits.get(i) {
+                let raw = f32::from_bits(bits.load(Ordering::Relaxed));
+                *slot = mixer::smooth_peak(*slot, raw);
+            }
+        }
+
+        if (self.state.transport.bpm - self.state.bpm_synced_to_engine).abs() > f64::EPSILON {
+            self.state.bpm_synced_to_engine = self.state.transport.bpm;
+            self.state.audio_proxy.send(GuiCommand::SetBpm(self.state.transport.bpm as f32));
+        }
+
+        if self.state.is_playing() {
+            ctx.request_repaint();
+        }
+
+        let piano_tracks = self.state.tracks().clone();
+        piano_roll::trigger_playhead_notes(
+            &mut self.state.piano_roll_state,
+            &piano_tracks,
+            self.state.selected_track_index,
+            &self.state.audio_proxy,
+        );
+
+        if self.state.show_piano_roll {
+            let needs_frame = piano_roll::sync_frame(&mut self.state.piano_roll_state);
+            if needs_frame {
+                ctx.request_repaint();
+            }
+        }
     }
+}
 
-    pub fn current_tick(&self, cx: &mut Context<HikaruApp>) -> u64 {
-        let s = self.state.read(cx);
-        s.transport.samples_to_ticks(s.transport.sample_count)
-    }
+impl eframe::App for HikaruApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        theme::apply_theme(ctx);
+        self.sync_frame(ctx);
 
-    fn sync_frame(&mut self, cx: &mut Context<HikaruApp>) {
-        let (position_clock, audio_proxy) = {
-            let s = self.state.read(cx);
-            (s.position_clock.clone(), s.audio_proxy.clone())
-        };
-
-        let mut piano_roll_needs_frame = false;
-        self.state.update(cx, |state, cx| {
-            // El escaneo de plugins corre en un hilo aparte y avisa por un
-            // canal `mpsc` ordinario. Sin este drenaje los resultados se
-            // quedarían encolados para siempre y la lista de plugins del rack
-            // nunca se llenaría. `poll_updates` es el único consumidor.
-            state.plugin_settings_state.poll_updates();
-            // Sondeo de parámetros externos (hilos aparte → caché de slots)
-            // y feedback del editor nativo (ventana → knobs del rack). Ambos
-            // llegan por canal y se aplican acá, en el hilo principal.
-            state.drain_param_probes();
-            let param_feedback = state.plugin_settings_state.take_param_feedback();
-            let feedback_changed = state.apply_param_feedback(param_feedback);
-            // Y al motor: los cambios que nacieron en el editor nativo (o en
-            // un knob del rack) van a la instancia de audio del plugin. Va
-            // después del feedback para que un cambio que llegó en este frame
-            // salga en este mismo frame.
-            state.flush_pending_external_params();
-            if feedback_changed {
-                // El feedback llega por un canal: nada lo repinta solo.
-                cx.notify();
+        // Global Keyboard shortcuts
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Space) {
+                self.state.toggle_play();
             }
-
-            // Resizes que pidió el editor nativo por su cuenta (un synth que
-            // reorganiza su layout al abrir un filtro). El launcher VST3
-            // redimensiona su ventana flotante; el resto no tiene a quién
-            // avisarle.
-            for plugin in state.active_external_plugins.iter_mut() {
-                plugin.poll_editor_resize();
+            if i.key_pressed(egui::Key::Tab) || i.key_pressed(egui::Key::F9) {
+                toggle_central_view(&mut self.state);
             }
-
-            state.transport.sample_count = position_clock.load(Ordering::Relaxed);
-            state.playlist_state.ppqn = state.transport.ppqn();
-            // Playhead de la Playlist / Timeline: deriva del reloj del motor
-            // (samples) con el tempo real, así la regla y el marcador avanzan
-            // juntos aunque cambien BPM o SIG.
-            state.playlist_state.playhead_tick = state
-                .transport
-                .samples_to_ticks(state.transport.sample_count);
-
-            // Suavizado de picos para los VU del Arranger (ataque rápido,
-            // liberación lenta): los canvas de tamaño fijo leen estos valores
-            // ya filtrados, así el nivel de señal nunca provoca un relayout
-            // aunque el motor escriba picos crudos en cada buffer de audio.
-            {
-                let raw_master =
-                    f32::from_bits(state.output_level_bits.load(Ordering::Relaxed));
-                state.smoothed_master_peak =
-                    mixer::smooth_peak(state.smoothed_master_peak, raw_master);
-                for (i, slot) in state.smoothed_track_peaks.iter_mut().enumerate() {
-                    if let Some(bits) = state.track_peak_bits.get(i) {
-                        let raw = f32::from_bits(bits.load(Ordering::Relaxed));
-                        *slot = mixer::smooth_peak(*slot, raw);
-                    }
+            if i.key_pressed(egui::Key::F10) {
+                self.state.show_dsp_rack = !self.state.show_dsp_rack;
+            }
+            if i.key_pressed(egui::Key::F11) {
+                self.state.show_explorer = !self.state.show_explorer;
+            }
+            if i.key_pressed(egui::Key::Delete) {
+                if self.state.show_dsp_rack {
+                    dsp_rack::handle_delete_key(&mut self.state);
+                } else if !self.state.playlist_state.selected_clips.is_empty() {
+                    let selected = self.state.playlist_state.selected_clips.clone();
+                    self.state.playlist_state.clips.retain(|(_, c)| !selected.contains(&c.id));
+                    self.state.playlist_state.selected_clips.clear();
                 }
-            }
-
-            if (state.transport.bpm - state.bpm_synced_to_engine).abs() > f64::EPSILON {
-                state.bpm_synced_to_engine = state.transport.bpm;
-                audio_proxy.send(GuiCommand::SetBpm(state.transport.bpm as f32));
-            }
-
-            if state.transport.playback_state == TransportPlaybackState::Playing
-                && state.explorer_state.is_playing_preview
-            {
-                state.explorer_state.is_playing_preview = false;
-                state.explorer_state.preview_position = 0.0;
-            }
-
-            if state.transport.playback_state == TransportPlaybackState::Playing {
-                let is_live = state.mode == AppMode::OpenLive;
-                if state.is_looping && !is_live {
-                    let ppqn = state.playlist_state.ppqn.max(1);
-                    let mut start = state.playlist_state.loop_start_ticks;
-                    let mut end = state.playlist_state.loop_end_ticks;
-                    let len = end.saturating_sub(start);
-                    if !state.playlist_state.loop_region_active || end <= start || len < ppqn {
-                        let total = state.playlist_state.total_project_ticks();
-                        start = 0u64;
-                        end = total.max(4u64.saturating_mul(ppqn));
-                    }
-                    if end <= start {
-                        end = start.saturating_add(4u64.saturating_mul(ppqn));
-                    }
-                    if end.saturating_sub(start) < ppqn {
-                        end = start.saturating_add(ppqn);
-                    }
-                    if end > start {
-                        state.playlist_state.loop_start_ticks = start;
-                        state.playlist_state.loop_end_ticks = end;
-                        state.playlist_state.loop_region_active = true;
-                        state.playlist_state.loop_preview_start_ticks = start;
-                        state.playlist_state.loop_preview_end_ticks = end;
-                    }
-                }
-            }
-
-            {
-                let ppqn = state.playlist_state.ppqn.max(1);
-                let (want_enabled, want_start, want_end) =
-                    if state.is_looping && state.playlist_state.is_loop_region_valid() {
-                        let start = state.playlist_state.loop_start_ticks;
-                        let mut end = state.playlist_state.loop_end_ticks;
-                        if end <= start {
-                            end = start.saturating_add(4u64.saturating_mul(ppqn));
-                        }
-                        if end.saturating_sub(start) < ppqn {
-                            end = start.saturating_add(ppqn);
-                        }
-                        (end > start, start, end)
-                    } else {
-                        (false, 0, 0)
-                    };
-                let want_start_samples = state.transport.ticks_to_samples(want_start);
-                let want_end_samples = state.transport.ticks_to_samples(want_end);
-                let want = (want_enabled, want_start_samples, want_end_samples);
-                if state.global_loop_synced_to_engine != Some(want) {
-                    state.global_loop_synced_to_engine = Some(want);
-                    state
-                        .transport
-                        .set_loop_region_samples(want_start_samples, want_end_samples);
-                    state.transport.set_loop_enabled(want_enabled);
-                    audio_proxy.send(GuiCommand::SetGlobalLoop {
-                        start_samples: want_start_samples,
-                        end_samples: want_end_samples,
-                        enabled: want_enabled,
-                    });
-                }
-            }
-
-            if state.mode == AppMode::OpenLive {
-                let any_clip_playing = state
-                    .matrix_state
-                    .grid
-                    .iter()
-                    .flatten()
-                    .any(|slot| slot.state == matrix::SlotState::Playing);
-                if any_clip_playing {
-                    cx.notify();
-                }
-            }
-
-            // Repaint continuo durante la reproducción (cualquier modo): el
-            // playhead de la Playlist, el timecode y los waveforms verticales
-            // del mixer leen el reloj del motor en cada frame. Sin este
-            // notify la UI quedaría congelada hasta el próximo input, porque
-            // los canvas sólo repintan cuando hay frame.
-            if state.transport.playback_state == TransportPlaybackState::Playing {
-                cx.notify();
-            }
-
-            if let Some((track_idx, scene_idx)) = state.matrix_state.selected_slot {
-                if let Some(slot) = state
-                    .matrix_state
-                    .grid
-                    .get_mut(track_idx)
-                    .and_then(|r| r.get_mut(scene_idx))
-                {
-                    if let Some(clip) = &mut slot.clip {
-                        if let matrix::ClipData::Midi { notes } = &mut clip.content {
-                            if state.piano_roll_state.notes_source_slot
-                                != Some((track_idx, scene_idx))
-                            {
-                                state.piano_roll_state.clear_note_selection();
-                                state.piano_roll_state.notes_source_slot =
-                                    Some((track_idx, scene_idx));
-                            }
-                            state.piano_roll_state.notes = notes
-                                .iter()
-                                .map(|&(start_tick, pitch, velocity, duration_ticks)| {
-                                    piano_roll::MidiNote {
-                                        pitch,
-                                        start_tick,
-                                        duration_ticks: duration_ticks as u64,
-                                        velocity,
-                                    }
-                                })
-                                .collect();
-                        } else {
-                            state.piano_roll_state.notes.clear();
-                            state.piano_roll_state.clear_note_selection();
-                            state.piano_roll_state.notes_source_slot = None;
-                        }
-                    } else {
-                        state.piano_roll_state.notes.clear();
-                        state.piano_roll_state.clear_note_selection();
-                        state.piano_roll_state.notes_source_slot = None;
-                    }
-                } else {
-                    state.piano_roll_state.notes.clear();
-                    state.piano_roll_state.clear_note_selection();
-                    state.piano_roll_state.notes_source_slot = None;
-                }
-            } else {
-                state.piano_roll_state.notes.clear();
-                state.piano_roll_state.clear_note_selection();
-                state.piano_roll_state.notes_source_slot = None;
-            }
-
-            if state.transport.playback_state == TransportPlaybackState::Playing {
-                let transport_tick =
-                    state.transport.samples_to_ticks(state.transport.sample_count);
-
-                if state.piano_roll_state.loop_enabled
-                    && state.piano_roll_state.selection_active
-                    && state.piano_roll_state.selection_end_tick
-                        > state.piano_roll_state.selection_start_tick
-                {
-                    let loop_len = state.piano_roll_state.selection_end_tick
-                        - state.piano_roll_state.selection_start_tick;
-
-                    if state.piano_roll_state.loop_start_instant.is_none() {
-                        state.piano_roll_state.loop_transport_start_tick = transport_tick;
-                        state.piano_roll_state.loop_start_instant = Some(std::time::Instant::now());
-                    }
-
-                    let elapsed_secs = state
-                        .piano_roll_state
-                        .loop_start_instant
-                        .map(|t| t.elapsed().as_secs_f64())
-                        .unwrap_or(0.0);
-
-                    let ppqn = state.transport.ppqn().max(1) as f64;
-                    let ticks_per_second = (state.transport.bpm * ppqn) / 60.0;
-                    let ticks_elapsed = (elapsed_secs * ticks_per_second) as u64;
-
-                    let offset_in_loop = ticks_elapsed % loop_len;
-                    state.piano_roll_state.playhead_tick =
-                        state.piano_roll_state.selection_start_tick + offset_in_loop;
-                } else {
-                    state.piano_roll_state.playhead_tick = transport_tick;
-                    state.piano_roll_state.loop_start_instant = None;
-                }
-            } else {
-                state.piano_roll_state.loop_start_instant = None;
-            }
-
-            let piano_roll_tracks = match state.mode {
-                AppMode::OpenLive => &state.live_tracks,
-                AppMode::OpenStudio => &state.studio_tracks,
-            };
-
-            if state.show_piano_roll {
-                if let Some((track_idx, scene_idx)) = state.matrix_state.selected_slot {
-                    if let Some(slot) = state
-                        .matrix_state
-                        .grid
-                        .get_mut(track_idx)
-                        .and_then(|r| r.get_mut(scene_idx))
-                    {
-                        if let Some(clip) = &mut slot.clip {
-                            if let matrix::ClipData::Midi { notes } = &mut clip.content {
-                                *notes = state
-                                    .piano_roll_state
-                                    .notes
-                                    .iter()
-                                    .map(|n| {
-                                        (
-                                            n.start_tick,
-                                            n.pitch,
-                                            n.velocity,
-                                            n.duration_ticks as u32,
-                                        )
-                                    })
-                                    .collect();
-                            }
-                        }
-                    }
-                }
-            }
-
-            piano_roll::trigger_playhead_notes(
-                &mut state.piano_roll_state,
-                piano_roll_tracks,
-                state.selected_track_index,
-                &audio_proxy,
-            );
-
-            // Layout inicial del piano roll (zoom al panel + foco en C4). Va
-            // acá y no en el render de la vista porque necesita pedir un frame
-            // de la entidad RAÍZ: el `cx` de este closure es el de `AppState`.
-            if state.show_piano_roll {
-                piano_roll_needs_frame = piano_roll::sync_frame(&mut state.piano_roll_state);
             }
         });
 
-        if piano_roll_needs_frame {
-            cx.notify();
-        }
-    }
-}
+        // 1. TOP PANEL: Unified Bitwig 5.1.7 Transport & Application Header
+        egui::TopBottomPanel::top("top_panel")
+            .frame(egui::Frame::NONE.fill(theme::DAW_BG_LAYER_2))
+            .show(ctx, |ui| {
+                header::render(ui, &mut self.state);
+            });
 
-// =========================================================================
-// RENDER PRINCIPAL DE LA APLICACIÓN (LAYOUT DAW INTEGRADO)
-// GNU AGPLv3 - crates/hikaru_gui/src/app.rs
-// =========================================================================
+        // 2. BOTTOM PANEL: Footer status & panel bar
+        egui::TopBottomPanel::bottom("bottom_footer")
+            .frame(egui::Frame::NONE.fill(theme::DAW_BG_LAYER_2))
+            .show(ctx, |ui| {
+                footer::render(ui, &mut self.state);
+            });
 
-impl Render for HikaruApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<HikaruApp>) -> impl IntoElement {
-        self.sync_frame(cx);
-
-        // Foco en la vista raíz: garantiza que las teclas (TAB, F9-F11)
-        // lleguen al div raíz aunque el usuario no haya clickeado nada.
-        if window.focused(cx).is_none() {
-            window.focus(&self.focus_handle, cx);
-        }
-
-        let app_state = self.state.read(cx);
-        let mode = app_state.mode;
-        let openlive_view = app_state.openlive_view;
-        let show_piano_roll = app_state.show_piano_roll;
-        let show_dsp_rack = app_state.show_dsp_rack;
-        let show_clip_editor = app_state.clip_editor.show_editor;
-        let clip_editor_height = app_state.clip_editor.editor_height.max(220.0);
-        let show_explorer = app_state.show_explorer;
-        let panel_layout = app_state.panel_layout;
-        let show_mixer_panel = panel_layout.show_mixer;
-        let bottom_mixer_splitter_drag = app_state.bottom_mixer_splitter_drag;
-        let arranger_track_width_drag = app_state.arranger_track_width_drag;
-        let show_about = app_state.show_about;
-        let audio_settings_open = app_state.audio_settings_state.is_open;
-        let plugin_settings_open = app_state.plugin_settings_state.is_open;
-        let mcp_port_settings_open = app_state.mcp_port_settings_state.is_open;
-        let control_panel_open = app_state.control_panel_state.is_open;
-        let dragged_sample = app_state.dragged_sample.clone();
-        // El alto del rack es fijo e inmutable: no se expande ni se achica al
-        // insertar o abrir dispositivos. Todas las tarjetas ocupan el 100% de
-        // esta altura.
-        let dsp_rack_height = crate::views::dsp_rack::RACK_HEIGHT;
-        let _ = app_state;
-
-        div()
-            .id("app_root")
-            .track_focus(&self.focus_handle)
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(crate::theme::WINDOW_BG)
-            // El seguimiento del arrastre de las ventanas modales. Va PRIMERO
-            // (se pinta antes que todo lo demás) para que su listener de
-            // ventana sea el primero en escucharse: GPUI despacha los
-            // eventos de mouse en fase de captura (en orden de pintado) y en
-            // fase de burbuja (al revés), y el gesto de arrastrar una modal
-            // tiene que survive a los `stop_propagation` del fondo.
-            //
-            // No tiene hitbox: no intercepta el mouse de nada.
-            .child(modal::drag_tracking_keepalive())
-            
-            // 1. BARRA SUPERIOR (MENÚ + TRANSPORT)
-            .child(
-                v_flex()
-                    .w_full()
-                    .child(menu_bar::render(cx))
-                    .child(header::render(window, cx)),
-            )
-            
-            // 2. ÁREA CENTRAL WORKSPACE (LAYOUT HORIZONTAL + VERTICAL)
-            .child(
-                h_flex()
-                    .flex_1()
-                    .w_full()
-                    .overflow_hidden()
-                    
-                    // PANEL LATERAL IZQUIERDO: INSPECTOR (Bitwig: inspector en el
-                    // splitter `inspector_and_main_splitter`, visible con el flag
-                    // `panel_layout.show_inspector` / F11)
-                    .when(show_explorer, |this| {
-                        this.child(
-                            div()
-                                .w(px(260.0))
-                                .h_full()
-                                .border_r_1()
-                                .border_color(crate::theme::BORDER_COLOR)
-                                .bg(crate::theme::PANEL_BG)
-                                .child(explorer::render(cx)),
-                        )
-                    })
-                    
-                    // CONTENEDOR PRINCIPAL FLEX (Vistas + Paneles Inferiores)
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .h_full()
-                            .overflow_hidden()
-                            
-                            // VISTA PRINCIPAL (Session Matrix / Arranger / Studio Playlist / Clip Launcher)
-                            // Bitwig monta la vista central desde el splitter
-                            // `main.1.arranger_detail_splitter` (`arranger` vs
-                            // complementary): el arranger es el pane principal y el
-                            // complementary panel (mixer con el clip launcher) el
-                            // resto. El flag `panel_layout.show_arranger` es la
-                            // visibilidad con la que se arma esta vista.
-                            .when(panel_layout.show_arranger, |this| {
-                                this.child(
-                                    div()
-                                        .flex_1()
-                                        .w_full()
-                                        .overflow_hidden()
-                                        .child(render_central(
-                                            mode,
-                                            openlive_view,
-                                            panel_layout.show_arranger,
-                                            panel_layout.show_clip_launcher,
-                                            cx,
-                                        )),
-                                )
-                            })
-                            // PANEL INFERIOR PLEGABLE: CLIP EDITOR
-                            // Alimentado por Session Matrix Y Playlist, así que
-                            // vive acá (global) y no dentro de la matriz.
-                            .when(show_clip_editor, |this| {
-                                this.child(
-                                    div()
-                                        .h(px(clip_editor_height))
-                                        .w_full()
-                                        .flex_shrink_0()
-                                        .border_t_1()
-                                        .border_color(crate::theme::BORDER_COLOR)
-                                        .child(detail_editor_panel::render(cx)),
-                                )
-                            })
-                            // PANEL INFERIOR PLEGABLE: PIANO ROLL (F9/F10)
-                            .when(show_piano_roll, |this| {
-                                this.child(
-                                    div()
-                                        .h(px(220.0))
-                                        .w_full()
-                                        .border_t_1()
-                                        .border_color(crate::theme::BORDER_COLOR)
-                                        .child(piano_roll::render(cx)),
-                                )
-                            })
-                            
-                            // PANEL INFERIOR PLEGABLE: DSP RACK
-                            .when(show_dsp_rack, |this| {
-                                this.child(
-                                    div()
-                                        .h(px(dsp_rack_height))
-                                        .max_h(px(220.0))
-                                        .w_full()
-                                        .flex_shrink_0()
-                                        .border_t_1()
-                                        .border_color(crate::theme::BORDER_COLOR)
-                                        .child(dsp_rack::render(cx)),
-                                )
-                            })
-                            // PANEL INFERIOR PLEGABLE: MIX PANEL (Bitwig Bottom Mixer)
-                            .when(show_mixer_panel, |this| {
-                                this.child(mixer::render_bottom_panel(cx))
-                            }),
-                    ),
-            )
-            
-            // 3. BARRA DE ESTADO / FOOTER
-            .child(footer::render(cx))
-            
-            // 4. OVERLAYS Y VENTANAS MODALES
-            .when(show_about, |this| this.child(about::render(cx)))
-            .when(audio_settings_open, |this| this.child(audio_settings::render(cx)))
-            .when(plugin_settings_open, |this| {
-                this.child(external_plugins_settings::render(cx))
-            })
-            .when(mcp_port_settings_open, |this| {
-                this.child(mcp_port_settings::render(cx))
-            })
-            .when(control_panel_open, |this| {
-                this.child(control_panel::render(cx))
-            })
-            .when_some(dragged_sample, |this, sample_path| {
-                this.child(render_drag_preview(&sample_path))
-            })
-            // Capturador de arrastre del splitter del Mixer Panel inferior
-            .when(bottom_mixer_splitter_drag.is_some(), |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .cursor_ns_resize()
-                        .on_mouse_move(move |event, _, cx| {
-                            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
-                                update_state(cx, |s| s.bottom_mixer_splitter_drag = None);
-                                return;
-                            }
-                            let st = state(cx);
-                            let drag = st.read(cx).bottom_mixer_splitter_drag;
-                            if let Some((start_y, start_h)) = drag {
-                                let curr_y = event.position.y.as_f32();
-                                let delta = start_y - curr_y;
-                                let new_h = (start_h + delta).clamp(160.0, 500.0);
-                                st.update(cx, |s, cx| {
-                                    s.bottom_mixer_height = new_h;
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                            update_state(cx, |s| s.bottom_mixer_splitter_drag = None);
-                        }),
+        // 3. RIGHT PANEL: Bitwig-style Browser (Samples, Files & Presets)
+        if self.state.show_explorer {
+            egui::SidePanel::right("right_explorer")
+                .default_width(270.0)
+                .min_width(210.0)
+                .max_width(420.0)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(theme::DAW_PANEL_BG)
+                        .inner_margin(egui::Margin::symmetric(6, 4))
+                        .stroke(egui::Stroke::new(1.0_f32, theme::DAW_BORDER_SUBTLE)),
                 )
-            })
-            // Capturador de arrastre del ancho de columnas en Arranger View (Bitwig parity)
-            .when(arranger_track_width_drag.is_some(), |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .cursor_col_resize()
-                        .on_mouse_move(move |event, _, cx| {
-                            if event.pressed_button != Some(gpui_kit::MouseButton::Left) {
-                                update_state(cx, |s| s.arranger_track_width_drag = None);
-                                return;
-                            }
-                            let st = state(cx);
-                            let drag = st.read(cx).arranger_track_width_drag;
-                            if let Some((target, start_x, start_w)) = drag {
-                                let curr_x = event.position.x.as_f32();
-                                let delta = curr_x - start_x;
-                                let new_w = (start_w + delta).clamp(
-                                    arranger_view::MIN_TRACK_WIDTH,
-                                    arranger_view::MAX_TRACK_WIDTH,
-                                );
-                                st.update(cx, |s, cx| {
-                                    s.set_track_width(target, new_w);
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _, cx| {
-                            update_state(cx, |s| s.arranger_track_width_drag = None);
-                        }),
-                )
-            })
-            
-            .on_modifiers_changed(move |event, _, cx| {
-                let st = state(cx);
-                let changed = st.read(cx).active_modifiers != event.modifiers;
-                if changed {
-                    let id = st.entity_id();
-                    st.update(cx, |s, _| {
-                        s.active_modifiers = event.modifiers;
-                    });
-                    cx.notify(id);
-                }
-            })
-            // SHORTCUTS: el foco vive en el div raíz, por eso capture_key_down
-            // los recibe sin importar qué control interno esté enfocado.
-            .capture_key_down(move |event, window, cx| {
-                // Salvo la caja de BPM: es el único campo de texto de la app,
-                // y mientras edita el tempo las teclas le pertenecen a ella
-                // (si no, `backspace` borraría clips del playlist).
-                let app = state(cx).read(cx);
-                let bpm_input = app.bpm_input.clone();
-                let show_dsp_rack = app.show_dsp_rack;
-                let _ = app;
-                if bpm_input.read(cx).focus_handle(cx).is_focused(window) {
-                    return;
-                }
-                let key = event.keystroke.key.as_str().to_lowercase();
-                let mods = event.keystroke.modifiers;
-                {
-                    let st = state(cx);
-                    if st.read(cx).active_modifiers != mods {
-                        st.update(cx, |s, _| s.active_modifiers = mods);
+                .show(ctx, |ui| {
+                    explorer::render(ui, &mut self.state);
+                });
+        }
+
+        // 4. BOTTOM DOCK PANELS: Clip Editor / Piano Roll / DSP Rack / Mix Panel
+        let has_dock = self.state.clip_editor.show_editor
+            || self.state.show_piano_roll
+            || self.state.show_dsp_rack
+            || self.state.panel_layout.show_mixer;
+
+        if has_dock {
+            let dock_h = if self.state.show_dsp_rack {
+                dsp_rack::RACK_HEIGHT + 6.0
+            } else if self.state.show_piano_roll {
+                220.0
+            } else if self.state.clip_editor.show_editor {
+                self.state.clip_editor.editor_height.max(200.0)
+            } else {
+                self.state.bottom_mixer_height
+            };
+
+            egui::TopBottomPanel::bottom("bottom_dock")
+                .exact_height(dock_h)
+                .frame(egui::Frame::NONE.fill(theme::DAW_BG_LAYER_1).stroke(egui::Stroke::new(1.0_f32, theme::DAW_BORDER_SUBTLE)))
+                .show(ctx, |ui| {
+                    if self.state.clip_editor.show_editor {
+                        detail_editor_panel::render(ui, &mut self.state);
+                    } else if self.state.show_piano_roll {
+                        piano_roll::render(ui, &mut self.state);
+                    } else if self.state.show_dsp_rack {
+                        dsp_rack::render(ui, &mut self.state);
+                    } else if self.state.panel_layout.show_mixer {
+                        mixer::render_bottom_panel(ui, &mut self.state);
                     }
-                }
-                // La tecla Delete elimina la tarjeta seleccionada del DSP Rack
-                if show_dsp_rack && key == "delete" {
-                    dsp_rack::handle_delete_key(cx);
-                    return;
-                }
-                handle_global_key_mod(&key, mods, cx);
-            })
-    }
-}
+                });
+        }
 
-fn render_central(
-    mode: AppMode,
-    openlive_view: OpenLiveView,
-    show_arranger: bool,
-    show_clip_launcher: bool,
-    cx: &mut Context<HikaruApp>,
-) -> AnyElement {
-    // Bitwig: la vista central (Arranger / Playlist / Clip Launcher) se monta
-    // del splitter `main.1.arranger_detail_splitter`. El flag `show_arranger` es
-    // la visibilidad del panel; el Clip Launcher (`...complementary_panel.mixer
-    // .is_clip_launcher_visible`) decide si la Session Matrix con su grid de
-    // clips/escenas se monta dentro del main.
-    if !show_arranger {
-        return div().into_any_element();
-    }
-    match mode {
-        AppMode::OpenLive => match openlive_view {
-            OpenLiveView::SessionMatrix => {
-                if !show_clip_launcher {
-                    return div().into_any_element();
+        // 5. CENTRAL WORKSPACE PANEL
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(theme::DAW_CANVAS_VOID))
+            .show(ctx, |ui| {
+                match self.state.mode {
+                    AppMode::OpenLive => match self.state.openlive_view {
+                        OpenLiveView::SessionMatrix => matrix::render(ui, &mut self.state),
+                        OpenLiveView::ArrangerView => arranger_view::render(ui, &mut self.state),
+                    },
+                    AppMode::OpenStudio => match self.state.openstudio_view {
+                        OpenStudioView::Playlist => playlist::render(ui, &mut self.state),
+                        OpenStudioView::ArrangerMixer => arranger_view::render(ui, &mut self.state),
+                    },
                 }
-                matrix::render(cx)
+            });
+
+        // 6. Floating Drag-and-Drop Sample Preview Badge & Cleanup on Release
+        if let Some(ref sample_path) = self.state.dragged_sample.clone() {
+            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos())) {
+                let file_label = sample_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let layer_id = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("wav_drag_badge"));
+                let painter = ctx.layer_painter(layer_id);
+                let badge_rect = egui::Rect::from_min_size(
+                    egui::pos2(pos.x + 14.0, pos.y + 10.0),
+                    egui::vec2(198.0, 22.0),
+                );
+                painter.rect_filled(badge_rect, 3.0, egui::Color32::from_rgba_unmultiplied(18, 20, 24, 240));
+                painter.rect_stroke(
+                    badge_rect,
+                    3.0,
+                    egui::Stroke::new(1.5_f32, theme::ACCENT_ORANGE),
+                    egui::StrokeKind::Inside,
+                );
+                crate::ui::icons::paint_browser_badge(
+                    &painter,
+                    egui::Rect::from_min_size(
+                        egui::pos2(badge_rect.min.x + 4.0, badge_rect.min.y + 3.0),
+                        egui::vec2(16.0, 16.0),
+                    ),
+                    crate::ui::icons::BrowserBadgeKind::Audio,
+                );
+                painter.text(
+                    egui::pos2(badge_rect.min.x + 24.0, badge_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    file_label,
+                    crate::ui::fonts::semibold(10.5),
+                    egui::Color32::WHITE,
+                );
             }
-            OpenLiveView::ArrangerView => arranger_view::render(cx),
-        },
-        // OpenStudio también es el Arranger View: columnas con el contenedor
-        // vertical de waveform arriba y el MISMO channel strip abajo.
-        AppMode::OpenStudio => arranger_view::render(cx),
+            if ctx.input(|i| i.pointer.any_released() || !i.pointer.any_down()) {
+                self.state.dragged_sample = None;
+            }
+        }
+
+        // 6. POPUPS & MODALS
+        about::render(ctx, &mut self.state);
+        audio_settings::render(ctx, &mut self.state);
+        external_plugins_settings::render(ctx, &mut self.state);
+        mcp_port_settings::render(ctx, &mut self.state);
+        control_panel::render(ctx, &mut self.state);
     }
-}
-
-fn render_drag_preview(sample_path: &Path) -> AnyElement {
-    let name = sample_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    div()
-        .absolute()
-        .left(px(20.0))
-        .top(px(20.0))
-        .bg(rgb(0x14161C))
-        .border_1()
-        .border_color(rgb(0x00FFFF))
-        .rounded(px(4.0))
-        .p(px(6.0))
-        .child(Label::new(format!("🎵 {}", name)).text_sm())
-        .into_any_element()
 }

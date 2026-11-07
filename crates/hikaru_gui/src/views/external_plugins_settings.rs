@@ -2,21 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use gpui_kit::component::button::Button;
-use gpui_kit::component::label::Label;
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, Styled as _};
-use gpui_kit::*;
+use egui::{Button, Color32, Context, RichText, ScrollArea, Window};
 
-use crate::app::{state, HikaruApp};
-use crate::views::modal::{self, ModalId, ModalRoot};
-
-/// Posición base de la ventana (px, desde la esquina superior izquierda de la
-/// ventana principal). El arrastre la mueve desde acá.
-const BASE_LEFT: f32 = 20.0;
-const BASE_TOP: f32 = 80.0;
+use crate::app::AppState;
+use crate::theme::*;
 
 pub use hikaru_plugin_host::PluginDescriptor as DiscoveredPlugin;
 pub use hikaru_plugin_host::{HostParentKind, PluginFormat};
@@ -24,30 +13,10 @@ use hikaru_plugin_host::hikaru_wrapper::{
     FeedbackOrigin, HikaruWrapper, LoopExit, ParamFeedback, WrapperConfig, WrapperRuntime,
 };
 
-/// Comando del rack hacia el hilo de la ventana de un plugin abierto.
-///
-/// Re-export del tipo del envoltorio: el hilo de la ventana y el hilo del DAW
-/// tienen que hablar **exactamente** el mismo idioma, y duplicar el enum
-/// obligaría a mantener una tabla de conversión que nadie va a leer cuando
-/// se agregue un variante.
 pub use hikaru_plugin_host::hikaru_wrapper::WrapperCommand as PluginWindowCommand;
 
-/// Reduce el handle nativo de la ventana de GPUI al enum `Send` que el hilo
-/// de la ventana entiende.
-///
-/// Se llama en el handler del click (ahí sí hay `&mut Window`): el render
-/// puro no ve la ventana, así que el padre se captura en el gesto y viaja
-/// como dato plano. Sin handle (o con error) → `Unknown` → flotante de
-/// XWayland. La llamada es cualificada al trait a propósito: `Window` tiene
-/// un método inherente `window_handle` que devuelve otro tipo y taparía al
-/// del trait en resolución normal.
-pub fn capture_host_parent(window: &mut gpui_kit::Window) -> HostParentKind {
-    // Sin `as _`: la ruta cualificada de abajo necesita el NOMBRE del trait
-    // en scope (el método inherente `Window::window_handle` lo taparía).
-    use raw_window_handle::HasWindowHandle;
-    <gpui_kit::Window as HasWindowHandle>::window_handle(window)
-        .map(|handle| HostParentKind::from_raw(handle.as_raw()))
-        .unwrap_or(HostParentKind::Unknown)
+pub fn capture_host_parent() -> HostParentKind {
+    HostParentKind::Unknown
 }
 
 /// Lo que el editor nativo movió por su cuenta, hacia la UI.
@@ -508,335 +477,110 @@ fn run_plugin_window(
     }
 }
 
-pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
-    let app = state(cx).read(cx);
-    let is_open = app.plugin_settings_state.is_open;
-    let paths = app.plugin_settings_state.custom_paths.clone();
-    let status = app.plugin_settings_state.status_message.clone();
-    let is_scanning = app.plugin_settings_state.is_scanning;
-    let plugins = app.plugin_settings_state.discovered_plugins.clone();
-    let scan_errors = app.plugin_settings_state.scan_errors.clone();
-    let open_names: Vec<String> = app
-        .plugin_settings_state
-        .open_plugin_names();
-    let gui_errors = app.plugin_settings_state.gui_errors.clone();
-    // El desplazamiento del arrastre de la ventana.
-    let drag = app.modal_drags.get(ModalId::PluginSettings);
-    let offset = drag.offset();
-    let dragging = drag.is_dragging();
-    let _ = app;
-
-    if !is_open {
-        return div().into_any_element();
+pub fn render(ctx: &Context, state: &mut AppState) {
+    if !state.plugin_settings_state.is_open {
+        return;
     }
 
-    let mut path_rows: Vec<AnyElement> = Vec::new();
-    for (idx, p) in paths.iter().enumerate() {
-        path_rows.push(
-            h_flex()
-                .w_full()
-                .gap(px(6.0))
-                .items_center()
-                .py(px(2.0))
-                .px(px(6.0))
-                .bg(rgb(0x20232C))
-                .rounded(px(4.0))
-                .child(
-                    Label::new(p.clone())
-                        .text_xs()
-                        .truncate()
-                        .flex_1()
-                        .text_color(rgb(0xB8BCC8)),
-                )
-                .child(
-                    Button::new(format!("plugin_path_remove_{}", idx)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("✕")
-                        .compact()
-                        .flex_shrink_0()
-                        .w(px(28.0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.plugin_settings_state.custom_paths.remove(idx);
-                                cx.notify();
-                            });
-                        }),
-                )
-                .into_any_element(),
-        );
-    }
+    let mut is_open = state.plugin_settings_state.is_open;
 
-    let mut plugin_rows: Vec<AnyElement> = Vec::new();
-    for plugin in plugins.iter() {
-        let is_open = open_names.contains(&plugin.name);
-        let badge = match plugin.format {
-            PluginFormat::CLAP => "CLAP",
-            PluginFormat::VST3 => "VST3",
-        };
-        let badge_col = match plugin.format {
-            PluginFormat::CLAP => rgb(0xB464FF),
-            PluginFormat::VST3 => rgb(0x64B4FF),
-        };
-        let name = plugin.name.clone();
-        let vendor = plugin.vendor.clone();
-        let plugin = plugin.clone();
-        let gui_error = gui_errors.get(&plugin.name).cloned();
-        plugin_rows.push(
-            v_flex()
-                .w_full()
-                .gap(px(1.0))
-                .py(px(4.0))
-                .px(px(6.0))
-                .bg(rgb(0x20232C))
-                .rounded(px(4.0))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .gap(px(8.0))
-                        .items_center()
-                        .child(
-                            Label::new(badge)
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(badge_col)
-                                .flex_shrink_0()
-                                .w(px(44.0)),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .overflow_hidden()
-                                .child(
-                                    Label::new(name.clone())
-                                        .text_xs()
-                                        .truncate()
-                                        .text_color(rgb(0xE8EAF0)),
-                                )
-                                .when(!vendor.is_empty(), |this| {
-                                    this.child(
-                                        Label::new(vendor.clone())
-                                            .text_xs()
-                                            .truncate()
-                                            .text_color(rgb(0x6A7080)),
-                                    )
-                                }),
-                        )
-                        .child(
-                            Button::new(format!("plugin_open_{}", name)).rounded(gpui_kit::component::button::ButtonRounded::None)
-                                .label(if is_open { "Abierto" } else { "Abrir" })
-                                .compact()
-                                .flex_shrink_0()
-                                .on_click(move |_, window, cx| {
-                                    let parent = capture_host_parent(window);
-                                    // Este panel abre plugins que pueden no
-                                    // estar en ninguna cadena, así que no hay
-                                    // slot del que sacar audio: el editor abre
-                                    // para editar parámetros, sin display
-                                    // reactivo. Quien sí está en el rack usa el
-                                    // botón `Editor` de la tarjeta.
-                                    let st = state(cx);
-                                    cx.update_entity(&st, |state, cx| {
-                                        state.plugin_settings_state.open_plugin(
-                                            &plugin,
-                                            parent,
-                                            hikaru_plugin_host::tap::NO_SLOT,
-                                        );
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
-                )
-                .when_some(gui_error, |this, message| {
-                    this.child(
-                        Label::new(message)
-                            .text_xs()
-                            .truncate()
-                            .text_color(rgb(0xFF7A5C)),
-                    )
-                })
-                .into_any_element(),
-        );
-    }
+    Window::new(RichText::new("PLUGINS EXTERNOS · VST3 / CLAP").strong().color(Color32::from_rgb(0xE8, 0xEA, 0xF0)))
+        .open(&mut is_open)
+        .default_size([560.0, 480.0])
+        .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
 
-    // La posición de la ventana: la base más el desplazamiento del arrastre.
-    let (left, top) = modal::modal_position(BASE_LEFT, BASE_TOP, offset);
+            ui.label(RichText::new("Rutas de búsqueda").size(11.0).strong().color(TEXT_MUTED));
 
-    let panel = v_flex()
-        .id("plugin_settings")
-        .absolute()
-        .left(px(left))
-        .top(px(top))
-        .w(px(560.0))
-        .max_h(px(480.0))
-        .bg(rgb(0x181A20))
-        .border_1()
-        .border_color(rgb(0x2A2D37))
-        .rounded(px(8.0))
-        .shadow(vec![gpui_kit::BoxShadow {
-            color: gpui_kit::black().opacity(0.5),
-            offset: point(px(0.0), px(8.0)),
-            blur_radius: px(24.0),
-            spread_radius: px(0.0),
-            inset: false,
-        }])
-        .p(px(14.0))
-        .gap(px(10.0))
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .gap(px(8.0))
-                .child(
-                    // El título es el ASA de arrastre de la ventana: el
-                    // usuario la agarra y la mueve. El `✕` queda fuera del
-                    // asa para que siga siendo un botón y no un asa.
-                    modal::drag_handle(
-                        h_flex()
-                            .id("plugin_settings_title")
-                            .flex_1()
-                            .items_center()
-                            .child(
-                                Label::new("PLUGINS EXTERNOS · VST3 / CLAP")
-                                    .text_sm()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(rgb(0xE8EAF0)),
-                            ),
-                        ModalId::PluginSettings,
-                        dragging,
-                    ),
-                )
-                .child(
-                    Button::new("plugin_close_top").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("✕")
-                        .compact()
-                        .flex_shrink_0()
-                        .w(px(28.0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.plugin_settings_state.is_open = false;
-                                // La ventana vuelve a su posición base la
-                                // próxima vez que abra.
-                                state.modal_drags.reset(ModalId::PluginSettings);
-                                cx.notify();
-                            });
-                        }),
-                ),
-        )
-        .child(Label::new("Rutas de búsqueda").text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x8A90A0)))
-        .child(
-            v_flex()
-                .w_full()
-                .gap(px(4.0))
-                .max_h(px(120.0))
-                .overflow_y_scrollbar()
-                .children(path_rows),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap(px(8.0))
-                .items_center()
-                .child(
-                    Button::new("plugin_add_path").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("+ Agregar ruta…")
-                        .compact()
-                        .flex_shrink_0()
-                        .on_click(move |_, _, cx| {
-                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                let st = state(cx);
-                                cx.update_entity(&st, |state, cx| {
-                                    state
-                                        .plugin_settings_state
-                                        .custom_paths
-                                        .push(folder.display().to_string());
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                )
-                .child(
-                    Button::new("plugin_rescan").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(if is_scanning { "Escaneando…" } else { "Rescan plugins" })
-                        .compact()
-                        .flex_shrink_0()
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.plugin_settings_state.start_scan();
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    Label::new(status.clone())
-                        .text_xs()
-                        .truncate()
-                        .flex_1()
-                        .text_color(rgb(0x8A90A0)),
-                ),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(px(6.0))
-                .child(Label::new(format!("Plugins encontrados ({})", plugins.len())).text_xs().font_weight(FontWeight::BOLD).text_color(rgb(0x8A90A0))),
-        )
-        .child(
-            v_flex()
-                .w_full()
-                .gap(px(4.0))
-                .max_h(px(150.0))
-                .overflow_y_scrollbar()
-                .when(plugins.is_empty(), |this| {
-                    this.child(
-                        Label::new("Ninguno todavía — pulsa «Rescan plugins».")
-                            .text_xs()
-                            .text_color(rgb(0x4A5060)),
-                    )
-                })
-                .children(plugin_rows),
-        )
-        // Errores de escaneo. No interrumpen nada: un bundle roto convive con
-        // los demás plugins en el rack, y lo que se quiere es que el usuario
-        // sepa por qué el suyo no aparece.
-        .when(!scan_errors.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .gap(px(2.0))
-                    .child(
-                        Label::new(format!("Omitidos ({}):", scan_errors.len()))
-                            .text_xs()
-                            .text_color(rgb(0xB464FF)),
-                    )
-                    .children(scan_errors.iter().take(5).map(|e| {
-                        Label::new(e.clone()).text_xs().text_color(rgb(0x6A7080))
-                    })),
-            )
-        })
-        .child(
-            Button::new("plugin_close").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("Cerrar")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    cx.update_entity(&st, |state, cx| {
-                        state.plugin_settings_state.is_open = false;
-                        // La ventana vuelve a su posición base la próxima vez
-                        // que abra.
-                        state.modal_drags.reset(ModalId::PluginSettings);
-                        cx.notify();
+            let mut to_remove = None;
+            ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                for (idx, p) in state.plugin_settings_state.custom_paths.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(p).size(11.0).color(Color32::from_rgb(0xB8, 0xBC, 0xC8)));
+                        if ui.add(Button::new("x").small()).clicked() {
+                            to_remove = Some(idx);
+                        }
                     });
-                }),
-        )
-        // El root del diálogo se traga los clics: los del panel nunca bajan
-        // al fondo de la app.
-        .absorb_clicks()
-        .into_any_element();
+                }
+            });
+            if let Some(idx) = to_remove {
+                state.plugin_settings_state.custom_paths.remove(idx);
+            }
 
-    // El backdrop cubre toda la ventana: lo que se clicque fuera del panel no
-    // llega a la Session Matrix ni al resto de la app.
-    modal::overlay("plugin_settings_backdrop", panel)
+            ui.horizontal(|ui| {
+                if ui.add(Button::new("+ Agregar ruta…").fill(SURFACE_BG)).clicked() {
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        state.plugin_settings_state.custom_paths.push(folder.display().to_string());
+                    }
+                }
+
+                let scan_label = if state.plugin_settings_state.is_scanning { "Escaneando…" } else { "Rescan plugins" };
+                if ui.add(Button::new(scan_label).fill(SURFACE_BG)).clicked() {
+                    state.plugin_settings_state.start_scan();
+                }
+
+                ui.label(RichText::new(&state.plugin_settings_state.status_message).size(11.0).color(TEXT_MUTED));
+            });
+
+            ui.separator();
+
+            let plugins_count = state.plugin_settings_state.discovered_plugins.len();
+            ui.label(RichText::new(format!("Plugins encontrados ({})", plugins_count)).size(11.0).strong().color(TEXT_MUTED));
+
+            let plugins = state.plugin_settings_state.discovered_plugins.clone();
+            let open_names = state.plugin_settings_state.open_plugin_names();
+
+            ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                if plugins.is_empty() {
+                    ui.label(RichText::new("Ninguno todavía — pulsa «Rescan plugins».").size(11.0).color(TEXT_DISABLED));
+                } else {
+                    for plugin in &plugins {
+                        let is_plugin_open = open_names.contains(&plugin.name);
+                        let (badge, badge_col) = match plugin.format {
+                            PluginFormat::CLAP => ("CLAP", Color32::from_rgb(0xB4, 0x64, 0xFF)),
+                            PluginFormat::VST3 => ("VST3", Color32::from_rgb(0x64, 0xB4, 0xFF)),
+                        };
+
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(badge).size(10.0).strong().color(badge_col));
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&plugin.name).size(11.0).color(TEXT_PRIMARY));
+                                if !plugin.vendor.is_empty() {
+                                    ui.label(RichText::new(&plugin.vendor).size(9.5).color(TEXT_MUTED));
+                                }
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let btn_label = if is_plugin_open { "Abierto" } else { "Abrir" };
+                                if ui.add(Button::new(btn_label).fill(SURFACE_BG)).clicked() {
+                                    let parent = capture_host_parent();
+                                    state.plugin_settings_state.open_plugin(
+                                        plugin,
+                                        parent,
+                                        hikaru_plugin_host::tap::NO_SLOT,
+                                    );
+                                }
+                            });
+                        });
+                        ui.separator();
+                    }
+                }
+            });
+
+            if !state.plugin_settings_state.scan_errors.is_empty() {
+                ui.separator();
+                ui.label(RichText::new(format!("Omitidos ({}):", state.plugin_settings_state.scan_errors.len())).size(11.0).color(Color32::from_rgb(0xB4, 0x64, 0xFF)));
+                for err in state.plugin_settings_state.scan_errors.iter().take(5) {
+                    ui.label(RichText::new(err).size(10.0).color(TEXT_MUTED));
+                }
+            }
+
+            ui.separator();
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(Button::new("Cerrar").fill(SURFACE_BG)).clicked() {
+                    state.plugin_settings_state.is_open = false;
+                }
+            });
+        });
+
+    state.plugin_settings_state.is_open = is_open;
 }

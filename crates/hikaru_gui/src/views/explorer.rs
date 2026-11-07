@@ -1,649 +1,53 @@
-// Hikaru OpenLive - Explorer
+// Hikaru OpenLive - File Explorer / Right-Side Bitwig Browser (egui)
 // GNU AGPLv3
 // crates/hikaru_gui/src/views/explorer.rs
 
 use std::fs;
 use std::path::PathBuf;
 
-use gpui_kit::component::button::Button;
-use gpui_kit::component::label::Label;
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _, Styled as _};
-use gpui_kit::*;
+use egui::{pos2, vec2, Align2, Color32, Rect, RichText, ScrollArea, Sense, Stroke, Ui};
 
-use crate::app::{state, HikaruApp};
+use crate::app::AppState;
 use crate::audio_proxy::GuiCommand;
+use crate::theme::*;
+use crate::ui::bitwig_kit::{
+    capsule_icon_button, capsule_text_button, fader_horizontal_range, JoinSide,
+};
+use crate::ui::fonts;
+use crate::ui::icons::{self, BrowserBadgeKind};
+use crate::views::dsp_rack::PLUGIN_CATALOG;
+use crate::views::mixer::DspSlot;
 
-/// Payload del Drag & Drop interno (Explorer → Session Matrix / Arranger).
-///
-/// Viaja con el gesto nativo de GPUI (`on_drag` / `on_drop`): el drop target
-/// lo recibe tipado y carga el clip sin pasar por `dragged_sample`. Se usa
-/// `PathBuf` envuelto (y no crudo) para que `can_drop` pueda discriminar este
-/// gesto de cualquier otro drag de la app.
-#[derive(Clone, Debug)]
+/// Entrada de archivo/directorio cacheada en memoria.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExplorerEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub is_midi: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExplorerAudioDrag(pub PathBuf);
 
-/// Fantasma flotante que sigue al cursor durante el arrastre.
-///
-/// GPUI pinta la vista que devuelve el constructor de `on_drag` junto al
-/// cursor; este `Render` mínimo (nombre del archivo + icono de clip) es el
-/// indicador flotante que pide el requerimiento 1.
-pub struct ExplorerDragGhost {
-    name: String,
+pub fn mark_dragged_sample(state: &mut AppState, path: &PathBuf) {
+    state.dragged_sample = Some(path.clone());
 }
 
-impl Render for ExplorerDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .bg(rgb(0x14161C))
-            .border_1()
-            .border_color(rgb(0x00FFFF))
-            .rounded(px(4.0))
-            .px(px(8.0))
-            .py(px(4.0))
-            .child(
-                Label::new(format!("🎵 {}", self.name))
-                    .text_xs()
-                    .text_color(crate::theme::TEXT_PRIMARY),
-            )
-    }
+pub fn clear_dragged_sample(state: &mut AppState) {
+    state.dragged_sample = None;
 }
 
-/// Marca el archivo como "arrastrándose" para el resaltado legacy de los pads.
-///
-/// El gesto nativo ya transporta el path tipado, pero los pads iluminan su
-/// borde a partir de `dragged_sample` (`drop_sample_ready`). Sincronizarlo
-/// aquí mantiene ese feedback sin duplicar la carga: el `on_drop` de los
-/// pads consume el payload tipado y limpia este flag.
-pub fn mark_dragged_sample(cx: &mut App, path: &PathBuf) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        s.dragged_sample = Some(path.clone());
-        cx.notify();
-    });
+pub fn begin_wavetable_pick(state: &mut AppState, track_idx: usize, slot_idx: usize) {
+    state.pending_wavetable_slot = Some((track_idx, slot_idx));
+    state.show_explorer = true;
 }
 
-pub fn clear_dragged_sample(cx: &mut App) {
-    let st = state(cx);
-    st.update(cx, |s, cx| {
-        s.dragged_sample = None;
-        cx.notify();
-    });
-}
-
-pub struct FileExplorerState {
-    pub current_path: PathBuf,
-    pub path_input: String,
-    pub selected_file: Option<PathBuf>,
-    pub history_back: Vec<PathBuf>,
-    pub history_forward: Vec<PathBuf>,
-    pub preview_volume: f32,
-    pub preview_position: f32,
-    pub is_playing_preview: bool,
-    pub sample_bpm: f32,
-    pub is_synced: bool,
-    pub cached_path: Option<PathBuf>,
-    pub cached_waveform: Vec<f32>,
-    pub sample_duration_secs: f32,
-}
-
-impl Default for FileExplorerState {
-    fn default() -> Self {
-        let root = PathBuf::from("/");
-        Self {
-            current_path: root.clone(),
-            path_input: root.to_string_lossy().to_string(),
-            selected_file: None,
-            history_back: Vec::new(),
-            history_forward: Vec::new(),
-            preview_volume: 0.8,
-            preview_position: 0.0,
-            is_playing_preview: false,
-            sample_bpm: 140.0,
-            is_synced: false,
-            cached_path: None,
-            cached_waveform: Vec::new(),
-            sample_duration_secs: 1.0,
-        }
-    }
-}
-
-impl FileExplorerState {
-    pub fn navigate_to(&mut self, new_path: PathBuf) {
-        if new_path.exists() && new_path.is_dir() {
-            self.history_back.push(self.current_path.clone());
-            self.history_forward.clear();
-            self.current_path = new_path.clone();
-            self.path_input = new_path.to_string_lossy().to_string();
-        }
-    }
-
-    pub fn go_back(&mut self) {
-        if let Some(prev) = self.history_back.pop() {
-            self.history_forward.push(self.current_path.clone());
-            self.current_path = prev.clone();
-            self.path_input = prev.to_string_lossy().to_string();
-        }
-    }
-
-    pub fn go_forward(&mut self) {
-        if let Some(next) = self.history_forward.pop() {
-            self.history_back.push(self.current_path.clone());
-            self.current_path = next.clone();
-            self.path_input = next.to_string_lossy().to_string();
-        }
-    }
-
-    pub fn current_speed(&self, project_bpm: f32) -> f32 {
-        if self.is_synced && self.sample_bpm > 0.0 {
-            (project_bpm / self.sample_bpm).clamp(0.25, 4.0)
-        } else {
-            1.0
-        }
-    }
-
-    pub fn load_waveform_peaks(&mut self, path: &PathBuf, target_bins: usize) {
-        if is_midi_file(path) {
-            return;
-        }
-
-        let mut peaks = vec![0.0_f32; target_bins];
-
-        if let Ok(mut reader) = hound::WavReader::open(path) {
-            let spec = reader.spec();
-            let total_samples = reader.len() as usize;
-
-            if spec.sample_rate > 0 {
-                self.sample_duration_secs =
-                    total_samples as f32 / (spec.sample_rate as f32 * spec.channels as f32);
-            }
-
-            if total_samples > 0 {
-                let samples_per_bin = (total_samples / target_bins).max(1);
-
-                match spec.sample_format {
-                    hound::SampleFormat::Int => {
-                        let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
-                        let mut samples_iter = reader.samples::<i32>().filter_map(|s| s.ok());
-
-                        for bin in 0..target_bins {
-                            let mut max_peak = 0.0_f32;
-                            for _ in 0..samples_per_bin {
-                                if let Some(s) = samples_iter.next() {
-                                    let abs_val = (s as f32 / max_val).abs();
-                                    if abs_val > max_peak {
-                                        max_peak = abs_val;
-                                    }
-                                } else {
-                                    break;
-                                }
-                            }
-                            peaks[bin] = max_peak;
-                        }
-                    }
-                    hound::SampleFormat::Float => {
-                        let mut samples_iter = reader.samples::<f32>().filter_map(|s| s.ok());
-
-                        for bin in 0..target_bins {
-                            let mut max_peak = 0.0_f32;
-                            for _ in 0..samples_per_bin {
-                                if let Some(s) = samples_iter.next() {
-                                    let abs_val = s.abs();
-                                    if abs_val > max_peak {
-                                        max_peak = abs_val;
-                                    }
-                                } else {
-                                    break;
-                                }
-                            }
-                            peaks[bin] = max_peak;
-                        }
-                    }
-                }
-            }
-        }
-
-        self.cached_waveform = peaks;
-        self.cached_path = Some(path.clone());
-    }
-}
-
-/// Abre el explorador en modo "elegir una wavetable para este slot".
-///
-/// El editor de Wavetable llama a esto en vez de armar su propio navegador: el
-/// explorer ya recorre los directorios de Linux con historial, barra de ruta y
-/// atajo a la raíz, y duplicar todo eso para elegir un archivo sería mantener
-/// dos navegadores que se desincronizan.
-///
-/// El modo se guarda como un slot pendiente en el estado: el click sobre un
-/// archivo consulta esa bandera y, si está, carga la wavetable en vez de armar
-/// un clip. Un flag y no un closure, porque el click se resuelve en otra vista.
-pub fn begin_wavetable_pick(cx: &mut App, track_idx: usize, slot_idx: usize) {
-    state(cx).update(cx, |state, cx| {
-        state.pending_wavetable_slot = Some((track_idx, slot_idx));
-        state.show_explorer = true;
-        cx.notify();
-    });
-}
-
-/// Directorio en el que arranca el explorador.
-///
-/// El home del usuario, no `/`: la raíz del filesystem es el peor lugar para
-/// buscar una wavetable, y desde ahí hay que navegar hacia abajo en cada
-/// intento. Si el home no existe (contenedor, servicio), se cae a la raíz.
 pub fn default_start_path() -> PathBuf {
     match std::env::var("HOME") {
         Ok(home) if PathBuf::from(&home).is_dir() => PathBuf::from(home),
         _ => PathBuf::from("/"),
     }
-}
-
-pub fn render(cx: &mut Context<HikaruApp>) -> AnyElement {
-    let app = state(cx).read(cx);
-    let ex = &app.explorer_state;
-    let current_path = ex.current_path.clone();
-    let path_input = ex.path_input.clone();
-    let selected_file = ex.selected_file.clone();
-    let _preview_volume = ex.preview_volume;
-    let preview_position = ex.preview_position;
-    let is_playing = ex.is_playing_preview;
-    let sample_bpm = ex.sample_bpm;
-    let is_synced = ex.is_synced;
-    let cached_waveform = ex.cached_waveform.clone();
-    let _audio_proxy = app.audio_proxy.clone();
-    let project_bpm = app.transport.bpm as f32;
-    let _ = app;
-
-    let mut entries: Vec<(String, PathBuf, bool)> = Vec::new();
-    if let Ok(rd) = fs::read_dir(&current_path) {
-        let mut dirs = Vec::new();
-        let mut files = Vec::new();
-        for entry in rd.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if is_supported_file(&path) {
-                files.push(path);
-            }
-        }
-        dirs.sort();
-        files.sort();
-        for d in dirs {
-            let name = d.file_name().unwrap_or_default().to_string_lossy().to_string();
-            entries.push((format!("📁 {}", name), d, true));
-        }
-        for f in files {
-            let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let is_midi = is_midi_file(&f);
-            let icon = if is_midi { "🎹" } else { "🎵" };
-            entries.push((format!("{} {}", icon, name), f, false));
-        }
-    }
-
-    let selected_name = selected_file
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    // El waveform también inicia el arrastre (click sostenido + mover):
-    // si hay un archivo de audio/MIDI seleccionado, el visor es origen.
-    let wave_drag: Option<PathBuf> = selected_file.clone().filter(|p| {
-        is_audio_file(p) || is_midi_file(p)
-    });
-
-    let wave_canvas = div()
-        .id("explorer_wave_canvas")
-        .w_full()
-        .h(px(72.0))
-        .bg(crate::theme::SURFACE_BG)
-        .rounded(px(4.0))
-        .border_1()
-        .border_color(crate::theme::BORDER_COLOR)
-        .when_some(wave_drag, |d, drag_path| {
-            d.on_drag(
-                ExplorerAudioDrag(drag_path.clone()),
-                |payload, _, _, cx| {
-                    mark_dragged_sample(cx, &payload.0);
-                    let name = payload
-                        .0
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    cx.new(|_| ExplorerDragGhost { name })
-                },
-            )
-        })
-        .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let bg = crate::theme::SURFACE_BG;
-                    window.paint_quad(PaintQuad {
-                        bounds,
-                        background: bg.into(),
-                        border_color: Hsla::default(),
-                        corner_radii: gpui_kit::Corners::default(),
-                        border_widths: gpui_kit::Edges::default(),
-                        border_style: BorderStyle::default(),
-                    });
-                    if cached_waveform.is_empty() {
-                        return;
-                    }
-                    let origin_x: f32 = bounds.origin.x.into();
-                    let origin_y: f32 = bounds.origin.y.into();
-                    let height_f: f32 = bounds.size.height.into();
-                    let center_y = origin_y + height_f / 2.0;
-                    let max_h = height_f * 0.42;
-                    let n = cached_waveform.len();
-                    let w: f32 = bounds.size.width.into();
-                    let bar_w = (w / n as f32).max(1.0);
-                    for (i, &amp) in cached_waveform.iter().enumerate() {
-                        let x = origin_x + (i as f32 / n as f32) * w;
-                        let h = (amp * max_h).max(1.0);
-                        let mut pb = PathBuilder::fill();
-                        pb.move_to(point(px(x), px(center_y - h)));
-                        pb.line_to(point(px(x + bar_w), px(center_y - h)));
-                        pb.line_to(point(px(x + bar_w), px(center_y + h)));
-                        pb.line_to(point(px(x), px(center_y + h)));
-                        pb.close();
-                        window.paint_path(pb.build().unwrap(), crate::theme::ACCENT_COLOR);
-                    }
-                    let phx = origin_x + preview_position * w;
-                    let mut pb = PathBuilder::stroke(px(2.0));
-                    pb.move_to(point(px(phx), px(origin_y)));
-                    pb.line_to(point(px(phx), px(origin_y + height_f)));
-                    window.paint_path(pb.build().unwrap(), crate::theme::ACCENT_STUDIO);
-                },
-            )
-            .w_full()
-            .h_full(),
-        )
-        .on_click(move |event, _, cx| {
-            let Some(pos) = event.mouse_position() else { return; };
-            let norm_x: f32 = (pos.x.as_f32() / 260.0).clamp(0.0, 1.0);
-            let st = state(cx);
-            cx.update_entity(&st, |state, cx| {
-                state.explorer_state.preview_position = norm_x;
-                state.explorer_state.is_playing_preview = true;
-                if let Some(ref file) = state.explorer_state.selected_file {
-                    state.audio_proxy.send(GuiCommand::SetPreviewVolume(
-                        state.explorer_state.preview_volume,
-                    ));
-                    state.audio_proxy.send(GuiCommand::PreviewSample {
-                        path: file.to_string_lossy().to_string(),
-                        volume: state.explorer_state.preview_volume,
-                        speed: state.explorer_state.current_speed(project_bpm),
-                    });
-                }
-                cx.notify();
-            });
-        })
-        .into_any_element();
-
-    v_flex()
-        .id("file_explorer")
-        .size_full()
-        .bg(crate::theme::PANEL_BG)
-        .p(px(8.0))
-        .gap(px(6.0))
-        // 1. Navegación y Ruta Actual
-        .child(
-            h_flex()
-                .gap(px(4.0))
-                .child(
-                    Button::new("explorer_back").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("⮜")
-                        .compact()
-                        .text_color(rgb(0xB0B0B0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.explorer_state.go_back();
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    Button::new("explorer_forward").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("⮞")
-                        .compact()
-                        .text_color(rgb(0xB0B0B0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.explorer_state.go_forward();
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    Button::new("explorer_up").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("⬆")
-                        .compact()
-                        .text_color(rgb(0xB0B0B0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                if let Some(parent) = state.explorer_state.current_path.parent() {
-                                    state.explorer_state.navigate_to(parent.to_path_buf());
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .h(px(24.0))
-                        .px(px(6.0))
-                        .flex()
-                        .items_center()
-                        .bg(crate::theme::SURFACE_BG)
-                        .rounded(px(3.0))
-                        .border_1()
-                        .border_color(crate::theme::BORDER_COLOR)
-                        .child(
-                            Label::new(path_input.clone())
-                                .text_xs()
-                                .text_color(crate::theme::TEXT_PRIMARY),
-                        ),
-                ),
-        )
-        // 2. Lista de Archivos / Carpetas con Scroll
-        .child(
-            div()
-                .flex_1()
-                .w_full()
-                .overflow_y_scrollbar()
-                .child(
-                    v_flex()
-                        .gap(px(2.0))
-                        .children(entries.into_iter().map(|(label, path, is_dir)| {
-                            let is_selected = selected_file.as_ref() == Some(&path);
-                            let label_clone = label.clone();
-                            let project_bpm = project_bpm;
-                            // Solo audio/MIDI admiten arrastre; los directorios navegan con click.
-                            let is_draggable =
-                                !is_dir && (is_audio_file(&path) || is_midi_file(&path));
-
-                            let bg_color = if is_selected {
-                                crate::theme::SLOT_ACTIVE_BG
-                            } else {
-                                crate::theme::SURFACE_BG
-                            };
-
-                            div()
-                                .id(format!("explorer_entry_{}", path.display()))
-                                .w_full()
-                                .h(px(22.0))
-                                .px(px(6.0))
-                                .flex()
-                                .items_center()
-                                .bg(bg_color)
-                                .rounded(px(3.0))
-                                .child(Label::new(label_clone).text_xs().text_color(crate::theme::TEXT_PRIMARY))
-                                        .when(is_draggable, |d| {
-                                            d.on_drag(
-                                                ExplorerAudioDrag(path.clone()),
-                                                |payload, _, _, cx| {
-                                                    mark_dragged_sample(cx, &payload.0);
-                                                    let name = payload
-                                                        .0
-                                                        .file_name()
-                                                        .unwrap_or_default()
-                                                        .to_string_lossy()
-                                                        .to_string();
-                                                    cx.new(|_| ExplorerDragGhost { name })
-                                                },
-                                            )
-                                        })
-                                        .on_click(move |_, _, cx| {
-                                            let st = state(cx);
-                                            cx.update_entity(&st, |state, cx| {
-                                                if is_dir {
-                                                    state.explorer_state.navigate_to(path.clone());
-                                                } else if let Some((track_idx, slot_idx)) =
-                                                    state.pending_wavetable_slot
-                                                {
-                                            state.pending_wavetable_slot = None;
-                                            let wavetable_path = path.clone();
-                                            cx.defer(move |cx| {
-                                                crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::load_table_deferred(
-                                                    cx,
-                                                    track_idx,
-                                                    slot_idx,
-                                                    wavetable_path,
-                                                );
-                                            });
-                                        } else {
-                                            state.explorer_state.selected_file = Some(path.clone());
-                                            if !is_midi_file(&path) {
-                                                state.explorer_state.is_playing_preview = true;
-                                                state.explorer_state.preview_position = 0.0;
-                                                state.explorer_state.load_waveform_peaks(&path, 256);
-                                                if let Some(detected) =
-                                                    parse_bpm_from_filename(&path.to_string_lossy())
-                                                {
-                                                    state.explorer_state.sample_bpm = detected;
-                                                }
-                                                state.audio_proxy.send(GuiCommand::SetPreviewVolume(
-                                                    state.explorer_state.preview_volume,
-                                                ));
-                                                state.audio_proxy.send(GuiCommand::PreviewSample {
-                                                    path: path.to_string_lossy().to_string(),
-                                                    volume: state.explorer_state.preview_volume,
-                                                    speed: state
-                                                        .explorer_state
-                                                        .current_speed(project_bpm),
-                                                });
-                                            } else {
-                                                state.explorer_state.is_playing_preview = false;
-                                                state.audio_proxy.send(GuiCommand::StopPreview);
-                                            }
-                                        }
-                                        cx.notify();
-                                    });
-                                })
-                                .into_any_element()
-                        })),
-                ),
-        )
-        // 3. Controles de Reproducción y Preescucha (BPM / Sync / Vol)
-        .child(
-            h_flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(
-                    Button::new("explorer_play").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label(if is_playing { "⏸" } else { "▶" })
-                        .compact()
-                        .text_color(rgb(0xB0B0B0))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.explorer_state.is_playing_preview =
-                                    !state.explorer_state.is_playing_preview;
-                                if state.explorer_state.is_playing_preview {
-                                    if let Some(ref file) = state.explorer_state.selected_file {
-                                        state.audio_proxy.send(GuiCommand::SetPreviewVolume(
-                                            state.explorer_state.preview_volume,
-                                        ));
-                                        state.audio_proxy.send(GuiCommand::PreviewSample {
-                                            path: file.to_string_lossy().to_string(),
-                                            volume: state.explorer_state.preview_volume,
-                                            speed: state
-                                                .explorer_state
-                                                .current_speed(project_bpm),
-                                        });
-                                    }
-                                } else {
-                                    state.audio_proxy.send(GuiCommand::StopPreview);
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(Label::new("🔊").text_xs().text_color(crate::theme::TEXT_PRIMARY))
-                .child(
-                    div()
-                        .w(px(60.0))
-                        .h(px(10.0))
-                        .bg(crate::theme::SURFACE_BG)
-                        .rounded(px(3.0))
-                        .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, cx| {
-                            let x: f32 = event.position.x.as_f32() / 60.0;
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.explorer_state.preview_volume = x.clamp(0.0, 1.0);
-                                state.audio_proxy.send(GuiCommand::SetPreviewVolume(
-                                    state.explorer_state.preview_volume,
-                                ));
-                                cx.notify();
-                            });
-                        })
-                        .into_any_element(),
-                )
-                .child(
-                    Button::new("explorer_sync").rounded(gpui_kit::component::button::ButtonRounded::None)
-                        .label("Sync")
-                        .compact()
-                        .text_color(rgb(0xB0B0B0))
-                        .when(is_synced, |b| b.text_color(crate::theme::ACCENT_COLOR))
-                        .on_click(move |_, _, cx| {
-                            let st = state(cx);
-                            cx.update_entity(&st, |state, cx| {
-                                state.explorer_state.is_synced = !state.explorer_state.is_synced;
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(Label::new(format!("{} BPM", sample_bpm as u32)).text_xs().text_color(crate::theme::TEXT_PRIMARY)),
-        )
-        // 4. Visualización de Formas de Onda (Waveform)
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .justify_center()
-                        .child(
-                            Label::new(selected_name)
-                                .text_xs()
-                                .text_color(crate::theme::TEXT_PRIMARY),
-                        ),
-                )
-                .child(wave_canvas),
-        )
-        .into_any_element()
 }
 
 pub fn is_supported_file(path: &PathBuf) -> bool {
@@ -653,7 +57,10 @@ pub fn is_supported_file(path: &PathBuf) -> bool {
 pub fn is_audio_file(path: &PathBuf) -> bool {
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
-        matches!(ext_str.as_str(), "wav" | "flac" | "ogg" | "mp3" | "aiff" | "synth")
+        matches!(
+            ext_str.as_str(),
+            "wav" | "flac" | "ogg" | "mp3" | "aiff" | "synth"
+        )
     } else {
         false
     }
@@ -690,4 +97,822 @@ pub fn parse_bpm_from_filename(filename: &str) -> Option<f32> {
         }
     }
     None
+}
+
+/// Estado persistente del explorador de archivos.
+#[derive(Clone, Debug)]
+pub struct FileExplorerState {
+    pub current_path: PathBuf,
+    pub path_input: String,
+    pub show_hidden: bool,
+    pub selected_file: Option<PathBuf>,
+    pub history_back: Vec<PathBuf>,
+    pub history_forward: Vec<PathBuf>,
+    pub preview_volume: f32,
+    pub preview_position: f32,
+    pub is_playing_preview: bool,
+    pub sample_bpm: f32,
+    pub is_synced: bool,
+    pub cached_path: Option<PathBuf>,
+    pub cached_waveform: Vec<f32>,
+    pub sample_duration_secs: f32,
+    pub cached_entries: Vec<ExplorerEntry>,
+    pub search_query: String,
+    /// `0` = Samples & Files, `1` = Devices
+    pub active_tab: u8,
+}
+
+impl Default for FileExplorerState {
+    fn default() -> Self {
+        let root = default_start_path();
+        let mut st = Self {
+            current_path: root.clone(),
+            path_input: root.to_string_lossy().to_string(),
+            show_hidden: false,
+            selected_file: None,
+            history_back: Vec::new(),
+            history_forward: Vec::new(),
+            preview_volume: 0.8,
+            preview_position: 0.0,
+            is_playing_preview: false,
+            sample_bpm: 140.0,
+            is_synced: false,
+            cached_path: None,
+            cached_waveform: Vec::new(),
+            sample_duration_secs: 1.0,
+            cached_entries: Vec::new(),
+            search_query: String::new(),
+            active_tab: 0,
+        };
+        st.refresh_entries();
+        st
+    }
+}
+
+impl FileExplorerState {
+    pub fn refresh_entries(&mut self) {
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+
+        if let Ok(rd) = fs::read_dir(&self.current_path) {
+            for entry in rd.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if !self.show_hidden && name.starts_with('.') {
+                    continue;
+                }
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(ExplorerEntry {
+                        name: name.to_string(),
+                        path,
+                        is_dir: true,
+                        is_midi: false,
+                    });
+                } else if is_supported_file(&path) {
+                    let is_midi = is_midi_file(&path);
+                    files.push(ExplorerEntry {
+                        name: name.to_string(),
+                        path,
+                        is_dir: false,
+                        is_midi,
+                    });
+                }
+            }
+        }
+
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        dirs.extend(files);
+        self.cached_entries = dirs;
+    }
+
+    pub fn navigate_to(&mut self, new_path: PathBuf) {
+        if new_path.exists() && new_path.is_dir() {
+            if self.current_path != new_path {
+                self.history_back.push(self.current_path.clone());
+                self.history_forward.clear();
+                self.current_path = new_path.clone();
+                self.path_input = new_path.to_string_lossy().to_string();
+                self.refresh_entries();
+            }
+        }
+    }
+
+    pub fn go_back(&mut self) {
+        if let Some(prev) = self.history_back.pop() {
+            self.history_forward.push(self.current_path.clone());
+            self.current_path = prev.clone();
+            self.path_input = prev.to_string_lossy().to_string();
+            self.refresh_entries();
+        }
+    }
+
+    pub fn go_forward(&mut self) {
+        if let Some(next) = self.history_forward.pop() {
+            self.history_back.push(self.current_path.clone());
+            self.current_path = next.clone();
+            self.path_input = next.to_string_lossy().to_string();
+            self.refresh_entries();
+        }
+    }
+
+    pub fn go_up(&mut self) {
+        if let Some(parent) = self.current_path.parent() {
+            let parent_path = parent.to_path_buf();
+            self.navigate_to(parent_path);
+        }
+    }
+
+    pub fn go_home(&mut self) {
+        let home = default_start_path();
+        self.navigate_to(home);
+    }
+
+    pub fn toggle_hidden(&mut self) {
+        self.show_hidden = !self.show_hidden;
+        self.refresh_entries();
+    }
+
+    pub fn current_speed(&self, project_bpm: f32) -> f32 {
+        if self.is_synced && self.sample_bpm > 0.0 {
+            (project_bpm / self.sample_bpm).clamp(0.25, 4.0)
+        } else {
+            1.0
+        }
+    }
+
+    pub fn load_waveform_peaks(&mut self, path: &PathBuf, target_bins: usize) {
+        if is_midi_file(path) {
+            self.cached_waveform.clear();
+            self.cached_path = Some(path.clone());
+            return;
+        }
+
+        if self.cached_path.as_ref() == Some(path) && !self.cached_waveform.is_empty() {
+            return;
+        }
+
+        let mut peaks = vec![0.0_f32; target_bins];
+
+        if let Ok(mut reader) = hound::WavReader::open(path) {
+            let spec = reader.spec();
+            let total_samples = reader.len() as usize;
+
+            if spec.sample_rate > 0 && spec.channels > 0 {
+                self.sample_duration_secs =
+                    total_samples as f32 / (spec.sample_rate as f32 * spec.channels as f32);
+            }
+
+            if total_samples > 0 {
+                let samples_per_bin = (total_samples / target_bins).max(1);
+                let check_count = samples_per_bin.min(32);
+
+                match spec.sample_format {
+                    hound::SampleFormat::Int => {
+                        let max_val = (1 << (spec.bits_per_sample.saturating_sub(1))) as f32;
+                        for bin in 0..target_bins {
+                            let seek_idx = (bin * samples_per_bin) as u32;
+                            if reader.seek(seek_idx).is_err() {
+                                break;
+                            }
+                            let mut max_peak = 0.0_f32;
+                            let mut iter = reader.samples::<i32>().filter_map(|s| s.ok());
+                            for _ in 0..check_count {
+                                if let Some(s) = iter.next() {
+                                    let abs_val = (s as f32 / max_val).abs();
+                                    if abs_val > max_peak {
+                                        max_peak = abs_val;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            peaks[bin] = max_peak;
+                        }
+                    }
+                    hound::SampleFormat::Float => {
+                        for bin in 0..target_bins {
+                            let seek_idx = (bin * samples_per_bin) as u32;
+                            if reader.seek(seek_idx).is_err() {
+                                break;
+                            }
+                            let mut max_peak = 0.0_f32;
+                            let mut iter = reader.samples::<f32>().filter_map(|s| s.ok());
+                            for _ in 0..check_count {
+                                if let Some(s) = iter.next() {
+                                    let abs_val = s.abs();
+                                    if abs_val > max_peak {
+                                        max_peak = abs_val;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            peaks[bin] = max_peak;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.cached_waveform = peaks;
+        self.cached_path = Some(path.clone());
+    }
+}
+
+pub fn render(ui: &mut Ui, state: &mut AppState) {
+    let project_bpm = state.transport.bpm as f32;
+
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+
+        // =====================================================================
+        // 1. Tira superior de categorías estilo Bitwig Browser (Samples | Devices)
+        // =====================================================================
+        egui::Frame::NONE
+            .fill(Color32::from_rgb(0x2A, 0x2C, 0x31))
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let is_files = state.explorer_state.active_tab == 0;
+                    let is_devs = state.explorer_state.active_tab == 1;
+
+                    if capsule_text_button(
+                        ui,
+                        vec2(108.0, 20.0),
+                        "Samples & Files",
+                        10.0,
+                        is_files,
+                        ACCENT_ORANGE,
+                        JoinSide::Left,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        state.explorer_state.active_tab = 0;
+                    }
+                    if capsule_text_button(
+                        ui,
+                        vec2(78.0, 20.0),
+                        "Devices",
+                        10.0,
+                        is_devs,
+                        ACCENT_ORANGE,
+                        JoinSide::Right,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        state.explorer_state.active_tab = 1;
+                    }
+                });
+            });
+
+        // Banner contextual cuando OpenWavetable espera un WAV
+        if state.pending_wavetable_slot.is_some() {
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x3A, 0x22, 0x08))
+                .stroke(Stroke::new(1.0_f32, ACCENT_ORANGE))
+                .corner_radius(3.0)
+                .inner_margin(5.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (b_r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                        icons::paint_browser_badge(ui.painter(), b_r, BrowserBadgeKind::DeviceNote);
+                        ui.label(
+                            RichText::new("Select WAV to load into OpenWavetable")
+                                .font(fonts::semibold(10.5))
+                                .color(ACCENT_ORANGE),
+                        );
+                    });
+                });
+        }
+
+        // =====================================================================
+        // 2. Barra de búsqueda oscura hundida estilo Bitwig (`🔍 Search... ×`)
+        // =====================================================================
+        egui::Frame::NONE
+            .fill(BW_DARK_WELL)
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x24)))
+            .corner_radius(2.5)
+            .inner_margin(egui::Margin::symmetric(5, 3))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let (srch_r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                    icons::paint_icon(
+                        ui.painter(),
+                        srch_r,
+                        icons::SEARCH,
+                        TEXT_MUTED,
+                        1.7,
+                    );
+                    let edit_w = (ui.available_width() - 20.0).max(60.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.explorer_state.search_query)
+                            .hint_text("Search devices & samples...")
+                            .frame(false)
+                            .desired_width(edit_w),
+                    );
+                    if !state.explorer_state.search_query.is_empty() {
+                        let (clr_r, clr_resp) =
+                            ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+                        icons::paint_icon(
+                            ui.painter(),
+                            clr_r.shrink(1.5),
+                            icons::X_CLOSE,
+                            if clr_resp.hovered() {
+                                Color32::WHITE
+                            } else {
+                                TEXT_MUTED
+                            },
+                            1.7,
+                        );
+                        if clr_resp.clicked() {
+                            state.explorer_state.search_query.clear();
+                        }
+                    }
+                });
+            });
+
+        // Si estamos en la pestaña `Devices`, mostramos el catálogo nativo estilo Bitwig Browser
+        if state.explorer_state.active_tab == 1 {
+            let query_low = state.explorer_state.search_query.to_lowercase();
+            let list_h = (ui.available_height() - 8.0).max(120.0);
+            egui::Frame::NONE
+                .fill(BW_DARK_WELL)
+                .inner_margin(egui::Margin::symmetric(4, 4))
+                .show(ui, |ui| {
+                    ScrollArea::vertical()
+                        .id_salt("browser_device_list")
+                        .max_height(list_h)
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            let row_w = ui.available_width();
+                            for plugin in &PLUGIN_CATALOG {
+                                if !query_low.is_empty()
+                                    && !plugin.label.to_lowercase().contains(&query_low)
+                                    && !plugin.category.to_lowercase().contains(&query_low)
+                                {
+                                    continue;
+                                }
+                                let (row_r, resp) =
+                                    ui.allocate_exact_size(vec2(row_w, 22.0), Sense::click());
+                                if resp.hovered() {
+                                    ui.painter().rect_filled(
+                                        row_r,
+                                        2.0,
+                                        Color32::from_rgb(0x26, 0x28, 0x2E),
+                                    );
+                                }
+                                let badge_kind = if plugin.category.contains("Synth") {
+                                    BrowserBadgeKind::DeviceNote
+                                } else {
+                                    BrowserBadgeKind::DeviceAudio
+                                };
+                                icons::paint_browser_badge(
+                                    ui.painter(),
+                                    Rect::from_min_size(
+                                        pos2(row_r.min.x + 4.0, row_r.min.y + 3.0),
+                                        vec2(16.0, 16.0),
+                                    ),
+                                    badge_kind,
+                                );
+                                ui.painter().text(
+                                    pos2(row_r.min.x + 25.0, row_r.center().y),
+                                    Align2::LEFT_CENTER,
+                                    plugin.label,
+                                    fonts::semibold(11.0),
+                                    Color32::from_rgb(0xEC, 0xEE, 0xF2),
+                                );
+                                ui.painter().text(
+                                    pos2(row_r.max.x - 6.0, row_r.center().y),
+                                    Align2::RIGHT_CENTER,
+                                    plugin.category,
+                                    fonts::regular(9.5),
+                                    TEXT_MUTED,
+                                );
+                                if resp
+                                    .on_hover_text("Click to insert device on selected track")
+                                    .clicked()
+                                {
+                                    let t_idx = state.safe_track_index();
+                                    if let Some(tr) = state.current_tracks_mut().get_mut(t_idx) {
+                                        let mut slot = DspSlot::default();
+                                        slot.name = plugin.name.to_string();
+                                        tr.effects.push(slot);
+                                        state.selected_slot_index = tr.effects.len() - 1;
+                                        state.show_dsp_rack = true;
+                                    }
+                                }
+                            }
+                        });
+                });
+            return;
+        }
+
+        // =====================================================================
+        // 3. Barra de navegación de carpetas con cápsulas vectoriales GPU
+        // =====================================================================
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 20.0),
+                false,
+                ACCENT_ORANGE,
+                JoinSide::Left,
+                |p, r, fg| icons::paint_icon(p, r.shrink(1.0), icons::ARROW_LEFT, fg, 1.7),
+            )
+            .on_hover_text("Back")
+            .clicked()
+            {
+                state.explorer_state.go_back();
+            }
+
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 20.0),
+                false,
+                ACCENT_ORANGE,
+                JoinSide::Middle,
+                |p, r, fg| icons::paint_icon(p, r.shrink(1.0), icons::ARROW_RIGHT, fg, 1.7),
+            )
+            .on_hover_text("Forward")
+            .clicked()
+            {
+                state.explorer_state.go_forward();
+            }
+
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 20.0),
+                false,
+                ACCENT_ORANGE,
+                JoinSide::Middle,
+                |p, r, fg| icons::paint_icon(p, r.shrink(1.0), icons::ARROW_UP, fg, 1.7),
+            )
+            .on_hover_text("Parent Folder")
+            .clicked()
+            {
+                state.explorer_state.go_up();
+            }
+
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 20.0),
+                false,
+                ACCENT_ORANGE,
+                JoinSide::Middle,
+                |p, r, fg| icons::paint_icon(p, r.shrink(1.0), icons::HOME, fg, 1.7),
+            )
+            .on_hover_text("Home Directory")
+            .clicked()
+            {
+                state.explorer_state.go_home();
+            }
+
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 20.0),
+                false,
+                ACCENT_ORANGE,
+                JoinSide::Right,
+                |p, r, fg| icons::paint_icon(p, r.shrink(1.0), icons::REFRESH, fg, 1.7),
+            )
+            .on_hover_text("Refresh")
+            .clicked()
+            {
+                state.explorer_state.refresh_entries();
+            }
+
+            ui.add_space(4.0);
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 20.0),
+                state.explorer_state.show_hidden,
+                ACCENT_ORANGE,
+                JoinSide::Standalone,
+                |p, r, fg| icons::paint_icon(p, r.shrink(1.0), icons::EYE, fg, 1.7),
+            )
+            .on_hover_text("Show Hidden Files")
+            .clicked()
+            {
+                state.explorer_state.toggle_hidden();
+            }
+        });
+
+        // 4. Ruta actual editable
+        let mut path_str = state.explorer_state.path_input.clone();
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut path_str)
+                    .font(fonts::regular(10.0))
+                    .desired_width(ui.available_width()),
+            )
+            .lost_focus()
+        {
+            state.explorer_state.navigate_to(PathBuf::from(path_str));
+        }
+
+        // =====================================================================
+        // 5. Lista negra profunda `#0A0A0C` con insignias coloreadas Bitwig
+        // =====================================================================
+        let entries = state.explorer_state.cached_entries.clone();
+        let query_low = state.explorer_state.search_query.to_lowercase();
+        let mut clicked_path = None;
+        let mut double_clicked_path = None;
+        let mut is_dir_click = false;
+
+        let list_h = (ui.available_height() - 94.0).max(110.0);
+        egui::Frame::NONE
+            .fill(BW_DARK_WELL)
+            .inner_margin(egui::Margin::symmetric(3, 3))
+            .show(ui, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("browser_file_list")
+                    .max_height(list_h)
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        let row_w = ui.available_width();
+
+                        for entry in &entries {
+                            if !query_low.is_empty()
+                                && !entry.name.to_lowercase().contains(&query_low)
+                            {
+                                continue;
+                            }
+
+                            let is_sel =
+                                state.explorer_state.selected_file.as_ref() == Some(&entry.path);
+                            let (badge_kind, text_col) = if entry.is_dir {
+                                (
+                                    BrowserBadgeKind::Folder,
+                                    Color32::from_rgb(0xE6, 0xE8, 0xEE),
+                                )
+                            } else if entry.is_midi {
+                                (
+                                    BrowserBadgeKind::DeviceNote,
+                                    Color32::from_rgb(0xB8, 0xD8, 0xF8),
+                                )
+                            } else {
+                                (
+                                    BrowserBadgeKind::Audio,
+                                    Color32::from_rgb(0xF0, 0xF2, 0xF6),
+                                )
+                            };
+
+                            let (row_rect, resp) =
+                                ui.allocate_exact_size(vec2(row_w, 20.0), Sense::click_and_drag());
+
+                            if ui.is_rect_visible(row_rect) {
+                                if is_sel {
+                                    ui.painter().rect_filled(
+                                        row_rect,
+                                        2.0,
+                                        Color32::from_rgb(0x46, 0x29, 0x10),
+                                    );
+                                    ui.painter().rect_stroke(
+                                        row_rect,
+                                        2.0,
+                                        Stroke::new(1.0_f32, ACCENT_ORANGE),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                } else if resp.hovered() {
+                                    ui.painter().rect_filled(
+                                        row_rect,
+                                        2.0,
+                                        Color32::from_rgb(0x20, 0x22, 0x28),
+                                    );
+                                }
+
+                                icons::paint_browser_badge(
+                                    ui.painter(),
+                                    Rect::from_min_size(
+                                        pos2(row_rect.min.x + 4.0, row_rect.min.y + 2.0),
+                                        vec2(16.0, 16.0),
+                                    ),
+                                    badge_kind,
+                                );
+
+                                ui.painter().text(
+                                    pos2(row_rect.min.x + 24.0, row_rect.center().y),
+                                    Align2::LEFT_CENTER,
+                                    &entry.name,
+                                    fonts::regular(11.0),
+                                    if is_sel { Color32::WHITE } else { text_col },
+                                );
+                            }
+
+                            if resp.clicked() {
+                                clicked_path = Some(entry.path.clone());
+                                is_dir_click = entry.is_dir;
+                            }
+                            if resp.double_clicked() && !entry.is_dir {
+                                double_clicked_path = Some(entry.path.clone());
+                            }
+                            if (resp.drag_started() || resp.dragged()) && !entry.is_dir {
+                                mark_dragged_sample(state, &entry.path);
+                            }
+                        }
+                    });
+            });
+
+        // =====================================================================
+        // 6. Reproductor inferior de preescucha Bitwig (Waveform + GPU Fader)
+        // =====================================================================
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.5, BW_DARK_WELL);
+        painter.rect_stroke(
+            rect,
+            2.5,
+            Stroke::new(1.0_f32, Color32::from_rgb(0x22, 0x24, 0x2A)),
+            egui::StrokeKind::Inside,
+        );
+
+        let waveform = &state.explorer_state.cached_waveform;
+        if !waveform.is_empty() {
+            let width = rect.width();
+            let height = rect.height();
+            let center_y = rect.center().y;
+            let max_h = height * 0.42;
+            let n = waveform.len();
+            let bar_w = (width / n as f32).max(1.0);
+
+            for (i, &amp) in waveform.iter().enumerate() {
+                let x = rect.left() + (i as f32 / n as f32) * width;
+                let h = (amp * max_h).max(1.0);
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(x, center_y - h), pos2(x + bar_w, center_y + h)),
+                    0.0,
+                    ACCENT_ORANGE,
+                );
+            }
+
+            let phx = rect.left() + state.explorer_state.preview_position * width;
+            painter.line_segment(
+                [pos2(phx, rect.top()), pos2(phx, rect.bottom())],
+                Stroke::new(1.4_f32, BW_LCD_CYAN),
+            );
+        } else {
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "Drag WAV onto Clip Launcher or Timeline",
+                fonts::regular(10.0),
+                TEXT_MUTED,
+            );
+        }
+
+        if response.clicked() || response.dragged() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let norm_x = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                state.explorer_state.preview_position = norm_x;
+                state.explorer_state.is_playing_preview = true;
+
+                if let Some(ref file) = state.explorer_state.selected_file {
+                    state
+                        .audio_proxy
+                        .send(GuiCommand::SetPreviewVolume(state.explorer_state.preview_volume));
+                    state.audio_proxy.send(GuiCommand::PreviewSample {
+                        path: file.to_string_lossy().to_string(),
+                        volume: state.explorer_state.preview_volume,
+                        speed: state.explorer_state.current_speed(project_bpm),
+                    });
+                }
+            }
+        }
+
+        // Controles de preescucha con botón vectorial GPU + fader horizontal GPU
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let is_prev = state.explorer_state.is_playing_preview;
+            if capsule_icon_button(
+                ui,
+                vec2(24.0, 19.0),
+                is_prev,
+                PLAY_GREEN,
+                JoinSide::Standalone,
+                |p, r, fg| {
+                    if is_prev {
+                        icons::paint_stop_square(p, r, fg);
+                    } else {
+                        icons::paint_play_triangle(p, r, fg);
+                    }
+                },
+            )
+            .on_hover_text("Play / Stop Sample Preview")
+            .clicked()
+            {
+                if is_prev {
+                    state.explorer_state.is_playing_preview = false;
+                    state.audio_proxy.send(GuiCommand::StopPreview);
+                } else if let Some(ref file) = state.explorer_state.selected_file {
+                    state.explorer_state.is_playing_preview = true;
+                    state
+                        .audio_proxy
+                        .send(GuiCommand::SetPreviewVolume(state.explorer_state.preview_volume));
+                    state.audio_proxy.send(GuiCommand::PreviewSample {
+                        path: file.to_string_lossy().to_string(),
+                        volume: state.explorer_state.preview_volume,
+                        speed: state.explorer_state.current_speed(project_bpm),
+                    });
+                }
+            }
+
+            let (vol_icon_rect, _) = ui.allocate_exact_size(vec2(13.0, 13.0), Sense::hover());
+            icons::paint_icon(
+                ui.painter(),
+                vol_icon_rect,
+                icons::VOLUME,
+                TEXT_SECONDARY,
+                1.6,
+            );
+
+            let fader_w = (ui.available_width() - 52.0).max(60.0);
+            if fader_horizontal_range(
+                ui,
+                vec2(fader_w, 12.0),
+                &mut state.explorer_state.preview_volume,
+                0.0..=1.0,
+                0.8,
+                BW_FADER_AMBER,
+                BW_FADER_ORANGE,
+                false,
+            )
+            .1
+            {
+                state
+                    .audio_proxy
+                    .send(GuiCommand::SetPreviewVolume(state.explorer_state.preview_volume));
+            }
+
+            if capsule_text_button(
+                ui,
+                vec2(40.0, 19.0),
+                "Sync",
+                9.5,
+                state.explorer_state.is_synced,
+                ACCENT_ORANGE,
+                JoinSide::Standalone,
+                false,
+            )
+            .clicked()
+            {
+                state.explorer_state.is_synced = !state.explorer_state.is_synced;
+            }
+        });
+
+        if let Some(path) = double_clicked_path {
+            let (t_idx, s_idx) = state.matrix_state.selected_slot.unwrap_or((0, 0));
+            let safe_t = t_idx.min(state.matrix_state.tracks.len().saturating_sub(1));
+            let safe_s = s_idx.min(state.matrix_state.scenes.len().saturating_sub(1));
+            crate::views::matrix::load_clip_into_slot(
+                &mut state.matrix_state,
+                &state.audio_proxy,
+                safe_t,
+                safe_s,
+                path,
+                state.transport.bpm,
+            );
+        } else if let Some(path) = clicked_path {
+            if is_dir_click {
+                state.explorer_state.navigate_to(path);
+            } else if let Some((track_idx, slot_idx)) = state.pending_wavetable_slot.take() {
+                crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::load_wavetable_from_path(
+                    state,
+                    track_idx,
+                    slot_idx,
+                    &path,
+                );
+            } else {
+                state.explorer_state.selected_file = Some(path.clone());
+                state.explorer_state.load_waveform_peaks(&path, 128);
+
+                if let Some(bpm) = parse_bpm_from_filename(
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                ) {
+                    state.explorer_state.sample_bpm = bpm;
+                }
+
+                state.explorer_state.is_playing_preview = true;
+                state
+                    .audio_proxy
+                    .send(GuiCommand::SetPreviewVolume(state.explorer_state.preview_volume));
+                state.audio_proxy.send(GuiCommand::PreviewSample {
+                    path: path.to_string_lossy().to_string(),
+                    volume: state.explorer_state.preview_volume,
+                    speed: state.explorer_state.current_speed(project_bpm),
+                });
+            }
+        }
+    });
 }

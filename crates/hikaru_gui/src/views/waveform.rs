@@ -1,40 +1,34 @@
-// Hikaru OpenLive / OpenStudio - GPU Vector Waveform Renderer
+// Hikaru OpenLive / OpenStudio - GPU Vector Waveform Renderer (egui)
 // GNU AGPLv3
 // crates/hikaru_gui/src/views/waveform.rs
 
-use gpui_kit::*;
+use egui::{Color32, Pos2, Rect, Stroke};
 
-/// Renderiza una forma de onda vectorial en GPU a partir de muestras PCM crudas,
-/// agrupando la envolvente completa de picos, el núcleo energético RMS y los filos
-/// de transientes en polígonos/trazos vectoriales continuos (4 draw calls totales).
+/// Renderiza una forma de onda vectorial a partir de muestras PCM crudas,
+/// dibujando la envolvente exterior de picos y el núcleo RMS en el painter de egui.
 pub fn draw_waveform_bounds(
-    window: &mut Window,
-    rect: Bounds<Pixels>,
+    painter: &egui::Painter,
+    rect: Rect,
     pcm_data: &[f32],
-    color: Hsla,
+    color: Color32,
 ) {
-    let width: f32 = rect.size.width.into();
-    let height: f32 = rect.size.height.into();
+    let width = rect.width();
+    let height = rect.height();
     if pcm_data.is_empty() || width <= 0.5 || height <= 1.0 {
         return;
     }
 
-    let origin_x: f32 = rect.origin.x.into();
-    let origin_y: f32 = rect.origin.y.into();
+    let origin_x = rect.min.x;
+    let origin_y = rect.min.y;
     let center_y = origin_y + height * 0.5;
-    let half_height = (height * 0.5) * 0.90_f32;
+    let half_height = (height * 0.5) * 0.90;
 
-    // Línea base central (referencia de cruce por cero)
-    let zero_color = Hsla {
-        a: (color.a * 0.26).clamp(0.08, 0.42),
-        ..color
-    };
-    let mut zero_pb = PathBuilder::stroke(px(1.0));
-    zero_pb.move_to(point(px(origin_x), px(center_y)));
-    zero_pb.line_to(point(px(origin_x + width), px(center_y)));
-    if let Ok(path) = zero_pb.build() {
-        window.paint_path(path, zero_color);
-    }
+    // Línea base central
+    let zero_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (color.a() as f32 * 0.25) as u8);
+    painter.line_segment(
+        [Pos2::new(origin_x, center_y), Pos2::new(origin_x + width, center_y)],
+        Stroke::new(1.0_f32, zero_color),
+    );
 
     let mut max_peak = 0.0_f32;
     for &sample in pcm_data {
@@ -81,64 +75,43 @@ pub fn draw_waveform_bounds(
         columns.push((x, y_top, y_bot, rms_h));
     }
 
-    paint_batched_envelope(
-        window,
-        &columns,
-        center_y,
-        Hsla {
-            a: (color.a * 0.56).clamp(0.18, 0.82),
-            ..color
-        },
-        color,
-        Hsla {
-            l: (color.l + 0.16).clamp(0.0, 0.96),
-            a: (color.a * 0.82).clamp(0.25, 0.95),
-            ..color
-        },
-    );
+    let peak_fill = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (color.a() as f32 * 0.55) as u8);
+    let core_fill = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (color.a() as f32 * 0.85) as u8);
+    paint_batched_envelope(painter, &columns, center_y, peak_fill, color, core_fill);
 }
 
-/// Renderiza una forma de onda vectorial en GPU a partir de picos normalizados `[0.0..1.0]`
-/// (usada en `ClipCell` de Session Matrix y clips de Playlist/Arranger).
-/// Soporta un recorte `trim_start_norm..trim_end_norm` en `[0.0..1.0]`.
+/// Renderiza una forma de onda a partir de picos normalizados `[0.0..1.0]`.
 pub fn draw_waveform_peaks_bounds(
-    window: &mut Window,
-    rect: Bounds<Pixels>,
+    painter: &egui::Painter,
+    rect: Rect,
     peaks: &[f32],
     trim_start_norm: f32,
     trim_end_norm: f32,
-    peak_color: Hsla,
-    rms_color: Hsla,
+    peak_color: Color32,
+    rms_color: Color32,
 ) {
-    let width: f32 = rect.size.width.into();
-    let height: f32 = rect.size.height.into();
+    let width = rect.width();
+    let height = rect.height();
     if peaks.is_empty() || width <= 1.0 || height <= 1.0 {
         return;
     }
 
-    let origin_x: f32 = rect.origin.x.into();
-    let origin_y: f32 = rect.origin.y.into();
+    let origin_x = rect.min.x;
+    let origin_y = rect.min.y;
     let center_y = origin_y + height * 0.5;
     let half_height = (height * 0.5) * 0.90;
 
     // Línea central de cruce por cero
-    let zero_line_color = Hsla {
-        a: (peak_color.a * 0.24).clamp(0.08, 0.34),
-        ..peak_color
-    };
-    let mut zero_pb = PathBuilder::stroke(px(1.0));
-    zero_pb.move_to(point(px(origin_x), px(center_y)));
-    zero_pb.line_to(point(px(origin_x + width), px(center_y)));
-    if let Ok(path) = zero_pb.build() {
-        window.paint_path(path, zero_line_color);
-    }
+    let zero_line_color = Color32::from_rgba_unmultiplied(peak_color.r(), peak_color.g(), peak_color.b(), (peak_color.a() as f32 * 0.24) as u8);
+    painter.line_segment(
+        [Pos2::new(origin_x, center_y), Pos2::new(origin_x + width, center_y)],
+        Stroke::new(1.0_f32, zero_line_color),
+    );
 
     let start_n = trim_start_norm.clamp(0.0, 1.0);
     let end_n = trim_end_norm.clamp(start_n + 0.0005, 1.0);
-    let start_idx = ((start_n * peaks.len() as f32).floor() as usize)
-        .min(peaks.len().saturating_sub(1));
-    let end_idx = ((end_n * peaks.len() as f32).ceil() as usize)
-        .clamp(start_idx + 1, peaks.len());
+    let start_idx = ((start_n * peaks.len() as f32).floor() as usize).min(peaks.len().saturating_sub(1));
+    let end_idx = ((end_n * peaks.len() as f32).ceil() as usize).clamp(start_idx + 1, peaks.len());
     let visible = &peaks[start_idx..end_idx];
     if visible.is_empty() {
         return;
@@ -150,9 +123,7 @@ pub fn draw_waveform_peaks_bounds(
 
     for col in 0..cols {
         let p0 = (col * visible.len()) / cols;
-        let p1 = (((col + 1) * visible.len()) / cols)
-            .max(p0 + 1)
-            .min(visible.len());
+        let p1 = (((col + 1) * visible.len()) / cols).max(p0 + 1).min(visible.len());
         let mut peak = 0.0_f32;
         let mut sum_sq = 0.0_f32;
         for &v in &visible[p0..p1] {
@@ -169,85 +140,55 @@ pub fn draw_waveform_peaks_bounds(
         columns.push((x, center_y - amp_h, center_y + amp_h, rms_h));
     }
 
-    let body_fill = Hsla {
-        a: (peak_color.a * 0.58).clamp(0.20, 0.84),
-        ..peak_color
-    };
-    let core_fill = Hsla {
-        a: (rms_color.a * 0.85).clamp(0.30, 0.95),
-        ..rms_color
-    };
-    paint_batched_envelope(window, &columns, center_y, body_fill, peak_color, core_fill);
+    let body_fill = Color32::from_rgba_unmultiplied(peak_color.r(), peak_color.g(), peak_color.b(), (peak_color.a() as f32 * 0.58) as u8);
+    let core_fill = Color32::from_rgba_unmultiplied(rms_color.r(), rms_color.g(), rms_color.b(), (rms_color.a() as f32 * 0.85) as u8);
+    paint_batched_envelope(painter, &columns, center_y, body_fill, peak_color, core_fill);
 }
 
-/// Pinta en lote la silueta completa de picos, el núcleo RMS interior y los
-/// contornos superior/inferior de transientes en solo 4 llamadas a GPU.
 fn paint_batched_envelope(
-    window: &mut Window,
+    painter: &egui::Painter,
     columns: &[(f32, f32, f32, f32)],
     center_y: f32,
-    peak_fill: Hsla,
-    peak_stroke: Hsla,
-    rms_fill: Hsla,
+    peak_fill: Color32,
+    peak_stroke: Color32,
+    rms_fill: Color32,
 ) {
     if columns.is_empty() {
         return;
     }
     if columns.len() == 1 {
         let (x, y_top, y_bot, _) = columns[0];
-        let mut pb = PathBuilder::stroke(px(1.5));
-        pb.move_to(point(px(x), px(y_top)));
-        pb.line_to(point(px(x), px(y_bot)));
-        if let Ok(path) = pb.build() {
-            window.paint_path(path, peak_stroke);
-        }
+        painter.line_segment([Pos2::new(x, y_top), Pos2::new(x, y_bot)], Stroke::new(1.5_f32, peak_stroke));
         return;
     }
 
-    // 1. Polígono relleno de envolvente exterior de picos
-    let mut env = PathBuilder::fill();
-    env.move_to(point(px(columns[0].0), px(columns[0].1)));
-    for &(x, y_top, _, _) in &columns[1..] {
-        env.line_to(point(px(x), px(y_top)));
+    // 1. Polígono exterior de picos
+    let mut env_points = Vec::with_capacity(columns.len() * 2);
+    for &(x, y_top, _, _) in columns {
+        env_points.push(Pos2::new(x, y_top));
     }
     for &(x, _, y_bot, _) in columns.iter().rev() {
-        env.line_to(point(px(x), px(y_bot)));
+        env_points.push(Pos2::new(x, y_bot));
     }
-    env.close();
-    if let Ok(path) = env.build() {
-        window.paint_path(path, peak_fill);
-    }
+    painter.add(egui::Shape::convex_polygon(env_points, peak_fill, Stroke::NONE));
 
-    // 2. Polígono relleno del núcleo energético RMS interior
-    let mut core = PathBuilder::fill();
-    core.move_to(point(px(columns[0].0), px(center_y - columns[0].3)));
-    for &(x, _, _, rms_h) in &columns[1..] {
-        core.line_to(point(px(x), px(center_y - rms_h)));
+    // 2. Polígono interior RMS
+    let mut core_points = Vec::with_capacity(columns.len() * 2);
+    for &(x, _, _, rms_h) in columns {
+        core_points.push(Pos2::new(x, center_y - rms_h));
     }
     for &(x, _, _, rms_h) in columns.iter().rev() {
-        core.line_to(point(px(x), px(center_y + rms_h)));
+        core_points.push(Pos2::new(x, center_y + rms_h));
     }
-    core.close();
-    if let Ok(path) = core.build() {
-        window.paint_path(path, rms_fill);
-    }
+    painter.add(egui::Shape::convex_polygon(core_points, rms_fill, Stroke::NONE));
 
-    // 3. Contornos nítidos de 1px en crestas superiores e inferiores
-    let mut upper = PathBuilder::stroke(px(1.0));
-    upper.move_to(point(px(columns[0].0), px(columns[0].1)));
-    for &(x, y_top, _, _) in &columns[1..] {
-        upper.line_to(point(px(x), px(y_top)));
+    // 3. Trazos superior e inferior de transientes
+    let mut upper_pts = Vec::with_capacity(columns.len());
+    let mut lower_pts = Vec::with_capacity(columns.len());
+    for &(x, y_top, y_bot, _) in columns {
+        upper_pts.push(Pos2::new(x, y_top));
+        lower_pts.push(Pos2::new(x, y_bot));
     }
-    if let Ok(path) = upper.build() {
-        window.paint_path(path, peak_stroke);
-    }
-
-    let mut lower = PathBuilder::stroke(px(1.0));
-    lower.move_to(point(px(columns[0].0), px(columns[0].2)));
-    for &(x, _, y_bot, _) in &columns[1..] {
-        lower.line_to(point(px(x), px(y_bot)));
-    }
-    if let Ok(path) = lower.build() {
-        window.paint_path(path, peak_stroke);
-    }
+    painter.add(egui::Shape::line(upper_pts, Stroke::new(1.0_f32, peak_stroke)));
+    painter.add(egui::Shape::line(lower_pts, Stroke::new(1.0_f32, peak_stroke)));
 }

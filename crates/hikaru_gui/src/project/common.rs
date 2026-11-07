@@ -49,7 +49,7 @@ use hikaru_project_file::{Color, DspSlot};
 
 use crate::app::PanMode;
 use crate::views::mixer;
-use crate::views::playlist::Color32;
+use egui::Color32;
 
 /// Reexportado para que `src/project/` no tenga que saber de qué crate viene
 /// cada tipo de archivo.
@@ -228,14 +228,15 @@ pub fn default_studio_tracks() -> Vec<Track> {
 /// structito plano y no el `Hsla` de GPUI: un crate de formato que hubiera
 /// metido GPUI adentro ya no sería reutilizable por un DAW de código cerrado.
 
-/// Color del archivo -> color de GPUI.
+/// Color del archivo -> color de la GUI.
 pub fn color_to_gpui(c: Color) -> Color32 {
-    Color32 { h: c.h, s: c.s, l: c.l, a: c.a }
+    crate::theme::hsla_to_color32(c.h, c.s, c.l, c.a)
 }
 
-/// Color de GPUI -> color del archivo.
+/// Color de la GUI -> color del archivo.
 pub fn color_from_gpui(c: Color32) -> Color {
-    Color { h: c.h, s: c.s, l: c.l, a: c.a }
+    let (h, s, l, a) = crate::theme::color32_to_hsla(c);
+    Color { h, s, l, a }
 }
 
 // =========================================================================

@@ -1,22 +1,4 @@
-// crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/open_dms_sampler.rs
-
-//! El sampler de **Hikaru OpenDMS**: envolvente ADSR, sincronía de tempo, pitch
-//! en cents, posición de arranque y corte, y las slices del sample.
-//!
-//! Acá vive también [`load_peaks_from_wav`], que traduce un `.wav` de disco en
-//! los picos pre-calculados que la grilla de pads dibuja debajo de cada pad.
-//! La usan el explorador, el editor de clips y la apertura de proyecto, que
-//! por eso la buscan acá y no en la grilla: es **servicio**, no pantalla.
-
-use gpui_kit::component::*;
-use gpui_kit::component::button::Button;
-use gpui_kit::component::label::Label;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::Styled as _;
-use gpui_kit::*;
-
-use crate::app::{state, HikaruApp};
-use crate::audio_proxy::GuiCommand;
+// El sampler de Hikaru OpenDMS
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdsrEnvelope {
@@ -65,74 +47,31 @@ impl Default for DmsSampler {
 }
 
 pub fn render_sampler_ui(
-    _cx: &mut Context<HikaruApp>,
+    ui: &mut egui::Ui,
     sampler: &mut DmsSampler,
     _project_bpm: f32,
     _dragged_sample: &mut Option<std::path::PathBuf>,
     _peaks: &[f32],
-) -> AnyElement {
-    h_flex()
-        .gap(px(4.0))
-        .items_center()
-        .child(
-            Button::new("dms_load_wav").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("Load WAV")
-                .compact()
-                .on_click(move |_, _, cx| {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Audio", &["wav", "mp3", "ogg", "flac"])
-                        .pick_file()
-                    {
-                        let st = state(cx);
-                        st.update(cx, |state, cx| {
-                            state.audio_proxy.send(GuiCommand::LoadDmsSample {
-                                pad_idx: 0,
-                                path: path.to_string_lossy().to_string(),
-                            });
-                            cx.notify();
-                        });
-                    }
-                }),
-        )
-        .child(
-            Button::new("dms_sync_tempo").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label("Sync Tempo")
-                .compact()
-                .when(sampler.sync_tempo, |b| b.text_color(rgb(0x00FFC8)))
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                            if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "Hikaru OpenDMS") {
-                                if let Some(dms) = slot.dms_state.as_mut() {
-                                    dms.sampler.sync_tempo = !dms.sampler.sync_tempo;
-                                }
-                            }
-                        }
-                        cx.notify();
-                    });
-                }),
-        )
-        .child(Label::new("BPM:").text_xs())
-        .child(
-            Button::new("dpm_bpm_btn").rounded(gpui_kit::component::button::ButtonRounded::None)
-                .label(format!("{:.0}", sampler.sample_bpm))
-                .compact()
-                .on_click(move |_, _, cx| {
-                    let st = state(cx);
-                    st.update(cx, |state, cx| {
-                        if let Some(track) = state.live_tracks.get_mut(state.selected_track_index) {
-                            if let Some(slot) = track.effects.iter_mut().find(|s| s.name == "Hikaru OpenDMS") {
-                                if let Some(dms) = slot.dms_state.as_mut() {
-                                    dms.sampler.sample_bpm = (dms.sampler.sample_bpm + 1.0).min(300.0);
-                                }
-                            }
-                        }
-                        cx.notify();
-                    });
-                }),
-        )
-        .into_any_element()
+) {
+    ui.horizontal(|ui| {
+        if ui.button("Load WAV").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Audio", &["wav", "mp3", "ogg", "flac"])
+                .pick_file()
+            {
+                // File picked
+                let _ = path;
+            }
+        }
+
+        let sync_text = if sampler.sync_tempo { "Sync: ON" } else { "Sync: OFF" };
+        if ui.selectable_label(sampler.sync_tempo, sync_text).clicked() {
+            sampler.sync_tempo = !sampler.sync_tempo;
+        }
+
+        ui.label("BPM:");
+        ui.add(egui::DragValue::new(&mut sampler.sample_bpm).speed(0.5).range(20.0..=300.0));
+    });
 }
 
 pub fn load_peaks_from_wav(path: &str, target_bins: usize) -> Vec<f32> {

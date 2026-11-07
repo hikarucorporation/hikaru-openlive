@@ -384,8 +384,8 @@ impl KnobRenderer {
 
         let pipeline_layout = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hikaru_render::knob::layout"),
-            bind_group_layouts: &[Some(&uniform_layout)],
-            immediate_size: 0,
+            bind_group_layouts: &[&uniform_layout],
+            push_constant_ranges: &[],
         });
 
         let pipeline = ctx.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -404,19 +404,13 @@ impl KnobRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                // Sin culling: la marca y la cara están una sobre la otra y el
-                // orden de índices depende del anillo. Con culling, media malla
-                // desaparecía según el lado desde el que se mirara.
                 cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                depth_write_enabled: Some(true),
-                // `LessEqual` y no `Less`: la marca está un pelo por encima de
-                // la cara y con `Less` la marca, que se dibuja después, pasa el
-                // test contra sí misma.
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -431,7 +425,7 @@ impl KnobRenderer {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -484,7 +478,6 @@ impl KnobRenderer {
                 label: Some("hikaru_render::knob::pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.color_view,
-                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -501,7 +494,6 @@ impl KnobRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.pipeline);

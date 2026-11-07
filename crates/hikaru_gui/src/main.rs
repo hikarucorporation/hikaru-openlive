@@ -8,7 +8,6 @@ use hikaru_audio_engine::EngineMode;
 use hikaru_cli::{Dispatch, GuiOptions};
 use hikaru_gui::app::HikaruApp;
 use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
-use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 static DEFAULT_WAVETABLE: [f32; 2048] = [0.0; 2048];
 
@@ -477,80 +476,51 @@ fn run_gui(options: GuiOptions) -> ExitCode {
     // existir antes de que `project::load` lo pise).
     let project_path = options.project.clone();
 
-    // OJO: NO registrar `.with_assets(...)` por ahora. Los SVG de Lucide traen
-    // `stroke="currentColor"`, que el renderer de GPUI no resuelve: con la
-    // fuente de assets activa los íconos se rasterizan como bloques opacos
-    // (cuadrados blancos). Los controles que los necesitan dibujan glifos de
-    // texto mientras tanto.
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        // La app es oscura de punta a punta; los componentes de gpui-kit que no
-        // se re-colorean a mano (la caja numérica de BPM, menús, tooltips)
-        // necesitan el tema oscuro para no abrir agujeros blancos en pantalla.
-        gpui_kit::component::theme::Theme::change(
-            gpui_kit::component::theme::ThemeMode::Dark,
-            None,
-            cx,
-        );
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 720.0])
+            .with_min_inner_size([960.0, 540.0])
+            .with_title("Hikaru OpenLive"),
+        ..Default::default()
+    };
 
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    Default::default(),
-                    size(px(1280.0), px(720.0)),
-                ))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Hikaru OpenLive".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |window, cx| {
-                cx.new(|cx| {
-                    let mut app = HikaruApp::build(
-                        window,
-                        cx,
-                        audio_proxy,
-                        audio_stream,
-                        position_clock,
-                        output_level_bits,
-                        Some(engine_arc.clone()),
-                    );
-                    app.sync_hardware_sample_rate(cx, hardware_sr);
+    let result = eframe::run_native(
+        "Hikaru OpenLive",
+        native_options,
+        Box::new(move |cc| {
+            hikaru_gui::theme::apply_theme(&cc.egui_ctx);
+            hikaru_gui::ui::bitwig_wgpu::install_render_resources(cc.wgpu_render_state.as_ref());
 
-                    // `--project <ruta>`: el proyecto se carga al abrir la
-                    // ventana. Es el camino que usa un agente de IA para
-                    // levantar el DAW con una sesión concreta.
-                    if let Some(path) = project_path.clone() {
-                        let mut failure: Option<hikaru_gui::project::ProjectError> = None;
-                        app.state.update(cx, |state, _| {
-                            if let Err(err) = hikaru_gui::project::load(state, &path) {
-                                failure = Some(err);
-                            }
-                        });
-                        match failure {
-                            None => {
-                                let saved = path.clone();
-                                app.state.update(cx, |state, _| {
-                                    state.project_path = Some(saved.clone());
-                                    state.project_dirty = false;
-                                });
-                                println!("[PROJECT] proyecto cargado: {}", saved.display());
-                            }
-                            Some(err) => {
-                                eprintln!("[PROJECT] no se pudo abrir {}: {}", path.display(), err)
-                            }
-                        }
-                    }
+            let mut app = HikaruApp::build(
+                audio_proxy,
+                audio_stream,
+                position_clock,
+                output_level_bits,
+                Some(engine_arc.clone()),
+            );
+            app.sync_hardware_sample_rate(hardware_sr);
 
-                    app
-                })
-            },
-        )
-        .expect("failed to open window");
-    });
+            if let Some(ref path) = project_path {
+                if let Err(err) = hikaru_gui::project::load(&mut app.state, path) {
+                    eprintln!("[PROJECT] no se pudo abrir {}: {}", path.display(), err);
+                } else {
+                    app.state.project_path = Some(path.clone());
+                    app.state.project_dirty = false;
+                    println!("[PROJECT] proyecto cargado: {}", path.display());
+                }
+            }
 
-    ExitCode::SUCCESS
+            Ok(Box::new(app))
+        }),
+    );
+
+    match result {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("[Hikaru] Error ejecutando eframe: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn init_cpal_stream(
