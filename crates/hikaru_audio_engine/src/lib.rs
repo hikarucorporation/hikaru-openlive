@@ -19,19 +19,89 @@ use hikaru_plugin_host::{PluginDescriptor, PluginFormat, PluginInstance};
 const MAX_TRACK_BUF: usize = 2048 * 2;
 
 // --- Definición de estructuras de clips MIDI ---
-#[derive(Clone, Debug)]
-pub struct MidiNoteInstance {
-    pub start_tick: u64,
-    pub pitch: u8,
-    pub velocity: u8,
-    pub duration_ticks: u32,
-}
+pub use hikaru_core::MidiNoteInstance;
 
+#[derive(Clone, Debug)]
 pub struct MidiClipInstance {
+    pub id: u32,
     pub track_index: usize,
     pub scene_index: usize,
     pub notes: Vec<MidiNoteInstance>,
     pub is_playing: bool,
+    pub start_frame: u64,
+    pub start_absolute: u64,
+    pub duration_ticks: u64,
+    pub clip_loop_enabled: bool,
+    pub clip_loop_start_ticks: u64,
+    pub clip_loop_end_ticks: u64,
+    pub is_matrix_clip: bool,
+    pub active_notes: [bool; 128],
+}
+
+impl Default for MidiClipInstance {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            track_index: 0,
+            scene_index: 0,
+            notes: Vec::new(),
+            is_playing: false,
+            start_frame: 0,
+            start_absolute: 0,
+            duration_ticks: 960 * 4,
+            clip_loop_enabled: true,
+            clip_loop_start_ticks: 0,
+            clip_loop_end_ticks: 960 * 4,
+            is_matrix_clip: true,
+            active_notes: [false; 128],
+        }
+    }
+}
+
+impl MidiClipInstance {
+    pub fn new(track_index: usize, scene_index: usize, notes: Vec<MidiNoteInstance>) -> Self {
+        let max_tick = notes.iter().map(|n| n.end_tick()).max().unwrap_or(960 * 4);
+        let duration_ticks = max_tick.max(960 * 4);
+        Self {
+            id: (track_index * 32 + scene_index) as u32,
+            track_index,
+            scene_index,
+            notes,
+            is_playing: false,
+            start_frame: 0,
+            start_absolute: 0,
+            duration_ticks,
+            clip_loop_enabled: true,
+            clip_loop_start_ticks: 0,
+            clip_loop_end_ticks: duration_ticks,
+            is_matrix_clip: true,
+            active_notes: [false; 128],
+        }
+    }
+
+    pub fn has_valid_clip_loop(&self) -> bool {
+        self.clip_loop_enabled && self.clip_loop_end_ticks > self.clip_loop_start_ticks
+    }
+
+    pub fn loop_len_ticks(&self) -> u64 {
+        if self.has_valid_clip_loop() {
+            self.clip_loop_end_ticks - self.clip_loop_start_ticks
+        } else {
+            self.duration_ticks
+        }
+    }
+
+    pub fn quantized_loop_len(&self, transport: &TransportPosition) -> u64 {
+        transport.ticks_to_samples(self.loop_len_ticks())
+    }
+
+    pub fn emission_len_frames(&self, transport: &TransportPosition) -> u64 {
+        transport.ticks_to_samples(self.duration_ticks)
+    }
+
+    pub fn clear_active_notes(&mut self) {
+        self.active_notes = [false; 128];
+    }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -732,6 +802,17 @@ pub struct DmsAdsrParams {
     pub release_rate: f32,
 }
 
+impl Default for DmsAdsrParams {
+    fn default() -> Self {
+        Self {
+            attack_rate: 1.0,
+            decay_rate: 1.0,
+            sustain_level: 1.0,
+            release_rate: 0.05,
+        }
+    }
+}
+
 /// Pads por pista en el banco global de samples del OpenDMS.
 /// Cada pista tiene su propio banco de 64 pads: la clave global es
 /// `track * DMS_PADS_PER_TRACK + pad`. Antes el banco era único por
@@ -786,6 +867,10 @@ pub struct AudioEngine<'a> {
     /// Los plugins VST3/CLAP necesitan conocer el sample rate para
     /// procesar correctamente. Se actualiza cuando cambia el stream.
     pub effects_sample_rate: f32,
+    dms_scratch_l: Vec<f32>,
+    dms_scratch_r: Vec<f32>,
+    fx_scratch_buf: Vec<f32>,
+    track_midi_events: Vec<Vec<hikaru_midi::MidiEvent>>,
 }
 
 impl<'a> AudioEngine<'a> {
@@ -829,6 +914,10 @@ impl<'a> AudioEngine<'a> {
             dms_track_idx: 0,
             track_effects: (0..16).map(|_| Vec::new()).collect(),
             effects_sample_rate: sr.get(),
+            dms_scratch_l: vec![0.0; MAX_TRACK_BUF],
+            dms_scratch_r: vec![0.0; MAX_TRACK_BUF],
+            fx_scratch_buf: vec![0.0; MAX_TRACK_BUF],
+            track_midi_events: (0..16).map(|_| Vec::with_capacity(128)).collect(),
         }
     }
 
@@ -1329,11 +1418,28 @@ impl<'a> AudioEngine<'a> {
 
     pub fn pause(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Paused;
+        for clip in self.midi_clips.iter_mut() {
+            for pitch in 0..128 {
+                if clip.active_notes[pitch] {
+                    self.dms_voice_pool.release_pad(dms_pad_key(clip.track_index, pitch));
+                    clip.active_notes[pitch] = false;
+                }
+            }
+        }
     }
 
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
+        for clip in self.midi_clips.iter_mut() {
+            for pitch in 0..128 {
+                if clip.active_notes[pitch] {
+                    self.dms_voice_pool.kill_pad(dms_pad_key(clip.track_index, pitch));
+                    clip.active_notes[pitch] = false;
+                }
+            }
+            clip.is_playing = false;
+        }
     }
 
     pub fn set_global_loop(&mut self, start_samples: u64, end_samples: u64, enabled: bool) {
@@ -1361,12 +1467,20 @@ impl<'a> AudioEngine<'a> {
     pub fn trigger_clip(&mut self, track_index: usize, scene_index: usize) {
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
-        let target_was_playing = self
+        let target_audio_playing = self
             .clips
             .iter()
             .find(|c| c.track_index == track_index && c.scene_index == scene_index)
             .map(|c| c.is_playing)
             .unwrap_or(false);
+        let target_midi_playing = self
+            .midi_clips
+            .iter()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+            .map(|c| c.is_playing)
+            .unwrap_or(false);
+        let target_was_playing = target_audio_playing || target_midi_playing;
+
         // Capturar origen de referencia ANTES de mutar (legato).
         let legato_origin: Option<(u64, u64)> = if target_was_playing {
             None
@@ -1392,6 +1506,36 @@ impl<'a> AudioEngine<'a> {
                 clip.is_playing = false;
             }
         }
+        for clip in self.midi_clips.iter_mut().filter(|c| c.track_index == track_index) {
+            if clip.scene_index == scene_index {
+                clip.is_playing = !target_was_playing;
+                if clip.is_playing {
+                    if let Some((ref_frame, ref_abs)) = legato_origin {
+                        clip.start_frame = ref_frame;
+                        clip.start_absolute = ref_abs;
+                    } else {
+                        clip.start_frame = now;
+                        clip.start_absolute = now_abs;
+                    }
+                    clip.clear_active_notes();
+                } else {
+                    for pitch in 0..128 {
+                        if clip.active_notes[pitch] {
+                            self.dms_voice_pool.release_pad(dms_pad_key(clip.track_index, pitch));
+                            clip.active_notes[pitch] = false;
+                        }
+                    }
+                }
+            } else {
+                clip.is_playing = false;
+                for pitch in 0..128 {
+                    if clip.active_notes[pitch] {
+                        self.dms_voice_pool.release_pad(dms_pad_key(clip.track_index, pitch));
+                        clip.active_notes[pitch] = false;
+                    }
+                }
+            }
+        }
     }
 
     /// Origen de fase a heredar para un arranque legato.
@@ -1402,21 +1546,41 @@ impl<'a> AudioEngine<'a> {
     /// de cualquier track (sincronía global entre pads).
     fn legato_reference(&self, preferred_track: Option<usize>) -> Option<(u64, u64)> {
         if let Some(t) = preferred_track {
-            let same_track = self
+            let same_track_audio = self
                 .clips
                 .iter()
                 .filter(|c| c.track_index == t && c.is_playing)
                 .min_by_key(|c| c.start_absolute)
                 .map(|c| (c.start_frame, c.start_absolute));
-            if same_track.is_some() {
-                return same_track;
+            if same_track_audio.is_some() {
+                return same_track_audio;
+            }
+            let same_track_midi = self
+                .midi_clips
+                .iter()
+                .filter(|c| c.track_index == t && c.is_playing)
+                .min_by_key(|c| c.start_absolute)
+                .map(|c| (c.start_frame, c.start_absolute));
+            if same_track_midi.is_some() {
+                return same_track_midi;
             }
         }
-        self.clips
+        let oldest_audio = self.clips
             .iter()
             .filter(|c| c.is_playing)
             .min_by_key(|c| c.start_absolute)
-            .map(|c| (c.start_frame, c.start_absolute))
+            .map(|c| (c.start_frame, c.start_absolute));
+        let oldest_midi = self.midi_clips
+            .iter()
+            .filter(|c| c.is_playing)
+            .min_by_key(|c| c.start_absolute)
+            .map(|c| (c.start_frame, c.start_absolute));
+        match (oldest_audio, oldest_midi) {
+            (Some(a), Some(m)) => if a.1 <= m.1 { Some(a) } else { Some(m) },
+            (Some(a), None) => Some(a),
+            (None, Some(m)) => Some(m),
+            (None, None) => None,
+        }
     }
 
     /// Disparo de escena con reinicio de fase (Beat/Bar Sync): todos los
@@ -1440,6 +1604,11 @@ impl<'a> AudioEngine<'a> {
                 tracks_with_clip.insert(clip.track_index);
             }
         }
+        for clip in self.midi_clips.iter() {
+            if clip.scene_index == scene_index {
+                tracks_with_clip.insert(clip.track_index);
+            }
+        }
         for clip in self.clips.iter_mut() {
             if clip.scene_index == scene_index {
                 clip.is_playing = true;
@@ -1452,11 +1621,42 @@ impl<'a> AudioEngine<'a> {
                 clip.is_playing = false;
             }
         }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.scene_index == scene_index {
+                clip.is_playing = true;
+                clip.start_frame = now;
+                clip.start_absolute = now_abs;
+                clip.clear_active_notes();
+            } else if tracks_with_clip.contains(&clip.track_index) {
+                clip.is_playing = false;
+                for pitch in 0..128 {
+                    if clip.active_notes[pitch] {
+                        self.dms_voice_pool.release_pad(dms_pad_key(clip.track_index, pitch));
+                        clip.active_notes[pitch] = false;
+                    }
+                }
+            }
+        }
     }
 
     pub fn voice_active(&self, track_index: usize, scene_index: usize) -> bool {
-        match self
+        let audio_active = match self
             .clips
+            .iter()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            None => false,
+            Some(clip) => {
+                clip.is_playing && clip.voice_state_linear(self.absolute_frame, &self.transport) == VoiceState::Active
+            }
+        };
+
+        if audio_active {
+            return true;
+        }
+
+        match self
+            .midi_clips
             .iter()
             .find(|c| c.track_index == track_index && c.scene_index == scene_index)
         {
@@ -1465,7 +1665,13 @@ impl<'a> AudioEngine<'a> {
                 if !clip.is_playing {
                     return false;
                 }
-                clip.voice_state_linear(self.absolute_frame, &self.transport) == VoiceState::Active
+                if clip.clip_loop_enabled {
+                    true
+                } else {
+                    let emission = clip.emission_len_frames(&self.transport);
+                    let elapsed = self.absolute_frame.saturating_sub(clip.start_absolute);
+                    elapsed < emission
+                }
             }
         }
     }
@@ -1475,17 +1681,28 @@ impl<'a> AudioEngine<'a> {
         track_index: usize,
         scene_index: usize,
     ) -> Option<u64> {
-        let clip = self
+        if let Some(clip) = self
             .clips
             .iter()
-            .find(|c| c.track_index == track_index && c.scene_index == scene_index)?;
-        if !clip.is_playing {
-            return None;
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            if clip.is_playing && clip.voice_state_linear(self.absolute_frame, &self.transport) == VoiceState::Active {
+                return Some(self.absolute_frame.saturating_sub(clip.start_absolute));
+            }
         }
-        if clip.voice_state_linear(self.absolute_frame, &self.transport) != VoiceState::Active {
-            return None;
+        if let Some(clip) = self
+            .midi_clips
+            .iter()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            if clip.is_playing {
+                let elapsed = self.absolute_frame.saturating_sub(clip.start_absolute);
+                if clip.clip_loop_enabled || elapsed < clip.emission_len_frames(&self.transport) {
+                    return Some(elapsed);
+                }
+            }
         }
-        Some(self.absolute_frame.saturating_sub(clip.start_absolute))
+        None
     }
 
     /// Posición exacta del playhead dentro del clip: `(frame_actual, duración_natural)`.
@@ -1495,24 +1712,48 @@ impl<'a> AudioEngine<'a> {
         track_index: usize,
         scene_index: usize,
     ) -> Option<(u64, u64)> {
-        let clip = self
+        if let Some(clip) = self
             .clips
             .iter()
-            .find(|c| c.track_index == track_index && c.scene_index == scene_index)?;
-        if !clip.is_playing {
-            return None;
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            if clip.is_playing && clip.voice_state_linear(self.absolute_frame, &self.transport) == VoiceState::Active {
+                let frame = clip.voice_frame_linear(self.absolute_frame, &self.transport)? as u64;
+                let total = clip.natural_frames().max(1);
+                return Some((frame, total));
+            }
         }
-        if clip.voice_state_linear(self.absolute_frame, &self.transport) != VoiceState::Active {
-            return None;
+        if let Some(clip) = self
+            .midi_clips
+            .iter()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            if clip.is_playing {
+                let elapsed = self.absolute_frame.saturating_sub(clip.start_absolute);
+                let emission = clip.emission_len_frames(&self.transport).max(1);
+                if clip.clip_loop_enabled {
+                    let loop_len = clip.quantized_loop_len(&self.transport).max(1);
+                    return Some((elapsed % loop_len, loop_len));
+                } else if elapsed < emission {
+                    return Some((elapsed, emission));
+                }
+            }
         }
-        let frame = clip.voice_frame_linear(self.absolute_frame, &self.transport)? as u64;
-        let total = clip.natural_frames().max(1);
-        Some((frame, total))
+        None
     }
 
     pub fn stop_track(&mut self, track_index: usize) {
         for clip in self.clips.iter_mut().filter(|c| c.track_index == track_index) {
             clip.is_playing = false;
+        }
+        for clip in self.midi_clips.iter_mut().filter(|c| c.track_index == track_index) {
+            clip.is_playing = false;
+            for pitch in 0..128 {
+                if clip.active_notes[pitch] {
+                    self.dms_voice_pool.kill_pad(dms_pad_key(clip.track_index, pitch));
+                    clip.active_notes[pitch] = false;
+                }
+            }
         }
     }
 
@@ -1612,6 +1853,297 @@ impl<'a> AudioEngine<'a> {
             preview.process(samples);
         }
 
+        let sample_rate = self.sample_rate;
+        let dms_samples = &self.dms_samples;
+        let dms_channels = &self.dms_channels;
+        let dms_voice_pool = &mut self.dms_voice_pool;
+        let track_midi_events = &mut self.track_midi_events;
+        let midi_clips = &mut self.midi_clips;
+
+        for evs in track_midi_events.iter_mut() {
+            evs.clear();
+        }
+
+        if self.transport.playback_state == TransportPlaybackState::Playing {
+            let buffer_frames = (samples.len() / num_channels) as u64;
+            if buffer_frames > 0 {
+                let frame_start = self.transport.sample_count;
+                let abs_start = self.absolute_frame;
+                let transport = self.transport;
+                let mode = self.mode;
+
+                // ─── Real-Time MIDI Clip Scheduling ──────────────────
+                for clip in midi_clips.iter_mut() {
+                    let ti = clip.track_index.min(15);
+                    if mode == EngineMode::OpenStudio {
+                        let clip_frame_start = clip.start_frame;
+                        let duration_frames = transport.ticks_to_samples(clip.duration_ticks);
+                        let clip_frame_end = clip_frame_start.saturating_add(duration_frames);
+                        let quantum_start = frame_start;
+                        let quantum_end = frame_start + buffer_frames;
+
+                        if quantum_end <= clip_frame_start || quantum_start >= clip_frame_end {
+                            if quantum_start >= clip_frame_end {
+                                for pitch in 0..128 {
+                                    if clip.active_notes[pitch] {
+                                        dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                        clip.active_notes[pitch] = false;
+                                        track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                            status: 0x80 | (ti as u8 & 0x0F),
+                                            data1: pitch as u8,
+                                            data2: 0,
+                                        });
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        for note in &clip.notes {
+                            let note_start = clip_frame_start + transport.ticks_to_samples(note.start_tick);
+                            let note_end = clip_frame_start + transport.ticks_to_samples(note.end_tick());
+
+                            if note_start >= quantum_start && note_start < quantum_end && note_start < clip_frame_end {
+                                let pitch = note.pitch as usize;
+                                let vel = note.velocity;
+                                if vel > 0 {
+                                    let adsr = DmsAdsrParams {
+                                        attack_rate: sample_rate,
+                                        decay_rate: sample_rate,
+                                        sustain_level: 1.0,
+                                        release_rate: sample_rate / 0.05,
+                                    };
+                                    let key = dms_pad_key(ti, pitch);
+                                    let (samples_ref, ch) = if let Some(Some(ref s)) = dms_samples.get(key) {
+                                        (s.as_slice(), dms_channels.get(key).copied().unwrap_or(1))
+                                    } else if let Some(Some(ref s)) = dms_samples.get(pitch) {
+                                        (s.as_slice(), dms_channels.get(pitch).copied().unwrap_or(1))
+                                    } else {
+                                        (&[] as &[f32], 1)
+                                    };
+                                    if !samples_ref.is_empty() {
+                                        dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                    }
+                                    clip.active_notes[pitch.min(127)] = true;
+                                    track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                        status: 0x90 | (ti as u8 & 0x0F),
+                                        data1: note.pitch,
+                                        data2: vel,
+                                    });
+                                }
+                            }
+
+                            if note_end >= quantum_start && note_end < quantum_end {
+                                let pitch = note.pitch as usize;
+                                dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                clip.active_notes[pitch.min(127)] = false;
+                                track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                    status: 0x80 | (ti as u8 & 0x0F),
+                                    data1: note.pitch,
+                                    data2: 0,
+                                });
+                            }
+                        }
+
+                        if clip_frame_end >= quantum_start && clip_frame_end < quantum_end {
+                            for pitch in 0..128 {
+                                if clip.active_notes[pitch] {
+                                    dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                    clip.active_notes[pitch] = false;
+                                    track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                        status: 0x80 | (ti as u8 & 0x0F),
+                                        data1: pitch as u8,
+                                        data2: 0,
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        // OpenLive mode
+                        if !clip.is_playing || abs_start < clip.start_absolute {
+                            continue;
+                        }
+
+                        let elapsed_start = abs_start - clip.start_absolute;
+                        let has_loop = clip.has_valid_clip_loop();
+                        let duration_frames = transport.ticks_to_samples(clip.duration_ticks);
+
+                        if !has_loop {
+                            if elapsed_start >= duration_frames {
+                                clip.is_playing = false;
+                                for pitch in 0..128 {
+                                    if clip.active_notes[pitch] {
+                                        dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                        clip.active_notes[pitch] = false;
+                                        track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                            status: 0x80 | (ti as u8 & 0x0F),
+                                            data1: pitch as u8,
+                                            data2: 0,
+                                        });
+                                    }
+                                }
+                                continue;
+                            }
+
+                            let elapsed_end = elapsed_start + buffer_frames;
+                            for note in &clip.notes {
+                                let n_start = transport.ticks_to_samples(note.start_tick);
+                                let n_end = transport.ticks_to_samples(note.end_tick());
+
+                                if n_start >= elapsed_start && n_start < elapsed_end && n_start < duration_frames {
+                                    let pitch = note.pitch as usize;
+                                    let vel = note.velocity;
+                                    if vel > 0 {
+                                        let adsr = DmsAdsrParams {
+                                            attack_rate: sample_rate,
+                                            decay_rate: sample_rate,
+                                            sustain_level: 1.0,
+                                            release_rate: sample_rate / 0.05,
+                                        };
+                                        let key = dms_pad_key(ti, pitch);
+                                        let (samples_ref, ch) = if let Some(Some(ref s)) = dms_samples.get(key) {
+                                            (s.as_slice(), dms_channels.get(key).copied().unwrap_or(1))
+                                        } else if let Some(Some(ref s)) = dms_samples.get(pitch) {
+                                            (s.as_slice(), dms_channels.get(pitch).copied().unwrap_or(1))
+                                        } else {
+                                            (&[] as &[f32], 1)
+                                        };
+                                        if !samples_ref.is_empty() {
+                                            dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                        }
+                                        clip.active_notes[pitch.min(127)] = true;
+                                        track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                            status: 0x90 | (ti as u8 & 0x0F),
+                                            data1: note.pitch,
+                                            data2: vel,
+                                        });
+                                    }
+                                }
+
+                                if n_end >= elapsed_start && n_end < elapsed_end {
+                                    let pitch = note.pitch as usize;
+                                    dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                    clip.active_notes[pitch.min(127)] = false;
+                                    track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                        status: 0x80 | (ti as u8 & 0x0F),
+                                        data1: note.pitch,
+                                        data2: 0,
+                                    });
+                                }
+                            }
+
+                            if elapsed_end >= duration_frames {
+                                clip.is_playing = false;
+                                for pitch in 0..128 {
+                                    if clip.active_notes[pitch] {
+                                        dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                        clip.active_notes[pitch] = false;
+                                        track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                            status: 0x80 | (ti as u8 & 0x0F),
+                                            data1: pitch as u8,
+                                            data2: 0,
+                                        });
+                                    }
+                                }
+                            }
+                        } else {
+                            // Looping MIDI clip in OpenLive
+                            let ls_ticks = clip.clip_loop_start_ticks;
+                            let le_ticks = clip.clip_loop_end_ticks;
+                            let loop_len_ticks = le_ticks.saturating_sub(ls_ticks).max(960);
+                            let loop_start_frames = transport.ticks_to_samples(ls_ticks);
+                            let loop_len_frames = transport.ticks_to_samples(loop_len_ticks).max(1);
+                            let loop_end_frames = loop_start_frames + loop_len_frames;
+
+                            let mut cur_elapsed = elapsed_start;
+                            let mut frames_left = buffer_frames;
+
+                            while frames_left > 0 {
+                                let (cycle_sample, dist_to_wrap) = if cur_elapsed < loop_end_frames {
+                                    let pos = cur_elapsed;
+                                    let dist = loop_end_frames - cur_elapsed;
+                                    (pos, dist)
+                                } else {
+                                    let offset = cur_elapsed - loop_end_frames;
+                                    let cycle_pos = offset % loop_len_frames;
+                                    let pos = loop_start_frames + cycle_pos;
+                                    let dist = loop_len_frames - cycle_pos;
+                                    (pos, dist)
+                                };
+
+                                let seg_frames = frames_left.min(dist_to_wrap);
+                                let seg_start_sample = cycle_sample;
+                                let seg_end_sample = cycle_sample + seg_frames;
+
+                                for note in &clip.notes {
+                                    let n_start = transport.ticks_to_samples(note.start_tick);
+                                    let n_end = transport.ticks_to_samples(note.end_tick());
+
+                                    if n_start >= seg_start_sample && n_start < seg_end_sample {
+                                        let pitch = note.pitch as usize;
+                                        let vel = note.velocity;
+                                        if vel > 0 {
+                                            let adsr = DmsAdsrParams {
+                                                attack_rate: sample_rate,
+                                                decay_rate: sample_rate,
+                                                sustain_level: 1.0,
+                                                release_rate: sample_rate / 0.05,
+                                            };
+                                            let key = dms_pad_key(ti, pitch);
+                                            let (samples_ref, ch) = if let Some(Some(ref s)) = dms_samples.get(key) {
+                                                (s.as_slice(), dms_channels.get(key).copied().unwrap_or(1))
+                                            } else if let Some(Some(ref s)) = dms_samples.get(pitch) {
+                                                (s.as_slice(), dms_channels.get(pitch).copied().unwrap_or(1))
+                                            } else {
+                                                (&[] as &[f32], 1)
+                                            };
+                                            if !samples_ref.is_empty() {
+                                                dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                            }
+                                            clip.active_notes[pitch.min(127)] = true;
+                                            track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                                status: 0x90 | (ti as u8 & 0x0F),
+                                                data1: note.pitch,
+                                                data2: vel,
+                                            });
+                                        }
+                                    }
+
+                                    if n_end >= seg_start_sample && n_end < seg_end_sample {
+                                        let pitch = note.pitch as usize;
+                                        dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                        clip.active_notes[pitch.min(127)] = false;
+                                        track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                            status: 0x80 | (ti as u8 & 0x0F),
+                                            data1: note.pitch,
+                                            data2: 0,
+                                        });
+                                    }
+                                }
+
+                                cur_elapsed += seg_frames;
+                                frames_left -= seg_frames;
+
+                                if seg_frames == dist_to_wrap && frames_left > 0 {
+                                    for pitch in 0..128 {
+                                        if clip.active_notes[pitch] {
+                                            dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                            clip.active_notes[pitch] = false;
+                                            track_midi_events[ti].push(hikaru_midi::MidiEvent {
+                                                status: 0x80 | (ti as u8 & 0x0F),
+                                                data1: pitch as u8,
+                                                data2: 0,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ─── OpenDMS Polyphonic Voice Mixing ──────────────────────
         // Always active (not gated by transport), like preview player.
         // Cada voz lleva su propio `track_idx`: el fader/pan/mute/solo del
@@ -1638,18 +2170,24 @@ impl<'a> AudioEngine<'a> {
                 dms_gain_r[t] = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
             }
 
-            let mut dms_l = vec![0.0f32; buf_frames];
-            let mut dms_r = vec![0.0f32; buf_frames];
+            if self.dms_scratch_l.len() < buf_frames {
+                self.dms_scratch_l.resize(buf_frames, 0.0);
+            }
+            if self.dms_scratch_r.len() < buf_frames {
+                self.dms_scratch_r.resize(buf_frames, 0.0);
+            }
+            self.dms_scratch_l[..buf_frames].fill(0.0);
+            self.dms_scratch_r[..buf_frames].fill(0.0);
             self.dms_voice_pool.process_all_with_gains(
-                &mut dms_l,
-                &mut dms_r,
+                &mut self.dms_scratch_l[..buf_frames],
+                &mut self.dms_scratch_r[..buf_frames],
                 &dms_gain_l,
                 &dms_gain_r,
                 self.sample_rate,
             );
             for i in 0..buf_frames {
-                samples[i * 2] += dms_l[i];
-                samples[i * 2 + 1] += dms_r[i];
+                samples[i * 2] += self.dms_scratch_l[i];
+                samples[i * 2 + 1] += self.dms_scratch_r[i];
             }
         }
 
@@ -1881,19 +2419,22 @@ impl<'a> AudioEngine<'a> {
                 // pasa por cada plugin en orden. El `process()` de cada nodo
                 // es lock-free hacia el hilo de audio (anillo de comandos).
                 if !self.track_effects[t].is_empty() {
-                    // Copiamos el buffer de la pista para que los plugins
+                    // Copiamos el buffer de la pista en el scratch prealocado para que los plugins
                     // procesen una copia y no modifiquen el original
-                    // (que se usa para el cálculo de picos).
-                    let mut fx_buf = track_buf.clone();
-                    let mut audio_buffer = AudioBuffer::new(&mut fx_buf);
+                    // (que se usa para el cálculo de picos), sin allocar en RT.
+                    if self.fx_scratch_buf.len() < buf_len {
+                        self.fx_scratch_buf.resize(buf_len, 0.0);
+                    }
+                    self.fx_scratch_buf[..buf_len].copy_from_slice(&track_buf[..buf_len]);
+                    let mut audio_buffer = AudioBuffer::new(&mut self.fx_scratch_buf[..buf_len]);
                     for node in self.track_effects[t].iter_mut() {
                         if node.is_active {
-                            node.process(&mut audio_buffer, &[]);
+                            node.process(&mut audio_buffer, &self.track_midi_events[t]);
                         }
                     }
                     // Sumamos la salida procesada al output.
                     for i in 0..buf_len {
-                        let v = fx_buf[i];
+                        let v = self.fx_scratch_buf[i];
                         let a = if v.is_finite() { v.abs() } else { 0.0 };
                         if a > track_peak {
                             track_peak = a;
@@ -1955,14 +2496,14 @@ impl<'a> AudioEngine<'a> {
             .iter_mut()
             .find(|c| c.track_index == track_index && c.scene_index == scene_index)
         {
+            let max_tick = notes.iter().map(|n| n.end_tick()).max().unwrap_or(960 * 4);
+            clip.duration_ticks = max_tick.max(960 * 4);
+            if clip.clip_loop_end_ticks <= clip.clip_loop_start_ticks || clip.clip_loop_end_ticks < clip.duration_ticks {
+                clip.clip_loop_end_ticks = clip.duration_ticks;
+            }
             clip.notes = notes;
         } else {
-            self.midi_clips.push(MidiClipInstance {
-                track_index,
-                scene_index,
-                notes,
-                is_playing: false,
-            });
+            self.midi_clips.push(MidiClipInstance::new(track_index, scene_index, notes));
         }
     }
 }

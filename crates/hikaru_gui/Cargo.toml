@@ -7,6 +7,7 @@ license = "AGPL-3.0-later"
 
 [dependencies]
 hikaru_core = { path = "../hikaru_core" }
+hikaru_midi = { path = "../hikaru_midi" }
 hikaru_audio_engine = { path = "../hikaru_audio_engine" }
 hikaru_dsp = { path = "../hikaru_dsp" }
 hikaru_transport = { path = "../hikaru_transport" }

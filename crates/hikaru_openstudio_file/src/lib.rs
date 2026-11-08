@@ -33,6 +33,7 @@
 use std::path::{Path, PathBuf};
 
 use hikaru_project_file::{parse_with_probe, write_json, Color, ProjectError, Track};
+pub use hikaru_project_file::MidiNote;
 use serde::{Deserialize, Serialize};
 
 /// Extensión del formato OpenStudio.
@@ -162,6 +163,11 @@ pub enum ClipKind {
         sample_path: String,
         sample_offset_ticks: u64,
         total_sample_ticks: u64,
+    },
+    /// Clip MIDI con notas directas en el timeline.
+    Midi {
+        #[serde(default)]
+        notes: Vec<MidiNote>,
     },
     /// Clip de automatización.
     Automation {
@@ -386,5 +392,44 @@ mod tests {
         assert!(project.studio_tracks[0].is_master);
         // El PPQN se conserva: es la resolución del timeline, no del contenido.
         assert_eq!(project.playlist.ppqn, DEFAULT_PPQN);
+    }
+
+    #[test]
+    fn un_opsf_guarda_y_lee_clips_midi() {
+        let mut proj = template("Hikaru OpenStudio 2.24.0");
+        proj.playlist.clips.push((
+            1,
+            PlaylistClipSaved {
+                id: 10,
+                name: "Bassline".to_string(),
+                start_tick: 0,
+                duration_ticks: 1920,
+                color: Color { h: 0.1, s: 0.8, l: 0.5, a: 1.0 },
+                kind: ClipKind::Midi {
+                    notes: vec![
+                        MidiNote::new(0, 36, 100, 480),
+                        MidiNote::new(480, 38, 90, 480),
+                    ],
+                },
+            },
+        ));
+
+        let mut path = std::env::temp_dir();
+        path.push(format!("hikaru_opsf_midi_{}.opsf", std::process::id()));
+        save(&path, &proj).unwrap();
+
+        let loaded = parse(&path).unwrap();
+        assert_eq!(loaded.playlist.clips.len(), 1);
+        let (_, clip) = &loaded.playlist.clips[0];
+        assert_eq!(clip.name, "Bassline");
+        match &clip.kind {
+            ClipKind::Midi { notes } => {
+                assert_eq!(notes.len(), 2);
+                assert_eq!(notes[0].note, 36);
+                assert_eq!(notes[1].note, 38);
+            }
+            _ => panic!("se esperaba ClipKind::Midi"),
+        }
+        let _ = std::fs::remove_file(&path);
     }
 }

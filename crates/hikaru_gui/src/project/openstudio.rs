@@ -93,7 +93,7 @@ fn capture_metadata(studio_tracks: &[Track], playlist: &Playlist) -> Metadata {
     for (_, clip) in &playlist.clips {
         match clip.kind {
             ClipKind::Audio { .. } => audio_clips += 1,
-            ClipKind::Pattern { .. } | ClipKind::Automation { .. } => midi_clips += 1,
+            ClipKind::Pattern { .. } | ClipKind::Automation { .. } | ClipKind::Midi { .. } => midi_clips += 1,
         }
     }
     Metadata {
@@ -299,6 +299,9 @@ fn build_playlist_clip(
                 })
                 .collect(),
             target_param: target_param.clone(),
+        },
+        ClipKind::Midi { .. } => ClipType::Pattern {
+            pattern_id: saved.id,
         },
     };
 

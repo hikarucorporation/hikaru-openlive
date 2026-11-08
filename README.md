@@ -6,7 +6,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey.svg)](#-quick-build-linux)
-[![GUI: gpui-kit](https://img.shields.io/badge/GUI-gpui--kit-6E4AFF.svg)](https://github.com/zed-industries/gpui)
+[![GUI: egui 0.31 + wgpu 24.0.5 + naga 24.0.0 + wgsl](https://img.shields.io/badge/GUI-egui%200.31%20%2B%20wgpu%2024.0.5%20%2B%20naga%2024.0.0%20%2B%20wgsl-6E4AFF.svg)](https://github.com/emilk/egui)
 [![Audio: CPAL](https://img.shields.io/badge/Audio-CPAL%200.18.2-green.svg)](https://github.com/RustAudio/cpal)
 
 **Hikaru OpenLive** is a digital audio workstation (DAW) designed for **live performance, real-time clip launching and linear composition**. Built entirely in Rust, it offers an ultra-low-latency audio engine with no dynamic memory allocations on the critical thread.
@@ -21,15 +21,19 @@
 
 ### Session Matrix
 ![Session Matrix](assets/screenshots/session-matrix.png)
+
+### Piano Roll (buggy)
+![Piano Roll](assets/screenshots/piano-roll-bugged-1.png)
+*MIDI note editing — currently buggy, WIP.*
+
+### Arranger (OpenWavetable)
+![Arranger](assets/screenshots/arranger-view-with-colored-wavetables.png)
+*Linear timeline with OpenWavetable devices.*
 *Ableton/Bitwig-style clip grid for quantized scene triggering and real-time waveforms.*
 
 ### About
 ![About](assets/screenshots/about.png)
 *Version info, credits and project links.*
-
-### VST3 / CLAP Plugin Host (Experimental/Beta)
-![Plugin Host](assets/screenshots/lgpl-vst3-clap-host-dev-1.png)
-*Loading and management of third-party plugins in VST3 and CLAP formats.*
 
 ---
 
@@ -38,9 +42,9 @@
 - **Session Matrix (Live Workflow):** Scene-based clip launching, tight quantization and instant triggers.
 - **Arranger View:** Timeline editing parallel to the session matrix.
 - **Lock-Free Audio Engine:** Real-time audio thread powered by CPAL and a sample-accurate sequencer.
-- **DSP & Native Synthesis:** Effect racks (filters, flanger, phaser) and integrated wavetable generator.
-- **VST3 / CLAP Host:** Experimental integration for external instruments and effects.
-
+- **DSP & Native Synthesis:** Effect racks (filters, flanger, phaser) and integrated wavetable generator (OpenWavetable).
+- **Piano Roll:** MIDI note editing (buggy, WIP).
+- **Arranger:** Linear timeline view with OpenWavetable devices.
 ---
 
 ## 🧭 Project Direction: Reverse Engineering Bitwig Studio
@@ -184,6 +188,8 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ![meme](assets/gauss-wojak-joda-2.jpeg)
 
+PD: we changed everything to egui + wgpu + wgsl/naga + 3D renders stolen from Lemon Studio, which is also free and open software...
+
 ---
 
 ## 👥 Community & Contributors
@@ -197,9 +203,10 @@ Special thanks to all the contributors and the open-source community supporting 
 
 Creators:
 
-* [Hikaru Corporation](https://github.com/hikarucorporation)
-* [DTG](https://github.com/doujintechnologicsgroup)
+* 🔵 [Hikaru Corporation](https://github.com/hikarucorporation)
+* 🔴 [DTG](https://github.com/doujintechnologicsgroup)
 * 🤖 [OpenCode](https://github.com/opencode-agent)
+* 🤖 [Google Antigravity](antigravity.google) (Gemini 3.8 Flash & Gemini 4 Argon)
 
 ### 🤝 Code Contributors Wanted
 

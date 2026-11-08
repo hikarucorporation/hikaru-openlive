@@ -168,6 +168,35 @@ pub struct Color {
 }
 
 // =========================================================================
+// NOTA MIDI (PERSISTENCIA)
+// =========================================================================
+
+/// Nota MIDI persistible en archivos de proyecto (.oplf y .opsf).
+///
+/// `(inicio_en_ticks, nota, velocity, duración_en_ticks)`.
+/// El campo `note` admite el alias serde `"pitch"` para interoperabilidad completa
+/// con modelos del motor y de la interfaz de usuario.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiNote {
+    pub start_tick: u64,
+    #[serde(alias = "pitch")]
+    pub note: u8,
+    pub velocity: u8,
+    pub duration_ticks: u32,
+}
+
+impl MidiNote {
+    pub fn new(start_tick: u64, note: u8, velocity: u8, duration_ticks: u32) -> Self {
+        Self {
+            start_tick,
+            note,
+            velocity,
+            duration_ticks,
+        }
+    }
+}
+
+// =========================================================================
 // I/O
 // =========================================================================
 
@@ -247,5 +276,19 @@ mod tests {
             other => panic!("error inesperado: {:?}", other),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn midi_note_serde_alias_support() {
+        let json_with_note = r#"{"start_tick":480,"note":60,"velocity":100,"duration_ticks":240}"#;
+        let parsed_note: MidiNote = serde_json::from_str(json_with_note).unwrap();
+        assert_eq!(parsed_note.note, 60);
+
+        let json_with_pitch = r#"{"start_tick":480,"pitch":64,"velocity":110,"duration_ticks":480}"#;
+        let parsed_pitch: MidiNote = serde_json::from_str(json_with_pitch).unwrap();
+        assert_eq!(parsed_pitch.note, 64);
+
+        let serialized = serde_json::to_string(&parsed_pitch).unwrap();
+        assert!(serialized.contains(r#""note":64"#));
     }
 }

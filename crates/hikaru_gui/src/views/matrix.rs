@@ -691,7 +691,7 @@ pub fn load_clip_into_slot(
     track_idx: usize,
     scene_idx: usize,
     path: PathBuf,
-    _bpm: f64,
+    bpm: f64,
 ) {
     if track_idx >= state.grid.len() {
         return;
@@ -712,8 +712,29 @@ pub fn load_clip_into_slot(
     let path_str = path.to_string_lossy().to_string();
     let is_midi = crate::views::explorer::is_midi_file(&path);
 
-    let content = if is_midi {
-        ClipData::Midi { notes: Vec::new() }
+    let (content, real_dur, total_frames) = if is_midi {
+        let parsed_notes: Vec<(u64, u8, u8, u32)> = if let Ok(bytes) = std::fs::read(&path) {
+            hikaru_midi::parse_midi_file_to_notes(&bytes)
+                .map(|notes| {
+                    notes
+                        .into_iter()
+                        .map(|n| (n.start_tick, n.pitch, n.velocity, n.duration_ticks))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let max_tick = parsed_notes
+            .iter()
+            .map(|(st, _, _, dur)| st + *dur as u64)
+            .max()
+            .unwrap_or(3840);
+        let bars = (max_tick as f64 / 3840.0).ceil().max(1.0) as u64;
+        let total_ticks = bars * 3840;
+        let effective_bpm = if bpm > 0.0 { bpm as f64 } else { 120.0 };
+        let dur = (total_ticks as f64 / 960.0) * (60.0 / effective_bpm);
+        (ClipData::Midi { notes: parsed_notes }, dur, total_ticks)
     } else {
         let mut events = Vec::new();
         if let Some((samples, channels, sr)) = decode_audio_file(&path) {
@@ -721,31 +742,32 @@ pub fn load_clip_into_slot(
             ev.source_path = Some(path.clone());
             events.push(ev);
         }
-        ClipData::Audio {
-            events,
-            next_event_id: 2,
-            preview_mix: Vec::new(),
-            preview_sr: 44100,
-        }
+        let dur_calc = if let Ok(reader) = hound::WavReader::open(path_str.as_str()) {
+            let spec = reader.spec();
+            let samples = reader.duration();
+            let dur = if spec.sample_rate > 0 {
+                samples as f64 / (spec.sample_rate as f64 * spec.channels.max(1) as f64)
+            } else {
+                0.0
+            };
+            (dur, samples as u64)
+        } else {
+            (0.0, 0)
+        };
+        (
+            ClipData::Audio {
+                events,
+                next_event_id: 2,
+                preview_mix: Vec::new(),
+                preview_sr: 44100,
+            },
+            dur_calc.0,
+            dur_calc.1,
+        )
     };
 
     let mut local_state = PlaylistState::default();
     local_state.zoom_x = state.editor_zoom_x;
-
-    let (real_dur, total_frames) = if is_midi {
-        (0.0, 0)
-    } else if let Ok(reader) = hound::WavReader::open(path_str.as_str()) {
-        let spec = reader.spec();
-        let samples = reader.duration();
-        let dur = if spec.sample_rate > 0 {
-            samples as f64 / (spec.sample_rate as f64 * spec.channels.max(1) as f64)
-        } else {
-            0.0
-        };
-        (dur, samples as u64)
-    } else {
-        (0.0, 0)
-    };
 
     let peaks = if is_midi {
         Vec::new()
@@ -790,6 +812,45 @@ pub fn load_clip_into_slot(
             scene_index: scene_idx,
         });
     }
+}
+
+pub fn create_empty_midi_clip(
+    state: &mut SessionMatrixState,
+    audio_proxy: &crate::audio_proxy::AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+) {
+    if track_idx >= state.tracks.len() || scene_idx >= state.scenes.len() {
+        return;
+    }
+    let new_id = state.next_clip_id;
+    state.next_clip_id += 1;
+    let name = format!("MIDI Clip {}", new_id);
+    let mut local_state = PlaylistState::default();
+    local_state.zoom_x = state.editor_zoom_x;
+    let total_ticks = 3840u64; // 1 compás (4 beats × 960 ticks)
+    let dur = (total_ticks as f64 / 960.0) * (60.0 / 120.0);
+
+    state.grid[track_idx][scene_idx] = MatrixSlot {
+        state: SlotState::Stopped,
+        clip: Some(MatrixClip {
+            id: new_id,
+            name: name.clone(),
+            path: PathBuf::new(),
+            duration_secs: dur,
+            content: ClipData::Midi { notes: Vec::new() },
+            local_state,
+            local_track: Track::new(0, name, false),
+            local_bar: 1.0,
+            loop_start: 0,
+            loop_end: total_ticks,
+            loop_enabled: true,
+            has_time_selection: true,
+            peaks: Vec::new(),
+        }),
+    };
+    state.selected_slot = Some((track_idx, scene_idx));
+    sync_midi_clip(state, audio_proxy, track_idx, scene_idx);
 }
 
 pub fn decode_audio_file(path: &std::path::Path) -> Option<(Vec<f32>, usize, u32)> {
@@ -1199,6 +1260,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     let mut trigger_slot_action: Option<(usize, usize)> = None;
     let mut select_slot_action: Option<(usize, usize)> = None;
+    let mut create_midi_slot_action: Option<(usize, usize)> = None;
+    let mut open_piano_roll_action = false;
     let mut toggle_mute_action: Option<usize> = None;
     let mut toggle_solo_action: Option<usize> = None;
     let mut toggle_arm_action: Option<usize> = None;
@@ -1786,26 +1849,61 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         Color32::from_rgb(0x10, 0x10, 0x12),
                     );
 
-                    // Mini waveform inside slot body
-                    if !clip.peaks.is_empty() {
-                        let wave_rect = Rect::from_min_max(
-                            pos2(cell_rect.min.x + 3.0, cell_rect.min.y + 18.0),
-                            pos2(cell_rect.max.x - 3.0, cell_rect.max.y - 3.0),
-                        );
-                        let cy = wave_rect.center().y;
-                        let hh = wave_rect.height() * 0.44;
-                        let n = clip.peaks.len();
-                        let step = wave_rect.width() / n as f32;
-                        for (i, &pk) in clip.peaks.iter().enumerate() {
-                            let x = wave_rect.min.x + i as f32 * step;
-                            let h = (pk * hh).max(1.0);
-                            lg_painter.line_segment(
-                                [pos2(x, cy - h), pos2(x, cy + h)],
-                                Stroke::new(
-                                    1.0_f32,
-                                    Color32::from_rgba_unmultiplied(255, 255, 255, 200),
-                                ),
-                            );
+                    // Mini waveform or Mini-Notes inside slot body
+                    match &clip.content {
+                        ClipData::Audio { .. } => {
+                            if !clip.peaks.is_empty() {
+                                let wave_rect = Rect::from_min_max(
+                                    pos2(cell_rect.min.x + 3.0, cell_rect.min.y + 18.0),
+                                    pos2(cell_rect.max.x - 3.0, cell_rect.max.y - 3.0),
+                                );
+                                let cy = wave_rect.center().y;
+                                let hh = wave_rect.height() * 0.44;
+                                let n = clip.peaks.len();
+                                let step = wave_rect.width() / n as f32;
+                                for (i, &pk) in clip.peaks.iter().enumerate() {
+                                    let x = wave_rect.min.x + i as f32 * step;
+                                    let h = (pk * hh).max(1.0);
+                                    lg_painter.line_segment(
+                                        [pos2(x, cy - h), pos2(x, cy + h)],
+                                        Stroke::new(
+                                            1.0_f32,
+                                            Color32::from_rgba_unmultiplied(255, 255, 255, 200),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        ClipData::Midi { notes } => {
+                            if !notes.is_empty() {
+                                let body_rect = Rect::from_min_max(
+                                    pos2(cell_rect.min.x + 3.0, cell_rect.min.y + 18.0),
+                                    pos2(cell_rect.max.x - 3.0, cell_rect.max.y - 3.0),
+                                );
+                                let max_t = (clip.loop_end.max(3840)) as f32;
+                                let min_p = notes.iter().map(|(_, p, _, _)| *p).min().unwrap_or(36).saturating_sub(2);
+                                let max_p = notes.iter().map(|(_, p, _, _)| *p).max().unwrap_or(84).saturating_add(2);
+                                let p_range = (max_p.saturating_sub(min_p)).max(12) as f32;
+
+                                for &(st, pitch, _, dur) in notes.iter().take(120) {
+                                    let nx = body_rect.min.x + (st as f32 / max_t) * body_rect.width();
+                                    let nw = ((dur as f32 / max_t) * body_rect.width()).clamp(2.0, body_rect.width());
+                                    let norm_pitch = (pitch.saturating_sub(min_p) as f32 / p_range).clamp(0.0, 1.0);
+                                    let ny = body_rect.max.y - norm_pitch * (body_rect.height() - 3.0) - 2.0;
+
+                                    if nx < body_rect.max.x {
+                                        let note_rect = Rect::from_min_size(
+                                            pos2(nx, ny),
+                                            vec2(nw.min(body_rect.max.x - nx), 2.0),
+                                        );
+                                        lg_painter.rect_filled(
+                                            note_rect,
+                                            0.5,
+                                            Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1872,9 +1970,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 }
 
                 if cell_hovered {
-                    if primary_clicked {
+                    if double_clicked {
+                        if has_clip {
+                            select_slot_action = Some((track_idx, scene_idx));
+                            open_piano_roll_action = true;
+                        } else {
+                            create_midi_slot_action = Some((track_idx, scene_idx));
+                            open_piano_roll_action = true;
+                        }
+                    } else if primary_clicked {
                         if has_clip {
                             trigger_slot_action = Some((track_idx, scene_idx));
+                            select_slot_action = Some((track_idx, scene_idx));
                         } else {
                             select_slot_action = Some((track_idx, scene_idx));
                         }
@@ -2385,6 +2492,20 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if let Some((t_idx, s_idx)) = select_slot_action {
         state.matrix_state.selected_slot = Some((t_idx, s_idx));
         select_matrix_track(state, t_idx);
+    }
+
+    if let Some((t_idx, s_idx)) = create_midi_slot_action {
+        create_empty_midi_clip(&mut state.matrix_state, &state.audio_proxy, t_idx, s_idx);
+        select_matrix_track(state, t_idx);
+        state.show_piano_roll = true;
+        state.show_dsp_rack = false;
+        state.clip_editor.show_editor = false;
+    }
+
+    if open_piano_roll_action {
+        state.show_piano_roll = true;
+        state.show_dsp_rack = false;
+        state.clip_editor.show_editor = false;
     }
 
     if let Some(t_idx) = stop_track_action {

@@ -256,14 +256,8 @@ pub struct Event {
     pub fade_out_secs: f64,
 }
 
-/// Nota MIDI: `(inicio_en_ticks, nota, velocity, duración_en_ticks)`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct MidiNote {
-    pub start_tick: u64,
-    pub note: u8,
-    pub velocity: u8,
-    pub duration_ticks: u32,
-}
+/// Nota MIDI re-exportada desde `hikaru_project_file`.
+pub use hikaru_project_file::MidiNote;
 
 // =========================================================================
 // I/O

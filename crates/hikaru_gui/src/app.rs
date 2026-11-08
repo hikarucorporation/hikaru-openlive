@@ -1113,7 +1113,7 @@ impl eframe::App for HikaruApp {
             let dock_h = if self.state.show_dsp_rack {
                 dsp_rack::RACK_HEIGHT + 6.0
             } else if self.state.show_piano_roll {
-                220.0
+                self.state.clip_editor.editor_height.max(260.0)
             } else if self.state.clip_editor.show_editor {
                 self.state.clip_editor.editor_height.max(200.0)
             } else {

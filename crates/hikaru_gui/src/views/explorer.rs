@@ -766,7 +766,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "Drag WAV onto Clip Launcher or Timeline",
+                "Drag WAV / MIDI onto Clip Launcher or Timeline",
                 fonts::regular(10.0),
                 TEXT_MUTED,
             );

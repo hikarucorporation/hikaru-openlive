@@ -349,6 +349,10 @@ fn summary_openstudio(path: &Path, project: &OpenStudioProject) -> Value {
                 midi_clips += 1;
                 ("automation", Some(target_param.clone()))
             }
+            hikaru_openstudio_file::ClipKind::Midi { notes } => {
+                midi_clips += 1;
+                ("midi", Some(format!("notes:{}", notes.len())))
+            }
         };
 
         clips.push(json!({

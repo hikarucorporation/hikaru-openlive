@@ -1,6 +1,7 @@
 // crates/hikaru_sequencer/src/clip.rs
 
 use std::sync::atomic::{AtomicU8, Ordering};
+use hikaru_core::MidiNoteInstance;
 
 /// Estados posibles de un clip en la matriz.
 /// Representados como u8 para manipulación atómica rápida.
@@ -329,9 +330,56 @@ impl ClipAudioTimeline {
     }
 }
 
+/// Tipo de contenido que aloja el clip: Audio o MIDI.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipContentType {
+    Audio,
+    Midi(ClipMidiTimeline),
+}
+
+/// Timeline y contenedor de eventos MIDI dentro de un clip.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClipMidiTimeline {
+    pub notes: Vec<MidiNoteInstance>,
+    pub duration_ticks: u64,
+}
+
+impl ClipMidiTimeline {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_notes(notes: Vec<MidiNoteInstance>, duration_ticks: u64) -> Self {
+        let mut tl = Self {
+            notes,
+            duration_ticks,
+        };
+        tl.sort();
+        tl
+    }
+
+    pub fn sort(&mut self) {
+        self.notes.sort();
+    }
+
+    pub fn add_note(&mut self, note: MidiNoteInstance) {
+        self.notes.push(note);
+        self.sort();
+    }
+
+    pub fn clear(&mut self) {
+        self.notes.clear();
+    }
+
+    pub fn note_count(&self) -> usize {
+        self.notes.len()
+    }
+}
+
 pub struct Clip {
     pub id: u32,
     pub audio_buffer_id: u32, // Referencia al buffer precargado en hikaru_core
+    pub content_type: ClipContentType,
     pub state: AtomicU8,
     pub trigger_mode: TriggerMode,
     pub start_sample: u64,    // Cuándo empezó a sonar realmente
@@ -354,6 +402,7 @@ impl Clip {
         Self {
             id,
             audio_buffer_id,
+            content_type: ClipContentType::Audio,
             state: AtomicU8::new(ClipState::Stopped as u8),
             trigger_mode: TriggerMode::Trigger,
             start_sample: 0,
@@ -366,6 +415,43 @@ impl Clip {
             loop_start: 0,
             loop_end: 0,
             total_frames: 0,
+        }
+    }
+
+    pub fn new_midi(id: u32, timeline: ClipMidiTimeline) -> Self {
+        Self {
+            id,
+            audio_buffer_id: 0,
+            content_type: ClipContentType::Midi(timeline),
+            state: AtomicU8::new(ClipState::Stopped as u8),
+            trigger_mode: TriggerMode::Trigger,
+            start_sample: 0,
+            loop_enabled: true,
+            loop_start: 0,
+            loop_end: 0,
+            total_frames: 0,
+        }
+    }
+
+    pub fn is_midi(&self) -> bool {
+        matches!(self.content_type, ClipContentType::Midi(_))
+    }
+
+    pub fn is_audio(&self) -> bool {
+        matches!(self.content_type, ClipContentType::Audio)
+    }
+
+    pub fn midi_timeline(&self) -> Option<&ClipMidiTimeline> {
+        match &self.content_type {
+            ClipContentType::Midi(tl) => Some(tl),
+            _ => None,
+        }
+    }
+
+    pub fn midi_timeline_mut(&mut self) -> Option<&mut ClipMidiTimeline> {
+        match &mut self.content_type {
+            ClipContentType::Midi(tl) => Some(tl),
+            _ => None,
         }
     }
 
@@ -778,5 +864,21 @@ mod tests {
         assert!((mixed[0] - 1.0).abs() < 1e-6);
         assert!((mixed[300] - 2.0).abs() < 1e-6);
         assert!((mixed[600] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn midi_clip_timeline_integration() {
+        let mut tl = ClipMidiTimeline::new();
+        tl.add_note(MidiNoteInstance::new(960, 64, 100, 480));
+        tl.add_note(MidiNoteInstance::new(0, 60, 110, 480));
+        assert_eq!(tl.note_count(), 2);
+        assert_eq!(tl.notes[0].start_tick, 0);
+        assert_eq!(tl.notes[1].start_tick, 960);
+
+        let clip = Clip::new_midi(42, tl);
+        assert!(clip.is_midi());
+        assert!(!clip.is_audio());
+        assert_eq!(clip.midi_timeline().unwrap().note_count(), 2);
+        assert_eq!(clip.get_state(), ClipState::Stopped);
     }
 }

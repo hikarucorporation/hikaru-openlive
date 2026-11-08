@@ -1975,6 +1975,7 @@ dependencies = [
  "hikaru_core",
  "hikaru_dsp",
  "hikaru_mcp_port",
+ "hikaru_midi",
  "hikaru_openlive_file",
  "hikaru_openstudio_file",
  "hikaru_plugin_host",

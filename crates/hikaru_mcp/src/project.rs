@@ -195,6 +195,10 @@ impl LoadedProject {
                                 "parametro": target_param,
                                 "puntos": points.len(),
                             }),
+                            hikaru_openstudio_file::ClipKind::Midi { notes } => json!({
+                                "tipo": "midi",
+                                "notas": notes.len(),
+                            }),
                         };
 
                         json!({

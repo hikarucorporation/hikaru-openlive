@@ -6,7 +6,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey.svg)](#compilación-rápida-linux--debian--ubuntu)
-[![GUI: gpui-kit](https://img.shields.io/badge/GUI-gpui--kit-6E4AFF.svg)](https://github.com/zed-industries/gpui)
+[![GUI: egui 0.31 + wgpu 24.0.5 + naga 24.0.0 + wgsl](https://img.shields.io/badge/GUI-egui%200.31%20%2B%20wgpu%2024.0.5%20%2B%20naga%2024.0.0%20%2B%20wgsl-6E4AFF.svg)](https://github.com/emilk/egui)
 [![Audio: CPAL](https://img.shields.io/badge/Audio-CPAL%200.18.2-green.svg)](https://github.com/RustAudio/cpal)
 
 **Hikaru OpenLive** es una estación de trabajo de audio digital (DAW) diseñada para **actuaciones en vivo, lanzamiento de clips en tiempo real y composición lineal**. Construido completamente en Rust, ofrece un motor de audio de ultra baja latencia sin asignaciones de memoria dinámicas en el hilo crítico.
@@ -21,15 +21,19 @@
 
 ### Session Matrix
 ![Session Matrix](assets/screenshots/session-matrix.png)
+
+### Piano Roll (bugueado)
+![Piano Roll](assets/screenshots/piano-roll-bugged-1.png)
+*Edición de notas MIDI — actualmente bugueado, WIP.*
+
+### Arranger (OpenWavetable)
+![Arranger](assets/screenshots/arranger-view-with-colored-wavetables.png)
+*Línea de tiempo lineal con devices OpenWavetable.*
 *Grilla de clips al estilo Ableton/Bitwig para disparo cuantizado de escenas y waveforms en tiempo real.*
 
 ### Acerca de
 ![Acerca de](assets/screenshots/about.png)
 *Información del proyecto, créditos y enlaces.*
-
-### Host de Plugins VST3 / CLAP (Experimental/Beta)
-![Plugin Host](assets/screenshots/lgpl-vst3-clap-host-dev-1.png)
-*Carga y gestión de plugins de terceros en formato VST3 y CLAP.*
 
 ---
 
@@ -38,9 +42,9 @@
 - **Session Matrix (Live Workflow):** Lanzamiento de clips por escenas, cuantización rígida y triggers instantáneos.
 - **Arranger View:** Edición en línea de tiempo paralela a la matriz de sesión.
 - **Motor de Audio sin Bloqueos:** Hilo de audio en tiempo real impulsado por CPAL y secuenciador sample-accurate.
-- **DSP & Sintesis Nativa:** Racks de efectos (filtros, flanger, phaser) y generador wavetable integrado.
-- **Host VST3 / CLAP:** Integración experimental para instrumentos y efectos externos.
-
+- **DSP & Sintesis Nativa:** Racks de efectos (filtros, flanger, phaser) y generador wavetable integrado (OpenWavetable).
+- **Piano Roll:** Edición de notas MIDI (bugeado, WIP).
+- **Arranger:** Vista de línea de tiempo lineal con devices OpenWavetable.
 ---
 
 ## 🧭 Dirección del Proyecto: Ingeniería Inversa a Bitwig Studio
@@ -171,6 +175,8 @@ wine target/x86_64-pc-windows-gnu/release/hikaru_gui.exe
 
 ![meme](assets/gauss-wojak-joda-2.jpeg)
 
+PD: cambiamos todo a egui + wgpu + wgsl/naga + renders 3D robados de Lemon Studio, que también es software libre...  GORDO MENTIROSO XD jajaj
+
 ## 👥 Comunidad y Colaboradores
 
 Estamos **buscando contribuyentes** para seguir impulsando el desarrollo de **Hikaru OpenLive**! 🙌
@@ -182,9 +188,10 @@ Un agradecimiento especial a los gordos contribuyentes y a la comunidad de softw
 
 Creadores:
 
-* [Hikaru Corporation](https://github.com/hikarucorporation)
-* [DTG](https://github.com/doujintechnologicsgroup)
-* [OpenCode 🤖 ](https://github.com/opencode-agent)
+* 🔵 [Hikaru Corporation](https://github.com/hikarucorporation)
+* 🔴 [DTG](https://github.com/doujintechnologicsgroup)
+* 🤖 [OpenCode](https://github.com/opencode-agent)
+* 🤖 Google Antigravity (Gemini 3.8 Flash & Gemini 4 Argon, cuando sus tokens no se fuman como un pedo en la mano XD)
 
 ### 🤝 Se Buscan Contribuyentes de Código
 
