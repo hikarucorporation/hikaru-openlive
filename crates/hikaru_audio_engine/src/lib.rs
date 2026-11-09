@@ -2360,7 +2360,9 @@ impl<'a> AudioEngine<'a> {
                                 for pitch in 0..128 {
                                     if clip.active_notes[pitch] {
                                         dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
-                                        wavetable_voice_pool.kill_note(pitch as u8, ti);
+                                        let offset = track_wavetable_pitch_offsets[ti];
+                                        let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                        wavetable_voice_pool.kill_note(eff_pitch, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2431,7 +2433,9 @@ impl<'a> AudioEngine<'a> {
                             for pitch in 0..128 {
                                 if clip.active_notes[pitch] {
                                     dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
-                                    wavetable_voice_pool.kill_note(pitch as u8, ti);
+                                    let offset = track_wavetable_pitch_offsets[ti];
+                                    let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                    wavetable_voice_pool.kill_note(eff_pitch, ti);
                                     clip.active_notes[pitch] = false;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                         status: 0x80 | (ti as u8 & 0x0F),
@@ -2457,7 +2461,9 @@ impl<'a> AudioEngine<'a> {
                                 for pitch in 0..128 {
                                     if clip.active_notes[pitch] {
                                         dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
-                                        wavetable_voice_pool.kill_note(pitch as u8, ti);
+                                        let offset = track_wavetable_pitch_offsets[ti];
+                                        let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                        wavetable_voice_pool.kill_note(eff_pitch, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2529,7 +2535,9 @@ impl<'a> AudioEngine<'a> {
                                 for pitch in 0..128 {
                                     if clip.active_notes[pitch] {
                                         dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
-                                        wavetable_voice_pool.kill_note(pitch as u8, ti);
+                                        let offset = track_wavetable_pitch_offsets[ti];
+                                        let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                        wavetable_voice_pool.kill_note(eff_pitch, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2625,11 +2633,13 @@ impl<'a> AudioEngine<'a> {
                                 cur_elapsed += seg_frames;
                                 frames_left -= seg_frames;
 
-                                if seg_frames == dist_to_wrap && frames_left > 0 {
+                                if seg_frames == dist_to_wrap {
                                     for pitch in 0..128 {
                                         if clip.active_notes[pitch] {
                                             dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
-                                            wavetable_voice_pool.release_note(pitch as u8, ti);
+                                            let offset = track_wavetable_pitch_offsets[ti];
+                                            let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                            wavetable_voice_pool.release_note(eff_pitch, ti);
                                             clip.active_notes[pitch] = false;
                                             track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                                 status: 0x80 | (ti as u8 & 0x0F),
@@ -2687,14 +2697,16 @@ impl<'a> AudioEngine<'a> {
                 &dms_gain_r,
                 self.sample_rate,
             );
-            self.wavetable_voice_pool.process_all_with_track_tables(
-                &self.track_wavetables,
-                &mut self.dms_scratch_l[..buf_frames],
-                &mut self.dms_scratch_r[..buf_frames],
-                &dms_gain_l,
-                &dms_gain_r,
-                self.sample_rate,
-            );
+            if self.transport.playback_state != TransportPlaybackState::Playing {
+                self.wavetable_voice_pool.process_all_with_track_tables(
+                    &self.track_wavetables,
+                    &mut self.dms_scratch_l[..buf_frames],
+                    &mut self.dms_scratch_r[..buf_frames],
+                    &dms_gain_l,
+                    &dms_gain_r,
+                    self.sample_rate,
+                );
+            }
             for i in 0..buf_frames {
                 samples[i * 2] += self.dms_scratch_l[i];
                 samples[i * 2 + 1] += self.dms_scratch_r[i];

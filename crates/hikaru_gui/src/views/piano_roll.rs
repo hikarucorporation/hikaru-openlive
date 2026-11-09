@@ -496,6 +496,12 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         .map(|t| t.color)
         .unwrap_or(theme::ACCENT_ORANGE);
 
+    let track_name = app
+        .tracks()
+        .get(selected_track_idx)
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| "Inst 1".into());
+
     // 1. SINCRONIZACIÓN DE NOTAS DEL SLOT ACTIVO (Session Matrix <-> Piano Roll)
     if let Some((t_idx, s_idx)) = selected_slot_coord {
         if app.piano_roll_state.notes_source_slot != Some((t_idx, s_idx)) {
@@ -528,6 +534,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     }
 
     let mut audition_event: Option<(u8, f32)> = None;
+    let mut seek_event: Option<u64> = None;
     let prs = &mut app.piano_roll_state;
     let total_width = ui.available_width();
     let total_height = ui.available_height();
@@ -1129,7 +1136,9 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                 && !loop_bar_handle_rect.contains(pos)
             {
                 let clicked_tick_raw = ((pos.x - content_x - scroll_x) / zoom_x).max(0.0) as u64;
-                prs.playhead_tick = quantize_tick(clicked_tick_raw, snap_step);
+                let target_tick = quantize_tick(clicked_tick_raw, snap_step);
+                prs.playhead_tick = target_tick;
+                seek_event = Some(target_tick);
             }
         }
     }
@@ -1163,6 +1172,26 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         [track_strip_rect.right_top(), track_strip_rect.right_bottom()],
         Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x24)),
     );
+
+    // Texto vertical rotado estilo Bitwig Studio (ej: "INST 1 / SCENE 1")
+    {
+        let t_name = &track_name;
+        let s_label = selected_slot_coord
+            .map(|(_, s)| format!(" / SCENE {}", s + 1))
+            .unwrap_or_else(|| " / SCENE 1".to_string());
+        let label_text = format!("{}{}", t_name.to_uppercase(), s_label);
+
+        let galley = ui.painter().layout_no_wrap(
+            label_text,
+            fonts::semibold(9.5),
+            Color32::from_rgb(180, 184, 195),
+        );
+        let center_y = (content_y + 12.0 + galley.size().x).min(content_y + grid_h - 10.0);
+        let text_pos = pos2(rect.min.x + 15.0, center_y);
+        let mut text_shape = egui::epaint::TextShape::new(text_pos, galley, Color32::from_rgb(180, 184, 195));
+        text_shape.angle = -std::f32::consts::FRAC_PI_2;
+        sidebar_painter.add(text_shape);
+    }
 
     // Compatibilidad para tests existentes que miden gutter_rect
     let _gutter_rect = Rect::from_min_max(
@@ -2016,7 +2045,16 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         }
     }
 
-    // --- 7. AUDITION AUDIO (Preview de nota al final) ---
+    // --- 7. SEEK TRANSPORT ---
+    if let Some(target_tick) = seek_event {
+        let target_samples = app.transport.ticks_to_samples(target_tick);
+        app.transport.sample_count = target_samples;
+        app.audio_proxy.send(GuiCommand::Seek {
+            sample_count: target_samples,
+        });
+    }
+
+    // --- 8. AUDITION AUDIO (Preview de nota al final) ---
     if let Some((p, v)) = audition_event {
         if has_instrument {
             trigger_audition_note(engine_track_idx, p, v, &app.audio_proxy);

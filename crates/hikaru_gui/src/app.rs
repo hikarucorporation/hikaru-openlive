@@ -141,15 +141,19 @@ pub enum AppMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum OpenLiveView {
-    SessionMatrix,
-    ArrangerView,
+    SessionMatrix = 0,
+    ArrangerView = 1,
+    EditView = 2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum OpenStudioView {
-    Playlist,
-    ArrangerMixer,
+    Playlist = 0,
+    ArrangerMixer = 1,
+    EditView = 2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -923,6 +927,25 @@ impl AppState {
     pub fn play(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Playing;
         self.audio_proxy.send(GuiCommand::Play);
+
+        if self.mode == AppMode::OpenLive {
+            let any_slot_playing = self.matrix_state.grid.iter().any(|row| {
+                row.iter().any(|s| s.state == matrix::SlotState::Playing)
+            });
+            if !any_slot_playing {
+                if let Some((t_idx, s_idx)) = self.matrix_state.selected_slot {
+                    if self
+                        .matrix_state
+                        .grid
+                        .get(t_idx)
+                        .and_then(|row| row.get(s_idx))
+                        .map_or(false, |slot| slot.clip.is_some())
+                    {
+                        matrix::trigger_pad(&mut self.matrix_state, &self.audio_proxy, t_idx, s_idx);
+                    }
+                }
+            }
+        }
     }
 
     pub fn pause(&mut self) {
@@ -933,6 +956,9 @@ impl AppState {
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
+        self.playlist_state.playhead_tick = 0;
+        self.piano_roll_state.playhead_tick = self.piano_roll_state.loop_start_tick;
+        self.piano_roll_state.prev_playhead_tick = self.piano_roll_state.playhead_tick;
         self.audio_proxy.send(GuiCommand::Stop);
     }
 
@@ -980,13 +1006,15 @@ pub fn toggle_central_view(state: &mut AppState) {
         AppMode::OpenLive => {
             state.openlive_view = match state.openlive_view {
                 OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
-                OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+                OpenLiveView::ArrangerView => OpenLiveView::EditView,
+                OpenLiveView::EditView => OpenLiveView::SessionMatrix,
             };
         }
         AppMode::OpenStudio => {
             state.openstudio_view = match state.openstudio_view {
                 OpenStudioView::Playlist => OpenStudioView::ArrangerMixer,
-                OpenStudioView::ArrangerMixer => OpenStudioView::Playlist,
+                OpenStudioView::ArrangerMixer => OpenStudioView::EditView,
+                OpenStudioView::EditView => OpenStudioView::Playlist,
             };
         }
     }
@@ -1040,7 +1068,22 @@ impl HikaruApp {
 
         self.state.transport.sample_count = self.state.position_clock.load(Ordering::Relaxed);
         self.state.playlist_state.ppqn = self.state.transport.ppqn();
-        self.state.playlist_state.playhead_tick = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
+        let raw_tick = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
+        self.state.playlist_state.playhead_tick = raw_tick;
+
+        if self.state.is_playing() {
+            let prs = &mut self.state.piano_roll_state;
+            if prs.loop_enabled && prs.loop_end_tick > prs.loop_start_tick {
+                let loop_len = (prs.loop_end_tick - prs.loop_start_tick).max(240);
+                prs.playhead_tick = if raw_tick >= prs.loop_start_tick {
+                    prs.loop_start_tick + ((raw_tick - prs.loop_start_tick) % loop_len)
+                } else {
+                    raw_tick
+                };
+            } else {
+                prs.playhead_tick = raw_tick;
+            }
+        }
 
         // Smooth peaks
         let raw_master = f32::from_bits(self.state.output_level_bits.load(Ordering::Relaxed));
@@ -1063,14 +1106,18 @@ impl HikaruApp {
 
         self.state.sync_wavetables_to_engine();
 
-        let piano_tracks = self.state.tracks().clone();
-        let engine_tr = self.state.selected_track_index.saturating_sub(1);
-        piano_roll::trigger_playhead_notes(
-            &mut self.state.piano_roll_state,
-            &piano_tracks,
-            engine_tr,
-            &self.state.audio_proxy,
-        );
+        if !self.state.is_playing() {
+            let piano_tracks = self.state.tracks().clone();
+            let engine_tr = self.state.selected_track_index.saturating_sub(1);
+            piano_roll::trigger_playhead_notes(
+                &mut self.state.piano_roll_state,
+                &piano_tracks,
+                engine_tr,
+                &self.state.audio_proxy,
+            );
+        } else {
+            self.state.piano_roll_state.prev_playhead_tick = self.state.piano_roll_state.playhead_tick;
+        }
 
         if self.state.show_piano_roll {
             let needs_frame = piano_roll::sync_frame(&mut self.state.piano_roll_state);
@@ -1144,14 +1191,27 @@ impl eframe::App for HikaruApp {
         }
 
         // 4. BOTTOM DOCK PANELS: Clip Editor / Piano Roll / DSP Rack / Mix Panel
-        let has_dock = self.state.clip_editor.show_editor
-            || self.state.show_piano_roll
-            || self.state.show_dsp_rack
-            || self.state.panel_layout.show_mixer;
+        let is_edit_view = match self.state.mode {
+            AppMode::OpenLive => self.state.openlive_view == OpenLiveView::EditView,
+            AppMode::OpenStudio => self.state.openstudio_view == OpenStudioView::EditView,
+        };
+
+        let has_dock = if is_edit_view {
+            // En vista EDIT (1:1 Bitwig Studio), el dock inferior se activa exclusivamente
+            // al seleccionar Show Device Panel o Show Mixer Panel en el footer.
+            self.state.show_dsp_rack || self.state.panel_layout.show_mixer
+        } else {
+            self.state.clip_editor.show_editor
+                || self.state.show_piano_roll
+                || self.state.show_dsp_rack
+                || self.state.panel_layout.show_mixer
+        };
 
         if has_dock {
             let dock_h = if self.state.show_dsp_rack {
                 dsp_rack::RACK_HEIGHT + 6.0
+            } else if self.state.panel_layout.show_mixer {
+                self.state.bottom_mixer_height.max(260.0)
             } else if self.state.show_piano_roll {
                 self.state.clip_editor.editor_height.max(260.0)
             } else if self.state.clip_editor.show_editor {
@@ -1164,14 +1224,14 @@ impl eframe::App for HikaruApp {
                 .exact_height(dock_h)
                 .frame(egui::Frame::NONE.fill(theme::DAW_BG_LAYER_1).stroke(egui::Stroke::new(1.0_f32, theme::DAW_BORDER_SUBTLE)))
                 .show(ctx, |ui| {
-                    if self.state.clip_editor.show_editor {
-                        detail_editor_panel::render(ui, &mut self.state);
-                    } else if self.state.show_piano_roll {
-                        piano_roll::render(ui, &mut self.state);
-                    } else if self.state.show_dsp_rack {
+                    if self.state.show_dsp_rack {
                         dsp_rack::render(ui, &mut self.state);
                     } else if self.state.panel_layout.show_mixer {
                         mixer::render_bottom_panel(ui, &mut self.state);
+                    } else if self.state.show_piano_roll {
+                        piano_roll::render(ui, &mut self.state);
+                    } else if self.state.clip_editor.show_editor {
+                        detail_editor_panel::render(ui, &mut self.state);
                     }
                 });
         }
@@ -1184,10 +1244,16 @@ impl eframe::App for HikaruApp {
                     AppMode::OpenLive => match self.state.openlive_view {
                         OpenLiveView::SessionMatrix => matrix::render(ui, &mut self.state),
                         OpenLiveView::ArrangerView => arranger_view::render(ui, &mut self.state),
+                        OpenLiveView::EditView => {
+                            piano_roll::render(ui, &mut self.state);
+                        }
                     },
                     AppMode::OpenStudio => match self.state.openstudio_view {
                         OpenStudioView::Playlist => playlist::render(ui, &mut self.state),
                         OpenStudioView::ArrangerMixer => arranger_view::render(ui, &mut self.state),
+                        OpenStudioView::EditView => {
+                            piano_roll::render(ui, &mut self.state);
+                        }
                     },
                 }
             });

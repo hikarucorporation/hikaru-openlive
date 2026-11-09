@@ -317,6 +317,7 @@ pub fn apply(state: &mut AppState, project: &OpenLiveProject, base_dir: Option<&
 fn openlive_view_from_u8(v: u8) -> OpenLiveView {
     match v {
         1 => OpenLiveView::ArrangerView,
+        2 => OpenLiveView::EditView,
         _ => OpenLiveView::SessionMatrix,
     }
 }

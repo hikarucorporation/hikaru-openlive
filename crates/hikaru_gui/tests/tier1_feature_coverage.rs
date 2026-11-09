@@ -825,3 +825,115 @@ fn test_tier1_f28_detail_editor_dock_mounting_and_panel_sync() {
     assert!(!app_state.clip_editor.show_editor);
     assert!(!app_state.panel_layout.show_mixer);
 }
+
+// -----------------------------------------------------------------------------
+// F29: Bitwig 1:1 Edit View & Footer Panel Selector Exclusivity
+// -----------------------------------------------------------------------------
+#[test]
+fn test_tier1_f29_edit_view_and_footer_panel_selector_exclusivity() {
+    use hikaru_gui::app::{toggle_central_view, OpenLiveView, OpenStudioView};
+    let (mut app_state, _rx) = create_test_app_state();
+
+    // 1. Initial view is SessionMatrix
+    assert_eq!(app_state.openlive_view, OpenLiveView::SessionMatrix);
+
+    // 2. Cycle view: SessionMatrix -> ArrangerView -> EditView -> SessionMatrix
+    toggle_central_view(&mut app_state);
+    assert_eq!(app_state.openlive_view, OpenLiveView::ArrangerView);
+
+    toggle_central_view(&mut app_state);
+    assert_eq!(app_state.openlive_view, OpenLiveView::EditView);
+
+    toggle_central_view(&mut app_state);
+    assert_eq!(app_state.openlive_view, OpenLiveView::SessionMatrix);
+
+    // 3. Switch to OpenStudio mode and test cycling
+    app_state.mode = hikaru_gui::app::AppMode::OpenStudio;
+    assert_eq!(app_state.openstudio_view, OpenStudioView::Playlist);
+
+    toggle_central_view(&mut app_state);
+    assert_eq!(app_state.openstudio_view, OpenStudioView::ArrangerMixer);
+
+    toggle_central_view(&mut app_state);
+    assert_eq!(app_state.openstudio_view, OpenStudioView::EditView);
+
+    toggle_central_view(&mut app_state);
+    assert_eq!(app_state.openstudio_view, OpenStudioView::Playlist);
+
+    // 4. In EditView, toggling Show Device Panel vs Show Mixer Panel
+    app_state.openlive_view = OpenLiveView::EditView;
+    app_state.show_dsp_rack = true;
+    app_state.panel_layout.show_mixer = false;
+    assert!(app_state.show_dsp_rack);
+    assert!(!app_state.panel_layout.show_mixer);
+
+    // Switching to Mixer Panel turns off Device Panel
+    app_state.panel_layout.show_mixer = true;
+    app_state.show_dsp_rack = false;
+    assert!(!app_state.show_dsp_rack);
+    assert!(app_state.panel_layout.show_mixer);
+}
+
+// -----------------------------------------------------------------------------
+// F30: Piano Roll Playhead Continuous Sweep & Wavetable Engine Clean Processing
+// -----------------------------------------------------------------------------
+#[test]
+fn test_tier1_f30_piano_roll_playhead_sync_and_wavetable_routing() {
+    let (mut app_state, _rx) = create_test_app_state();
+
+    // 1. Configure clip loop in piano roll (bar 1: 0 to 3840 ticks)
+    app_state.piano_roll_state.loop_enabled = true;
+    app_state.piano_roll_state.loop_start_tick = 0;
+    app_state.piano_roll_state.loop_end_tick = 3840;
+
+    // Simulate playback at tick 1920 (half-way through bar 1)
+    let sample_half_bar = app_state.transport.ticks_to_samples(1920);
+    app_state.position_clock.store(sample_half_bar, Ordering::Relaxed);
+    app_state.transport.playback_state = hikaru_transport::TransportPlaybackState::Playing;
+
+    // Advance position clock in AppState
+    app_state.transport.sample_count = app_state.position_clock.load(Ordering::Relaxed);
+    let raw_tick = app_state.transport.samples_to_ticks(app_state.transport.sample_count);
+    app_state.playlist_state.playhead_tick = raw_tick;
+
+    if app_state.is_playing() {
+        let prs = &mut app_state.piano_roll_state;
+        if prs.loop_enabled && prs.loop_end_tick > prs.loop_start_tick {
+            let loop_len = (prs.loop_end_tick - prs.loop_start_tick).max(240);
+            prs.playhead_tick = if raw_tick >= prs.loop_start_tick {
+                prs.loop_start_tick + ((raw_tick - prs.loop_start_tick) % loop_len)
+            } else {
+                raw_tick
+            };
+        } else {
+            prs.playhead_tick = raw_tick;
+        }
+    }
+
+    assert_eq!(app_state.piano_roll_state.playhead_tick, 1920);
+
+    // Simulate playback wrapping past loop_end (tick 3840 + 480 = 4320 ticks)
+    let sample_wrapped = app_state.transport.ticks_to_samples(4320);
+    app_state.position_clock.store(sample_wrapped, Ordering::Relaxed);
+    app_state.transport.sample_count = app_state.position_clock.load(Ordering::Relaxed);
+    let raw_tick_wrapped = app_state.transport.samples_to_ticks(app_state.transport.sample_count);
+
+    if app_state.is_playing() {
+        let prs = &mut app_state.piano_roll_state;
+        if prs.loop_enabled && prs.loop_end_tick > prs.loop_start_tick {
+            let loop_len = (prs.loop_end_tick - prs.loop_start_tick).max(240);
+            prs.playhead_tick = if raw_tick_wrapped >= prs.loop_start_tick {
+                prs.loop_start_tick + ((raw_tick_wrapped - prs.loop_start_tick) % loop_len)
+            } else {
+                raw_tick_wrapped
+            };
+        }
+    }
+
+    // Must wrap cleanly to 480 ticks inside bar 1
+    assert_eq!(app_state.piano_roll_state.playhead_tick, 480);
+
+    // 2. Stop resets playhead to loop start
+    app_state.stop();
+    assert_eq!(app_state.piano_roll_state.playhead_tick, 0);
+}

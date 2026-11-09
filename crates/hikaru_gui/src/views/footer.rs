@@ -28,7 +28,7 @@ fn draw_footer_sep(ui: &mut Ui) {
 }
 
 pub fn render(ui: &mut Ui, state: &mut AppState) {
-    let show_clip_editor = state.clip_editor.show_editor;
+    let _show_clip_editor = state.clip_editor.show_editor;
     let show_piano_roll = state.show_piano_roll;
     let show_dsp_rack = state.show_dsp_rack;
     let show_explorer = state.show_explorer;
@@ -43,19 +43,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let context_cues = state.footer_context_cues.clone();
     let active_mods = state.active_modifiers;
 
-    let active_tab = if show_clip_editor {
-        StatusViewTab::Edit
-    } else {
-        match active_mode {
-            AppMode::OpenLive => match openlive_view {
-                OpenLiveView::SessionMatrix => StatusViewTab::Arrange,
-                OpenLiveView::ArrangerView => StatusViewTab::Mix,
-            },
-            AppMode::OpenStudio => match openstudio_view {
-                OpenStudioView::Playlist => StatusViewTab::Arrange,
-                OpenStudioView::ArrangerMixer => StatusViewTab::Mix,
-            },
-        }
+    let active_tab = match active_mode {
+        AppMode::OpenLive => match openlive_view {
+            OpenLiveView::SessionMatrix => StatusViewTab::Arrange,
+            OpenLiveView::ArrangerView => StatusViewTab::Mix,
+            OpenLiveView::EditView => StatusViewTab::Edit,
+        },
+        AppMode::OpenStudio => match openstudio_view {
+            OpenStudioView::Playlist => StatusViewTab::Arrange,
+            OpenStudioView::ArrangerMixer => StatusViewTab::Mix,
+            OpenStudioView::EditView => StatusViewTab::Edit,
+        },
     };
 
     let display_cues: Vec<(String, String)> = if !context_cues.is_empty() {
@@ -134,84 +132,129 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     state.clip_editor.show_editor = false;
                 }
                 if text_tab(ui, "EDIT", StatusViewTab::Edit, 30.0) {
-                    state.clip_editor.show_editor = !state.clip_editor.show_editor;
-                    if state.clip_editor.show_editor {
-                        state.show_dsp_rack = false;
-                        state.show_piano_roll = false;
-                    }
+                    state.openlive_view = OpenLiveView::EditView;
+                    state.openstudio_view = OpenStudioView::EditView;
+                    state.clip_editor.show_editor = false;
                 }
 
                 draw_footer_sep(ui);
 
-                // 3. Los 4 selectores icónicos inferiores de Bitwig: Note Editor | Automation | Device Panel | Mixer
-                if flat_icon_toggle(
-                    ui,
-                    vec2(22.0, 20.0),
-                    show_piano_roll,
-                    BW_ACCENT_ORANGE,
-                    inactive_fg,
-                    |p, r, fg| icons::paint_note_editor(p, r, fg),
-                )
-                .on_hover_text("Toggle Note Editor Panel")
-                .clicked()
-                {
-                    state.show_piano_roll = !state.show_piano_roll;
-                    if state.show_piano_roll {
-                        state.show_dsp_rack = false;
-                        state.clip_editor.show_editor = false;
-                        state.panel_layout.show_mixer = false;
+                // 3. Selectores de panel inferior:
+                // En pestaña EDIT estilo 1:1 Bitwig Studio, solamente están activos los dos iconitos:
+                // Show Device Panel y Show Mixer Panel.
+                // En pestañas ARRANGE y MIX se muestran los 4 selectores: Note Editor, Automation, Device Panel, Mixer.
+                if active_tab == StatusViewTab::Edit {
+                    let dev_resp = flat_icon_toggle(
+                        ui,
+                        vec2(22.0, 20.0),
+                        show_dsp_rack,
+                        BW_ACCENT_ORANGE,
+                        inactive_fg,
+                        |p, r, fg| icons::paint_device_box(p, r, fg, show_dsp_rack),
+                    );
+                    let dev_resp = dev_resp.on_hover_text("Show Device Panel");
+                    if dev_resp.hovered() {
+                        state.footer_context_help = Some(("CLICK".into(), "Show Device Panel".into()));
                     }
-                }
-
-                if flat_icon_toggle(
-                    ui,
-                    vec2(22.0, 20.0),
-                    show_automation,
-                    BW_ACCENT_ORANGE,
-                    inactive_fg,
-                    |p, r, fg| icons::paint_automation_nodes(p, r, fg, false),
-                )
-                .on_hover_text("Toggle Automation Lane")
-                .clicked()
-                {
-                    state.panel_layout.show_automation = !state.panel_layout.show_automation;
-                }
-
-                if flat_icon_toggle(
-                    ui,
-                    vec2(22.0, 20.0),
-                    show_dsp_rack,
-                    BW_ACCENT_ORANGE,
-                    inactive_fg,
-                    |p, r, fg| icons::paint_device_box(p, r, fg, show_dsp_rack),
-                )
-                .on_hover_text("Toggle Device Panel (F10)")
-                .clicked()
-                {
-                    state.show_dsp_rack = !state.show_dsp_rack;
-                    if state.show_dsp_rack {
-                        state.show_piano_roll = false;
-                        state.clip_editor.show_editor = false;
-                        state.panel_layout.show_mixer = false;
+                    if dev_resp.clicked() {
+                        state.show_dsp_rack = !state.show_dsp_rack;
+                        if state.show_dsp_rack {
+                            state.panel_layout.show_mixer = false;
+                            state.show_piano_roll = false;
+                            state.clip_editor.show_editor = false;
+                        }
                     }
-                }
 
-                if flat_icon_toggle(
-                    ui,
-                    vec2(22.0, 20.0),
-                    show_bottom_mixer,
-                    BW_ACCENT_ORANGE,
-                    inactive_fg,
-                    |p, r, fg| icons::paint_mixer_faders(p, r, fg),
-                )
-                .on_hover_text("Toggle Sub-Mixer Panel")
-                .clicked()
-                {
-                    state.panel_layout.show_mixer = !state.panel_layout.show_mixer;
-                    if state.panel_layout.show_mixer {
-                        state.show_dsp_rack = false;
-                        state.show_piano_roll = false;
-                        state.clip_editor.show_editor = false;
+                    let mix_resp = flat_icon_toggle(
+                        ui,
+                        vec2(22.0, 20.0),
+                        show_bottom_mixer,
+                        BW_ACCENT_ORANGE,
+                        inactive_fg,
+                        |p, r, fg| icons::paint_mixer_faders(p, r, fg),
+                    );
+                    let mix_resp = mix_resp.on_hover_text("Show Mixer Panel");
+                    if mix_resp.hovered() {
+                        state.footer_context_help = Some(("CLICK".into(), "Show Mixer Panel".into()));
+                    }
+                    if mix_resp.clicked() {
+                        state.panel_layout.show_mixer = !state.panel_layout.show_mixer;
+                        if state.panel_layout.show_mixer {
+                            state.show_dsp_rack = false;
+                            state.show_piano_roll = false;
+                            state.clip_editor.show_editor = false;
+                        }
+                    }
+                } else {
+                    if flat_icon_toggle(
+                        ui,
+                        vec2(22.0, 20.0),
+                        show_piano_roll,
+                        BW_ACCENT_ORANGE,
+                        inactive_fg,
+                        |p, r, fg| icons::paint_note_editor(p, r, fg),
+                    )
+                    .on_hover_text("Toggle Note Editor Panel")
+                    .clicked()
+                    {
+                        state.show_piano_roll = !state.show_piano_roll;
+                        if state.show_piano_roll {
+                            state.show_dsp_rack = false;
+                            state.clip_editor.show_editor = false;
+                            state.panel_layout.show_mixer = false;
+                        }
+                    }
+
+                    if flat_icon_toggle(
+                        ui,
+                        vec2(22.0, 20.0),
+                        show_automation,
+                        BW_ACCENT_ORANGE,
+                        inactive_fg,
+                        |p, r, fg| icons::paint_automation_nodes(p, r, fg, false),
+                    )
+                    .on_hover_text("Toggle Automation Lane")
+                    .clicked()
+                    {
+                        state.panel_layout.show_automation = !state.panel_layout.show_automation;
+                    }
+
+                    if flat_icon_toggle(
+                        ui,
+                        vec2(22.0, 20.0),
+                        show_dsp_rack,
+                        BW_ACCENT_ORANGE,
+                        inactive_fg,
+                        |p, r, fg| icons::paint_device_box(p, r, fg, show_dsp_rack),
+                    )
+                    .on_hover_text("Toggle Device Panel (F10)")
+                    .clicked()
+                    {
+                        state.show_dsp_rack = !state.show_dsp_rack;
+                        if state.show_dsp_rack {
+                            state.show_piano_roll = false;
+                            state.clip_editor.show_editor = false;
+                            state.panel_layout.show_mixer = false;
+                        }
+                    }
+
+                    if flat_icon_toggle(
+                        ui,
+                        vec2(22.0, 20.0),
+                        show_bottom_mixer,
+                        BW_ACCENT_ORANGE,
+                        inactive_fg,
+                        |p, r, fg| icons::paint_mixer_faders(p, r, fg),
+                    )
+                    .on_hover_text("Toggle Sub-Mixer Panel")
+                    .clicked()
+                    {
+                        state.panel_layout.show_mixer = !state.panel_layout.show_mixer;
+                        if state.panel_layout.show_mixer {
+                            state.show_dsp_rack = false;
+                            state.show_piano_roll = false;
+                            state.clip_editor.show_editor = false;
+                        }
                     }
                 }
 

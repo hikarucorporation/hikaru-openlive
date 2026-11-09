@@ -77,6 +77,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 state.openlive_view = OpenLiveView::ArrangerView;
                 ui.close_menu();
             }
+            if ui.button("Edit View (Tab)").clicked() {
+                state.mode = AppMode::OpenLive;
+                state.openlive_view = OpenLiveView::EditView;
+                ui.close_menu();
+            }
             if ui.button("Playlist / Timeline").clicked() {
                 state.mode = AppMode::OpenStudio;
                 state.openstudio_view = OpenStudioView::Playlist;
@@ -88,6 +93,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     state.openlive_view = match state.openlive_view {
                         OpenLiveView::SessionMatrix => OpenLiveView::ArrangerView,
                         OpenLiveView::ArrangerView => OpenLiveView::SessionMatrix,
+                        OpenLiveView::EditView => OpenLiveView::SessionMatrix,
                     };
                 }
                 ui.close_menu();

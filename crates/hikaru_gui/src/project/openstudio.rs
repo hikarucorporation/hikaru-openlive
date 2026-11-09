@@ -220,6 +220,7 @@ pub fn apply(state: &mut AppState, project: &OpenStudioProject, base_dir: Option
 fn openstudio_view_from_u8(v: u8) -> OpenStudioView {
     match v {
         1 => OpenStudioView::ArrangerMixer,
+        2 => OpenStudioView::EditView,
         _ => OpenStudioView::Playlist,
     }
 }
