@@ -3032,6 +3032,25 @@ impl<'a> AudioEngine<'a> {
             self.midi_clips.push(MidiClipInstance::new(track_index, scene_index, notes));
         }
     }
+
+    pub fn set_midi_clip_loop(
+        &mut self,
+        track_index: usize,
+        scene_index: usize,
+        loop_start_ticks: u64,
+        loop_end_ticks: u64,
+    ) {
+        if let Some(clip) = self
+            .midi_clips
+            .iter_mut()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            clip.clip_loop_start_ticks = loop_start_ticks;
+            clip.clip_loop_end_ticks = loop_end_ticks.max(loop_start_ticks + 240);
+            let max_tick = clip.notes.iter().map(|n| n.end_tick()).max().unwrap_or(clip.clip_loop_end_ticks);
+            clip.duration_ticks = clip.clip_loop_end_ticks.max(max_tick);
+        }
+    }
 }
 
 #[cfg(test)]

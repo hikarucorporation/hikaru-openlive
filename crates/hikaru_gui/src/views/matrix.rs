@@ -568,18 +568,25 @@ pub(crate) fn sync_midi_clip(
     track_idx: usize,
     scene_idx: usize,
 ) {
-    if let Some(ClipData::Midi { notes }) = state
+    if let Some(clip) = state
         .grid
         .get(track_idx)
         .and_then(|row| row.get(scene_idx))
         .and_then(|slot| slot.clip.as_ref())
-        .map(|clip| &clip.content)
     {
-        audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
-            track_idx,
-            scene_idx,
-            notes: notes.clone(),
-        });
+        if let ClipData::Midi { notes } = &clip.content {
+            audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+                track_idx,
+                scene_idx,
+                notes: notes.clone(),
+            });
+            audio_proxy.send(GuiCommand::SetMidiClipLoop {
+                track_idx,
+                scene_idx,
+                loop_start_ticks: clip.loop_start,
+                loop_end_ticks: clip.loop_end.max(clip.loop_start + 240),
+            });
+        }
     }
 }
 
@@ -828,7 +835,7 @@ pub fn create_empty_midi_clip(
     let name = format!("MIDI Clip {}", new_id);
     let mut local_state = PlaylistState::default();
     local_state.zoom_x = state.editor_zoom_x;
-    let total_ticks = 3840u64; // 1 compás (4 beats × 960 ticks)
+    let total_ticks = 3840u64 * 4; // 4 compases por defecto (16 beats × 960 ticks)
     let dur = (total_ticks as f64 / 960.0) * (60.0 / 120.0);
 
     state.grid[track_idx][scene_idx] = MatrixSlot {

@@ -124,6 +124,12 @@ pub enum GuiCommand {
         scene_idx: usize,
         notes: Vec<(u64, u8, u8, u32)>,
     },
+    SetMidiClipLoop {
+        track_idx: usize,
+        scene_idx: usize,
+        loop_start_ticks: u64,
+        loop_end_ticks: u64,
+    },
 
     SyncPlaylistClips { 
         clips: Vec<AudioClipData> 

@@ -80,12 +80,14 @@ pub struct PianoRollState {
     pub loop_end_tick: u64,
     pub loop_drag_handle: SelectionDragHandle,
     pub loop_drag_orig_ticks: (u64, u64),
+    pub loop_drag_origin_pointer: Option<Pos2>,
     pub note_resize_active: bool,
     pub note_resize_handle: SelectionDragHandle,
     pub note_resize_index: Option<usize>,
     pub note_resize_targets: Vec<(usize, u64, u64)>,
     pub note_resize_delta_start: i64,
     pub note_resize_delta_duration: i64,
+    pub note_resize_origin_pointer: Option<Pos2>,
     pub selected_notes: HashSet<usize>,
     pub note_marquee_active: bool,
     pub note_marquee_start: Option<Pos2>,
@@ -136,12 +138,14 @@ impl Default for PianoRollState {
             loop_end_tick: TICKS_PER_BAR,
             loop_drag_handle: SelectionDragHandle::None,
             loop_drag_orig_ticks: (0, TICKS_PER_BAR),
+            loop_drag_origin_pointer: None,
             note_resize_active: false,
             note_resize_handle: SelectionDragHandle::None,
             note_resize_index: None,
             note_resize_targets: Vec::new(),
             note_resize_delta_start: 0,
             note_resize_delta_duration: 0,
+            note_resize_origin_pointer: None,
             selected_notes: HashSet::new(),
             note_marquee_active: false,
             note_marquee_start: None,
@@ -179,12 +183,14 @@ impl PianoRollState {
         self.loop_transport_start_tick = 0;
         self.loop_start_instant = None;
         self.loop_drag_handle = SelectionDragHandle::None;
+        self.loop_drag_origin_pointer = None;
         self.note_resize_active = false;
         self.note_resize_handle = SelectionDragHandle::None;
         self.note_resize_index = None;
         self.note_resize_targets.clear();
         self.note_resize_delta_start = 0;
         self.note_resize_delta_duration = 0;
+        self.note_resize_origin_pointer = None;
         self.note_move_active = false;
         self.note_move_grab_index = None;
         self.note_move_orig.clear();
@@ -506,8 +512,13 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                             })
                             .collect();
                         app.piano_roll_state.loop_start_tick = clip.loop_start;
+                        let clip_loop_end = if clip.loop_end > clip.loop_start {
+                            clip.loop_end
+                        } else {
+                            TICKS_PER_BAR * 4
+                        };
                         app.piano_roll_state.loop_end_tick =
-                            clip.loop_end.max(clip.loop_start + 960);
+                            clip_loop_end.max(clip.loop_start + 960);
                         app.piano_roll_state.notes_source_slot = Some((t_idx, s_idx));
                         app.piano_roll_state.clear_note_selection();
                     }
@@ -660,6 +671,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
 
     // --- TECLADO SHORTCUTS: DELETE / BACKSPACE / CTRL+A / FLECHAS ---
     let mut notes_modified = false;
+    let mut loop_modified = false;
     let delete_pressed =
         ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
     if delete_pressed && !prs.selected_notes.is_empty() {
@@ -702,6 +714,9 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     }
 
     // --- 1. RULER & LOOP HEADER ---
+    let snap_step = prs.grid_snap_ticks.max(1);
+    let drag_origin = ui.input(|i| i.pointer.press_origin()).or(pointer_pos);
+
     let ruler_rect = Rect::from_min_max(
         pos2(content_x, rect.min.y),
         pos2(rect.max.x, content_y),
@@ -750,38 +765,372 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     let loop_s_px = content_x + scroll_x + prs.loop_start_tick as f32 * zoom_x;
     let loop_e_px = content_x + scroll_x + prs.loop_end_tick as f32 * zoom_x;
 
+    let loop_end_handle_rect = Rect::from_min_max(
+        pos2(loop_e_px - 8.0, ruler_rect.min.y),
+        pos2(loop_e_px + 8.0, ruler_rect.max.y),
+    );
+    let loop_start_handle_rect = Rect::from_min_max(
+        pos2(loop_s_px - 8.0, ruler_rect.min.y),
+        pos2(loop_s_px + 8.0, ruler_rect.max.y),
+    );
+    let loop_bar_handle_rect = Rect::from_min_max(
+        pos2((loop_s_px + 8.0).max(content_x), ruler_rect.max.y - 8.0),
+        pos2((loop_e_px - 8.0).min(rect.max.x), ruler_rect.max.y),
+    );
+
+    // Toolbar de longitud rápida en esquina superior derecha
+    let tb_w = 268.0;
+    let tb_rect = Rect::from_min_size(
+        pos2(rect.max.x - tb_w - 6.0, ruler_rect.min.y + 2.0),
+        vec2(tb_w, 20.0),
+    );
+    let can_show_tb = ruler_rect.width() > 390.0;
+
+    let mut is_hovering_end = false;
+    let mut is_hovering_start = false;
+    let mut is_hovering_bar = false;
+
+    if let Some(pos) = pointer_pos {
+        if ruler_rect.contains(pos) && !prs.note_resize_active && !prs.note_move_active && !prs.note_marquee_active {
+            let on_tb = can_show_tb && tb_rect.contains(pos);
+            if !on_tb {
+                if prs.loop_drag_handle == SelectionDragHandle::Right
+                    || (prs.loop_drag_handle == SelectionDragHandle::None && loop_end_handle_rect.contains(pos))
+                {
+                    is_hovering_end = true;
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                } else if prs.loop_drag_handle == SelectionDragHandle::Left
+                    || (prs.loop_drag_handle == SelectionDragHandle::None && loop_start_handle_rect.contains(pos))
+                {
+                    is_hovering_start = true;
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                } else if prs.loop_drag_handle == SelectionDragHandle::Body
+                    || (prs.loop_drag_handle == SelectionDragHandle::None && loop_bar_handle_rect.contains(pos) && (loop_e_px - loop_s_px) > 20.0)
+                {
+                    is_hovering_bar = true;
+                    ui.output_mut(|o| {
+                        o.cursor_icon = if prs.loop_drag_handle == SelectionDragHandle::Body {
+                            CursorIcon::Grabbing
+                        } else {
+                            CursorIcon::Grab
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    // Iniciar arrastre del loop
+    if response.drag_started()
+        && !prs.note_resize_active
+        && !prs.note_move_active
+        && !prs.note_marquee_active
+    {
+        if let Some(orig) = drag_origin {
+            if ruler_rect.contains(orig) {
+                let on_tb = can_show_tb && tb_rect.contains(orig);
+                if !on_tb {
+                    if loop_end_handle_rect.contains(orig) {
+                        prs.loop_drag_handle = SelectionDragHandle::Right;
+                        prs.loop_drag_orig_ticks = (prs.loop_start_tick, prs.loop_end_tick);
+                        prs.loop_drag_origin_pointer = Some(orig);
+                    } else if loop_start_handle_rect.contains(orig) {
+                        prs.loop_drag_handle = SelectionDragHandle::Left;
+                        prs.loop_drag_orig_ticks = (prs.loop_start_tick, prs.loop_end_tick);
+                        prs.loop_drag_origin_pointer = Some(orig);
+                    } else if loop_bar_handle_rect.contains(orig) && (loop_e_px - loop_s_px) > 20.0 {
+                        prs.loop_drag_handle = SelectionDragHandle::Body;
+                        prs.loop_drag_orig_ticks = (prs.loop_start_tick, prs.loop_end_tick);
+                        prs.loop_drag_origin_pointer = Some(orig);
+                    }
+                }
+            }
+        }
+    }
+
+    // Procesar arrastre interactivo del loop
+    if prs.loop_drag_handle != SelectionDragHandle::None && response.dragged() {
+        if let (Some(orig_pos), Some(curr_pos)) = (prs.loop_drag_origin_pointer, pointer_pos) {
+            let delta_px_x = curr_pos.x - orig_pos.x;
+            let delta_ticks_raw = (delta_px_x / zoom_x) as i64;
+            let (orig_start, orig_end) = prs.loop_drag_orig_ticks;
+            let min_ticks = snap_step.max(240);
+
+            match prs.loop_drag_handle {
+                SelectionDragHandle::Right => {
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                    let target_end = (orig_end as i64 + delta_ticks_raw).max(orig_start as i64 + min_ticks as i64) as u64;
+                    let new_end = if shift_held {
+                        target_end
+                    } else {
+                        quantize_tick(target_end, snap_step).max(orig_start + min_ticks)
+                    };
+                    if new_end != prs.loop_end_tick {
+                        prs.loop_end_tick = new_end;
+                        loop_modified = true;
+                    }
+                }
+                SelectionDragHandle::Left => {
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                    let max_start = orig_end.saturating_sub(min_ticks);
+                    let target_start = (orig_start as i64 + delta_ticks_raw).clamp(0, max_start as i64) as u64;
+                    let new_start = if shift_held {
+                        target_start
+                    } else {
+                        quantize_tick(target_start, snap_step).min(max_start)
+                    };
+                    if new_start != prs.loop_start_tick {
+                        prs.loop_start_tick = new_start;
+                        loop_modified = true;
+                    }
+                }
+                SelectionDragHandle::Body => {
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::Grabbing);
+                    let loop_len = orig_end.saturating_sub(orig_start);
+                    let target_start = (orig_start as i64 + delta_ticks_raw).max(0) as u64;
+                    let new_start = if shift_held {
+                        target_start
+                    } else {
+                        quantize_tick(target_start, snap_step)
+                    };
+                    let new_end = new_start + loop_len;
+                    if new_start != prs.loop_start_tick || new_end != prs.loop_end_tick {
+                        prs.loop_start_tick = new_start;
+                        prs.loop_end_tick = new_end;
+                        loop_modified = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Dibujar Región de Loop en Ruler
     if loop_e_px > content_x && loop_s_px < rect.max.x {
+        let bar_col = if is_hovering_bar || prs.loop_drag_handle == SelectionDragHandle::Body {
+            Color32::WHITE
+        } else {
+            track_color
+        };
         let loop_bar_rect = Rect::from_min_max(
             pos2(loop_s_px.max(content_x), ruler_rect.max.y - 4.0),
             pos2(loop_e_px.min(rect.max.x), ruler_rect.max.y),
         );
-        ruler_painter.rect_filled(loop_bar_rect, 0.0, track_color);
+        ruler_painter.rect_filled(loop_bar_rect, 0.0, bar_col);
 
         // Banderas triangulares de inicio (▶) y fin (◀)
         if loop_s_px >= content_x - 10.0 && loop_s_px <= rect.max.x + 10.0 {
+            let flag_col = if is_hovering_start || prs.loop_drag_handle == SelectionDragHandle::Left {
+                Color32::WHITE
+            } else {
+                track_color
+            };
             let tri_s = [
-                pos2(loop_s_px, ruler_rect.max.y - 12.0),
-                pos2(loop_s_px + 8.0, ruler_rect.max.y - 6.0),
+                pos2(loop_s_px, ruler_rect.max.y - 13.0),
+                pos2(loop_s_px + 9.0, ruler_rect.max.y - 6.5),
                 pos2(loop_s_px, ruler_rect.max.y),
             ];
             ruler_painter.add(egui::epaint::PathShape::convex_polygon(
                 tri_s.to_vec(),
-                track_color,
+                flag_col,
                 Stroke::NONE,
             ));
+            if is_hovering_start || prs.loop_drag_handle == SelectionDragHandle::Left {
+                painter.line_segment(
+                    [pos2(loop_s_px, ruler_rect.min.y), pos2(loop_s_px, content_y + grid_h)],
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 160)),
+                );
+            }
         }
 
         if loop_e_px >= content_x - 10.0 && loop_e_px <= rect.max.x + 10.0 {
+            let flag_col = if is_hovering_end || prs.loop_drag_handle == SelectionDragHandle::Right {
+                Color32::WHITE
+            } else {
+                track_color
+            };
             let tri_e = [
-                pos2(loop_e_px, ruler_rect.max.y - 12.0),
-                pos2(loop_e_px - 8.0, ruler_rect.max.y - 6.0),
+                pos2(loop_e_px, ruler_rect.max.y - 13.0),
+                pos2(loop_e_px - 9.0, ruler_rect.max.y - 6.5),
                 pos2(loop_e_px, ruler_rect.max.y),
             ];
             ruler_painter.add(egui::epaint::PathShape::convex_polygon(
                 tri_e.to_vec(),
-                track_color,
+                flag_col,
                 Stroke::NONE,
             ));
+            if is_hovering_end || prs.loop_drag_handle == SelectionDragHandle::Right {
+                painter.line_segment(
+                    [pos2(loop_e_px, ruler_rect.min.y), pos2(loop_e_px, content_y + grid_h)],
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 160)),
+                );
+                let total_bars = prs.loop_end_tick.saturating_sub(prs.loop_start_tick) as f32 / TICKS_PER_BAR as f32;
+                let badge_text = if (total_bars - total_bars.round()).abs() < 0.05 {
+                    format!("{} BARS", total_bars.round() as u64)
+                } else {
+                    format!("{:.2} BARS", total_bars)
+                };
+                let badge_pos = pos2(loop_e_px.clamp(content_x + 35.0, rect.max.x - 45.0), ruler_rect.min.y + 4.0);
+                ruler_painter.rect_filled(
+                    Rect::from_center_size(badge_pos, vec2(54.0, 14.0)),
+                    2.0,
+                    Color32::from_rgb(0x10, 0x11, 0x14),
+                );
+                ruler_painter.text(
+                    badge_pos,
+                    Align2::CENTER_CENTER,
+                    badge_text,
+                    fonts::semibold(8.5),
+                    theme::ACCENT_ORANGE,
+                );
+            }
+        }
+    }
+
+    // Renderizado del Toolbar de Longitud rápida
+    if can_show_tb {
+        ruler_painter.rect_filled(tb_rect, 3.0, Color32::from_rgb(0x18, 0x19, 0x1D));
+        ruler_painter.rect_stroke(
+            tb_rect,
+            3.0,
+            Stroke::new(1.0_f32, Color32::from_rgb(0x35, 0x36, 0x3D)),
+            egui::StrokeKind::Inside,
+        );
+
+        let cur_bars_f = prs.loop_end_tick.saturating_sub(prs.loop_start_tick) as f32 / TICKS_PER_BAR as f32;
+
+        let mut cur_x = tb_rect.min.x + 5.0;
+        ruler_painter.text(
+            pos2(cur_x, tb_rect.center().y),
+            Align2::LEFT_CENTER,
+            "LENGTH",
+            fonts::semibold(8.5),
+            theme::TEXT_MUTED,
+        );
+        cur_x += 44.0;
+
+        let presets: [(u32, &str); 5] = [
+            (1, "1B"),
+            (2, "2B"),
+            (4, "4B"),
+            (8, "8B"),
+            (16, "16B"),
+        ];
+
+        for (bars, label) in presets {
+            let btn_w = 24.0;
+            let btn_rect = Rect::from_min_size(pos2(cur_x, tb_rect.min.y + 2.0), vec2(btn_w, 16.0));
+            cur_x += btn_w + 2.0;
+
+            let is_active = (cur_bars_f - bars as f32).abs() < 0.05;
+            let hovered = pointer_pos.map_or(false, |p| btn_rect.contains(p));
+
+            if hovered && primary_clicked {
+                prs.loop_start_tick = 0;
+                prs.loop_end_tick = (bars as u64) * TICKS_PER_BAR;
+                loop_modified = true;
+            }
+
+            let bg_col = if is_active {
+                theme::ACCENT_ORANGE
+            } else if hovered {
+                Color32::from_rgb(0x38, 0x3A, 0x42)
+            } else {
+                Color32::from_rgb(0x23, 0x25, 0x2B)
+            };
+
+            let text_col = if is_active {
+                Color32::BLACK
+            } else if hovered {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(0xC5, 0xC8, 0xD4)
+            };
+
+            ruler_painter.rect_filled(btn_rect, 2.0, bg_col);
+            ruler_painter.text(
+                btn_rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                fonts::semibold(9.0),
+                text_col,
+            );
+        }
+
+        let div_rect = Rect::from_min_size(pos2(cur_x + 2.0, tb_rect.min.y + 2.0), vec2(22.0, 16.0));
+        let mul_rect = Rect::from_min_size(pos2(cur_x + 26.0, tb_rect.min.y + 2.0), vec2(22.0, 16.0));
+
+        let div_hovered = pointer_pos.map_or(false, |p| div_rect.contains(p));
+        let mul_hovered = pointer_pos.map_or(false, |p| mul_rect.contains(p));
+
+        if div_hovered && primary_clicked {
+            let len = prs.loop_end_tick.saturating_sub(prs.loop_start_tick);
+            if len >= TICKS_PER_BAR * 2 {
+                prs.loop_end_tick = prs.loop_start_tick + (len / 2);
+                loop_modified = true;
+            }
+        }
+        if mul_hovered && primary_clicked {
+            let len = prs.loop_end_tick.saturating_sub(prs.loop_start_tick).max(TICKS_PER_BAR);
+            prs.loop_end_tick = prs.loop_start_tick + len * 2;
+            loop_modified = true;
+        }
+
+        ruler_painter.rect_filled(
+            div_rect,
+            2.0,
+            if div_hovered {
+                Color32::from_rgb(0x38, 0x3A, 0x42)
+            } else {
+                Color32::from_rgb(0x23, 0x25, 0x2B)
+            },
+        );
+        ruler_painter.text(
+            div_rect.center(),
+            Align2::CENTER_CENTER,
+            "÷2",
+            fonts::semibold(9.0),
+            if div_hovered {
+                Color32::WHITE
+            } else {
+                theme::TEXT_MUTED
+            },
+        );
+
+        ruler_painter.rect_filled(
+            mul_rect,
+            2.0,
+            if mul_hovered {
+                Color32::from_rgb(0x38, 0x3A, 0x42)
+            } else {
+                Color32::from_rgb(0x23, 0x25, 0x2B)
+            },
+        );
+        ruler_painter.text(
+            mul_rect.center(),
+            Align2::CENTER_CENTER,
+            "×2",
+            fonts::semibold(9.0),
+            if mul_hovered {
+                Color32::WHITE
+            } else {
+                theme::TEXT_MUTED
+            },
+        );
+    }
+
+    // Clic en regla vacía: reposiciona el cabezal de reproducción
+    if primary_clicked {
+        if let Some(pos) = pointer_pos {
+            if ruler_rect.contains(pos)
+                && !(can_show_tb && tb_rect.contains(pos))
+                && !loop_end_handle_rect.contains(pos)
+                && !loop_start_handle_rect.contains(pos)
+                && !loop_bar_handle_rect.contains(pos)
+            {
+                let clicked_tick_raw = ((pos.x - content_x - scroll_x) / zoom_x).max(0.0) as u64;
+                prs.playhead_tick = quantize_tick(clicked_tick_raw, snap_step);
+            }
         }
     }
 
@@ -1164,10 +1513,9 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     let mut clicked_note_index: Option<usize> = None;
     let mut double_clicked_note_index: Option<usize> = None;
     let mut resize_drag_detected: Option<(usize, SelectionDragHandle)> = None;
+    let mut move_drag_detected: Option<usize> = None;
 
-    let snap_step = prs.grid_snap_ticks.max(1);
-
-    // Dibujar cada nota MIDI
+    // Dibujar cada nota MIDI y evaluar hit testing
     for (idx, note) in prs.notes.iter().enumerate() {
         let row = (MIDI_KEY_COUNT - 1 - note.pitch as u32) as f32;
         let nx = content_x + scroll_x + note.start_tick as f32 * zoom_x;
@@ -1216,26 +1564,83 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             );
         }
 
-        // Hit-test interactivo
-        if let Some(pos) = pointer_pos {
-            if note_rect.contains(pos) {
-                let is_left_edge = pos.x <= note_rect.min.x + 5.0;
-                let is_right_edge = pos.x >= note_rect.max.x - 5.0;
+        // Zona interactiva de borde para estirar notas (mínimo 5px, máx 10px)
+        let edge_margin = (nw * 0.35).clamp(5.0, 10.0);
+        let hit_rect = Rect::from_min_max(
+            pos2(note_rect.min.x - 3.0, note_rect.min.y),
+            pos2(note_rect.max.x + 3.0, note_rect.max.y),
+        );
 
-                if is_left_edge || is_right_edge {
+        // Highlight visual del borde cuando se hace hover o durante resize activo
+        if prs.note_resize_active && is_selected {
+            if prs.note_resize_handle == SelectionDragHandle::Right {
+                let handle_rect = Rect::from_min_max(
+                    pos2(note_rect.max.x - 3.0, note_rect.min.y),
+                    pos2(note_rect.max.x, note_rect.max.y),
+                );
+                grid_painter.rect_filled(handle_rect, 1.5, Color32::WHITE);
+            } else if prs.note_resize_handle == SelectionDragHandle::Left {
+                let handle_rect = Rect::from_min_max(
+                    pos2(note_rect.min.x, note_rect.min.y),
+                    pos2(note_rect.min.x + 3.0, note_rect.max.y),
+                );
+                grid_painter.rect_filled(handle_rect, 1.5, Color32::WHITE);
+            }
+        } else if let Some(pos) = pointer_pos {
+            if hit_rect.contains(pos) && !prs.note_resize_active && !prs.note_move_active && !prs.note_marquee_active {
+                let is_left_edge = pos.x <= note_rect.min.x + edge_margin;
+                let is_right_edge = pos.x >= note_rect.max.x - edge_margin;
+
+                if is_right_edge {
                     ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
-                    if response.drag_started() {
-                        let handle = if is_left_edge {
+                    let handle_rect = Rect::from_min_max(
+                        pos2(note_rect.max.x - 3.0, note_rect.min.y),
+                        pos2(note_rect.max.x, note_rect.max.y),
+                    );
+                    grid_painter.rect_filled(handle_rect, 1.5, Color32::WHITE);
+                } else if is_left_edge {
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+                    let handle_rect = Rect::from_min_max(
+                        pos2(note_rect.min.x, note_rect.min.y),
+                        pos2(note_rect.min.x + 3.0, note_rect.max.y),
+                    );
+                    grid_painter.rect_filled(handle_rect, 1.5, Color32::WHITE);
+                } else {
+                    ui.output_mut(|o| o.cursor_icon = CursorIcon::Grab);
+                }
+            }
+        }
+
+        // Detectar inicio de arrastre usando el punto de origen del clic
+        if response.drag_started() {
+            if let Some(pos) = drag_origin {
+                if hit_rect.contains(pos) {
+                    let is_left_edge = pos.x <= note_rect.min.x + edge_margin;
+                    let is_right_edge = pos.x >= note_rect.max.x - edge_margin;
+
+                    if is_left_edge || is_right_edge {
+                        let handle = if is_left_edge && is_right_edge {
+                            if pos.x >= note_rect.center().x {
+                                SelectionDragHandle::Right
+                            } else {
+                                SelectionDragHandle::Left
+                            }
+                        } else if is_left_edge {
                             SelectionDragHandle::Left
                         } else {
                             SelectionDragHandle::Right
                         };
                         resize_drag_detected = Some((idx, handle));
+                    } else {
+                        move_drag_detected = Some(idx);
                     }
-                } else {
-                    ui.output_mut(|o| o.cursor_icon = CursorIcon::Grab);
                 }
+            }
+        }
 
+        // Detectar clic o doble clic (sin arrastre)
+        if let Some(pos) = pointer_pos {
+            if hit_rect.contains(pos) {
                 if primary_clicked {
                     clicked_note_index = Some(idx);
                 }
@@ -1251,6 +1656,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         prs.note_resize_active = true;
         prs.note_resize_handle = handle;
         prs.note_resize_index = Some(idx);
+        prs.note_resize_origin_pointer = drag_origin;
         if !prs.selected_notes.contains(&idx) {
             prs.selected_notes.clear();
             prs.selected_notes.insert(idx);
@@ -1263,6 +1669,22 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                     .get(i)
                     .map(|n| (i, n.start_tick, n.duration_ticks))
             })
+            .collect();
+    }
+
+    // Iniciar Arrastre/Movimiento de Nota
+    if let Some(idx) = move_drag_detected {
+        prs.note_move_active = true;
+        prs.note_move_grab_index = Some(idx);
+        prs.note_move_origin_pointer = drag_origin;
+        if !prs.selected_notes.contains(&idx) {
+            prs.selected_notes.clear();
+            prs.selected_notes.insert(idx);
+        }
+        prs.note_move_orig = prs
+            .selected_notes
+            .iter()
+            .filter_map(|&i| prs.notes.get(i).map(|n| (i, n.start_tick, n.pitch)))
             .collect();
     }
 
@@ -1304,6 +1726,13 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         prs.notes.push(new_note);
         prs.notes.sort_by_key(|n| (n.start_tick, n.pitch));
 
+        let note_end = start_tick + snap_step;
+        if note_end > prs.loop_end_tick {
+            let next_bar = ((note_end as f32 / TICKS_PER_BAR as f32).ceil() as u64) * TICKS_PER_BAR;
+            prs.loop_end_tick = next_bar.max(prs.loop_start_tick + snap_step);
+            loop_modified = true;
+        }
+
         let new_idx = prs
             .notes
             .iter()
@@ -1323,21 +1752,14 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         }
     }
 
-    // ARRASTRE DE CUERPO DE NOTAS (Traslado Pitch y Tiempo)
-    if response.drag_started()
-        && !prs.note_resize_active
-        && clicked_note_index.is_some()
-    {
-        prs.note_move_active = true;
-        prs.note_move_grab_index = clicked_note_index;
-        prs.note_move_origin_pointer = pointer_pos;
-        prs.note_move_orig = prs
-            .selected_notes
-            .iter()
-            .filter_map(|&i| prs.notes.get(i).map(|n| (i, n.start_tick, n.pitch)))
-            .collect();
+    // Actualizar icono de cursor durante arrastres activos
+    if prs.note_resize_active {
+        ui.output_mut(|o| o.cursor_icon = CursorIcon::ResizeHorizontal);
+    } else if prs.note_move_active {
+        ui.output_mut(|o| o.cursor_icon = CursorIcon::Grabbing);
     }
 
+    // ARRASTRE DE CUERPO DE NOTAS (Traslado Pitch y Tiempo)
     if prs.note_move_active && response.dragged() {
         if let (Some(orig_pos), Some(curr_pos)) = (prs.note_move_origin_pointer, pointer_pos) {
             let delta_px_x = curr_pos.x - orig_pos.x;
@@ -1347,7 +1769,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             let delta_ticks = if shift_held {
                 delta_ticks_raw
             } else {
-                (delta_ticks_raw / snap_step as i64) * snap_step as i64
+                (delta_ticks_raw as f32 / snap_step as f32).round() as i64 * snap_step as i64
             };
 
             let delta_semitones = -(delta_px_y / key_h).round() as i32;
@@ -1358,50 +1780,67 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                     let new_pitch = (orig_pitch as i32 + delta_semitones).clamp(0, 127) as u8;
                     n.start_tick = new_tick;
                     n.pitch = new_pitch;
+
+                    if n.end_tick() > prs.loop_end_tick {
+                        let next_bar = ((n.end_tick() as f32 / TICKS_PER_BAR as f32).ceil() as u64) * TICKS_PER_BAR;
+                        prs.loop_end_tick = next_bar.max(prs.loop_start_tick + snap_step);
+                        loop_modified = true;
+                    }
                 }
             }
             notes_modified = true;
         }
     }
 
-    // ARRASTRE DE REDIMENSIONAMIENTO (Resize Duración)
+    // ARRASTRE DE REDIMENSIONAMIENTO (Resize Duración desde Bordes)
     if prs.note_resize_active && response.dragged() {
-        let delta_x = ui.input(|i| i.pointer.delta().x);
-        let delta_ticks = (delta_x / zoom_x) as i64;
+        if let (Some(orig_pos), Some(curr_pos)) = (prs.note_resize_origin_pointer, pointer_pos) {
+            let delta_px_x = curr_pos.x - orig_pos.x;
+            let delta_ticks_raw = (delta_px_x / zoom_x) as i64;
 
-        for &(idx, orig_start, orig_dur) in &prs.note_resize_targets {
-            if let Some(n) = prs.notes.get_mut(idx) {
-                if prs.note_resize_handle == SelectionDragHandle::Right {
-                    let new_dur = (orig_dur as i64 + delta_ticks).max(snap_step as i64) as u64;
-                    n.duration_ticks = if shift_held {
-                        new_dur
-                    } else {
-                        quantize_tick(new_dur, snap_step).max(snap_step)
-                    };
-                } else if prs.note_resize_handle == SelectionDragHandle::Left {
-                    let end_tick = orig_start + orig_dur;
-                    let new_start = (orig_start as i64 + delta_ticks).clamp(0, end_tick as i64 - 1) as u64;
-                    n.start_tick = if shift_held {
-                        new_start
-                    } else {
-                        quantize_tick(new_start, snap_step).min(end_tick.saturating_sub(snap_step))
-                    };
-                    n.duration_ticks = end_tick.saturating_sub(n.start_tick).max(1);
+            for &(idx, orig_start, orig_dur) in &prs.note_resize_targets {
+                if let Some(n) = prs.notes.get_mut(idx) {
+                    let orig_end = orig_start + orig_dur;
+                    if prs.note_resize_handle == SelectionDragHandle::Right {
+                        let new_end = if shift_held {
+                            (orig_end as i64 + delta_ticks_raw).max(orig_start as i64 + 1) as u64
+                        } else {
+                            let target_end = (orig_end as i64 + delta_ticks_raw)
+                                .max(orig_start as i64 + snap_step as i64) as u64;
+                            quantize_tick(target_end, snap_step).max(orig_start + snap_step)
+                        };
+                        n.duration_ticks = new_end.saturating_sub(orig_start).max(1);
+
+                        if new_end > prs.loop_end_tick {
+                            let next_bar = ((new_end as f32 / TICKS_PER_BAR as f32).ceil() as u64) * TICKS_PER_BAR;
+                            prs.loop_end_tick = next_bar.max(prs.loop_start_tick + snap_step);
+                            loop_modified = true;
+                        }
+                    } else if prs.note_resize_handle == SelectionDragHandle::Left {
+                        let new_start = if shift_held {
+                            (orig_start as i64 + delta_ticks_raw)
+                                .clamp(0, orig_end.saturating_sub(1) as i64) as u64
+                        } else {
+                            let target_start = (orig_start as i64 + delta_ticks_raw).max(0) as u64;
+                            quantize_tick(target_start, snap_step).min(orig_end.saturating_sub(snap_step))
+                        };
+                        n.start_tick = new_start;
+                        n.duration_ticks = orig_end.saturating_sub(n.start_tick).max(1);
+                    }
                 }
             }
+            notes_modified = true;
         }
-        notes_modified = true;
     }
 
-    // MARQUEE SELECTION (Selección Rectangular)
+    // MARQUEE SELECTION (Selección Rectangular en Espacio Vacío)
     if response.drag_started()
         && !prs.note_resize_active
         && !prs.note_move_active
-        && clicked_note_index.is_none()
-        && grid_rect.contains(pointer_pos.unwrap_or_default())
+        && grid_rect.contains(drag_origin.unwrap_or_default())
     {
         prs.note_marquee_active = true;
-        prs.note_marquee_start = pointer_pos;
+        prs.note_marquee_start = drag_origin;
         prs.note_marquee_current = pointer_pos;
         if !shift_held {
             prs.clear_note_selection();
@@ -1436,11 +1875,26 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
 
     if pointer_released {
         if prs.note_move_active || prs.note_resize_active {
+            let selected_keys: Vec<(u64, u8)> = prs
+                .selected_notes
+                .iter()
+                .filter_map(|&i| prs.notes.get(i).map(|n| (n.start_tick, n.pitch)))
+                .collect();
             prs.notes.sort_by_key(|n| (n.start_tick, n.pitch));
+            prs.selected_notes.clear();
+            for (i, n) in prs.notes.iter().enumerate() {
+                if selected_keys.iter().any(|&(st, p)| st == n.start_tick && p == n.pitch) {
+                    prs.selected_notes.insert(i);
+                }
+            }
         }
         prs.note_move_active = false;
         prs.note_resize_active = false;
         prs.note_marquee_active = false;
+        prs.note_resize_origin_pointer = None;
+        prs.note_move_origin_pointer = None;
+        prs.loop_drag_handle = SelectionDragHandle::None;
+        prs.loop_drag_origin_pointer = None;
     }
 
     // --- 5. CARRIL DE VELOCIDAD (Velocity Lane estilo Bitwig) ---
@@ -1532,19 +1986,24 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     }
 
     // --- 6. GUARDAR CAMBIOS AL CLIP Y SINCRONIZAR AL AUDIO ENGINE ---
-    if notes_modified {
+    if notes_modified || loop_modified {
         if let Some((t_idx, s_idx)) = selected_slot_coord {
-            let updated_notes: Vec<(u64, u8, u8, u32)> = prs
-                .notes
-                .iter()
-                .map(|n| (n.start_tick, n.pitch, n.velocity, n.duration_ticks as u32))
-                .collect();
-
+            let bpm = app.transport.bpm;
             if let Some(slot) = app.matrix_state.slot_mut(t_idx, s_idx) {
                 if let Some(clip) = slot.clip.as_mut() {
-                    clip.content = ClipData::Midi {
-                        notes: updated_notes,
-                    };
+                    clip.loop_start = prs.loop_start_tick;
+                    clip.loop_end = prs.loop_end_tick;
+                    clip.duration_secs = (prs.loop_end_tick as f64 / 960.0) * (60.0 / bpm.max(1.0));
+                    if notes_modified {
+                        let updated_notes: Vec<(u64, u8, u8, u32)> = prs
+                            .notes
+                            .iter()
+                            .map(|n| (n.start_tick, n.pitch, n.velocity, n.duration_ticks as u32))
+                            .collect();
+                        clip.content = ClipData::Midi {
+                            notes: updated_notes,
+                        };
+                    }
                 }
             }
 

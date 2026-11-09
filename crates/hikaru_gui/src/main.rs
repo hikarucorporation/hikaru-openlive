@@ -352,6 +352,12 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     }
                 }
 
+                GuiCommand::SetMidiClipLoop { track_idx, scene_idx, loop_start_ticks, loop_end_ticks } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_midi_clip_loop(track_idx, scene_idx, loop_start_ticks, loop_end_ticks);
+                    }
+                }
+
                 GuiCommand::LoadDmsSample { pad_idx, path } => {
                     if let Ok(mut reader) = hound::WavReader::open(&path) {
                         let spec = reader.spec();
