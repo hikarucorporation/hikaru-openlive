@@ -458,6 +458,7 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub project_dirty: bool,
     pub open_menu: Option<usize>,
+    pub synced_wavetable_fingerprints: [Option<(u64, i8)>; 16],
 }
 
 impl AppState {
@@ -591,6 +592,42 @@ impl AppState {
             project_path: None,
             project_dirty: false,
             open_menu: None,
+            synced_wavetable_fingerprints: [None; 16],
+        }
+    }
+
+    pub fn sync_wavetables_to_engine(&mut self) {
+        let tracks = self.tracks().clone();
+        for (tr_idx, track) in tracks.iter().enumerate() {
+            let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
+            if eng_track >= 16 { continue; }
+
+            let open_wt_slot = track.effects.iter().find(|slot| slot.active && slot.name == "OpenWavetable");
+            if let Some(slot) = open_wt_slot {
+                let pitch_offset = slot.wavetable.octave * 12 + slot.wavetable.pitch;
+                let fp: u64 = (slot.wavetable.frame as u64)
+                    ^ (((slot.wavetable.morph * 10000.0) as u64) << 16)
+                    ^ ((slot.wavetable.table.samples.len() as u64) << 32)
+                    ^ ((slot.wavetable.smooth as u64) << 48)
+                    ^ ((slot.wavetable.table.frames as u64) << 52);
+
+                if self.synced_wavetable_fingerprints[eng_track] != Some((fp, pitch_offset)) {
+                    let samples = slot.wavetable.current_samples();
+                    self.audio_proxy.send(GuiCommand::SetTrackWavetable {
+                        track_idx: eng_track,
+                        samples,
+                        pitch_offset,
+                    });
+                    self.synced_wavetable_fingerprints[eng_track] = Some((fp, pitch_offset));
+                }
+            } else if self.synced_wavetable_fingerprints[eng_track].is_some() {
+                self.audio_proxy.send(GuiCommand::SetTrackWavetable {
+                    track_idx: eng_track,
+                    samples: Vec::new(),
+                    pitch_offset: 0,
+                });
+                self.synced_wavetable_fingerprints[eng_track] = None;
+            }
         }
     }
 
@@ -1024,11 +1061,14 @@ impl HikaruApp {
             ctx.request_repaint();
         }
 
+        self.state.sync_wavetables_to_engine();
+
         let piano_tracks = self.state.tracks().clone();
+        let engine_tr = self.state.selected_track_index.saturating_sub(1);
         piano_roll::trigger_playhead_notes(
             &mut self.state.piano_roll_state,
             &piano_tracks,
-            self.state.selected_track_index,
+            engine_tr,
             &self.state.audio_proxy,
         );
 

@@ -825,6 +825,367 @@ pub fn dms_pad_key(track_idx: usize, pad_idx: usize) -> usize {
     track_idx.min(15) * DMS_PADS_PER_TRACK + pad_idx.min(DMS_PADS_PER_TRACK - 1)
 }
 
+pub const MAX_WAVETABLE_VOICES: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WavetableEnvStage {
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+    Free,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WavetableAdsrParams {
+    pub attack_rate: f32,
+    pub decay_rate: f32,
+    pub sustain_level: f32,
+    pub release_rate: f32,
+}
+
+impl Default for WavetableAdsrParams {
+    fn default() -> Self {
+        Self {
+            attack_rate: 200.0, // ~5ms
+            decay_rate: 8.0,    // ~125ms
+            sustain_level: 0.7,
+            release_rate: 6.0,  // ~160ms
+        }
+    }
+}
+
+pub struct WavetableVoice {
+    pub active: bool,
+    pub pitch: u8,
+    pub velocity: f32,
+    pub track_idx: usize,
+    pub phase: f32,
+    pub phase_inc: f32,
+    pub env_stage: WavetableEnvStage,
+    pub env_level: f32,
+    pub attack_rate: f32,
+    pub decay_rate: f32,
+    pub sustain_level: f32,
+    pub release_rate: f32,
+    pub age: u64,
+}
+
+impl WavetableVoice {
+    pub fn new() -> Self {
+        Self {
+            active: false,
+            pitch: 60,
+            velocity: 1.0,
+            track_idx: 0,
+            phase: 0.0,
+            phase_inc: 0.0,
+            env_stage: WavetableEnvStage::Free,
+            env_level: 0.0,
+            attack_rate: 200.0,
+            decay_rate: 8.0,
+            sustain_level: 0.7,
+            release_rate: 6.0,
+            age: 0,
+        }
+    }
+
+    #[inline]
+    pub fn advance_envelope(&mut self, sr: f32) -> f32 {
+        match self.env_stage {
+            WavetableEnvStage::Attack => {
+                if self.attack_rate <= 0.0 {
+                    self.env_level = 1.0;
+                    self.env_stage = WavetableEnvStage::Decay;
+                } else {
+                    self.env_level += self.attack_rate / sr;
+                    if self.env_level >= 1.0 {
+                        self.env_level = 1.0;
+                        self.env_stage = WavetableEnvStage::Decay;
+                    }
+                }
+            }
+            WavetableEnvStage::Decay => {
+                if self.decay_rate <= 0.0 {
+                    self.env_level = self.sustain_level;
+                    self.env_stage = WavetableEnvStage::Sustain;
+                } else {
+                    self.env_level -= self.decay_rate / sr;
+                    if self.env_level <= self.sustain_level {
+                        self.env_level = self.sustain_level;
+                        self.env_stage = WavetableEnvStage::Sustain;
+                    }
+                }
+            }
+            WavetableEnvStage::Sustain => {
+                self.env_level = self.sustain_level;
+            }
+            WavetableEnvStage::Release => {
+                if self.release_rate <= 0.0 {
+                    self.env_level = 0.0;
+                    self.env_stage = WavetableEnvStage::Free;
+                    self.active = false;
+                } else {
+                    self.env_level -= self.release_rate / sr;
+                    if self.env_level <= 0.0 {
+                        self.env_level = 0.0;
+                        self.env_stage = WavetableEnvStage::Free;
+                        self.active = false;
+                    }
+                }
+            }
+            WavetableEnvStage::Free => {
+                self.env_level = 0.0;
+                self.active = false;
+            }
+        }
+        self.env_level
+    }
+
+    #[inline]
+    pub fn process_frame(&mut self, table: &[f32], sr: f32) -> (f32, f32) {
+        if !self.active || table.is_empty() {
+            return (0.0, 0.0);
+        }
+        let env = self.advance_envelope(sr);
+        if !self.active {
+            return (0.0, 0.0);
+        }
+
+        let table_len = table.len();
+        let idx0 = (self.phase as usize) % table_len;
+        let idx1 = (idx0 + 1) % table_len;
+        let frac = self.phase - self.phase.floor();
+        let s0 = table[idx0];
+        let s1 = table[idx1];
+        let sample = (s0 + frac * (s1 - s0)) * env * self.velocity;
+
+        self.phase = (self.phase + self.phase_inc) % (table_len as f32);
+
+        let pan = ((self.pitch as f32 - 60.0) / 60.0 * 0.25).clamp(-0.4, 0.4);
+        let pan_l = if pan > 0.0 { 1.0 - pan } else { 1.0 };
+        let pan_r = if pan < 0.0 { 1.0 + pan } else { 1.0 };
+
+        (sample * pan_l, sample * pan_r)
+    }
+}
+
+pub struct WavetableVoicePool {
+    voices: Vec<WavetableVoice>,
+    global_age: u64,
+}
+
+impl WavetableVoicePool {
+    pub fn new() -> Self {
+        let voices = (0..MAX_WAVETABLE_VOICES).map(|_| WavetableVoice::new()).collect();
+        Self {
+            voices,
+            global_age: 0,
+        }
+    }
+
+    pub fn trigger(
+        &mut self,
+        pitch: u8,
+        velocity: f32,
+        track_idx: usize,
+        adsr: &WavetableAdsrParams,
+        table_len: usize,
+        sr: f32,
+    ) -> Option<usize> {
+        self.global_age = self.global_age.wrapping_add(1);
+
+        let existing = self.voices.iter().position(|v| v.active && v.track_idx == track_idx && v.pitch == pitch);
+
+        let idx = if let Some(i) = existing {
+            i
+        } else if let Some(free_i) = self.voices.iter().position(|v| !v.active) {
+            free_i
+        } else {
+            let oldest = self.voices.iter().enumerate()
+                .min_by_key(|(_, v)| v.age)
+                .map(|(i, _)| i)?;
+            oldest
+        };
+
+        let freq = 440.0 * 2.0_f32.powf((pitch as f32 - 69.0) / 12.0);
+        let t_len = if table_len > 0 { table_len } else { 2048 };
+        let phase_inc = (freq * t_len as f32) / sr.max(8000.0);
+
+        let v = &mut self.voices[idx];
+        v.active = true;
+        v.pitch = pitch;
+        v.velocity = velocity.clamp(0.0, 1.0);
+        v.track_idx = track_idx.min(15);
+        v.phase_inc = phase_inc;
+        v.env_stage = WavetableEnvStage::Attack;
+        v.env_level = 0.0;
+        v.attack_rate = adsr.attack_rate;
+        v.decay_rate = adsr.decay_rate;
+        v.sustain_level = adsr.sustain_level;
+        v.release_rate = adsr.release_rate;
+        v.age = self.global_age;
+
+        Some(idx)
+    }
+
+    pub fn release_note(&mut self, pitch: u8, track_idx: usize) {
+        for v in self.voices.iter_mut() {
+            if v.active && v.track_idx == track_idx && v.pitch == pitch && v.env_stage != WavetableEnvStage::Release {
+                v.env_stage = WavetableEnvStage::Release;
+            }
+        }
+    }
+
+    pub fn kill_note(&mut self, pitch: u8, track_idx: usize) {
+        for v in self.voices.iter_mut() {
+            if v.active && v.track_idx == track_idx && v.pitch == pitch {
+                v.active = false;
+                v.env_stage = WavetableEnvStage::Free;
+            }
+        }
+    }
+
+    pub fn kill_track_notes(&mut self, track_idx: usize) {
+        for v in self.voices.iter_mut() {
+            if v.active && v.track_idx == track_idx {
+                v.active = false;
+                v.env_stage = WavetableEnvStage::Free;
+            }
+        }
+    }
+
+    pub fn kill_all(&mut self) {
+        for v in self.voices.iter_mut() {
+            v.active = false;
+            v.env_stage = WavetableEnvStage::Free;
+        }
+    }
+
+    pub fn process_track(
+        &mut self,
+        track_idx: usize,
+        table: &[f32],
+        track_buf: &mut [f32],
+        gain_l: f32,
+        gain_r: f32,
+        frames: usize,
+        sr: f32,
+    ) {
+        if gain_l == 0.0 && gain_r == 0.0 {
+            for v in self.voices.iter_mut() {
+                if v.active && v.track_idx == track_idx {
+                    for _ in 0..frames {
+                        let _ = v.process_frame(table, sr);
+                    }
+                }
+            }
+            return;
+        }
+
+        let has_active = self.voices.iter().any(|v| v.active && v.track_idx == track_idx);
+        if !has_active {
+            return;
+        }
+
+        for v in self.voices.iter_mut() {
+            if !v.active || v.track_idx != track_idx {
+                continue;
+            }
+            for i in 0..frames {
+                let (l, r) = v.process_frame(table, sr);
+                if i * 2 + 1 < track_buf.len() {
+                    track_buf[i * 2] += l * gain_l;
+                    track_buf[i * 2 + 1] += r * gain_r;
+                }
+            }
+        }
+    }
+
+    pub fn process_all_with_track_tables(
+        &mut self,
+        tables: &[Option<Vec<f32>>; 16],
+        output_l: &mut [f32],
+        output_r: &mut [f32],
+        gains_l: &[f32; 16],
+        gains_r: &[f32; 16],
+        sr: f32,
+    ) {
+        let buf_len = output_l.len().min(output_r.len());
+        for v in self.voices.iter_mut() {
+            if !v.active {
+                continue;
+            }
+            let ti = v.track_idx.min(15);
+            let Some(table) = tables[ti].as_ref() else {
+                v.active = false;
+                v.env_stage = WavetableEnvStage::Free;
+                continue;
+            };
+            let gl = gains_l[ti];
+            let gr = gains_r[ti];
+            if gl == 0.0 && gr == 0.0 {
+                for _ in 0..buf_len {
+                    let _ = v.process_frame(table, sr);
+                }
+                continue;
+            }
+            for i in 0..buf_len {
+                let (l, r) = v.process_frame(table, sr);
+                output_l[i] += l * gl;
+                output_r[i] += r * gr;
+            }
+        }
+    }
+
+    pub fn process_all_with_gains(
+        &mut self,
+        table: &[f32],
+        output_l: &mut [f32],
+        output_r: &mut [f32],
+        gains_l: &[f32; 16],
+        gains_r: &[f32; 16],
+        sr: f32,
+    ) {
+        let buf_len = output_l.len();
+        for v in self.voices.iter_mut() {
+            if !v.active {
+                continue;
+            }
+            let ti = v.track_idx.min(15);
+            let gl = gains_l[ti];
+            let gr = gains_r[ti];
+            if gl == 0.0 && gr == 0.0 {
+                for _ in 0..buf_len {
+                    let _ = v.process_frame(table, sr);
+                }
+                continue;
+            }
+            for i in 0..buf_len {
+                let (l, r) = v.process_frame(table, sr);
+                output_l[i] += l * gl;
+                output_r[i] += r * gr;
+            }
+        }
+    }
+}
+
+pub fn create_default_synth_table() -> Vec<f32> {
+    let size = 2048;
+    let mut table = Vec::with_capacity(size);
+    for i in 0..size {
+        let phase = i as f32 / size as f32;
+        let s1 = (phase * std::f32::consts::TAU).sin();
+        let s2 = (2.0 * phase * std::f32::consts::TAU).sin() * 0.5;
+        let s3 = (3.0 * phase * std::f32::consts::TAU).sin() * 0.28;
+        let s4 = (4.0 * phase * std::f32::consts::TAU).sin() * 0.15;
+        let s5 = (5.0 * phase * std::f32::consts::TAU).sin() * 0.08;
+        let val = (s1 + s2 + s3 + s4 + s5) * 0.48;
+        table.push(val);
+    }
+    table
+}
+
 pub struct AudioEngine<'a> {
     pub transport: TransportPosition,
     pub mode: EngineMode,
@@ -854,6 +1215,10 @@ pub struct AudioEngine<'a> {
     pub dms_samples: Vec<Option<Vec<f32>>>,
     pub dms_channels: Vec<usize>,
     pub dms_track_idx: usize,
+    pub wavetable_voice_pool: WavetableVoicePool,
+    pub wavetable_data: Vec<f32>,
+    pub track_wavetables: [Option<Vec<f32>>; 16],
+    pub track_wavetable_pitch_offsets: [i8; 16],
     /// Cadena de efectos externos (VST3/CLAP) por pista.
     ///
     /// Cada pista tiene su propia cadena: los plugins se instancian en el
@@ -912,6 +1277,14 @@ impl<'a> AudioEngine<'a> {
             dms_samples: Vec::new(),
             dms_channels: Vec::new(),
             dms_track_idx: 0,
+            wavetable_voice_pool: WavetableVoicePool::new(),
+            wavetable_data: if wavetable.iter().any(|&s| s != 0.0) {
+                wavetable.to_vec()
+            } else {
+                create_default_synth_table()
+            },
+            track_wavetables: std::array::from_fn(|_| None),
+            track_wavetable_pitch_offsets: [0; 16],
             track_effects: (0..16).map(|_| Vec::new()).collect(),
             effects_sample_rate: sr.get(),
             dms_scratch_l: vec![0.0; MAX_TRACK_BUF],
@@ -1431,6 +1804,7 @@ impl<'a> AudioEngine<'a> {
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
+        self.wavetable_voice_pool.kill_all();
         for clip in self.midi_clips.iter_mut() {
             for pitch in 0..128 {
                 if clip.active_notes[pitch] {
@@ -1755,6 +2129,7 @@ impl<'a> AudioEngine<'a> {
                 }
             }
         }
+        self.wavetable_voice_pool.kill_track_notes(track_index);
     }
 
     // ─── OpenDMS Polyphonic Methods ──────────────────────────────
@@ -1842,6 +2217,101 @@ impl<'a> AudioEngine<'a> {
         self.dms_track_idx = track_idx.min(15);
     }
 
+    pub fn trigger_virtual_note(&mut self, track_idx: usize, pitch: u8, velocity: f32) {
+        let ti = track_idx.min(15);
+        if let Some(table) = &self.track_wavetables[ti] {
+            let adsr = WavetableAdsrParams::default();
+            let table_len = table.len();
+            let offset = self.track_wavetable_pitch_offsets[ti];
+            let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+            self.wavetable_voice_pool.trigger(eff_pitch, velocity, ti, &adsr, table_len, self.sample_rate);
+        }
+
+        let key = dms_pad_key(ti, pitch as usize);
+        let (samples_ref, channels) = if let Some(Some(ref s)) = self.dms_samples.get(key) {
+            (s.as_slice(), self.dms_channels.get(key).copied().unwrap_or(1))
+        } else if let Some(Some(ref s)) = self.dms_samples.get(pitch as usize) {
+            (s.as_slice(), self.dms_channels.get(pitch as usize).copied().unwrap_or(1))
+        } else {
+            (&[] as &[f32], 1)
+        };
+        if !samples_ref.is_empty() {
+            let dms_adsr = DmsAdsrParams {
+                attack_rate: self.sample_rate,
+                decay_rate: self.sample_rate,
+                sustain_level: 1.0,
+                release_rate: self.sample_rate / 0.05,
+            };
+            self.dms_voice_pool.trigger(
+                samples_ref,
+                channels,
+                key,
+                1.0,
+                0.0,
+                velocity,
+                1.0,
+                &dms_adsr,
+                ti,
+            );
+        }
+
+        let vel_byte = (velocity * 127.0).clamp(1.0, 127.0) as u8;
+        self.track_midi_events[ti].push(hikaru_midi::MidiEvent {
+            status: 0x90 | (ti as u8 & 0x0F),
+            data1: pitch,
+            data2: vel_byte,
+        });
+    }
+
+    pub fn release_virtual_note(&mut self, track_idx: usize, pitch: u8) {
+        let ti = track_idx.min(15);
+        let offset = self.track_wavetable_pitch_offsets[ti];
+        let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+        self.wavetable_voice_pool.release_note(eff_pitch, ti);
+        let key = dms_pad_key(ti, pitch as usize);
+        self.dms_voice_pool.release_pad(key);
+        self.dms_voice_pool.release_pad(pitch as usize);
+        self.track_midi_events[ti].push(hikaru_midi::MidiEvent {
+            status: 0x80 | (ti as u8 & 0x0F),
+            data1: pitch,
+            data2: 0,
+        });
+    }
+
+    pub fn kill_virtual_note(&mut self, track_idx: usize, pitch: u8) {
+        let ti = track_idx.min(15);
+        let offset = self.track_wavetable_pitch_offsets[ti];
+        let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
+        self.wavetable_voice_pool.kill_note(eff_pitch, ti);
+        let key = dms_pad_key(ti, pitch as usize);
+        self.dms_voice_pool.kill_pad(key);
+        self.dms_voice_pool.kill_pad(pitch as usize);
+        self.track_midi_events[ti].push(hikaru_midi::MidiEvent {
+            status: 0x80 | (ti as u8 & 0x0F),
+            data1: pitch,
+            data2: 0,
+        });
+    }
+
+    pub fn set_track_wavetable(&mut self, track_idx: usize, samples: Vec<f32>, pitch_offset: i8) {
+        let ti = track_idx.min(15);
+        if samples.len() >= 256 {
+            self.track_wavetables[ti] = Some(samples);
+            self.track_wavetable_pitch_offsets[ti] = pitch_offset;
+        } else {
+            self.track_wavetables[ti] = None;
+            self.track_wavetable_pitch_offsets[ti] = 0;
+            self.wavetable_voice_pool.kill_track_notes(ti);
+        }
+    }
+
+    pub fn clear_track_wavetable(&mut self, track_idx: usize) {
+        let ti = track_idx.min(15);
+        self.track_wavetables[ti] = None;
+        self.track_wavetable_pitch_offsets[ti] = 0;
+        self.wavetable_voice_pool.kill_track_notes(ti);
+    }
+
     pub fn process(&mut self, out_buffer: &mut AudioBuffer<'_>) {
         let samples = out_buffer.get_samples_mut();
         let num_channels = 2;
@@ -1857,6 +2327,9 @@ impl<'a> AudioEngine<'a> {
         let dms_samples = &self.dms_samples;
         let dms_channels = &self.dms_channels;
         let dms_voice_pool = &mut self.dms_voice_pool;
+        let wavetable_voice_pool = &mut self.wavetable_voice_pool;
+        let track_wavetables = &self.track_wavetables;
+        let track_wavetable_pitch_offsets = &self.track_wavetable_pitch_offsets;
         let track_midi_events = &mut self.track_midi_events;
         let midi_clips = &mut self.midi_clips;
 
@@ -1887,6 +2360,7 @@ impl<'a> AudioEngine<'a> {
                                 for pitch in 0..128 {
                                     if clip.active_notes[pitch] {
                                         dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                        wavetable_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -1923,6 +2397,11 @@ impl<'a> AudioEngine<'a> {
                                     };
                                     if !samples_ref.is_empty() {
                                         dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                    } else if let Some(table) = &track_wavetables[ti] {
+                                        let wt_adsr = WavetableAdsrParams::default();
+                                        let offset = track_wavetable_pitch_offsets[ti];
+                                        let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                        wavetable_voice_pool.trigger(eff_pitch, (vel as f32) / 127.0, ti, &wt_adsr, table.len(), sample_rate);
                                     }
                                     clip.active_notes[pitch.min(127)] = true;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
@@ -1936,6 +2415,9 @@ impl<'a> AudioEngine<'a> {
                             if note_end >= quantum_start && note_end < quantum_end {
                                 let pitch = note.pitch as usize;
                                 dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                let offset = track_wavetable_pitch_offsets[ti];
+                                let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                wavetable_voice_pool.release_note(eff_pitch, ti);
                                 clip.active_notes[pitch.min(127)] = false;
                                 track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                     status: 0x80 | (ti as u8 & 0x0F),
@@ -1949,6 +2431,7 @@ impl<'a> AudioEngine<'a> {
                             for pitch in 0..128 {
                                 if clip.active_notes[pitch] {
                                     dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                    wavetable_voice_pool.kill_note(pitch as u8, ti);
                                     clip.active_notes[pitch] = false;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                         status: 0x80 | (ti as u8 & 0x0F),
@@ -1974,6 +2457,7 @@ impl<'a> AudioEngine<'a> {
                                 for pitch in 0..128 {
                                     if clip.active_notes[pitch] {
                                         dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                        wavetable_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2010,6 +2494,11 @@ impl<'a> AudioEngine<'a> {
                                         };
                                         if !samples_ref.is_empty() {
                                             dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                        } else if let Some(table) = &track_wavetables[ti] {
+                                            let wt_adsr = WavetableAdsrParams::default();
+                                            let offset = track_wavetable_pitch_offsets[ti];
+                                            let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                            wavetable_voice_pool.trigger(eff_pitch, (vel as f32) / 127.0, ti, &wt_adsr, table.len(), sample_rate);
                                         }
                                         clip.active_notes[pitch.min(127)] = true;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
@@ -2023,6 +2512,9 @@ impl<'a> AudioEngine<'a> {
                                 if n_end >= elapsed_start && n_end < elapsed_end {
                                     let pitch = note.pitch as usize;
                                     dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                    let offset = track_wavetable_pitch_offsets[ti];
+                                    let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                    wavetable_voice_pool.release_note(eff_pitch, ti);
                                     clip.active_notes[pitch.min(127)] = false;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                         status: 0x80 | (ti as u8 & 0x0F),
@@ -2037,6 +2529,7 @@ impl<'a> AudioEngine<'a> {
                                 for pitch in 0..128 {
                                     if clip.active_notes[pitch] {
                                         dms_voice_pool.kill_pad(dms_pad_key(ti, pitch));
+                                        wavetable_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2099,6 +2592,11 @@ impl<'a> AudioEngine<'a> {
                                             };
                                             if !samples_ref.is_empty() {
                                                 dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                            } else if let Some(table) = &track_wavetables[ti] {
+                                                let wt_adsr = WavetableAdsrParams::default();
+                                                let offset = track_wavetable_pitch_offsets[ti];
+                                                let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                                wavetable_voice_pool.trigger(eff_pitch, (vel as f32) / 127.0, ti, &wt_adsr, table.len(), sample_rate);
                                             }
                                             clip.active_notes[pitch.min(127)] = true;
                                             track_midi_events[ti].push(hikaru_midi::MidiEvent {
@@ -2112,6 +2610,9 @@ impl<'a> AudioEngine<'a> {
                                     if n_end >= seg_start_sample && n_end < seg_end_sample {
                                         let pitch = note.pitch as usize;
                                         dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                        let offset = track_wavetable_pitch_offsets[ti];
+                                        let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
+                                        wavetable_voice_pool.release_note(eff_pitch, ti);
                                         clip.active_notes[pitch.min(127)] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2128,6 +2629,7 @@ impl<'a> AudioEngine<'a> {
                                     for pitch in 0..128 {
                                         if clip.active_notes[pitch] {
                                             dms_voice_pool.release_pad(dms_pad_key(ti, pitch));
+                                            wavetable_voice_pool.release_note(pitch as u8, ti);
                                             clip.active_notes[pitch] = false;
                                             track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                                 status: 0x80 | (ti as u8 & 0x0F),
@@ -2179,6 +2681,14 @@ impl<'a> AudioEngine<'a> {
             self.dms_scratch_l[..buf_frames].fill(0.0);
             self.dms_scratch_r[..buf_frames].fill(0.0);
             self.dms_voice_pool.process_all_with_gains(
+                &mut self.dms_scratch_l[..buf_frames],
+                &mut self.dms_scratch_r[..buf_frames],
+                &dms_gain_l,
+                &dms_gain_r,
+                self.sample_rate,
+            );
+            self.wavetable_voice_pool.process_all_with_track_tables(
+                &self.track_wavetables,
                 &mut self.dms_scratch_l[..buf_frames],
                 &mut self.dms_scratch_r[..buf_frames],
                 &dms_gain_l,
@@ -2238,6 +2748,22 @@ impl<'a> AudioEngine<'a> {
                     buf.resize(buf_len, 0.0);
                 }
                 buf.fill(0.0);
+            }
+
+            for t in 0..16 {
+                let gl = track_gain_l[t];
+                let gr = track_gain_r[t];
+                if let Some(table) = &self.track_wavetables[t] {
+                    self.wavetable_voice_pool.process_track(
+                        t,
+                        table,
+                        &mut self.track_output_bufs[t],
+                        gl,
+                        gr,
+                        buffer_frames as usize,
+                        self.sample_rate,
+                    );
+                }
             }
 
             for clip in self.clips.iter_mut() {

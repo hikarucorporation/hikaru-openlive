@@ -215,6 +215,21 @@ pub enum GuiCommand {
     DmsNoteOff {
         pad_idx: usize,
     },
+    /// Input MIDI virtual para sintetizadores (OpenWavetable / instrumentos externos)
+    VirtualNoteOn {
+        track_idx: usize,
+        pitch: u8,
+        velocity: f32,
+    },
+    VirtualNoteOff {
+        track_idx: usize,
+        pitch: u8,
+    },
+    SetTrackWavetable {
+        track_idx: usize,
+        samples: Vec<f32>,
+        pitch_offset: i8,
+    },
     /// Carga un plugin externo (VST3/CLAP) en un slot de pista.
     /// El motor instancia el binario y lo inserta en la cadena de efectos.
     LoadExternalPlugin {

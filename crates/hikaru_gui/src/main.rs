@@ -399,6 +399,21 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.release_dms_note(pad_idx);
                     }
                 }
+                GuiCommand::VirtualNoteOn { track_idx, pitch, velocity } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.trigger_virtual_note(track_idx, pitch, velocity);
+                    }
+                }
+                GuiCommand::VirtualNoteOff { track_idx, pitch } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.release_virtual_note(track_idx, pitch);
+                    }
+                }
+                GuiCommand::SetTrackWavetable { track_idx, samples, pitch_offset } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_track_wavetable(track_idx, samples, pitch_offset);
+                    }
+                }
                 GuiCommand::LoadExternalPlugin { track_idx, slot_idx, descriptor } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         if let Err(e) = engine.load_external_plugin(track_idx, slot_idx, &descriptor) {

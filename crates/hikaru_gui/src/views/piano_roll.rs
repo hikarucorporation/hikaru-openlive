@@ -103,6 +103,9 @@ pub struct PianoRollState {
     pub grid_snap_ticks: u64,
     pub audition_on_click: bool,
     pub velocity_drag_idx: Option<usize>,
+    pub active_audition_pitch: Option<u8>,
+    pub active_virtual_pitches: HashSet<u8>,
+    pub musical_typing_octave: i8,
 }
 
 impl Default for PianoRollState {
@@ -156,6 +159,9 @@ impl Default for PianoRollState {
             grid_snap_ticks: 240, // 1/16th beat (960 / 4)
             audition_on_click: true,
             velocity_drag_idx: None,
+            active_audition_pitch: None,
+            active_virtual_pitches: HashSet::new(),
+            musical_typing_octave: 4, // C4
         }
     }
 }
@@ -186,6 +192,8 @@ impl PianoRollState {
         self.note_move_preview_delta_rows = 0;
         self.note_move_origin_pointer = None;
         self.velocity_drag_idx = None;
+        self.active_audition_pitch = None;
+        self.active_virtual_pitches.clear();
     }
 
     pub fn clear_note_selection(&mut self) {
@@ -201,6 +209,8 @@ impl PianoRollState {
         self.note_move_preview_delta_rows = 0;
         self.note_move_origin_pointer = None;
         self.velocity_drag_idx = None;
+        self.active_audition_pitch = None;
+        self.active_virtual_pitches.clear();
     }
 }
 
@@ -223,7 +233,8 @@ pub fn sync_drum_map_from_opendms(state: &mut PianoRollState, opendms: &OpenDms)
     };
 }
 
-fn find_opendms_in_track(track: &Track) -> Option<&OpenDms> {
+#[allow(dead_code)]
+pub fn find_opendms_in_track(track: &Track) -> Option<&OpenDms> {
     track.effects.iter().find_map(|slot| slot.dms_state.as_ref())
 }
 
@@ -345,12 +356,34 @@ pub fn total_ticks_for(max_note_tick: u64, playhead_tick: u64) -> u64 {
     max_note_tick.max(playhead_tick).max(default_ticks)
 }
 
+pub fn track_has_instrument(track: &Track) -> bool {
+    track.effects.iter().any(|slot| {
+        slot.active && (slot.name == "OpenWavetable" || slot.name == "Hikaru OpenDMS" || slot.external.is_some())
+    })
+}
+
 pub fn trigger_playhead_notes(
     state: &mut PianoRollState,
     tracks: &[Track],
     selected_track_index: usize,
     audio_proxy: &AudioProxy,
 ) {
+    let track = tracks.get(selected_track_index).or_else(|| {
+        if selected_track_index > 0 {
+            tracks.get(selected_track_index - 1)
+        } else {
+            None
+        }
+    });
+    let Some(track) = track else {
+        state.prev_playhead_tick = state.playhead_tick;
+        return;
+    };
+    if !track_has_instrument(track) {
+        state.prev_playhead_tick = state.playhead_tick;
+        return;
+    }
+
     let current_tick = state.playhead_tick;
     let prev_tick = state.prev_playhead_tick;
 
@@ -361,9 +394,13 @@ pub fn trigger_playhead_notes(
                 && current_tick < note.start_tick + 240
             {
                 let velocity_scale = note.velocity as f32 / 127.0;
-                preview_drum_pad(
-                    tracks,
-                    selected_track_index,
+                let eng_tr = if tracks.first().map_or(false, |t| t.is_master) {
+                    selected_track_index.saturating_sub(1)
+                } else {
+                    selected_track_index
+                };
+                trigger_audition_note(
+                    eng_tr,
                     note.pitch,
                     velocity_scale,
                     audio_proxy,
@@ -375,26 +412,38 @@ pub fn trigger_playhead_notes(
     state.prev_playhead_tick = state.playhead_tick;
 }
 
-fn preview_drum_pad(
-    tracks: &[Track],
+pub fn trigger_audition_note(
     selected_track_index: usize,
     pitch: u8,
-    _velocity: f32,
+    velocity: f32,
     audio_proxy: &AudioProxy,
 ) {
-    if let Some(track) = tracks.get(selected_track_index) {
-        if let Some(opendms) = find_opendms_in_track(track) {
-            if let Some(pad) = opendms.pads.iter().find(|p| p.midi_note == pitch) {
-                if let Some(ref path) = pad.sample_path {
-                    audio_proxy.send(GuiCommand::PreviewSample {
-                        path: path.clone(),
-                        volume: 1.0,
-                        speed: 1.0,
-                    });
-                }
-            }
-        }
-    }
+    audio_proxy.send(GuiCommand::VirtualNoteOn {
+        track_idx: selected_track_index,
+        pitch,
+        velocity,
+    });
+}
+
+pub fn release_audition_note(
+    selected_track_index: usize,
+    pitch: u8,
+    audio_proxy: &AudioProxy,
+) {
+    audio_proxy.send(GuiCommand::VirtualNoteOff {
+        track_idx: selected_track_index,
+        pitch,
+    });
+}
+
+pub fn preview_drum_pad(
+    _tracks: &[Track],
+    selected_track_index: usize,
+    pitch: u8,
+    velocity: f32,
+    audio_proxy: &AudioProxy,
+) {
+    trigger_audition_note(selected_track_index, pitch, velocity, audio_proxy);
 }
 
 pub fn sync_frame(prs: &mut PianoRollState) -> bool {
@@ -420,7 +469,7 @@ const BW_KEY_IVORY_TOP: Color32 = Color32::from_rgb(0xD2, 0xD6, 0xE2);
 const BW_KEY_IVORY_BOT: Color32 = Color32::from_rgb(0xB8, 0xBD, 0xC9);
 const BW_KEY_EBONY_TOP: Color32 = Color32::from_rgb(0x2A, 0x2C, 0x31);
 const BW_KEY_EBONY_BOT: Color32 = Color32::from_rgb(0x16, 0x17, 0x19);
-const BW_KEY_HOVER_GLOW: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
+pub const BW_KEY_HOVER_GLOW: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
 const BW_KEY_BORDER: Color32 = Color32::from_rgb(0x4C, 0x4E, 0x56);
 const BW_VEL_BG: Color32 = Color32::from_rgb(0x15, 0x16, 0x18);
 const BW_VEL_BORDER: Color32 = Color32::from_rgb(0x2A, 0x2B, 0x30);
@@ -432,6 +481,8 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         let slot_coord = app.matrix_state.selected_slot;
         (t_idx, slot_coord)
     };
+    let engine_track_idx = selected_track_idx.saturating_sub(1);
+    let has_instrument = app.tracks().get(selected_track_idx).map(track_has_instrument).unwrap_or(false);
 
     let track_color = app
         .tracks()
@@ -519,9 +570,12 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     if response.hovered() {
         let delta = ui.input(|i| i.smooth_scroll_delta);
         if delta.x != 0.0 || delta.y != 0.0 {
-            if ctrl_held {
+            if ctrl_held && !shift_held {
                 let zoom_factor = 1.0 + delta.y * 0.01;
                 prs.zoom_x = (prs.zoom_x * zoom_factor).clamp(MIN_ZOOM_X, MAX_ZOOM_X);
+            } else if alt_held || (ctrl_held && shift_held) {
+                let kh_factor = 1.0 + delta.y * 0.02;
+                prs.key_height = (prs.key_height * kh_factor).clamp(8.0, 36.0);
             } else if shift_held {
                 prs.scroll_offset.x = (prs.scroll_offset.x + delta.y * 2.0).min(0.0);
             } else {
@@ -542,6 +596,67 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
 
     let scroll_x = prs.scroll_offset.x;
     let scroll_y = prs.scroll_offset.y;
+
+    // --- TECLADO MUSICAL VIRTUAL (QWERTY Musical Typing estilo Bitwig Studio) ---
+    // Filas centrales: A=C, W=C#, S=D, E=D#, D=E, F=F, T=F#, G=G, Y=G#, H=A, U=A#, J=B, K=C+1, O=C#+1, L=D+1, P=D#+1
+    // Cambio de octava: Z (abajo), X (arriba)
+    if (response.hovered() || app.panel_layout.show_keyboard) && !ctrl_held && !alt_held {
+        if ui.input(|i| i.key_pressed(egui::Key::Z)) {
+            prs.musical_typing_octave = (prs.musical_typing_octave - 1).clamp(-1, 8);
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::X)) {
+            prs.musical_typing_octave = (prs.musical_typing_octave + 1).clamp(-1, 8);
+        }
+
+        let base_pitch = ((prs.musical_typing_octave + 1) as i32 * 12).clamp(0, 112) as u8;
+        let typing_map: [(egui::Key, u8); 16] = [
+            (egui::Key::A, 0),
+            (egui::Key::W, 1),
+            (egui::Key::S, 2),
+            (egui::Key::E, 3),
+            (egui::Key::D, 4),
+            (egui::Key::F, 5),
+            (egui::Key::T, 6),
+            (egui::Key::G, 7),
+            (egui::Key::Y, 8),
+            (egui::Key::H, 9),
+            (egui::Key::U, 10),
+            (egui::Key::J, 11),
+            (egui::Key::K, 12),
+            (egui::Key::O, 13),
+            (egui::Key::L, 14),
+            (egui::Key::P, 15),
+        ];
+
+        for (k, semi) in typing_map {
+            let note_pitch = base_pitch + semi;
+            if note_pitch <= 127 {
+                if ui.input(|i| i.key_pressed(k)) {
+                    if prs.active_virtual_pitches.insert(note_pitch) {
+                        if has_instrument {
+                            trigger_audition_note(
+                                engine_track_idx,
+                                note_pitch,
+                                0.85,
+                                &app.audio_proxy,
+                            );
+                        }
+                    }
+                }
+                if ui.input(|i| i.key_released(k)) {
+                    if prs.active_virtual_pitches.remove(&note_pitch) {
+                        if has_instrument {
+                            release_audition_note(
+                                engine_track_idx,
+                                note_pitch,
+                                &app.audio_proxy,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // --- TECLADO SHORTCUTS: DELETE / BACKSPACE / CTRL+A / FLECHAS ---
     let mut notes_modified = false;
@@ -682,18 +797,31 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         Stroke::new(1.0_f32, BW_GRID_MAJOR),
     );
 
-    // Gutter de octavas (primeros 32px a la izquierda)
-    let gutter_rect = Rect::from_min_max(
+    // Gutter de octavas / strip lateral (primeros 22px con nombre de pista y color de track)
+    let track_strip_w = 22.0;
+    let track_strip_rect = Rect::from_min_max(
         pos2(rect.min.x, content_y),
-        pos2(rect.min.x + OCTAVE_GUTTER_WIDTH, content_y + grid_h),
+        pos2(rect.min.x + track_strip_w, content_y + grid_h),
     );
-    sidebar_painter.rect_filled(gutter_rect, 0.0, BW_GUTTER_BG);
+    sidebar_painter.rect_filled(track_strip_rect, 0.0, BW_GUTTER_BG);
+    // Barra de color de la pista
+    sidebar_painter.rect_filled(
+        Rect::from_min_max(pos2(rect.min.x, content_y), pos2(rect.min.x + 3.0, content_y + grid_h)),
+        0.0,
+        track_color,
+    );
     sidebar_painter.line_segment(
-        [gutter_rect.right_top(), gutter_rect.right_bottom()],
+        [track_strip_rect.right_top(), track_strip_rect.right_bottom()],
         Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x24)),
     );
 
-    // Esquina superior izquierda (Header del panel)
+    // Compatibilidad para tests existentes que miden gutter_rect
+    let _gutter_rect = Rect::from_min_max(
+        pos2(rect.min.x, content_y),
+        pos2(rect.min.x + OCTAVE_GUTTER_WIDTH, content_y + grid_h),
+    );
+
+    // Esquina superior izquierda (Header del panel estilo Bitwig Studio)
     let tl_rect = Rect::from_min_max(rect.min, pos2(content_x, content_y));
     painter.rect_filled(tl_rect, 0.0, Color32::from_rgb(0x18, 0x19, 0x1D));
     painter.line_segment(
@@ -705,22 +833,162 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         Stroke::new(1.0_f32, BW_GRID_MAJOR),
     );
 
+    // Botones de modo Keys / Drums / Audition / Octava en el header
+    let btn_keys_rect = Rect::from_min_size(pos2(tl_rect.min.x + 4.0, tl_rect.min.y + 3.0), vec2(20.0, 18.0));
+    let btn_drums_rect = Rect::from_min_size(pos2(tl_rect.min.x + 26.0, tl_rect.min.y + 3.0), vec2(20.0, 18.0));
+    let btn_audition_rect = Rect::from_min_size(pos2(tl_rect.min.x + 48.0, tl_rect.min.y + 3.0), vec2(18.0, 18.0));
+    let oct_badge_rect = Rect::from_min_size(pos2(tl_rect.min.x + 68.0, tl_rect.min.y + 4.0), vec2(14.0, 16.0));
+
+    if let Some(pos) = pointer_pos {
+        if primary_clicked {
+            if btn_keys_rect.contains(pos) {
+                prs.mode = PianoRollMode::Keys;
+            } else if btn_drums_rect.contains(pos) {
+                prs.mode = PianoRollMode::Drums;
+            } else if btn_audition_rect.contains(pos) {
+                prs.audition_on_click = !prs.audition_on_click;
+            }
+        }
+    }
+
+    let is_keys = matches!(prs.mode, PianoRollMode::Keys);
+    painter.rect_filled(
+        btn_keys_rect,
+        2.0,
+        if is_keys { Color32::from_rgb(0x2E, 0x30, 0x36) } else { Color32::TRANSPARENT },
+    );
     painter.text(
-        pos2(tl_rect.min.x + 8.0, tl_rect.center().y),
-        Align2::LEFT_CENTER,
-        match prs.mode {
-            PianoRollMode::Keys => "PIANO ROLL",
-            PianoRollMode::Drums => "DRUM PADS",
-        },
-        fonts::semibold(10.0),
-        theme::TEXT_PRIMARY,
+        btn_keys_rect.center(),
+        Align2::CENTER_CENTER,
+        "🎹",
+        fonts::regular(10.0),
+        if is_keys { theme::ACCENT_ORANGE } else { theme::TEXT_MUTED },
+    );
+    if is_keys {
+        painter.line_segment(
+            [pos2(btn_keys_rect.min.x + 2.0, btn_keys_rect.max.y), pos2(btn_keys_rect.max.x - 2.0, btn_keys_rect.max.y)],
+            Stroke::new(2.0_f32, theme::ACCENT_ORANGE),
+        );
+    }
+
+    let is_drums = matches!(prs.mode, PianoRollMode::Drums);
+    painter.rect_filled(
+        btn_drums_rect,
+        2.0,
+        if is_drums { Color32::from_rgb(0x2E, 0x30, 0x36) } else { Color32::TRANSPARENT },
+    );
+    painter.text(
+        btn_drums_rect.center(),
+        Align2::CENTER_CENTER,
+        "⊞",
+        fonts::semibold(11.0),
+        if is_drums { theme::ACCENT_ORANGE } else { theme::TEXT_MUTED },
+    );
+    if is_drums {
+        painter.line_segment(
+            [pos2(btn_drums_rect.min.x + 2.0, btn_drums_rect.max.y), pos2(btn_drums_rect.max.x - 2.0, btn_drums_rect.max.y)],
+            Stroke::new(2.0_f32, theme::ACCENT_ORANGE),
+        );
+    }
+
+    painter.text(
+        btn_audition_rect.center(),
+        Align2::CENTER_CENTER,
+        if prs.audition_on_click { "🔊" } else { "🔈" },
+        fonts::regular(10.0),
+        if prs.audition_on_click { Color32::from_rgb(0xDF, 0xE2, 0xEC) } else { theme::TEXT_MUTED },
+    );
+
+    // Octava activa de Musical Typing
+    painter.text(
+        oct_badge_rect.center(),
+        Align2::CENTER_CENTER,
+        format!("C{}", prs.musical_typing_octave),
+        fonts::semibold(8.0),
+        theme::ACCENT_ORANGE,
     );
 
     let first_row = (scroll_y / key_h).floor() as u32;
     let visible_rows = (sidebar_rect.height() / key_h).ceil() as u32 + 1;
     let last_row = (first_row + visible_rows).min(MIDI_KEY_COUNT);
 
-    let mut audition_pitch: Option<u8> = None;
+    let keys_start_x = rect.min.x + track_strip_w;
+    let black_key_w = 38.0;
+
+    // Recolectar notas activas bajo el cabezal de reproducción
+    let mut playhead_active_pitches = HashSet::new();
+    for note in &prs.notes {
+        if prs.playhead_tick >= note.start_tick && prs.playhead_tick < note.end_tick() {
+            playhead_active_pitches.insert(note.pitch);
+        }
+    }
+
+    // Hit test prioritario de teclas para mouse virtual input y auditioning
+    let mut hovered_key_pitch: Option<u8> = None;
+    let pointer_primary_down = ui.input(|i| i.pointer.primary_down());
+
+    if let Some(pos) = pointer_pos {
+        if sidebar_rect.contains(pos) && pos.x >= keys_start_x {
+            // Teclas negras primero (capa superior)
+            for row in first_row..last_row {
+                let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
+                if is_black_key(pitch) {
+                    let y0 = content_y + row as f32 * key_h - scroll_y;
+                    let y1 = y0 + key_h;
+                    let bk_rect = Rect::from_min_max(
+                        pos2(keys_start_x, y0 + 0.5),
+                        pos2(keys_start_x + black_key_w, y1 - 0.5),
+                    );
+                    if bk_rect.contains(pos) {
+                        hovered_key_pitch = Some(pitch);
+                        break;
+                    }
+                }
+            }
+
+            // Teclas blancas si no tocó ninguna negra
+            if hovered_key_pitch.is_none() {
+                for row in first_row..last_row {
+                    let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
+                    if !is_black_key(pitch) {
+                        let y0 = content_y + row as f32 * key_h - scroll_y;
+                        let y1 = y0 + key_h;
+                        let wk_rect = Rect::from_min_max(
+                            pos2(keys_start_x, y0),
+                            pos2(content_x, y1),
+                        );
+                        if wk_rect.contains(pos) {
+                            hovered_key_pitch = Some(pitch);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Interacción continua de teclado virtual con el puntero del mouse
+    if pointer_primary_down && sidebar_rect.contains(pointer_pos.unwrap_or(Pos2::ZERO)) {
+        if let Some(new_p) = hovered_key_pitch {
+            if prs.active_audition_pitch != Some(new_p) {
+                if let Some(old_p) = prs.active_audition_pitch {
+                    if has_instrument {
+                        release_audition_note(engine_track_idx, old_p, &app.audio_proxy);
+                    }
+                }
+                prs.active_audition_pitch = Some(new_p);
+                if has_instrument {
+                    trigger_audition_note(engine_track_idx, new_p, 0.85, &app.audio_proxy);
+                }
+            }
+        }
+    } else if pointer_released || !pointer_primary_down {
+        if let Some(p) = prs.active_audition_pitch.take() {
+            if has_instrument {
+                release_audition_note(engine_track_idx, p, &app.audio_proxy);
+            }
+        }
+    }
 
     // A. Dibujar teclas blancas primero (fondo completo de la fila)
     for row in first_row..last_row {
@@ -729,34 +997,21 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         let y0 = content_y + row as f32 * key_h - scroll_y;
         let y1 = y0 + key_h;
 
-        // Label de octava en gutter si es C
-        if pitch % 12 == 0 {
-            let oct_label = pitch_name(pitch);
-            sidebar_painter.line_segment(
-                [pos2(gutter_rect.min.x, y1), pos2(content_x, y1)],
-                Stroke::new(1.0_f32, Color32::from_rgb(0x40, 0x42, 0x4A)),
-            );
-            sidebar_painter.text(
-                pos2(gutter_rect.min.x + 4.0, (y0 + y1) * 0.5),
-                Align2::LEFT_CENTER,
-                oct_label,
-                fonts::semibold(9.0),
-                Color32::from_rgb(0x8A, 0x8C, 0x96),
-            );
-        }
+        let is_active = prs.active_audition_pitch == Some(pitch)
+            || prs.active_virtual_pitches.contains(&pitch)
+            || playhead_active_pitches.contains(&pitch);
+
+        let key_rect = Rect::from_min_max(
+            pos2(keys_start_x, y0),
+            pos2(content_x, y1),
+        );
+        let hovered = hovered_key_pitch == Some(pitch);
 
         if !is_black {
-            let key_rect = Rect::from_min_max(
-                pos2(gutter_rect.max.x, y0),
-                pos2(content_x, y1),
-            );
-            let hovered = pointer_pos.is_some_and(|p| key_rect.contains(p));
-            if hovered && primary_clicked {
-                audition_pitch = Some(pitch);
-            }
-
-            let fill = if hovered {
-                BW_KEY_HOVER_GLOW
+            let fill = if is_active {
+                Color32::from_rgb(0xFF, 0xFF, 0xFF) // Iluminación blanca 1:1 Bitwig al reproducir
+            } else if hovered {
+                Color32::from_rgb(0xE6, 0xEA, 0xF5)
             } else {
                 BW_KEY_IVORY_TOP
             };
@@ -770,52 +1025,71 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                 Stroke::new(0.5_f32, BW_KEY_BORDER),
             );
 
-            // Resalte de nota o label sutil si la tecla es ancha
-            if key_h >= 14.0 && pitch % 12 == 0 {
+            // Si es nota C, dibujar línea divisoria de octava y label nítido
+            if pitch % 12 == 0 {
+                let oct_label = pitch_name(pitch);
+                sidebar_painter.line_segment(
+                    [pos2(keys_start_x, y1), pos2(content_x, y1)],
+                    Stroke::new(1.0_f32, Color32::from_rgb(0x38, 0x3A, 0x42)),
+                );
+                sidebar_painter.text(
+                    pos2(keys_start_x + 4.0, (y0 + y1) * 0.5),
+                    Align2::LEFT_CENTER,
+                    oct_label,
+                    fonts::semibold(9.5),
+                    if is_active { Color32::from_rgb(0x10, 0x12, 0x16) } else { Color32::from_rgb(0x30, 0x32, 0x3A) },
+                );
+            } else if key_h >= 13.0 {
+                // Pitch class sutil en tecla blanca
                 sidebar_painter.text(
                     pos2(key_rect.max.x - 4.0, key_rect.center().y),
                     Align2::RIGHT_CENTER,
-                    pitch_name(pitch),
+                    PITCH_CLASS_NAMES[(pitch % 12) as usize],
                     fonts::regular(8.5),
-                    Color32::from_rgb(0x40, 0x42, 0x4A),
+                    Color32::from_rgb(0x6A, 0x6E, 0x7C),
                 );
             }
         }
     }
 
-    // B. Dibujar teclas negras encima (relieve ébano 3D, longitud ~34px)
-    let black_key_w = 34.0;
+    // B. Dibujar teclas negras encima (relieve ébano 3D con iluminación activa)
     for row in first_row..last_row {
         let pitch = (MIDI_KEY_COUNT - 1 - row) as u8;
         if is_black_key(pitch) {
             let y0 = content_y + row as f32 * key_h - scroll_y;
             let y1 = y0 + key_h;
             let key_rect = Rect::from_min_max(
-                pos2(gutter_rect.max.x, y0 + 0.5),
-                pos2(gutter_rect.max.x + black_key_w, y1 - 0.5),
+                pos2(keys_start_x, y0 + 0.5),
+                pos2(keys_start_x + black_key_w, y1 - 0.5),
             );
-            let hovered = pointer_pos.is_some_and(|p| key_rect.contains(p));
-            if hovered && primary_clicked {
-                audition_pitch = Some(pitch);
-            }
+            let hovered = hovered_key_pitch == Some(pitch);
+            let is_active = prs.active_audition_pitch == Some(pitch)
+                || prs.active_virtual_pitches.contains(&pitch)
+                || playhead_active_pitches.contains(&pitch);
 
-            let fill = if hovered {
-                Color32::from_rgb(0x40, 0x42, 0x48)
+            let fill = if is_active {
+                Color32::from_rgb(0xEE, 0xF2, 0xFC) // Brillo 1:1 Bitwig cuando suena
+            } else if hovered {
+                Color32::from_rgb(0x3E, 0x41, 0x4A)
             } else {
                 BW_KEY_EBONY_BOT
             };
-            sidebar_painter.rect_filled(key_rect, 1.5, fill);
+            sidebar_painter.rect_filled(key_rect, 2.0, fill);
             // Bisel superior iluminado
             sidebar_painter.line_segment(
                 [key_rect.left_top(), key_rect.right_top()],
-                Stroke::new(0.8_f32, BW_KEY_EBONY_TOP),
+                Stroke::new(0.8_f32, if is_active { Color32::WHITE } else { BW_KEY_EBONY_TOP }),
             );
-        }
-    }
 
-    if let Some(pitch) = audition_pitch {
-        if prs.audition_on_click {
-            audition_event = Some((pitch, 1.0));
+            if key_h >= 13.0 {
+                sidebar_painter.text(
+                    pos2(key_rect.max.x - 3.0, key_rect.center().y),
+                    Align2::RIGHT_CENTER,
+                    pitch_name(pitch),
+                    fonts::regular(8.0),
+                    if is_active { Color32::from_rgb(0x18, 0x1A, 0x20) } else { Color32::from_rgb(0x82, 0x86, 0x94) },
+                );
+            }
         }
     }
 
@@ -1285,6 +1559,8 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
 
     // --- 7. AUDITION AUDIO (Preview de nota al final) ---
     if let Some((p, v)) = audition_event {
-        preview_drum_pad(app.tracks(), selected_track_idx, p, v, &app.audio_proxy);
+        if has_instrument {
+            trigger_audition_note(engine_track_idx, p, v, &app.audio_proxy);
+        }
     }
 }
