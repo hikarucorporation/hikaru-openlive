@@ -120,10 +120,11 @@ pub struct LfoModState {
     pub sync_mode: LfoSyncMode,
     pub rate_hz: f32,
     pub sync_rate: SyncRate,
-    pub depth: f32,       // 0.0 .. 1.0
-    pub phase_deg: f32,   // 0.0 .. 360.0
-    pub bipolar: bool,    // true = +/-1.0, false = 0.0 .. 1.0
-    pub amount: f32,      // -1.0 .. +1.0 modulation intensity
+    pub sync_continuous: f32, // Smooth fractional accumulator for TempoSync mode (0.0 ..= 9.0)
+    pub depth: f32,           // 0.0 .. 1.0
+    pub phase_deg: f32,       // 0.0 .. 360.0
+    pub bipolar: bool,        // true = +/-1.0, false = 0.0 .. 1.0
+    pub amount: f32,          // -1.0 .. +1.0 modulation intensity
     pub target: ModulationTarget,
     pub is_mapping: bool,
     last_cycle_index: u64,
@@ -137,6 +138,7 @@ impl Default for LfoModState {
             sync_mode: LfoSyncMode::FreeHz,
             rate_hz: 1.0,
             sync_rate: SyncRate::Quarter,
+            sync_continuous: 4.0, // Quarter is index 4
             depth: 1.0,
             phase_deg: 0.0,
             bipolar: true,
@@ -150,6 +152,18 @@ impl Default for LfoModState {
 }
 
 impl LfoModState {
+    pub fn sync_index(&self) -> usize {
+        SyncRate::ALL
+            .iter()
+            .position(|&r| r == self.sync_rate)
+            .unwrap_or(4)
+    }
+
+    pub fn set_sync_rate(&mut self, rate: SyncRate) {
+        self.sync_rate = rate;
+        self.sync_continuous = self.sync_index() as f32;
+    }
+
     pub fn effective_hz(&self, bpm: f32) -> f32 {
         match self.sync_mode {
             LfoSyncMode::FreeHz => self.rate_hz.clamp(0.02, 30.0),
@@ -477,7 +491,7 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     right_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
     // Row 1: Primary Knobs (RATE, DEPTH, AMOUNT)
-    let knobs_row_h = 44.0;
+    let knobs_row_h = 50.0;
     let (knobs_row_rect, _) =
         right_ui.allocate_exact_size(vec2(right_w, knobs_row_h), Sense::hover());
     let col_w = (right_w / 3.0).floor();
@@ -496,87 +510,228 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
 
         match col {
             0 => {
-                // Rate knob
-                let (resp, _) = match state.sync_mode {
-                    LfoSyncMode::FreeHz => {
-                        let (r, ch) = bitwig_kit::rotary_knob(
-                            &mut cell_ui,
-                            28.0,
-                            &mut state.rate_hz,
-                            0.05..=20.0,
-                            1.0,
-                            theme::BW_LCD_CYAN,
-                            false,
-                        );
-                        let r = r.on_hover_text(format!("Rate: {:.2} Hz", state.rate_hz));
-                        (r, ch)
-                    }
+                // Rate knob (Dual-Mode: TempoSync with persistent fractional accumulator & mouse wheel, or FreeHz with perceptual exponential taper)
+                let max_sync_idx = (SyncRate::ALL.len() - 1) as f32;
+                const MIN_HZ: f32 = 0.05;
+                const MAX_HZ: f32 = 20.0;
+
+                let (resp, display_val) = match state.sync_mode {
                     LfoSyncMode::TempoSync => {
-                        let mut sync_idx = SyncRate::ALL
-                            .iter()
-                            .position(|&r| r == state.sync_rate)
-                            .unwrap_or(4) as f32;
-                        let (r, ch) = bitwig_kit::rotary_knob(
+                        let cur_idx = state.sync_index() as f32;
+                        if (state.sync_continuous - cur_idx).abs() > 1.0 {
+                            state.sync_continuous = cur_idx;
+                        }
+
+                        let (r, mut ch) = bitwig_kit::rotary_knob(
                             &mut cell_ui,
-                            28.0,
-                            &mut sync_idx,
-                            0.0..=9.0,
-                            4.0,
+                            26.0,
+                            &mut state.sync_continuous,
+                            0.0..=max_sync_idx,
+                            4.0, // Default 1/4 (index 4)
                             theme::BW_LCD_CYAN,
                             false,
                         );
+
+                        // Mouse wheel scroll to easily step through musical divisions
+                        let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
+                        if r.hovered() && scroll_y.abs() > 0.0 {
+                            let step = if scroll_y > 0.0 { 1.0 } else { -1.0 };
+                            state.sync_continuous =
+                                (state.sync_continuous + step).clamp(0.0, max_sync_idx);
+                            ch = true;
+                        }
+
                         if ch {
-                            let idx = sync_idx.round().clamp(0.0, 9.0) as usize;
+                            let idx = state
+                                .sync_continuous
+                                .round()
+                                .clamp(0.0, max_sync_idx) as usize;
                             state.sync_rate = SyncRate::ALL[idx];
                         }
-                        let r = r.on_hover_text(format!("Sync: {}", state.sync_rate.label()));
-                        (r, ch)
+
+                        let r = r.on_hover_text(format!(
+                            "Sync Rate: {} (Drag, scroll wheel, or click badge to change)",
+                            state.sync_rate.label()
+                        ));
+                        (r, state.sync_rate.label().to_string())
+                    }
+                    LfoSyncMode::FreeHz => {
+                        // Perceptual exponential taper: 0.05 Hz to 20.0 Hz with 1.00 Hz at center (norm = 0.5)
+                        let hz_to_norm = |hz: f32| -> f32 {
+                            let ratio = (hz / MIN_HZ).clamp(1.0, MAX_HZ / MIN_HZ);
+                            ratio.ln() / (MAX_HZ / MIN_HZ).ln()
+                        };
+                        let norm_to_hz = |norm: f32| -> f32 {
+                            MIN_HZ * (MAX_HZ / MIN_HZ).powf(norm.clamp(0.0, 1.0))
+                        };
+
+                        let mut norm = hz_to_norm(state.rate_hz);
+                        let (r, mut ch) = bitwig_kit::rotary_knob(
+                            &mut cell_ui,
+                            26.0,
+                            &mut norm,
+                            0.0..=1.0,
+                            0.5, // 1.00 Hz default
+                            theme::BW_LCD_CYAN,
+                            false,
+                        );
+
+                        // Mouse wheel scroll
+                        let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
+                        if r.hovered() && scroll_y.abs() > 0.0 {
+                            let step = if scroll_y > 0.0 { 0.02 } else { -0.02 };
+                            norm = (norm + step).clamp(0.0, 1.0);
+                            ch = true;
+                        }
+
+                        if ch {
+                            state.rate_hz = norm_to_hz(norm);
+                        }
+
+                        let r = r.on_hover_text(format!(
+                            "Rate: {:.2} Hz (Drag, scroll wheel, or click badge to tune)",
+                            state.rate_hz
+                        ));
+                        (r, format!("{:.2} Hz", state.rate_hz))
                     }
                 };
                 let _ = resp;
+
+                // Live digital readout badge (clickable to cycle or open menu)
+                let badge_btn = egui::Button::new(
+                    RichText::new(&display_val)
+                        .font(fonts::lcd(9.0))
+                        .color(theme::BW_LCD_CYAN),
+                )
+                .fill(Color32::from_rgb(0x10, 0x14, 0x1C))
+                .stroke(Stroke::new(0.5_f32, Color32::from_rgb(0x1F, 0x36, 0x44)))
+                .corner_radius(2.0);
+
+                let badge_resp = cell_ui.add(badge_btn);
+                if state.sync_mode == LfoSyncMode::TempoSync {
+                    if badge_resp.clicked() {
+                        let next_idx = (state.sync_index() + 1) % SyncRate::ALL.len();
+                        state.set_sync_rate(SyncRate::ALL[next_idx]);
+                    }
+                    badge_resp.context_menu(|menu_ui| {
+                        menu_ui.label(
+                            RichText::new("Tempo-Sync Division")
+                                .font(fonts::semibold(9.5))
+                                .color(theme::ACCENT_ORANGE),
+                        );
+                        menu_ui.separator();
+                        for &rate in &SyncRate::ALL {
+                            if menu_ui
+                                .selectable_label(state.sync_rate == rate, rate.label())
+                                .clicked()
+                            {
+                                state.set_sync_rate(rate);
+                                menu_ui.close_menu();
+                            }
+                        }
+                    });
+                } else {
+                    badge_resp.context_menu(|menu_ui| {
+                        menu_ui.label(
+                            RichText::new("Rate Presets")
+                                .font(fonts::semibold(9.5))
+                                .color(theme::ACCENT_ORANGE),
+                        );
+                        menu_ui.separator();
+                        for preset_hz in [0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {
+                            if menu_ui
+                                .selectable_label(
+                                    (state.rate_hz - preset_hz).abs() < 0.05,
+                                    format!("{preset_hz:.2} Hz"),
+                                )
+                                .clicked()
+                            {
+                                state.rate_hz = preset_hz;
+                                menu_ui.close_menu();
+                            }
+                        }
+                    });
+                }
+
                 cell_ui.label(
                     RichText::new("RATE")
-                        .font(fonts::semibold(8.5))
+                        .font(fonts::semibold(8.0))
                         .color(theme::TEXT_SECONDARY),
                 );
             }
             1 => {
                 // Depth knob
-                let (r, _) = bitwig_kit::rotary_knob(
+                let (r, mut ch) = bitwig_kit::rotary_knob(
                     &mut cell_ui,
-                    28.0,
+                    26.0,
                     &mut state.depth,
                     0.0..=1.0,
                     1.0,
                     theme::ACCENT_ORANGE,
                     false,
                 );
+                let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
+                if r.hovered() && scroll_y.abs() > 0.0 {
+                    let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
+                    state.depth = (state.depth + step).clamp(0.0, 1.0);
+                    ch = true;
+                }
+                let _ = ch;
                 r.on_hover_text(format!("Depth: {:.0}%", state.depth * 100.0));
+
+                let badge_btn = egui::Button::new(
+                    RichText::new(format!("{:.0}%", state.depth * 100.0))
+                        .font(fonts::lcd(9.0))
+                        .color(theme::ACCENT_ORANGE),
+                )
+                .fill(Color32::from_rgb(0x16, 0x12, 0x10))
+                .stroke(Stroke::new(0.5_f32, Color32::from_rgb(0x44, 0x24, 0x1B)))
+                .corner_radius(2.0);
+                cell_ui.add(badge_btn);
+
                 cell_ui.label(
                     RichText::new("DEPTH")
-                        .font(fonts::semibold(8.5))
+                        .font(fonts::semibold(8.0))
                         .color(theme::TEXT_SECONDARY),
                 );
             }
             _ => {
                 // Amount knob (Target modulation intensity, bipolar -1.0 .. +1.0)
-                let (r, _) = bitwig_kit::rotary_knob(
+                let (r, mut ch) = bitwig_kit::rotary_knob(
                     &mut cell_ui,
-                    28.0,
+                    26.0,
                     &mut state.amount,
                     -1.0..=1.0,
                     0.5,
                     theme::BW_FADER_AMBER,
                     true,
                 );
+                let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
+                if r.hovered() && scroll_y.abs() > 0.0 {
+                    let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
+                    state.amount = (state.amount + step).clamp(-1.0, 1.0);
+                    ch = true;
+                }
+                let _ = ch;
                 r.on_hover_text(format!(
                     "Modulation Amount: {:+.0}% (Live Delta: {:+.2})",
                     state.amount * 100.0,
                     current_delta
                 ));
+
+                let badge_btn = egui::Button::new(
+                    RichText::new(format!("{:+.0}%", state.amount * 100.0))
+                        .font(fonts::lcd(9.0))
+                        .color(theme::BW_FADER_AMBER),
+                )
+                .fill(Color32::from_rgb(0x16, 0x14, 0x10))
+                .stroke(Stroke::new(0.5_f32, Color32::from_rgb(0x44, 0x36, 0x1A)))
+                .corner_radius(2.0);
+                cell_ui.add(badge_btn);
+
                 cell_ui.label(
                     RichText::new("AMOUNT")
-                        .font(fonts::semibold(8.5))
+                        .font(fonts::semibold(8.0))
                         .color(theme::TEXT_SECONDARY),
                 );
             }
@@ -602,11 +757,12 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         .on_hover_text("Toggle Tempo-Sync / Free Hz")
         .clicked()
         {
-            state.sync_mode = if is_sync {
-                LfoSyncMode::FreeHz
+            if is_sync {
+                state.sync_mode = LfoSyncMode::FreeHz;
             } else {
-                LfoSyncMode::TempoSync
-            };
+                state.sync_mode = LfoSyncMode::TempoSync;
+                state.sync_continuous = state.sync_index() as f32;
+            }
         }
 
         // Bipolar vs Unipolar toggle

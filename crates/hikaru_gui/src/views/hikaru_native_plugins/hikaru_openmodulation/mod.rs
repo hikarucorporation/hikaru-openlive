@@ -63,4 +63,27 @@ mod tests {
         assert!((val_peak - 1.0).abs() < 1e-4);
         assert!((delta_peak - 0.5).abs() < 1e-4);
     }
+
+    #[test]
+    fn test_lfo_state_sync_rate_continuous_accumulation() {
+        use hikaru_dsp::effects::lfo::SyncRate;
+
+        let mut state = LfoModState::default();
+        assert_eq!(state.sync_rate, SyncRate::Quarter);
+        assert_eq!(state.sync_continuous, 4.0);
+
+        // Small incremental drags accumulate without being discarded
+        for _ in 0..10 {
+            state.sync_continuous += 0.06; // fractional mouse drag
+        }
+        assert!(state.sync_continuous > 4.5);
+        let idx = state.sync_continuous.round() as usize;
+        state.sync_rate = SyncRate::ALL[idx];
+        assert_eq!(state.sync_rate, SyncRate::Eighth);
+
+        // Setting sync rate snaps continuous accumulator cleanly
+        state.set_sync_rate(SyncRate::Whole1);
+        assert_eq!(state.sync_rate, SyncRate::Whole1);
+        assert_eq!(state.sync_continuous, 2.0);
+    }
 }
