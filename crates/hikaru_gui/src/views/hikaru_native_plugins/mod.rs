@@ -60,8 +60,9 @@
 
 pub mod hikaru_opendms;
 pub mod hikaru_openeq3;
-pub mod hikaru_openwavetable;
+pub mod hikaru_openmodulation;
 pub mod hikaru_openspectral_phaser;
+pub mod hikaru_openwavetable;
 
 // Reexports de superficie. Los que el resto de la app usa por nombre;
 // dejarlos acá evita repetir la cadena completa
@@ -69,5 +70,6 @@ pub mod hikaru_openspectral_phaser;
 // call site, que es largo y propaga el nombre de la carpeta a todo el crate.
 pub use hikaru_opendms::open_dms::{midi_note_name, DmsPad, OpenDms};
 pub use hikaru_opendms::open_dms_sampler::{AdsrEnvelope, DmsSampler};
+pub use hikaru_openmodulation::lfo_mod::{LfoModState, ModulationTarget};
 pub use hikaru_openwavetable::open_wavetable::WavetableEditor;
 pub use hikaru_openwavetable::wavetable_io::Wavetable;

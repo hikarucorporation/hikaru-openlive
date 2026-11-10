@@ -1912,6 +1912,51 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    /// Disparo imperativo sin toggle: asegura que el clip especificado quede
+    /// en reproducción activa (`is_playing = true`) y sincronizado con el transporte.
+    pub fn start_clip(&mut self, track_index: usize, scene_index: usize) {
+        let now = self.transport.sample_count;
+        let now_abs = self.absolute_frame;
+        let mut found_midi = false;
+        for clip in self.midi_clips.iter_mut().filter(|c| c.track_index == track_index) {
+            if clip.scene_index == scene_index {
+                clip.is_playing = true;
+                clip.start_frame = now;
+                clip.start_absolute = now_abs;
+                clip.clear_active_notes();
+                found_midi = true;
+            } else {
+                clip.is_playing = false;
+                for pitch in 0..128 {
+                    if clip.active_notes[pitch] {
+                        self.dms_voice_pool.release_pad(dms_pad_key(clip.track_index, pitch));
+                        clip.active_notes[pitch] = false;
+                    }
+                }
+            }
+        }
+        if !found_midi {
+            let mut new_clip = MidiClipInstance::new(track_index, scene_index, Vec::new());
+            new_clip.is_playing = true;
+            new_clip.start_frame = now;
+            new_clip.start_absolute = now_abs;
+            self.midi_clips.push(new_clip);
+        }
+
+        for clip in self.clips.iter_mut().filter(|c| c.track_index == track_index) {
+            if clip.scene_index == scene_index {
+                clip.is_playing = true;
+                clip.start_frame = now;
+                clip.start_absolute = now_abs;
+                clip.prev_frame = usize::MAX;
+                clip.xfade_remaining = 0;
+                clip.xfade_len = 0;
+            } else {
+                clip.is_playing = false;
+            }
+        }
+    }
+
     /// Origen de fase a heredar para un arranque legato.
     ///
     /// Devuelve `(start_frame, start_absolute)` del clip en `Playing` más

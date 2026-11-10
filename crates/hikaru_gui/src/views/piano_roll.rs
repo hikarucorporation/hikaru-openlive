@@ -482,12 +482,39 @@ const BW_VEL_BORDER: Color32 = Color32::from_rgb(0x2A, 0x2B, 0x30);
 
 /// Render the Piano Roll editor panel using egui with 1:1 Bitwig Studio fidelity.
 pub fn render(ui: &mut Ui, app: &mut AppState) {
-    let (selected_track_idx, selected_slot_coord) = {
+    let (selected_track_idx, mut selected_slot_coord) = {
         let t_idx = app.selected_track_index;
         let slot_coord = app.matrix_state.selected_slot;
         (t_idx, slot_coord)
     };
     let engine_track_idx = selected_track_idx.saturating_sub(1);
+
+    if app.mode == crate::app::AppMode::OpenLive && !app.matrix_state.grid.is_empty() {
+        let t = engine_track_idx.min(app.matrix_state.grid.len().saturating_sub(1));
+        match selected_slot_coord {
+            Some((curr_t, curr_s)) if curr_t != t => {
+                app.matrix_state.selected_slot = Some((t, curr_s));
+                selected_slot_coord = Some((t, curr_s));
+            }
+            None => {
+                app.matrix_state.selected_slot = Some((t, 0));
+                selected_slot_coord = Some((t, 0));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some((t_idx, s_idx)) = selected_slot_coord {
+        if app.matrix_state.grid.get(t_idx).and_then(|row| row.get(s_idx)).map_or(false, |slot| slot.clip.is_none()) {
+            super::matrix::create_empty_midi_clip(
+                &mut app.matrix_state,
+                &app.audio_proxy,
+                t_idx,
+                s_idx,
+            );
+        }
+    }
+
     let has_instrument = app.tracks().get(selected_track_idx).map(track_has_instrument).unwrap_or(false);
 
     let track_color = app
@@ -508,15 +535,17 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             if let Some(slot) = app.matrix_state.slot(t_idx, s_idx) {
                 if let Some(clip) = &slot.clip {
                     if let ClipData::Midi { notes } = &clip.content {
-                        app.piano_roll_state.notes = notes
-                            .iter()
-                            .map(|&(st, p, v, dur)| MidiNote {
-                                pitch: p,
-                                start_tick: st,
-                                duration_ticks: dur as u64,
-                                velocity: v,
-                            })
-                            .collect();
+                        if !notes.is_empty() || app.piano_roll_state.notes.is_empty() {
+                            app.piano_roll_state.notes = notes
+                                .iter()
+                                .map(|&(st, p, v, dur)| MidiNote {
+                                    pitch: p,
+                                    start_tick: st,
+                                    duration_ticks: dur as u64,
+                                    velocity: v,
+                                })
+                                .collect();
+                        }
                         app.piano_roll_state.loop_start_tick = clip.loop_start;
                         let clip_loop_end = if clip.loop_end > clip.loop_start {
                             clip.loop_end

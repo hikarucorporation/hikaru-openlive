@@ -65,6 +65,7 @@ pub struct WavetableEditor {
     pub morph: f32,
     pub frame: usize,
     pub smooth: bool,
+    pub base_position: Option<f32>,
     pub render_mode: RenderMode,
     pub render_settings: RenderSettings,
     pub settings_open: bool,
@@ -100,6 +101,7 @@ impl Default for WavetableEditor {
             morph: 0.0,
             frame: 0,
             smooth: true,
+            base_position: None,
             render_mode: RenderMode::default(),
             render_settings: RenderSettings::default(),
             settings_open: false,
@@ -1435,59 +1437,191 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
 
             match col_idx {
                 0 => {
-                    let mut pos = editor.position();
+                    let mod_opt = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        track_idx,
+                        "OpenWavetable",
+                        "WT POS",
+                    );
+                    let is_target = crate::views::hikaru_native_plugins::hikaru_openmodulation::is_mapping_target(
+                        track_idx,
+                        "OpenWavetable",
+                        "WT POS",
+                    );
+
+                    let base = editor.base_position.unwrap_or_else(|| editor.position());
+                    let mut effective = if let Some(m) = mod_opt {
+                        (base + m.delta).clamp(0.0, 1.0)
+                    } else {
+                        base
+                    };
+
                     let (r_idx, idx_changed) = crate::ui::bitwig_kit::rotary_knob(
                         &mut cell_ui,
                         28.0,
-                        &mut pos,
+                        &mut effective,
                         0.0..=1.0,
                         0.0,
-                        theme::ACCENT_ORANGE,
+                        if mod_opt.is_some() {
+                            theme::BW_LCD_CYAN
+                        } else {
+                            theme::ACCENT_ORANGE
+                        },
                         false,
                     );
-                    r_idx.on_hover_text("Wavetable Position / Index");
-                    if idx_changed {
-                        editor.set_position(pos);
+
+                    if is_target {
+                        cell_ui.painter().rect_stroke(
+                            cell_rect,
+                            3.0,
+                            egui::Stroke::new(1.5_f32, theme::BW_LCD_CYAN),
+                            egui::StrokeKind::Inside,
+                        );
+                        if r_idx.clicked() {
+                            crate::views::hikaru_native_plugins::hikaru_openmodulation::handle_knob_mapping_click(
+                                track_idx,
+                                "OpenWavetable",
+                                "WT POS",
+                            );
+                        }
                     }
-                    cell_ui.label(
-                        egui::RichText::new("WT POS")
-                            .font(crate::ui::fonts::semibold(8.5))
-                            .color(theme::TEXT_SECONDARY),
-                    );
+
+                    if idx_changed {
+                        editor.base_position = Some(effective);
+                        editor.set_position(effective);
+                    } else if mod_opt.is_some() {
+                        editor.set_position(effective);
+                    }
+
+                    if let Some(m) = mod_opt {
+                        r_idx.on_hover_text(format!(
+                            "WT POS [Modulated by LFO]: {:.1}% (Base: {:.1}%, Delta: {:+.2})",
+                            effective * 100.0,
+                            base * 100.0,
+                            m.delta
+                        ));
+                        cell_ui.label(
+                            egui::RichText::new("WT POS ●")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::BW_LCD_CYAN),
+                        );
+                    } else {
+                        r_idx.on_hover_text("Wavetable Position / Index");
+                        cell_ui.label(
+                            egui::RichText::new("WT POS")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::TEXT_SECONDARY),
+                        );
+                    }
                 }
                 1 => {
+                    let is_target = crate::views::hikaru_native_plugins::hikaru_openmodulation::is_mapping_target(
+                        track_idx,
+                        "OpenWavetable",
+                        "DETUNE",
+                    );
+                    let mod_opt = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        track_idx,
+                        "OpenWavetable",
+                        "DETUNE",
+                    );
                     let (r_det, _) = crate::ui::bitwig_kit::rotary_knob(
                         &mut cell_ui,
                         28.0,
                         &mut editor.detune,
                         0.0..=1.0,
                         0.0,
-                        theme::BW_LCD_CYAN,
+                        if mod_opt.is_some() {
+                            theme::BW_FADER_AMBER
+                        } else {
+                            theme::BW_LCD_CYAN
+                        },
                         false,
                     );
-                    r_det.on_hover_text("Unison Detune");
-                    cell_ui.label(
-                        egui::RichText::new("DETUNE")
-                            .font(crate::ui::fonts::semibold(8.5))
-                            .color(theme::TEXT_SECONDARY),
-                    );
+                    if is_target {
+                        cell_ui.painter().rect_stroke(
+                            cell_rect,
+                            3.0,
+                            egui::Stroke::new(1.5_f32, theme::BW_LCD_CYAN),
+                            egui::StrokeKind::Inside,
+                        );
+                        if r_det.clicked() {
+                            crate::views::hikaru_native_plugins::hikaru_openmodulation::handle_knob_mapping_click(
+                                track_idx,
+                                "OpenWavetable",
+                                "DETUNE",
+                            );
+                        }
+                    }
+                    if let Some(m) = mod_opt {
+                        r_det.on_hover_text(format!("Detune [LFO Delta]: {:+.2}", m.delta));
+                        cell_ui.label(
+                            egui::RichText::new("DETUNE ●")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::BW_LCD_CYAN),
+                        );
+                    } else {
+                        r_det.on_hover_text("Unison Detune");
+                        cell_ui.label(
+                            egui::RichText::new("DETUNE")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::TEXT_SECONDARY),
+                        );
+                    }
                 }
                 2 => {
+                    let is_target = crate::views::hikaru_native_plugins::hikaru_openmodulation::is_mapping_target(
+                        track_idx,
+                        "OpenWavetable",
+                        "PHASE",
+                    );
+                    let mod_opt = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        track_idx,
+                        "OpenWavetable",
+                        "PHASE",
+                    );
                     let (r_phs, _) = crate::ui::bitwig_kit::rotary_knob(
                         &mut cell_ui,
                         28.0,
                         &mut editor.phase,
                         0.0..=1.0,
                         0.0,
-                        theme::BW_FADER_AMBER,
+                        if mod_opt.is_some() {
+                            theme::BW_LCD_CYAN
+                        } else {
+                            theme::BW_FADER_AMBER
+                        },
                         false,
                     );
-                    r_phs.on_hover_text("Oscillator Phase");
-                    cell_ui.label(
-                        egui::RichText::new("PHASE")
-                            .font(crate::ui::fonts::semibold(8.5))
-                            .color(theme::TEXT_SECONDARY),
-                    );
+                    if is_target {
+                        cell_ui.painter().rect_stroke(
+                            cell_rect,
+                            3.0,
+                            egui::Stroke::new(1.5_f32, theme::BW_LCD_CYAN),
+                            egui::StrokeKind::Inside,
+                        );
+                        if r_phs.clicked() {
+                            crate::views::hikaru_native_plugins::hikaru_openmodulation::handle_knob_mapping_click(
+                                track_idx,
+                                "OpenWavetable",
+                                "PHASE",
+                            );
+                        }
+                    }
+                    if let Some(m) = mod_opt {
+                        r_phs.on_hover_text(format!("Phase [LFO Delta]: {:+.2}", m.delta));
+                        cell_ui.label(
+                            egui::RichText::new("PHASE ●")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::BW_LCD_CYAN),
+                        );
+                    } else {
+                        r_phs.on_hover_text("Oscillator Phase");
+                        cell_ui.label(
+                            egui::RichText::new("PHASE")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::TEXT_SECONDARY),
+                        );
+                    }
                 }
                 _ => {
                     let mut u_f = editor.unison as f32;
@@ -1534,6 +1668,7 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
             )
             .1
             {
+                editor.base_position = Some(pos);
                 editor.set_position(pos);
             }
             ui.label(

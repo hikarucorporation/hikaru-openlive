@@ -694,3 +694,55 @@ fn openwavetable_default_starts_in_3d_with_multicycle_table_and_mesh_controls() 
     SettingParam::Yaw.set(&mut editor.render_settings, 22.0);
     assert_ne!(hash_before, editor.render_settings.key_hash());
 }
+
+#[test]
+fn test_openmodulation_in_catalog_and_lfo_modulates_openwavetable_wt_pos() {
+    use hikaru_gui::views::dsp_rack::PLUGIN_CATALOG;
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openmodulation::lfo_mod::{
+        get_modulation, handle_knob_mapping_click, update_lfo_state, ModulationTarget,
+    };
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::WavetableEditor;
+
+    // 1. Catálogo de plugins del DSP Rack contiene Hikaru OpenModulation
+    let has_mod = PLUGIN_CATALOG
+        .iter()
+        .any(|entry| entry.name == "OpenModulation" && entry.label == "Hikaru OpenModulation" && entry.category == "Modulation");
+    assert!(
+        has_mod,
+        "Hikaru OpenModulation debe estar registrado en PLUGIN_CATALOG bajo la categoría Modulation"
+    );
+
+    // 2. Registro de LFO apuntando al parámetro WT POS de OpenWavetable en la pista 1
+    let track_idx = 1;
+    let slot_idx = 1;
+    update_lfo_state(track_idx, slot_idx, |state| {
+        state.rate_hz = 2.0;
+        state.depth = 1.0;
+        state.amount = 0.5;
+        state.target = ModulationTarget::OpenWavetableWtPos;
+    });
+
+    // 3. Probar lectura de modulación para OpenWavetable WT POS
+    let active_mod = get_modulation(track_idx, "OpenWavetable", "WT POS");
+    assert!(active_mod.is_some(), "Debe haber modulación activa para WT POS");
+    let active = active_mod.unwrap();
+    assert!(active.delta.is_finite());
+    assert!(active.delta.abs() <= 1.0);
+
+    // 4. Probar que otro parámetro o dispositivo no mapeado no recibe modulación
+    let unmapped_delta = get_modulation(track_idx, "OpenWavetable", "DETUNE");
+    assert!(unmapped_delta.is_none(), "Parámetros no mapeados deben devolver None");
+
+    let other_track_delta = get_modulation(2, "OpenWavetable", "WT POS");
+    assert!(other_track_delta.is_none(), "Otras pistas no deben verse afectadas");
+
+    // 5. Aplicar modulación a WavetableEditor
+    let mut editor = WavetableEditor::default();
+    editor.base_position = Some(0.5);
+    let effective = (editor.base_position.unwrap() + active.delta).clamp(0.0, 1.0);
+    editor.set_position(effective);
+    assert!(editor.position() >= 0.0 && editor.position() <= 1.0);
+
+    // 6. Probar clic de mapeo interactivo (MOD button)
+    let _ = handle_knob_mapping_click(track_idx, "OpenWavetable", "DETUNE");
+}

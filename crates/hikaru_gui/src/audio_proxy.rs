@@ -143,6 +143,10 @@ pub enum GuiCommand {
         track_idx: usize,
         scene_idx: usize
     },
+    StartClip {
+        track_idx: usize,
+        scene_idx: usize,
+    },
     /// Eventos editables del pad (cortar/pegar/split/multi-sample).
     /// El motor los mezcla por suma; el GUI es la fuente de verdad.
     SetClipEvents {

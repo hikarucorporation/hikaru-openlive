@@ -937,3 +937,54 @@ fn test_tier1_f30_piano_roll_playhead_sync_and_wavetable_routing() {
     app_state.stop();
     assert_eq!(app_state.piano_roll_state.playhead_tick, 0);
 }
+
+// -----------------------------------------------------------------------------
+// F31: Edit Tab Play Button Triggers MIDI Clip Audio & StartClip Command
+// -----------------------------------------------------------------------------
+#[test]
+fn test_tier1_f31_edit_tab_play_triggers_audio() {
+    let (mut app_state, rx) = create_test_app_state();
+    app_state.openlive_view = hikaru_gui::app::OpenLiveView::EditView;
+    app_state.matrix_state.selected_slot = None;
+
+    // Add MIDI notes in piano roll
+    app_state.piano_roll_state.notes = vec![
+        MidiNote { pitch: 59, start_tick: 0, duration_ticks: 480, velocity: 100 },
+        MidiNote { pitch: 57, start_tick: 960, duration_ticks: 480, velocity: 100 },
+    ];
+
+    // Trigger Play from the Edit tab
+    app_state.play();
+
+    // Verify slot is bound to (0, 0) and marked Playing
+    assert_eq!(app_state.matrix_state.selected_slot, Some((0, 0)));
+    assert_eq!(app_state.matrix_state.grid[0][0].state, matrix::SlotState::Playing);
+
+    // Verify command stream includes StartClip and notes sync
+    let mut has_play = false;
+    let mut has_update_notes = false;
+    let mut has_start_clip = false;
+
+    while let Ok(cmd) = rx.try_recv() {
+        match cmd {
+            GuiCommand::Play => has_play = true,
+            GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, notes } => {
+                assert_eq!(track_idx, 0);
+                assert_eq!(scene_idx, 0);
+                if notes.len() == 2 {
+                    has_update_notes = true;
+                }
+            }
+            GuiCommand::StartClip { track_idx, scene_idx } => {
+                assert_eq!(track_idx, 0);
+                assert_eq!(scene_idx, 0);
+                has_start_clip = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(has_play, "GuiCommand::Play must be dispatched");
+    assert!(has_update_notes, "GuiCommand::UpdateMidiClipNotes must be dispatched");
+    assert!(has_start_clip, "GuiCommand::StartClip must be dispatched to trigger audio engine playback");
+}

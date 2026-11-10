@@ -53,11 +53,12 @@ fn run_gui(options: GuiOptions) -> ExitCode {
 
     let position_clock = Arc::new(AtomicU64::new(0));
 
-    let engine = hikaru_audio_engine::AudioEngine::new(
+    let mut engine = hikaru_audio_engine::AudioEngine::new(
         sample_rate,
         &DEFAULT_WAVETABLE,
         position_clock.clone(),
     );
+    engine.set_mode(hikaru_audio_engine::EngineMode::OpenLive);
     let engine_arc = Arc::new(Mutex::new(engine));
 
     let engine_for_commands = engine_arc.clone();
@@ -246,6 +247,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                 GuiCommand::TriggerClip { track_idx, scene_idx } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.trigger_clip(track_idx, scene_idx);
+                    }
+                }
+                GuiCommand::StartClip { track_idx, scene_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.start_clip(track_idx, scene_idx);
                     }
                 }
                 GuiCommand::StopTrack { track_idx } => {

@@ -60,6 +60,31 @@ fn test_midi_clip_playback_triggers_notes() {
 }
 
 #[test]
+fn test_midi_clip_playback_triggers_wavetable() {
+    let mut engine = test_engine(EngineMode::OpenLive);
+
+    // Cargar wavetable en Track 0 (un ciclo seno)
+    let sine_table: Vec<f32> = (0..2048)
+        .map(|i| (2.0 * std::f32::consts::PI * i as f32 / 2048.0).sin())
+        .collect();
+    engine.set_track_wavetable(0, sine_table, 0);
+
+    let notes = vec![
+        MidiNoteInstance::new(0, 59, 100, 480),
+        MidiNoteInstance::new(960, 59, 100, 480),
+    ];
+    engine.update_midi_clip(0, 0, notes);
+
+    engine.start_clip(0, 0);
+    assert!(engine.voice_active(0, 0));
+    engine.play();
+    assert_eq!(engine.transport.playback_state, TransportPlaybackState::Playing);
+
+    let peak = process_frames(&mut engine, 512);
+    assert!(peak > 0.05, "El clip MIDI con wavetable debía emitir sonido al disparar la nota (peak={peak})");
+}
+
+#[test]
 fn test_midi_clip_non_looping_past_emission_silent() {
     let mut engine = test_engine(EngineMode::OpenLive);
 

@@ -520,7 +520,7 @@ impl AppState {
         let (param_probe_tx, param_probe_rx) = std::sync::mpsc::channel();
         let initial_bpm = transport.bpm;
 
-        Self {
+        let state = Self {
             mode: AppMode::OpenLive,
             transport,
             position_clock,
@@ -597,7 +597,9 @@ impl AppState {
             project_dirty: false,
             open_menu: None,
             synced_wavetable_fingerprints: [None; 16],
-        }
+        };
+        state.audio_proxy.send(GuiCommand::SetAppMode(false));
+        state
     }
 
     pub fn sync_wavetables_to_engine(&mut self) {
@@ -925,6 +927,9 @@ impl AppState {
     }
 
     pub fn play(&mut self) {
+        let is_studio = self.mode == AppMode::OpenStudio;
+        self.audio_proxy.send(GuiCommand::SetAppMode(is_studio));
+        self.sync_wavetables_to_engine();
         self.transport.playback_state = TransportPlaybackState::Playing;
         self.audio_proxy.send(GuiCommand::Play);
 
@@ -932,17 +937,57 @@ impl AppState {
             let any_slot_playing = self.matrix_state.grid.iter().any(|row| {
                 row.iter().any(|s| s.state == matrix::SlotState::Playing)
             });
-            if !any_slot_playing {
-                if let Some((t_idx, s_idx)) = self.matrix_state.selected_slot {
-                    if self
-                        .matrix_state
-                        .grid
-                        .get(t_idx)
-                        .and_then(|row| row.get(s_idx))
-                        .map_or(false, |slot| slot.clip.is_some())
-                    {
-                        matrix::trigger_pad(&mut self.matrix_state, &self.audio_proxy, t_idx, s_idx);
+
+            // Si estamos en EditView o no hay ningún slot reproduciéndose,
+            // aseguramos que el clip bajo edición se dispare de inmediato en el motor.
+            if self.openlive_view == OpenLiveView::EditView || !any_slot_playing {
+                let target_slot = self.matrix_state.selected_slot.or_else(|| {
+                    let eng_idx = self.selected_track_index.saturating_sub(1);
+                    if !self.matrix_state.grid.is_empty() {
+                        let t = eng_idx.min(self.matrix_state.grid.len().saturating_sub(1));
+                        self.matrix_state.selected_slot = Some((t, 0));
+                        Some((t, 0))
+                    } else {
+                        None
                     }
+                });
+
+                if let Some((t_idx, s_idx)) = target_slot {
+                    if self.matrix_state.grid.get(t_idx).and_then(|row| row.get(s_idx)).map_or(false, |slot| slot.clip.is_none()) {
+                        matrix::create_empty_midi_clip(&mut self.matrix_state, &self.audio_proxy, t_idx, s_idx);
+                    }
+                    if !self.piano_roll_state.notes.is_empty() {
+                        if let Some(slot) = self.matrix_state.slot_mut(t_idx, s_idx) {
+                            if let Some(clip) = slot.clip.as_mut() {
+                                clip.loop_start = self.piano_roll_state.loop_start_tick;
+                                clip.loop_end = self.piano_roll_state.loop_end_tick;
+                                let updated_notes: Vec<(u64, u8, u8, u32)> = self.piano_roll_state
+                                    .notes
+                                    .iter()
+                                    .map(|n| (n.start_tick, n.pitch, n.velocity, n.duration_ticks as u32))
+                                    .collect();
+                                clip.content = matrix::ClipData::Midi { notes: updated_notes.clone() };
+                                self.audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+                                    track_idx: t_idx,
+                                    scene_idx: s_idx,
+                                    notes: updated_notes,
+                                });
+                                self.audio_proxy.send(GuiCommand::SetMidiClipLoop {
+                                    track_idx: t_idx,
+                                    scene_idx: s_idx,
+                                    loop_start_ticks: self.piano_roll_state.loop_start_tick,
+                                    loop_end_ticks: self.piano_roll_state.loop_end_tick,
+                                });
+                            }
+                        }
+                    }
+                    if let Some(slot) = self.matrix_state.slot_mut(t_idx, s_idx) {
+                        slot.state = matrix::SlotState::Playing;
+                    }
+                    self.audio_proxy.send(GuiCommand::StartClip {
+                        track_idx: t_idx,
+                        scene_idx: s_idx,
+                    });
                 }
             }
         }
@@ -959,6 +1004,13 @@ impl AppState {
         self.playlist_state.playhead_tick = 0;
         self.piano_roll_state.playhead_tick = self.piano_roll_state.loop_start_tick;
         self.piano_roll_state.prev_playhead_tick = self.piano_roll_state.playhead_tick;
+        for row in self.matrix_state.grid.iter_mut() {
+            for slot in row.iter_mut() {
+                if slot.state == matrix::SlotState::Playing {
+                    slot.state = matrix::SlotState::Stopped;
+                }
+            }
+        }
         self.audio_proxy.send(GuiCommand::Stop);
     }
 
@@ -1100,7 +1152,13 @@ impl HikaruApp {
             self.state.audio_proxy.send(GuiCommand::SetBpm(self.state.transport.bpm as f32));
         }
 
-        if self.state.is_playing() {
+        let has_active_lfo = self.state.current_tracks().iter().any(|tr| {
+            tr.effects.iter().any(|slot| {
+                slot.active && matches!(slot.name.as_str(), "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD")
+            })
+        });
+
+        if self.state.is_playing() || has_active_lfo {
             ctx.request_repaint();
         }
 

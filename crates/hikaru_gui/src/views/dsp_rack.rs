@@ -9,6 +9,7 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
 use crate::views::hikaru_native_plugins::hikaru_openeq3;
+use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATION_CARD_WIDTH};
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
 use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::mixer::DspSlot;
@@ -26,7 +27,7 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 4] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 5] = [
     PluginEntry {
         category: "Audio FX",
         name: "OpenEQ3",
@@ -46,6 +47,11 @@ pub const PLUGIN_CATALOG: [PluginEntry; 4] = [
         category: "Drum Synth",
         name: "Hikaru OpenDMS",
         label: "Hikaru OpenDMS",
+    },
+    PluginEntry {
+        category: "Modulation",
+        name: "OpenModulation",
+        label: "Hikaru OpenModulation",
     },
 ];
 
@@ -266,6 +272,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                         let card_w = match slot.name.as_str() {
                             "OpenWavetable" => OPEN_WAVETABLE_CARD_WIDTH,
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
+                            "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => MODULATION_CARD_WIDTH,
                             _ => CARD_WIDTH,
                         };
                         let card_h = pill_h;
@@ -434,6 +441,14 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             }
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
                                 openspectral_phaser::render_module(
+                                    &mut body_ui,
+                                    app,
+                                    track_idx,
+                                    slot_idx,
+                                );
+                            }
+                            "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => {
+                                hikaru_openmodulation::render_module(
                                     &mut body_ui,
                                     app,
                                     track_idx,
