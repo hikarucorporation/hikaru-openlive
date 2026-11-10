@@ -7,8 +7,10 @@
 pub mod lfo_mod;
 
 pub use lfo_mod::{
-    get_lfo_state, get_modulation, handle_knob_mapping_click, is_mapping_target, render_module,
-    update_lfo_state, ActiveModulation, LfoModState, ModulationTarget, MODULATION_CARD_WIDTH,
+    get_global_transport, get_lfo_state, get_modulation, handle_knob_mapping_click,
+    is_mapping_target, on_transport_pause_or_stop, on_transport_play, render_module,
+    update_global_transport, update_lfo_state, ActiveModulation, LfoModState, LfoTransportState,
+    ModulationTarget, MODULATION_CARD_WIDTH,
 };
 
 #[cfg(test)]
@@ -85,5 +87,71 @@ mod tests {
         state.set_sync_rate(SyncRate::Whole1);
         assert_eq!(state.sync_rate, SyncRate::Whole1);
         assert_eq!(state.sync_continuous, 2.0);
+    }
+
+    #[test]
+    fn test_lfo_transport_bpm_sync_and_pause_reset() {
+        use hikaru_dsp::effects::lfo::{LfoSyncMode, SyncRate};
+
+        let mut state = LfoModState::default();
+        state.sync_mode = LfoSyncMode::TempoSync;
+        state.sync_rate = SyncRate::Quarter; // 1 beat per cycle
+        state.depth = 1.0;
+        state.amount = 1.0;
+        state.phase_deg = 0.0;
+
+        let sr = 44100.0_f32;
+        let bpm = 120.0_f32;
+        let samples_per_beat = (sr * 60.0) / bpm; // 22050 samples
+
+        // 1. When paused / stopped: LFO is frozen at 0.0
+        let stopped_transport = LfoTransportState {
+            bpm,
+            sample_count: 5000,
+            sample_rate: sr,
+            is_playing: false,
+            playback_start_sample: 0,
+        };
+        let (phase, _, _) = state.compute_live_sample_from_transport(&stopped_transport);
+        assert_eq!(phase, 0.0, "LFO debe frenar en 0.0 cuando el transporte está detenido/pausado");
+
+        // 2. Play begins at sample 10000: phase must start at 0.0
+        let play_transport_start = LfoTransportState {
+            bpm,
+            sample_count: 10000,
+            sample_rate: sr,
+            is_playing: true,
+            playback_start_sample: 10000,
+        };
+        let (phase_start, _, _) = state.compute_live_sample_from_transport(&play_transport_start);
+        assert_eq!(phase_start, 0.0, "LFO debe comenzar desde el principio (fase 0.0) al dar play");
+
+        // 3. Exactly half a beat later (11025 samples elapsed): phase must be 0.5
+        let play_half_beat = LfoTransportState {
+            bpm,
+            sample_count: 10000 + (samples_per_beat as u64 / 2),
+            sample_rate: sr,
+            is_playing: true,
+            playback_start_sample: 10000,
+        };
+        let (phase_half, _, _) = state.compute_live_sample_from_transport(&play_half_beat);
+        assert!((phase_half - 0.5).abs() < 1e-4, "LFO debe estar exactamente a medio ciclo en medio beat");
+
+        // 4. Exactly one full beat later (22050 samples): phase wraps cleanly to 0.0 (exact quarter note)
+        let play_full_beat = LfoTransportState {
+            bpm,
+            sample_count: 10000 + (samples_per_beat as u64),
+            sample_rate: sr,
+            is_playing: true,
+            playback_start_sample: 10000,
+        };
+        let (phase_full, _, _) = state.compute_live_sample_from_transport(&play_full_beat);
+        assert!(phase_full.abs() < 1e-4, "LFO debe completar exactamente un ciclo en 1 beat");
+
+        // 5. When project pauses, LFO immediately halts and resets to 0.0
+        let mut paused_transport = play_half_beat;
+        paused_transport.is_playing = false;
+        let (phase_paused, _, _) = state.compute_live_sample_from_transport(&paused_transport);
+        assert_eq!(phase_paused, 0.0, "Al pausar el proyecto, el LFO debe frenar y volver al principio");
     }
 }

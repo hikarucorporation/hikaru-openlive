@@ -192,6 +192,62 @@ impl LfoModState {
         let delta = normalized * self.amount;
         (frac_phase, normalized, delta)
     }
+
+    /// Evaluates live LFO sample phase-locked to host transport position and project BPM.
+    /// When transport is paused or stopped, the LFO halts ("frenar") and holds at the initial
+    /// phase (0.0 + phase offset). When play starts, it launches smoothly from the beginning.
+    pub fn compute_live_sample_from_transport(
+        &mut self,
+        transport: &LfoTransportState,
+    ) -> (f32, f32, f32) {
+        let phase_offset = (self.phase_deg / 360.0).rem_euclid(1.0);
+
+        // When transport is not running (stopped or paused), halt and stay at the beginning
+        if !transport.is_playing {
+            let frac_phase = phase_offset;
+            let raw = evaluate_waveform(self.waveform, frac_phase, self.current_sh_val);
+            let normalized = if self.bipolar {
+                raw * self.depth
+            } else {
+                ((raw + 1.0) * 0.5) * self.depth
+            };
+            let delta = normalized * self.amount;
+            return (frac_phase, normalized, delta);
+        }
+
+        let bpm = transport.bpm.clamp(20.0, 400.0);
+        let sr = transport.sample_rate.max(1.0);
+        let elapsed_samples = transport.sample_count.saturating_sub(transport.playback_start_sample);
+
+        let (cycle_idx, frac_phase) = match self.sync_mode {
+            LfoSyncMode::TempoSync => {
+                let samples_per_beat = (sr * 60.0) / bpm;
+                let beats = elapsed_samples as f64 / samples_per_beat as f64;
+                let beats_per_cycle = self.sync_rate.beats_per_cycle() as f64;
+                let total_cycles = (beats / beats_per_cycle) + phase_offset as f64;
+                (total_cycles.floor() as u64, total_cycles.rem_euclid(1.0) as f32)
+            }
+            LfoSyncMode::FreeHz => {
+                let seconds = elapsed_samples as f64 / sr as f64;
+                let total_cycles = (seconds * self.rate_hz as f64) + phase_offset as f64;
+                (total_cycles.floor() as u64, total_cycles.rem_euclid(1.0) as f32)
+            }
+        };
+
+        if cycle_idx != self.last_cycle_index || self.current_sh_val == 0.0 {
+            self.last_cycle_index = cycle_idx;
+            self.current_sh_val = pseudo_random_step(cycle_idx);
+        }
+
+        let raw = evaluate_waveform(self.waveform, frac_phase, self.current_sh_val);
+        let normalized = if self.bipolar {
+            raw * self.depth
+        } else {
+            ((raw + 1.0) * 0.5) * self.depth
+        };
+        let delta = normalized * self.amount;
+        (frac_phase, normalized, delta)
+    }
 }
 
 type LfoMap = Mutex<HashMap<(usize, usize), LfoModState>>;
@@ -226,6 +282,78 @@ pub fn clock_time_secs() -> f32 {
     START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32()
 }
 
+/// Global transport state synchronized with the DAW audio engine.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LfoTransportState {
+    pub bpm: f32,
+    pub sample_count: u64,
+    pub sample_rate: f32,
+    pub is_playing: bool,
+    pub playback_start_sample: u64,
+}
+
+impl Default for LfoTransportState {
+    fn default() -> Self {
+        Self {
+            bpm: 120.0,
+            sample_count: 0,
+            sample_rate: 44100.0,
+            is_playing: false,
+            playback_start_sample: 0,
+        }
+    }
+}
+
+static GLOBAL_LFO_TRANSPORT: OnceLock<Mutex<LfoTransportState>> = OnceLock::new();
+
+fn global_transport() -> &'static Mutex<LfoTransportState> {
+    GLOBAL_LFO_TRANSPORT.get_or_init(|| Mutex::new(LfoTransportState::default()))
+}
+
+/// Updates the global modulation transport clock from the DAW state.
+/// Seamlessly tracks Play, Pause, Stop, and Loop wraps so all LFO modulators
+/// stay perfectly locked to tempo without drift or polyrhythms.
+pub fn update_global_transport(bpm: f32, sample_count: u64, sample_rate: f32, is_playing: bool) {
+    if let Ok(mut lock) = global_transport().lock() {
+        let prev_playing = lock.is_playing;
+        lock.bpm = bpm.clamp(20.0, 400.0);
+        lock.sample_count = sample_count;
+        lock.sample_rate = sample_rate.max(1.0);
+        lock.is_playing = is_playing;
+
+        // Detect transition from stopped/paused -> playing: latch playback origin
+        if !prev_playing && is_playing {
+            lock.playback_start_sample = sample_count;
+        } else if !is_playing {
+            lock.playback_start_sample = 0;
+        } else if sample_count < lock.playback_start_sample {
+            // Loop wrap or timeline seek during playback
+            lock.playback_start_sample = sample_count;
+        }
+    }
+}
+
+/// Explicit notification that host transport has started playback.
+pub fn on_transport_play(start_sample: u64) {
+    if let Ok(mut lock) = global_transport().lock() {
+        lock.is_playing = true;
+        lock.playback_start_sample = start_sample;
+    }
+}
+
+/// Explicit notification that host transport has stopped or paused playback.
+pub fn on_transport_pause_or_stop() {
+    if let Ok(mut lock) = global_transport().lock() {
+        lock.is_playing = false;
+        lock.playback_start_sample = 0;
+    }
+}
+
+/// Returns the current global LFO transport snapshot.
+pub fn get_global_transport() -> LfoTransportState {
+    global_transport().lock().map(|l| *l).unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ActiveModulation {
     pub raw_lfo: f32,
@@ -235,14 +363,14 @@ pub struct ActiveModulation {
 }
 
 /// Queries whether a given device knob on track_idx is currently modulated by any active LFO.
+/// Uses host transport sync to guarantee exact phase alignment with the audio engine.
 pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<ActiveModulation> {
-    let time_secs = clock_time_secs();
-    let bpm = 120.0_f32; // Default if not in app context
+    let transport = get_global_transport();
     let mut map = lfo_state_map().lock().unwrap();
 
     for (&(tr, _slot), lfo) in map.iter_mut() {
         if tr == track_idx && lfo.target.matches(device, param) {
-            let (phase, raw, delta) = lfo.compute_live_sample(time_secs, bpm);
+            let (phase, raw, delta) = lfo.compute_live_sample_from_transport(&transport);
             return Some(ActiveModulation {
                 raw_lfo: raw,
                 delta,
@@ -282,12 +410,19 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     // Request continuous repaint for fluid 60fps LFO animation
     ui.ctx().request_repaint();
 
-    let bpm = app.transport.bpm as f32;
-    let time_secs = clock_time_secs();
+    let is_playing = app.transport.playback_state == hikaru_transport::TransportPlaybackState::Playing;
+    update_global_transport(
+        app.transport.bpm as f32,
+        app.transport.sample_count,
+        app.transport.sample_rate.get().max(1.0),
+        is_playing,
+    );
+    let transport = get_global_transport();
+    let bpm = transport.bpm;
 
     let mut state = get_lfo_state(track_idx, slot_idx);
     let (current_phase, current_val, current_delta) =
-        state.compute_live_sample(time_secs, bpm);
+        state.compute_live_sample_from_transport(&transport);
 
     // Keep global mapping mode synchronized
     let mut is_global_mapping = {
@@ -419,8 +554,20 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     );
 
     let freq_txt = match state.sync_mode {
-        LfoSyncMode::FreeHz => format!("{:.2} Hz", state.effective_hz(bpm)),
-        LfoSyncMode::TempoSync => format!("{} ({} BPM)", state.sync_rate.label(), bpm.round()),
+        LfoSyncMode::FreeHz => {
+            if transport.is_playing {
+                format!("{:.2} Hz ▶", state.effective_hz(bpm))
+            } else {
+                format!("{:.2} Hz ⏸", state.effective_hz(bpm))
+            }
+        }
+        LfoSyncMode::TempoSync => {
+            if transport.is_playing {
+                format!("{} ({} BPM) ▶", state.sync_rate.label(), bpm.round())
+            } else {
+                format!("{} ({} BPM) ⏸", state.sync_rate.label(), bpm.round())
+            }
+        }
     };
     p.text(
         pos2(scope_rect.min.x + 4.0, scope_rect.max.y - 4.0),

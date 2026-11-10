@@ -160,9 +160,11 @@ pub fn arranger_timeline_toggle_widget(ui: &mut Ui, active: bool) -> egui::Respo
 fn trigger_play_or_pause(state: &mut AppState) {
     if state.transport.playback_state == TransportPlaybackState::Playing {
         state.transport.playback_state = TransportPlaybackState::Paused;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_pause_or_stop();
         state.audio_proxy.send(GuiCommand::Pause);
     } else {
         state.transport.playback_state = TransportPlaybackState::Playing;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_play(state.transport.sample_count);
         state.audio_proxy.send(GuiCommand::StopPreview);
         state
             .audio_proxy
@@ -538,6 +540,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 {
                     state.transport.playback_state = TransportPlaybackState::Stopped;
                     state.transport.sample_count = 0;
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_pause_or_stop();
                     state.audio_proxy.send(GuiCommand::Stop);
                 }
 

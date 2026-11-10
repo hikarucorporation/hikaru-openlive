@@ -603,13 +603,38 @@ impl AppState {
     }
 
     pub fn sync_wavetables_to_engine(&mut self) {
-        let tracks = self.tracks().clone();
-        for (tr_idx, track) in tracks.iter().enumerate() {
+        let is_playing = self.transport.playback_state == hikaru_transport::TransportPlaybackState::Playing;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::update_global_transport(
+            self.transport.bpm as f32,
+            self.transport.sample_count,
+            self.transport.sample_rate.get().max(1.0),
+            is_playing,
+        );
+
+        let is_openstudio = self.mode == AppMode::OpenStudio;
+        let tracks = if is_openstudio {
+            &mut self.studio_tracks
+        } else {
+            &mut self.live_tracks
+        };
+
+        for (tr_idx, track) in tracks.iter_mut().enumerate() {
             let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
             if eng_track >= 16 { continue; }
 
-            let open_wt_slot = track.effects.iter().find(|slot| slot.active && slot.name == "OpenWavetable");
+            let open_wt_slot = track.effects.iter_mut().find(|slot| slot.active && slot.name == "OpenWavetable");
             if let Some(slot) = open_wt_slot {
+                // If WT POS is modulated by OpenModulation, apply live modulation
+                if let Some(m) = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                    tr_idx,
+                    "OpenWavetable",
+                    "WT POS",
+                ) {
+                    let base = slot.wavetable.base_position.unwrap_or_else(|| slot.wavetable.position());
+                    let effective = (base + m.delta).clamp(0.0, 1.0);
+                    slot.wavetable.set_position(effective);
+                }
+
                 let pitch_offset = slot.wavetable.octave * 12 + slot.wavetable.pitch;
                 let fp: u64 = (slot.wavetable.frame as u64)
                     ^ (((slot.wavetable.morph * 10000.0) as u64) << 16)
@@ -931,6 +956,7 @@ impl AppState {
         self.audio_proxy.send(GuiCommand::SetAppMode(is_studio));
         self.sync_wavetables_to_engine();
         self.transport.playback_state = TransportPlaybackState::Playing;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_play(self.transport.sample_count);
         self.audio_proxy.send(GuiCommand::Play);
 
         if self.mode == AppMode::OpenLive {
@@ -995,12 +1021,14 @@ impl AppState {
 
     pub fn pause(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Paused;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_pause_or_stop();
         self.audio_proxy.send(GuiCommand::Pause);
     }
 
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_pause_or_stop();
         self.playlist_state.playhead_tick = 0;
         self.piano_roll_state.playhead_tick = self.piano_roll_state.loop_start_tick;
         self.piano_roll_state.prev_playhead_tick = self.piano_roll_state.playhead_tick;
