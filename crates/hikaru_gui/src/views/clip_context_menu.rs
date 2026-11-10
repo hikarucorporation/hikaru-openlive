@@ -15,6 +15,9 @@
 //! - Clip Launcher con MIDI Clip (`Captura de pantalla_20261110_185858.png`)
 //! - Clip Launcher con Audio Clip (`Captura de pantalla_20261110_185755.png`)
 //! - Clip Launcher en ranura vacía / sin audio (`Captura de pantalla_20261110_185638.png`)
+//!
+//! Para clips con contenido (Audio o MIDI), comprime y organiza la información en
+//! dos columnas elegantes lado a lado (evitando desbordamiento vertical fuera de pantalla).
 
 use egui::{
     pos2, vec2, Align2, Color32, Id, Key, Order, Pos2, Rect, Response, Sense,
@@ -163,22 +166,27 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
         .unwrap_or(true);
 
     let screen_rect = ui.ctx().screen_rect();
+    // Para clips con contenido, usamos diseño comprimido a dos columnas (w ~ 484px, h ~ 300px)
     let menu_width = if target_type == SlotTargetType::Empty {
-        220.0
-    } else {
-        256.0
-    };
-    let estimated_height = if target_type == SlotTargetType::Empty {
         210.0
     } else {
-        720.0
+        484.0
+    };
+    let estimated_height = if target_type == SlotTargetType::Empty {
+        145.0
+    } else {
+        300.0
     };
 
-    let clamped_x = menu.click_pos.x.clamp(8.0, (screen_rect.max.x - menu_width - 8.0).max(8.0));
-    let clamped_y = if menu.click_pos.y + estimated_height > screen_rect.max.y - 12.0 {
-        (menu.click_pos.y - estimated_height).max(8.0)
+    let clamped_x = if menu.click_pos.x + menu_width > screen_rect.max.x - 12.0 {
+        (screen_rect.max.x - menu_width - 12.0).max(6.0)
     } else {
-        menu.click_pos.y.max(8.0)
+        menu.click_pos.x.max(6.0)
+    };
+    let clamped_y = if menu.click_pos.y + estimated_height > screen_rect.max.y - 12.0 {
+        (screen_rect.max.y - estimated_height - 12.0).max(6.0)
+    } else {
+        menu.click_pos.y.max(6.0)
     };
     let origin = pos2(clamped_x, clamped_y);
 
@@ -208,13 +216,13 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
                 .inner_margin(egui::Margin::symmetric(4, 4));
 
             let response = frame.show(ui, |ui| {
-                ui.set_width(menu_width);
                 ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
 
                 match target_type {
                     SlotTargetType::Empty => {
+                        ui.set_width(menu_width);
                         // =====================================================
-                        // 1. RANURA VACÍA / SIN AUDIO
+                        // 1. RANURA VACÍA / SIN AUDIO (Compacto y vertical)
                         // =====================================================
                         if menu_item(ui, "Insert from Library...", Some("B"), true, Some(icons::FOLDER)).clicked() {
                             action = Some(ContextMenuAction::InsertFromLibrary);
@@ -256,209 +264,238 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
                     SlotTargetType::AudioClip | SlotTargetType::MidiClip => {
                         let is_audio = target_type == SlotTargetType::AudioClip;
                         let is_midi = target_type == SlotTargetType::MidiClip;
+                        let col_w = 236.0;
 
                         // =====================================================
-                        // 2 & 3. AUDIO Y MIDI CLIP (1:1 Bitwig Studio)
+                        // 2 & 3. AUDIO Y MIDI CLIP: COMPRESIÓN A LA DERECHA (2 COLUMNAS)
                         // =====================================================
-
-                        // Cabecera: Paleta de Colores 3x8
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                            ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+
+                            // -------------------------------------------------
+                            // COLUMNA IZQUIERDA: Paleta, Estados, Edit, Scales
+                            // -------------------------------------------------
                             ui.vertical(|ui| {
-                                for row in BITWIG_CLIP_PALETTE.iter() {
-                                    ui.horizontal(|ui| {
-                                        for &col in row.iter() {
-                                            let (swatch_rect, swatch_resp) =
-                                                ui.allocate_exact_size(vec2(16.0, 12.0), Sense::click());
-                                            let p = ui.painter();
-                                            let r = if swatch_resp.hovered() {
-                                                p.rect_filled(swatch_rect, 1.5, col);
-                                                p.rect_stroke(
-                                                    swatch_rect,
-                                                    1.5,
-                                                    Stroke::new(1.0_f32, Color32::WHITE),
-                                                    egui::StrokeKind::Inside,
-                                                );
-                                                swatch_resp
-                                            } else {
-                                                p.rect_filled(swatch_rect, 1.5, col);
-                                                swatch_resp
-                                            };
-                                            if r.clicked() {
-                                                action = Some(ContextMenuAction::Recolor(col));
-                                                close_menu = true;
-                                            }
+                                ui.set_width(col_w);
+                                ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
+
+                                // Paleta de Colores 3x8 compacta
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing = vec2(1.5, 1.5);
+                                    ui.vertical(|ui| {
+                                        for row in BITWIG_CLIP_PALETTE.iter() {
+                                            ui.horizontal(|ui| {
+                                                for &col in row.iter() {
+                                                    let (swatch_rect, swatch_resp) =
+                                                        ui.allocate_exact_size(vec2(15.0, 10.0), Sense::click());
+                                                    let p = ui.painter();
+                                                    if swatch_resp.hovered() {
+                                                        p.rect_filled(swatch_rect, 1.5, col);
+                                                        p.rect_stroke(
+                                                            swatch_rect,
+                                                            1.5,
+                                                            Stroke::new(1.0_f32, Color32::WHITE),
+                                                            egui::StrokeKind::Inside,
+                                                        );
+                                                    } else {
+                                                        p.rect_filled(swatch_rect, 1.5, col);
+                                                    }
+                                                    if swatch_resp.clicked() {
+                                                        action = Some(ContextMenuAction::Recolor(col));
+                                                        close_menu = true;
+                                                    }
+                                                }
+                                            });
                                         }
                                     });
+                                });
+
+                                render_separator(ui);
+
+                                // Estados Muted / Looping con círculo toggle
+                                if toggle_bullet_item(ui, "Muted", is_clip_muted, true).clicked() {
+                                    action = Some(ContextMenuAction::ToggleMute);
+                                    close_menu = true;
+                                }
+                                if toggle_bullet_item(ui, "Looping", is_clip_looping, true).clicked() {
+                                    action = Some(ContextMenuAction::ToggleLoop);
+                                    close_menu = true;
+                                }
+
+                                render_separator(ui);
+
+                                // Barra horizontal [CUT | COPY | PASTE | DUPL. | DELETE]
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
+                                    let item_w = (col_w - 4.0) / 5.0;
+
+                                    if action_toolbar_btn(ui, item_w, "CUT", Some(icons::CUT), true).clicked() {
+                                        action = Some(ContextMenuAction::Cut);
+                                        close_menu = true;
+                                    }
+                                    if action_toolbar_btn(ui, item_w, "COPY", Some(icons::FOLDERS), true).clicked() {
+                                        action = Some(ContextMenuAction::Copy);
+                                        close_menu = true;
+                                    }
+                                    if action_toolbar_btn(ui, item_w, "PASTE", None, has_clipboard_slot).clicked() {
+                                        action = Some(ContextMenuAction::Paste);
+                                        close_menu = true;
+                                    }
+                                    if action_toolbar_btn(ui, item_w, "DUPL.", Some(icons::DUPLICATE_PLUS), true).clicked() {
+                                        action = Some(ContextMenuAction::Duplicate);
+                                        close_menu = true;
+                                    }
+                                    if action_toolbar_btn(ui, item_w, "DELETE", Some(icons::CIRCLE_X), true).clicked() {
+                                        action = Some(ContextMenuAction::Delete);
+                                        close_menu = true;
+                                    }
+                                });
+
+                                render_separator(ui);
+
+                                // Loop Selected & Consolidate
+                                if menu_item(ui, "Loop Selected Region", Some("Ctrl+L"), true, None).clicked() {
+                                    action = Some(ContextMenuAction::LoopSelectedRegion);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Consolidate", Some("Ctrl+J"), true, None).clicked() {
+                                    action = Some(ContextMenuAction::Consolidate);
+                                    close_menu = true;
+                                }
+
+                                render_separator(ui);
+
+                                // Double & Scale
+                                if menu_item(ui, "Double Content", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::DoubleContent);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Scale 50%", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::Scale50);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Scale 200%", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::Scale200);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Scale...", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::ScaleCustom);
+                                    close_menu = true;
+                                }
+
+                                render_separator(ui);
+
+                                // Normalize: Activo en Audio, Deshabilitado en MIDI
+                                if menu_item(ui, "Normalize", None, is_audio, None).clicked() {
+                                    if is_audio {
+                                        action = Some(ContextMenuAction::Normalize);
+                                        close_menu = true;
+                                    }
+                                }
+                            });
+
+                            // -------------------------------------------------
+                            // LÍNEA DIVISORIA VERTICAL ENTRE COLUMNAS
+                            // -------------------------------------------------
+                            let (sep_rect, _) = ui.allocate_exact_size(vec2(1.0, estimated_height - 16.0), Sense::hover());
+                            let p = ui.painter();
+                            p.line_segment(
+                                [
+                                    pos2(sep_rect.center().x, sep_rect.min.y + 2.0),
+                                    pos2(sep_rect.center().x, sep_rect.max.y - 2.0),
+                                ],
+                                Stroke::new(1.0_f32, MENU_SEPARATOR),
+                            );
+
+                            // -------------------------------------------------
+                            // COLUMNA DERECHA: Biblioteca, Bounce, Transpose, Quantize
+                            // -------------------------------------------------
+                            ui.vertical(|ui| {
+                                ui.set_width(col_w);
+                                ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
+
+                                // Biblioteca (comprimida arriba a la derecha como en Bitwig)
+                                if menu_item(ui, "Insert from Library...", Some("B"), true, Some(icons::FOLDER)).clicked() {
+                                    action = Some(ContextMenuAction::InsertFromLibrary);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Save Launcher clip To Library", None, true, Some(icons::FILE_EXPORT)).clicked() {
+                                    action = Some(ContextMenuAction::SaveClipToLibrary);
+                                    close_menu = true;
+                                }
+
+                                render_separator(ui);
+
+                                // Bounce & Slicing
+                                if menu_item(ui, "Bounce In Place", Some("Ctrl+B"), true, None).clicked() {
+                                    action = Some(ContextMenuAction::BounceInPlace);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Bounce", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::Bounce);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Expand...", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::Expand);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Slice to Drum Machine...", Some("Ctrl+Alt+D"), true, None).clicked() {
+                                    action = Some(ContextMenuAction::SliceToDrumMachine);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Slice to Multisample...", None, true, None).clicked() {
+                                    action = Some(ContextMenuAction::SliceToMultisample);
+                                    close_menu = true;
+                                }
+                                let _ = menu_item(ui, "Fold to Takes...", None, false, None);
+
+                                render_separator(ui);
+
+                                // Octave Transposition
+                                if menu_item(ui, "Transpose an Octave Up", Some("Shift+Alt++"), true, None).clicked() {
+                                    action = Some(ContextMenuAction::TransposeOctaveUp);
+                                    close_menu = true;
+                                }
+                                if menu_item(ui, "Transpose an Octave Down", Some("Shift+Alt+-"), true, None).clicked() {
+                                    action = Some(ContextMenuAction::TransposeOctaveDown);
+                                    close_menu = true;
+                                }
+
+                                render_separator(ui);
+
+                                // Quantization & Timing
+                                if menu_item(ui, "Quantize", Some("Q"), is_midi, None).clicked() {
+                                    if is_midi {
+                                        action = Some(ContextMenuAction::Quantize);
+                                        close_menu = true;
+                                    }
+                                }
+                                if menu_item(ui, "Quantize...", Some("Alt+Q"), is_midi, None).clicked() {
+                                    if is_midi {
+                                        action = Some(ContextMenuAction::QuantizeOptions);
+                                        close_menu = true;
+                                    }
+                                }
+                                if menu_item(ui, "Quantize Audio", None, is_audio, None).clicked() {
+                                    if is_audio {
+                                        action = Some(ContextMenuAction::QuantizeAudio);
+                                        close_menu = true;
+                                    }
+                                }
+                                if menu_item(ui, "Quantize Audio...", None, is_audio, None).clicked() {
+                                    if is_audio {
+                                        action = Some(ContextMenuAction::QuantizeAudioOptions);
+                                        close_menu = true;
+                                    }
+                                }
+                                if menu_item(ui, "Make Legato", Some("Ctrl+Shift+Alt+L"), is_midi, None).clicked() {
+                                    if is_midi {
+                                        action = Some(ContextMenuAction::MakeLegato);
+                                        close_menu = true;
+                                    }
                                 }
                             });
                         });
-
-                        render_separator(ui);
-
-                        // Biblioteca
-                        if menu_item(ui, "Insert from Library...", Some("B"), true, Some(icons::FOLDER)).clicked() {
-                            action = Some(ContextMenuAction::InsertFromLibrary);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Save Launcher clip To Library", None, true, Some(icons::FILE_EXPORT)).clicked() {
-                            action = Some(ContextMenuAction::SaveClipToLibrary);
-                            close_menu = true;
-                        }
-
-                        render_separator(ui);
-
-                        // Estados Muted / Looping con círculo toggle
-                        if toggle_bullet_item(ui, "Muted", is_clip_muted, true).clicked() {
-                            action = Some(ContextMenuAction::ToggleMute);
-                            close_menu = true;
-                        }
-                        if toggle_bullet_item(ui, "Looping", is_clip_looping, true).clicked() {
-                            action = Some(ContextMenuAction::ToggleLoop);
-                            close_menu = true;
-                        }
-
-                        render_separator(ui);
-
-                        // Barra horizontal de iconos [CUT | COPY | PASTE | DUPL. | DELETE]
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                            let item_w = (ui.available_width() - 8.0) / 5.0;
-
-                            if action_toolbar_btn(ui, item_w, "CUT", Some(icons::CUT), true).clicked() {
-                                action = Some(ContextMenuAction::Cut);
-                                close_menu = true;
-                            }
-                            if action_toolbar_btn(ui, item_w, "COPY", Some(icons::FOLDERS), true).clicked() {
-                                action = Some(ContextMenuAction::Copy);
-                                close_menu = true;
-                            }
-                            if action_toolbar_btn(ui, item_w, "PASTE", None, has_clipboard_slot).clicked() {
-                                action = Some(ContextMenuAction::Paste);
-                                close_menu = true;
-                            }
-                            if action_toolbar_btn(ui, item_w, "DUPL.", Some(icons::DUPLICATE_PLUS), true).clicked() {
-                                action = Some(ContextMenuAction::Duplicate);
-                                close_menu = true;
-                            }
-                            if action_toolbar_btn(ui, item_w, "DELETE", Some(icons::CIRCLE_X), true).clicked() {
-                                action = Some(ContextMenuAction::Delete);
-                                close_menu = true;
-                            }
-                        });
-
-                        render_separator(ui);
-
-                        // Loop & Consolidate
-                        if menu_item(ui, "Loop Selected Region", Some("Ctrl+L"), true, None).clicked() {
-                            action = Some(ContextMenuAction::LoopSelectedRegion);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Consolidate", Some("Ctrl+J"), true, None).clicked() {
-                            action = Some(ContextMenuAction::Consolidate);
-                            close_menu = true;
-                        }
-
-                        render_separator(ui);
-
-                        // Double & Scale
-                        if menu_item(ui, "Double Content", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::DoubleContent);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Scale 50%", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::Scale50);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Scale 200%", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::Scale200);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Scale...", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::ScaleCustom);
-                            close_menu = true;
-                        }
-
-                        render_separator(ui);
-
-                        // Normalize: Activo en Audio, Deshabilitado en MIDI
-                        if menu_item(ui, "Normalize", None, is_audio, None).clicked() {
-                            if is_audio {
-                                action = Some(ContextMenuAction::Normalize);
-                                close_menu = true;
-                            }
-                        }
-
-                        render_separator(ui);
-
-                        // Bounce & Slicing
-                        if menu_item(ui, "Bounce In Place", Some("Ctrl+B"), true, None).clicked() {
-                            action = Some(ContextMenuAction::BounceInPlace);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Bounce", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::Bounce);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Expand...", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::Expand);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Slice to Drum Machine...", Some("Ctrl+Alt+D"), true, None).clicked() {
-                            action = Some(ContextMenuAction::SliceToDrumMachine);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Slice to Multisample...", None, true, None).clicked() {
-                            action = Some(ContextMenuAction::SliceToMultisample);
-                            close_menu = true;
-                        }
-                        let _ = menu_item(ui, "Fold to Takes...", None, false, None);
-
-                        render_separator(ui);
-
-                        // Octave Transposition
-                        if menu_item(ui, "Transpose an Octave Up", Some("Shift+Alt++"), true, None).clicked() {
-                            action = Some(ContextMenuAction::TransposeOctaveUp);
-                            close_menu = true;
-                        }
-                        if menu_item(ui, "Transpose an Octave Down", Some("Shift+Alt+-"), true, None).clicked() {
-                            action = Some(ContextMenuAction::TransposeOctaveDown);
-                            close_menu = true;
-                        }
-
-                        render_separator(ui);
-
-                        // Quantization & Timing
-                        if menu_item(ui, "Quantize", Some("Q"), is_midi, None).clicked() {
-                            if is_midi {
-                                action = Some(ContextMenuAction::Quantize);
-                                close_menu = true;
-                            }
-                        }
-                        if menu_item(ui, "Quantize...", Some("Alt+Q"), is_midi, None).clicked() {
-                            if is_midi {
-                                action = Some(ContextMenuAction::QuantizeOptions);
-                                close_menu = true;
-                            }
-                        }
-                        if menu_item(ui, "Quantize Audio", None, is_audio, None).clicked() {
-                            if is_audio {
-                                action = Some(ContextMenuAction::QuantizeAudio);
-                                close_menu = true;
-                            }
-                        }
-                        if menu_item(ui, "Quantize Audio...", None, is_audio, None).clicked() {
-                            if is_audio {
-                                action = Some(ContextMenuAction::QuantizeAudioOptions);
-                                close_menu = true;
-                            }
-                        }
-                        if menu_item(ui, "Make Legato", Some("Ctrl+Shift+Alt+L"), is_midi, None).clicked() {
-                            if is_midi {
-                                action = Some(ContextMenuAction::MakeLegato);
-                                close_menu = true;
-                            }
-                        }
                     }
                 }
             });
@@ -782,7 +819,7 @@ fn menu_item(
     enabled: bool,
     icon: Option<icons::VectorIcon>,
 ) -> Response {
-    let height = 22.0;
+    let height = 20.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -797,12 +834,12 @@ fn menu_item(
             TEXT_MUTED
         };
 
-        let mut text_x = rect.min.x + 8.0;
+        let mut text_x = rect.min.x + 6.0;
 
         if let Some(ic) = icon {
             let ic_rect = Rect::from_center_size(
-                pos2(rect.min.x + 14.0, rect.center().y),
-                vec2(12.0, 12.0),
+                pos2(rect.min.x + 12.0, rect.center().y),
+                vec2(11.0, 11.0),
             );
             icons::paint_icon(p, ic_rect, ic, text_color, 1.2_f32);
             text_x += 18.0;
@@ -812,7 +849,7 @@ fn menu_item(
             pos2(text_x, rect.center().y),
             Align2::LEFT_CENTER,
             label,
-            fonts::regular(11.0),
+            fonts::regular(10.5),
             text_color,
         );
 
@@ -823,10 +860,10 @@ fn menu_item(
                 TEXT_MUTED
             };
             p.text(
-                pos2(rect.max.x - 8.0, rect.center().y),
+                pos2(rect.max.x - 6.0, rect.center().y),
                 Align2::RIGHT_CENTER,
                 sc,
-                fonts::regular(10.0),
+                fonts::regular(9.5),
                 sc_col,
             );
         }
@@ -837,7 +874,7 @@ fn menu_item(
 
 /// Dibuja un ítem con viñeta circular / toggle de Bitwig (para Muted y Looping)
 fn toggle_bullet_item(ui: &mut Ui, label: &str, checked: bool, enabled: bool) -> Response {
-    let height = 22.0;
+    let height = 20.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -846,8 +883,8 @@ fn toggle_bullet_item(ui: &mut Ui, label: &str, checked: bool, enabled: bool) ->
             p.rect_filled(rect, 2.0, HOVER_BG);
         }
 
-        let circle_center = pos2(rect.min.x + 14.0, rect.center().y);
-        let circle_r = 5.0;
+        let circle_center = pos2(rect.min.x + 12.0, rect.center().y);
+        let circle_r = 4.5;
 
         if checked {
             p.circle_filled(circle_center, circle_r, Color32::from_rgb(0x8A, 0x90, 0x9C));
@@ -855,15 +892,15 @@ fn toggle_bullet_item(ui: &mut Ui, label: &str, checked: bool, enabled: bool) ->
             let mark_col = Color32::from_rgb(0x18, 0x1A, 0x1E);
             p.line_segment(
                 [
-                    pos2(circle_center.x - 2.5, circle_center.y),
-                    pos2(circle_center.x - 0.5, circle_center.y + 2.0),
+                    pos2(circle_center.x - 2.0, circle_center.y),
+                    pos2(circle_center.x - 0.5, circle_center.y + 1.8),
                 ],
                 Stroke::new(1.3_f32, mark_col),
             );
             p.line_segment(
                 [
-                    pos2(circle_center.x - 0.5, circle_center.y + 2.0),
-                    pos2(circle_center.x + 2.5, circle_center.y - 2.0),
+                    pos2(circle_center.x - 0.5, circle_center.y + 1.8),
+                    pos2(circle_center.x + 2.2, circle_center.y - 1.8),
                 ],
                 Stroke::new(1.3_f32, mark_col),
             );
@@ -877,10 +914,10 @@ fn toggle_bullet_item(ui: &mut Ui, label: &str, checked: bool, enabled: bool) ->
             TEXT_MUTED
         };
         p.text(
-            pos2(rect.min.x + 26.0, rect.center().y),
+            pos2(rect.min.x + 24.0, rect.center().y),
             Align2::LEFT_CENTER,
             label,
-            fonts::regular(11.0),
+            fonts::regular(10.5),
             text_color,
         );
     }
@@ -896,7 +933,7 @@ fn action_toolbar_btn(
     icon: Option<icons::VectorIcon>,
     enabled: bool,
 ) -> Response {
-    let height = 34.0;
+    let height = 28.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -913,17 +950,17 @@ fn action_toolbar_btn(
 
         if let Some(ic) = icon {
             let ic_rect = Rect::from_center_size(
-                pos2(rect.center().x, rect.min.y + 11.0),
-                vec2(13.0, 13.0),
+                pos2(rect.center().x, rect.min.y + 9.0),
+                vec2(11.0, 11.0),
             );
             icons::paint_icon(p, ic_rect, ic, col, 1.2_f32);
         }
 
         p.text(
-            pos2(rect.center().x, rect.max.y - 8.0),
+            pos2(rect.center().x, rect.max.y - 6.0),
             Align2::CENTER_CENTER,
             label,
-            fonts::semibold(9.0),
+            fonts::semibold(8.5),
             col,
         );
     }
@@ -933,7 +970,7 @@ fn action_toolbar_btn(
 
 /// Línea divisoria horizontal sutil
 fn render_separator(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
     let p = ui.painter();
     p.line_segment(
         [
