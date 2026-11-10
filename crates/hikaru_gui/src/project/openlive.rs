@@ -360,6 +360,7 @@ fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
                             None => matrix::SlotState::Empty,
                         },
                         clip: slot.as_ref().map(|c| build_clip(c, base_dir)),
+                        has_stop_button: true,
                     })
                     .collect()
             })
@@ -503,6 +504,8 @@ fn build_clip(saved: &Clip, base_dir: Option<&Path>) -> matrix::MatrixClip {
         loop_enabled: saved.loop_enabled,
         has_time_selection: true,
         peaks: Vec::new(),
+        muted: saved.mute,
+        color: None,
     };
     clip.local_track.volume = saved.volume;
     clip.local_track.pan = saved.pan;

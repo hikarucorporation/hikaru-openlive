@@ -790,6 +790,8 @@ fn test_tier1_f27_matrix_clip_launcher_midi_integration() {
         loop_enabled: true,
         has_time_selection: false,
         peaks: Vec::new(),
+        muted: false,
+        color: None,
     });
 
     assert!(slot.clip.is_some());

@@ -190,6 +190,8 @@ pub struct MatrixClip {
     pub loop_enabled: bool,
     pub has_time_selection: bool,
     pub peaks: Vec<f32>,
+    pub muted: bool,
+    pub color: Option<egui::Color32>,
 }
 
 impl MatrixClip {
@@ -308,6 +310,7 @@ impl MatrixClip {
 pub struct MatrixSlot {
     pub state: SlotState,
     pub clip: Option<MatrixClip>,
+    pub has_stop_button: bool,
 }
 
 impl Default for MatrixSlot {
@@ -315,6 +318,7 @@ impl Default for MatrixSlot {
         Self {
             state: SlotState::Empty,
             clip: None,
+            has_stop_button: true,
         }
     }
 }
@@ -346,6 +350,7 @@ pub struct SessionMatrixState {
     pub editor_height: f32,
     pub editor_zoom_x: f32,
     pub show_editor: bool,
+    pub context_menu: Option<crate::views::clip_context_menu::ClipLauncherContextMenu>,
 }
 
 impl Default for SessionMatrixState {
@@ -381,6 +386,7 @@ impl Default for SessionMatrixState {
             editor_height: 104.0,
             editor_zoom_x: 0.04,
             show_editor: true,
+            context_menu: None,
         }
     }
 }
@@ -787,6 +793,7 @@ pub fn load_clip_into_slot(
 
     state.grid[track_idx][scene_idx] = MatrixSlot {
         state: SlotState::Stopped,
+        has_stop_button: true,
         clip: Some(MatrixClip {
             id: new_id,
             name: name.clone(),
@@ -801,6 +808,8 @@ pub fn load_clip_into_slot(
             loop_enabled: true,
             has_time_selection: true,
             peaks,
+            muted: false,
+            color: None,
         }),
     };
 
@@ -840,6 +849,7 @@ pub fn create_empty_midi_clip(
 
     state.grid[track_idx][scene_idx] = MatrixSlot {
         state: SlotState::Stopped,
+        has_stop_button: true,
         clip: Some(MatrixClip {
             id: new_id,
             name: name.clone(),
@@ -854,6 +864,8 @@ pub fn create_empty_midi_clip(
             loop_enabled: true,
             has_time_selection: true,
             peaks: Vec::new(),
+            muted: false,
+            color: None,
         }),
     };
     state.selected_slot = Some((track_idx, scene_idx));
@@ -1278,6 +1290,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut add_scene_action = false;
     let mut drop_slot_action: Option<(usize, usize, PathBuf)> = None;
     let mut drop_timeline_action: Option<(usize, u64, PathBuf)> = None;
+    let mut open_context_menu_action: Option<(usize, usize, egui::Pos2)> = None;
 
     for track_idx in 0..tracks_count {
         let row_y0 = tracks_y0 + scroll_y + track_idx as f32 * row_h;
@@ -1818,18 +1831,28 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 if let Some(clip) = clip_opt {
                     // Populated Bitwig Clip Card
                     let is_playing = slot_state == SlotState::Playing;
-                    let card_bg = Color32::from_rgba_unmultiplied(
-                        track_color.r() / 2,
-                        track_color.g() / 2,
-                        track_color.b() / 2,
-                        240,
-                    );
+                    let effective_color = clip.color.unwrap_or(track_color);
+                    let card_bg = if clip.muted {
+                        Color32::from_rgb(0x28, 0x2A, 0x2E)
+                    } else {
+                        Color32::from_rgba_unmultiplied(
+                            effective_color.r() / 2,
+                            effective_color.g() / 2,
+                            effective_color.b() / 2,
+                            240,
+                        )
+                    };
                     lg_painter.rect_filled(cell_rect, 2.5, card_bg);
 
                     // Top colored header strip (16px tall) with vector play/stop icon
                     let top_strip =
                         Rect::from_min_size(cell_rect.min, vec2(cell_rect.width(), 16.0));
-                    lg_painter.rect_filled(top_strip, 2.5, track_color);
+                    let strip_col = if clip.muted {
+                        Color32::from_rgb(0x40, 0x43, 0x48)
+                    } else {
+                        effective_color
+                    };
+                    lg_painter.rect_filled(top_strip, 2.5, strip_col);
 
                     let ic_rect = Rect::from_min_size(
                         pos2(top_strip.min.x + 3.0, top_strip.min.y + 2.0),
@@ -1955,9 +1978,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         pos2(cell_rect.min.x + 5.0, cell_rect.center().y - 6.0),
                         vec2(12.0, 12.0),
                     );
+                    let has_stop_btn = slot.map(|s| s.has_stop_button).unwrap_or(true);
                     if is_armed {
                         icons::paint_record_circle(&lg_painter, ic_rect, REC_RED, false);
-                    } else {
+                    } else if has_stop_btn {
                         icons::paint_stop_square(
                             &lg_painter,
                             ic_rect,
@@ -1995,6 +2019,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     }
                     if secondary_clicked {
                         select_slot_action = Some((track_idx, scene_idx));
+                        open_context_menu_action = Some((
+                            track_idx,
+                            scene_idx,
+                            pointer_pos.unwrap_or(cell_rect.min),
+                        ));
                     }
                     if pointer_released {
                         if let Some(ref sample_path) = state.dragged_sample {
@@ -2501,6 +2530,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         select_matrix_track(state, t_idx);
     }
 
+    if let Some((t_idx, s_idx, click_pos)) = open_context_menu_action {
+        state.matrix_state.context_menu = Some(crate::views::clip_context_menu::ClipLauncherContextMenu {
+            track_idx: t_idx,
+            scene_idx: s_idx,
+            click_pos,
+        });
+    }
+
     if let Some((t_idx, s_idx)) = create_midi_slot_action {
         create_empty_midi_clip(&mut state.matrix_state, &state.audio_proxy, t_idx, s_idx);
         select_matrix_track(state, t_idx);
@@ -2557,6 +2594,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             tr.arm = !tr.arm;
         }
     }
+
+    crate::views::clip_context_menu::render_clip_context_menu(ui, state);
 }
 
 #[allow(dead_code)]

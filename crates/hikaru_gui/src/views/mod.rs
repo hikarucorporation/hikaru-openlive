@@ -39,4 +39,5 @@ pub mod external_plugins_settings;
 pub mod mcp_port_settings;
 pub mod control_panel;
 pub mod modal;
+pub mod clip_context_menu;
 pub mod hikaru_native_plugins;

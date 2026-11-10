@@ -178,6 +178,8 @@ fn test_tier4_s03_session_matrix_live_jam() {
         has_time_selection: false,
         peaks: Vec::new(),
         content: ClipData::Midi { notes: drum_notes_s0 },
+        muted: false,
+        color: None,
     });
     matrix_state.grid[1][0].clip = Some(matrix::MatrixClip {
         id: 2,
@@ -193,6 +195,8 @@ fn test_tier4_s03_session_matrix_live_jam() {
         has_time_selection: false,
         peaks: Vec::new(),
         content: ClipData::Midi { notes: bass_notes_s0 },
+        muted: false,
+        color: None,
     });
     matrix_state.grid[0][1].clip = Some(matrix::MatrixClip {
         id: 3,
@@ -208,6 +212,8 @@ fn test_tier4_s03_session_matrix_live_jam() {
         has_time_selection: false,
         peaks: Vec::new(),
         content: ClipData::Midi { notes: drum_notes_s1 },
+        muted: false,
+        color: None,
     });
     matrix_state.grid[1][1].clip = Some(matrix::MatrixClip {
         id: 4,
@@ -223,6 +229,8 @@ fn test_tier4_s03_session_matrix_live_jam() {
         has_time_selection: false,
         peaks: Vec::new(),
         content: ClipData::Midi { notes: bass_notes_s1 },
+        muted: false,
+        color: None,
     });
 
     // 1. Launch Scene 0 (triggers Track 0 Scene 0 and Track 1 Scene 0)

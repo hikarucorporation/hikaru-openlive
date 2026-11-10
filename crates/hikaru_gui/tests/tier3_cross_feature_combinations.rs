@@ -195,6 +195,8 @@ fn test_tier3_c05_matrix_clip_trigger_and_piano_roll_focus() {
         loop_enabled: true,
         has_time_selection: false,
         peaks: Vec::new(),
+        muted: false,
+        color: None,
     });
 
     // 1. User double-clicks clip in Matrix: triggers clip and opens Piano Roll
