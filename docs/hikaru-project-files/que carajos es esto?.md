@@ -34,6 +34,21 @@
 
 ---
 
+#### 3. `/docs/hikaru-device-panel/` (`.hdp`)
+
+**Propósito:** Enfocado 100% en presets individuales y cadenas de efectos/instrumentos (*Device Chains*) del Device Panel de Bitwig-style.
+
+* **Contenido exclusivo:**
+* **Información de Cabecera:** `"format_version": 1`, `"created_by": "Hikaru OpenLive 2.24.0"`.
+* **Tipo de Preset:** `"preset_type": "SingleDevice"` (un solo dispositivo) o `"Chain"` (cadena completa de la pista).
+* **Metadatos del Patch:** Nombre, autor, categoría y descripción.
+* **Estado de Instrumentos:** Parámetros de sintetizadores como `OpenWavetable` (tabla cargada, WT POS, morfología, afinación, unísono, vista 3D y colores).
+* **Estado de Moduladores:** Parámetros de `OpenModulation` (forma de onda, modo sync a compás, rate, depth, amount y mapeo interactivo de target a knobs).
+
+* **Qué NO incluye:** No contiene matrices de lanzamiento ni clips de audio/MIDI (eso va en `.oplf`), ni timelines del secuenciador (eso va en `.opsf`).
+
+---
+
 ### Plan de Acción para la IA (marcarle la cancha a OpenCode)
 
 1. **Creación de Specs en `/docs/`:**

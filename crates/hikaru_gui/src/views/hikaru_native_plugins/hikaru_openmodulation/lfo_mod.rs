@@ -9,6 +9,7 @@ use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
 use hikaru_dsp::effects::lfo::{
     evaluate_waveform, pseudo_random_step, LfoSyncMode, LfoWaveform, SyncRate,
 };
+use hikaru_project_file::OpenModulationParams;
 
 use crate::app::AppState;
 use crate::theme;
@@ -162,6 +163,61 @@ impl LfoModState {
     pub fn set_sync_rate(&mut self, rate: SyncRate) {
         self.sync_rate = rate;
         self.sync_continuous = self.sync_index() as f32;
+    }
+
+    pub fn to_params(&self) -> OpenModulationParams {
+        OpenModulationParams {
+            waveform: match self.waveform {
+                LfoWaveform::Sine => "Sine".to_string(),
+                LfoWaveform::Triangle => "Triangle".to_string(),
+                LfoWaveform::SawUp => "SawUp".to_string(),
+                LfoWaveform::SawDown => "SawDown".to_string(),
+                LfoWaveform::Square => "Square".to_string(),
+                LfoWaveform::SampleAndHold => "SampleAndHold".to_string(),
+            },
+            sync_mode: match self.sync_mode {
+                LfoSyncMode::FreeHz => "FreeHz".to_string(),
+                LfoSyncMode::TempoSync => "TempoSync".to_string(),
+            },
+            rate_hz: self.rate_hz,
+            sync_rate: self.sync_rate.label().to_string(),
+            depth: self.depth,
+            phase_deg: self.phase_deg,
+            bipolar: self.bipolar,
+            amount: self.amount,
+            target: self.target.label().to_string(),
+        }
+    }
+
+    pub fn apply_params(&mut self, p: &OpenModulationParams) {
+        self.waveform = match p.waveform.as_str() {
+            "Tri" | "Triangle" => LfoWaveform::Triangle,
+            "Saw Up" | "SawUp" => LfoWaveform::SawUp,
+            "Saw Dn" | "SawDown" => LfoWaveform::SawDown,
+            "Square" => LfoWaveform::Square,
+            "S&H" | "SampleAndHold" => LfoWaveform::SampleAndHold,
+            _ => LfoWaveform::Sine,
+        };
+        self.sync_mode = match p.sync_mode.as_str() {
+            "TempoSync" | "Sync" => LfoSyncMode::TempoSync,
+            _ => LfoSyncMode::FreeHz,
+        };
+        self.rate_hz = p.rate_hz.clamp(0.02, 30.0);
+        let matched_rate = SyncRate::ALL
+            .iter()
+            .find(|r| r.label().eq_ignore_ascii_case(&p.sync_rate))
+            .copied()
+            .unwrap_or(SyncRate::Quarter);
+        self.set_sync_rate(matched_rate);
+        self.depth = p.depth.clamp(0.0, 1.0);
+        self.phase_deg = p.phase_deg.clamp(0.0, 360.0);
+        self.bipolar = p.bipolar;
+        self.amount = p.amount.clamp(-1.0, 1.0);
+        self.target = ModulationTarget::ALL
+            .iter()
+            .find(|t| t.label().eq_ignore_ascii_case(&p.target))
+            .copied()
+            .unwrap_or(ModulationTarget::OpenWavetableWtPos);
     }
 
     pub fn effective_hz(&self, bpm: f32) -> f32 {
@@ -1038,10 +1094,78 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
                 }
             },
         );
+
+        // Preset HDP Menu button
+        ui.menu_button(
+            RichText::new("💾 HDP")
+                .font(fonts::semibold(9.0))
+                .color(theme::BW_LCD_CYAN),
+            |menu_ui| {
+                if menu_ui.button("💾 Guardar Preset (*.hdp)").clicked() {
+                    save_openmodulation_preset(&state);
+                    menu_ui.close_menu();
+                }
+                if menu_ui.button("📂 Cargar Preset (*.hdp)").clicked() {
+                    if let Some(loaded) = load_openmodulation_preset() {
+                        state = loaded;
+                    }
+                    menu_ui.close_menu();
+                }
+            },
+        );
     });
 
     // Save state back to map
     update_lfo_state(track_idx, slot_idx, |st| {
         *st = state;
     });
+}
+
+pub fn save_openmodulation_preset(state: &LfoModState) {
+    if let Some(path) = rfd::FileDialog::new()
+        .set_file_name("lfo_modulation.hdp")
+        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .save_file()
+    {
+        let slot = hikaru_project_file::DspSlot {
+            id: 0,
+            name: "OpenModulation".to_string(),
+            active: true,
+            wavetable_path: None,
+            plugin_path: None,
+            plugin_format: None,
+            open_wavetable: None,
+            open_modulation: Some(state.to_params()),
+        };
+        let preset = hikaru_project_file::HikaruDevicePreset {
+            format_version: hikaru_project_file::FORMAT_VERSION,
+            created_by: format!("Hikaru OpenLive {}", crate::version::VERSION),
+            preset_type: hikaru_project_file::PresetType::SingleDevice,
+            name: "OpenModulation Preset".to_string(),
+            author: None,
+            category: Some("Modulation / LFO".to_string()),
+            description: Some("Hikaru OpenModulation preset".to_string()),
+            slot: Some(slot),
+            chain: None,
+        };
+        let _ = hikaru_project_file::save_hdp(&path, &preset);
+    }
+}
+
+pub fn load_openmodulation_preset() -> Option<LfoModState> {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .pick_file()
+    {
+        if let Ok(preset) = hikaru_project_file::parse_hdp(&path) {
+            if let Some(slot) = preset.slot {
+                if let Some(ref p) = slot.open_modulation {
+                    let mut st = LfoModState::default();
+                    st.apply_params(p);
+                    return Some(st);
+                }
+            }
+        }
+    }
+    None
 }

@@ -25,6 +25,7 @@ pub struct ExplorerEntry {
     pub path: PathBuf,
     pub is_dir: bool,
     pub is_midi: bool,
+    pub is_preset: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,7 +52,16 @@ pub fn default_start_path() -> PathBuf {
 }
 
 pub fn is_supported_file(path: &PathBuf) -> bool {
-    is_audio_file(path) || is_midi_file(path)
+    is_audio_file(path) || is_midi_file(path) || is_preset_file(path)
+}
+
+pub fn is_preset_file(path: &PathBuf) -> bool {
+    if let Some(ext) = path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        ext_str == "hdp"
+    } else {
+        false
+    }
 }
 
 pub fn is_audio_file(path: &PathBuf) -> bool {
@@ -168,14 +178,17 @@ impl FileExplorerState {
                         path,
                         is_dir: true,
                         is_midi: false,
+                        is_preset: false,
                     });
                 } else if is_supported_file(&path) {
                     let is_midi = is_midi_file(&path);
+                    let is_preset = is_preset_file(&path);
                     files.push(ExplorerEntry {
                         name: name.to_string(),
                         path,
                         is_dir: false,
                         is_midi,
+                        is_preset,
                     });
                 }
             }
@@ -656,6 +669,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                     BrowserBadgeKind::Folder,
                                     Color32::from_rgb(0xE6, 0xE8, 0xEE),
                                 )
+                            } else if entry.is_preset {
+                                (
+                                    BrowserBadgeKind::DeviceAudio,
+                                    Color32::from_rgb(0x00, 0xE5, 0xFF),
+                                )
                             } else if entry.is_midi {
                                 (
                                     BrowserBadgeKind::DeviceNote,
@@ -872,17 +890,23 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         });
 
         if let Some(path) = double_clicked_path {
-            let (t_idx, s_idx) = state.matrix_state.selected_slot.unwrap_or((0, 0));
-            let safe_t = t_idx.min(state.matrix_state.tracks.len().saturating_sub(1));
-            let safe_s = s_idx.min(state.matrix_state.scenes.len().saturating_sub(1));
-            crate::views::matrix::load_clip_into_slot(
-                &mut state.matrix_state,
-                &state.audio_proxy,
-                safe_t,
-                safe_s,
-                path,
-                state.transport.bpm,
-            );
+            if is_preset_file(&path) {
+                let track_idx = state.safe_track_index();
+                crate::views::dsp_rack::load_device_preset_from_path(state, track_idx, &path);
+                state.show_dsp_rack = true;
+            } else {
+                let (t_idx, s_idx) = state.matrix_state.selected_slot.unwrap_or((0, 0));
+                let safe_t = t_idx.min(state.matrix_state.tracks.len().saturating_sub(1));
+                let safe_s = s_idx.min(state.matrix_state.scenes.len().saturating_sub(1));
+                crate::views::matrix::load_clip_into_slot(
+                    &mut state.matrix_state,
+                    &state.audio_proxy,
+                    safe_t,
+                    safe_s,
+                    path,
+                    state.transport.bpm,
+                );
+            }
         } else if let Some(path) = clicked_path {
             if is_dir_click {
                 state.explorer_state.navigate_to(path);

@@ -79,28 +79,68 @@ pub fn capture_track(t: &mixer::Track) -> Track {
         effects: t
             .effects
             .iter()
-            .map(|e| DspSlot {
-                id: e.id,
-                name: e.name.clone(),
-                active: e.active,
-                wavetable_path: e
-                    .wavetable
-                    .table
-                    .path
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string()),
-                plugin_path: e.external.as_ref().map(|p| p.path.display().to_string()),
-                plugin_format: e.external.as_ref().map(|p| {
-                    match p.format {
-                        hikaru_plugin_host::PluginFormat::VST3 => "VST3",
-                        hikaru_plugin_host::PluginFormat::CLAP => "CLAP",
-                    }
-                    .to_string()
-                }),
+            .enumerate()
+            .map(|(slot_idx, e)| {
+                let open_wavetable = if e.name == "OpenWavetable" {
+                    Some(e.wavetable.to_params())
+                } else {
+                    None
+                };
+                let open_modulation = if matches!(
+                    e.name.as_str(),
+                    "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD"
+                ) {
+                    let lfo = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_lfo_state(
+                        t.id,
+                        slot_idx,
+                    );
+                    Some(lfo.to_params())
+                } else {
+                    None
+                };
+                DspSlot {
+                    id: e.id,
+                    name: e.name.clone(),
+                    active: e.active,
+                    wavetable_path: e
+                        .wavetable
+                        .table
+                        .path
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string()),
+                    plugin_path: e.external.as_ref().map(|p| p.path.display().to_string()),
+                    plugin_format: e.external.as_ref().map(|p| {
+                        match p.format {
+                            hikaru_plugin_host::PluginFormat::VST3 => "VST3",
+                            hikaru_plugin_host::PluginFormat::CLAP => "CLAP",
+                        }
+                        .to_string()
+                    }),
+                    open_wavetable,
+                    open_modulation,
+                }
             })
             .collect(),
         matrix_idx: t.matrix_idx,
     }
+}
+
+pub fn resolve_wavetable_path(path_str: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(path_str);
+    if p.exists() {
+        return Some(p.to_path_buf());
+    }
+    if let Some(file_name) = p.file_name() {
+        let local = std::path::Path::new(file_name);
+        if local.exists() {
+            return Some(local.to_path_buf());
+        }
+        let in_assets = std::path::Path::new("assets").join(file_name);
+        if in_assets.exists() {
+            return Some(in_assets);
+        }
+    }
+    None
 }
 
 /// Reconstruye un canal del mixer desde el struct de archivo.
@@ -122,9 +162,42 @@ pub fn build_track(t: &Track) -> mixer::Track {
     track.effects = t
         .effects
         .iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(slot_idx, e)| {
             let mut slot = mixer::DspSlot::new(e.id, e.name.clone());
             slot.active = e.active;
+
+            // Reconstruir estado de Hikaru OpenWavetable
+            if e.name == "OpenWavetable" {
+                if let Some(path_str) = e.wavetable_path.as_ref().filter(|p| !p.is_empty()) {
+                    if let Some(path) = resolve_wavetable_path(path_str) {
+                        if let Ok(table) =
+                            crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::load_table_file(&path)
+                        {
+                            slot.wavetable.load(table);
+                        }
+                    }
+                }
+                if let Some(ref p) = e.open_wavetable {
+                    slot.wavetable.apply_params(p);
+                }
+            }
+
+            // Reconstruir estado de Hikaru OpenModulation
+            if matches!(
+                e.name.as_str(),
+                "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD"
+            ) {
+                if let Some(ref p) = e.open_modulation {
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::update_lfo_state(
+                        t.id,
+                        slot_idx,
+                        |st| {
+                            st.apply_params(p);
+                        },
+                    );
+                }
+            }
 
             // Reconstruimos el descriptor del plugin externo a partir de la
             // ruta guardada, sin cargarlo. `id` se deriva igual que en el

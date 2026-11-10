@@ -45,6 +45,10 @@
 use std::path::{Path, PathBuf};
 
 use hikaru_project_file::{parse_with_probe, write_json, DspSlot, ProjectError, Track};
+pub use hikaru_project_file::{
+    parse_hdp, save_hdp, HikaruDevicePreset, OpenModulationParams, OpenWavetableParams, PresetType,
+    HDP_EXTENSION, HDP_FILE_FILTER,
+};
 use serde::{Deserialize, Serialize};
 
 /// Extensión del formato OpenLive.

@@ -1,5 +1,6 @@
 // crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openwavetable/open_wavetable.rs
 
+use hikaru_project_file::OpenWavetableParams;
 use hikaru_render::{Camera, GradientMode, RenderMode, RenderSettings};
 
 use crate::app::AppState;
@@ -386,6 +387,73 @@ impl WavetableEditor {
         self.morph = 0.0;
         self.frame = 0;
         self.end_drag();
+    }
+
+    pub fn to_params(&self) -> OpenWavetableParams {
+        OpenWavetableParams {
+            table_name: self.table.name.clone(),
+            position: self.position(),
+            morph: self.morph,
+            frame: self.frame,
+            detune: self.detune,
+            phase: self.phase,
+            unison: self.unison,
+            octave: self.octave,
+            pitch: self.pitch,
+            voices: match self.voices {
+                VoiceMode::Mono => "Mono".to_string(),
+                VoiceMode::Legato => "Legato".to_string(),
+                VoiceMode::Poly => "Poly".to_string(),
+            },
+            render_mode_3d: self.render_mode == RenderMode::Mode3D,
+            render_mode_lines: self.render_settings.mesh == hikaru_render::MeshType::Wireframe,
+            color_primary: self.render_settings.color_primary,
+            color_secondary: self.render_settings.color_secondary,
+            color_active: self.render_settings.color_active,
+        }
+    }
+
+    pub fn apply_params(&mut self, p: &OpenWavetableParams) {
+        if !p.table_name.is_empty() {
+            self.table.name = p.table_name.clone();
+        }
+        self.detune = p.detune;
+        self.phase = p.phase;
+        self.unison = p.unison.clamp(1, 16);
+        self.octave = p.octave;
+        self.pitch = p.pitch;
+        self.voices = match p.voices.as_str() {
+            "Mono" => VoiceMode::Mono,
+            "Legato" => VoiceMode::Legato,
+            _ => VoiceMode::Poly,
+        };
+        self.render_mode = if p.render_mode_3d {
+            RenderMode::Mode3D
+        } else {
+            RenderMode::Mode2D
+        };
+        self.render_settings.mesh = if p.render_mode_lines {
+            hikaru_render::MeshType::Wireframe
+        } else {
+            hikaru_render::MeshType::Ribbon
+        };
+        if p.color_primary != [0.0, 0.0, 0.0] {
+            self.render_settings.color_primary = p.color_primary;
+        }
+        if p.color_secondary != [0.0, 0.0, 0.0] {
+            self.render_settings.color_secondary = p.color_secondary;
+        }
+        if p.color_active != [0.0, 0.0, 0.0] {
+            self.render_settings.color_active = p.color_active;
+        }
+        self.base_position = Some(p.position);
+        self.set_position(p.position);
+        if p.morph > 0.0 {
+            self.morph = p.morph;
+        }
+        if p.frame < self.table.selectable_frames() {
+            self.frame = p.frame;
+        }
     }
 }
 
@@ -778,16 +846,31 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
 
         left_ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 1.5;
-            let tbl_name = if editor.table.name.len() > 12 {
-                format!("{}…", &editor.table.name[..11])
+            let tbl_name = if editor.table.name.len() > 11 {
+                format!("{}…", &editor.table.name[..10])
             } else {
                 editor.table.name.clone()
             };
-            ui.label(
-                egui::RichText::new(tbl_name)
+            ui.menu_button(
+                egui::RichText::new(&tbl_name)
                     .size(8.8)
                     .strong()
                     .color(rgb_to_color32(editor.render_settings.color_primary)),
+                |menu_ui| {
+                    if menu_ui.button("💾 Guardar Preset (*.hdp)").clicked() {
+                        save_openwavetable_preset(editor);
+                        menu_ui.close_menu();
+                    }
+                    if menu_ui.button("📂 Cargar Preset (*.hdp)").clicked() {
+                        load_openwavetable_preset(editor);
+                        menu_ui.close_menu();
+                    }
+                    menu_ui.separator();
+                    if menu_ui.button("📁 Cargar WAV externo...").clicked() {
+                        pick_wav = true;
+                        menu_ui.close_menu();
+                    }
+                },
             );
 
             // Toggle 2D/3D (GPU capsule button showing active state in 3D)
@@ -1822,5 +1905,63 @@ pub fn step_table(app: &mut AppState, track_idx: usize, slot_idx: usize, delta: 
         .and_then(|slot| slot.wavetable.table.path.clone());
     if let Some(target) = sibling_step_target(current.as_ref(), delta) {
         load_table_deferred(app, track_idx, slot_idx, target);
+    }
+}
+
+pub fn save_openwavetable_preset(editor: &WavetableEditor) {
+    let preset_name = if editor.table.name.is_empty() {
+        "Custom Wavetable".to_string()
+    } else {
+        editor.table.name.clone()
+    };
+    if let Some(path) = rfd::FileDialog::new()
+        .set_file_name(&format!("{}.hdp", preset_name))
+        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .save_file()
+    {
+        let slot = hikaru_project_file::DspSlot {
+            id: 0,
+            name: "OpenWavetable".to_string(),
+            active: true,
+            wavetable_path: editor.table.path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            plugin_path: None,
+            plugin_format: None,
+            open_wavetable: Some(editor.to_params()),
+            open_modulation: None,
+        };
+        let preset = hikaru_project_file::HikaruDevicePreset {
+            format_version: hikaru_project_file::FORMAT_VERSION,
+            created_by: format!("Hikaru OpenLive {}", crate::version::VERSION),
+            preset_type: hikaru_project_file::PresetType::SingleDevice,
+            name: preset_name,
+            author: None,
+            category: Some("Polysynth / Wavetable".to_string()),
+            description: Some("Hikaru OpenWavetable preset".to_string()),
+            slot: Some(slot),
+            chain: None,
+        };
+        let _ = hikaru_project_file::save_hdp(&path, &preset);
+    }
+}
+
+pub fn load_openwavetable_preset(editor: &mut WavetableEditor) {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .pick_file()
+    {
+        if let Ok(preset) = hikaru_project_file::parse_hdp(&path) {
+            if let Some(slot) = preset.slot {
+                if let Some(ref path_str) = slot.wavetable_path {
+                    if let Some(resolved) = crate::project::common::resolve_wavetable_path(path_str) {
+                        if let Ok(table) = load_table_file(&resolved) {
+                            editor.load(table);
+                        }
+                    }
+                }
+                if let Some(ref p) = slot.open_wavetable {
+                    editor.apply_params(p);
+                }
+            }
+        }
     }
 }

@@ -374,3 +374,126 @@ fn test_tier4_s05_full_project_roundtrip_persistence() {
     let _ = std::fs::remove_file(&oplf_path);
     let _ = std::fs::remove_file(&opsf_path);
 }
+
+// -----------------------------------------------------------------------------
+// Scenario 6: Device Panel & HDP Preset Persistence (Skrillex Growl Sound Design)
+// -----------------------------------------------------------------------------
+#[test]
+fn test_tier4_s06_device_panel_and_hdp_preset_roundtrip_persistence() {
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openmodulation::{
+        get_lfo_state, update_lfo_state, ModulationTarget,
+    };
+    use hikaru_dsp::effects::lfo::{LfoSyncMode, LfoWaveform, SyncRate};
+    use hikaru_gui::views::mixer::{DspSlot as GuiDspSlot, Track as GuiTrack};
+    use hikaru_project_file::{parse_hdp, save_hdp, HikaruDevicePreset, PresetType};
+
+    let track_idx = 1;
+    let mut track = GuiTrack::new(track_idx, "Skrillex Bass".to_string(), false);
+
+    // 1. Configure OpenWavetable on Track 1 (Slot 0)
+    let mut wt_slot = GuiDspSlot::new(101, "OpenWavetable".to_string());
+    wt_slot.wavetable.table.name = "Uber Growl".to_string();
+    wt_slot.wavetable.octave = -3;
+    wt_slot.wavetable.pitch = 0;
+    wt_slot.wavetable.unison = 1;
+    wt_slot.wavetable.set_position(0.640625);
+    wt_slot.wavetable.render_mode = hikaru_render::RenderMode::Mode3D;
+    wt_slot.wavetable.render_settings.mesh = hikaru_render::MeshType::Wireframe;
+    track.effects.push(wt_slot);
+
+    // 2. Configure OpenModulation on Track 1 (Slot 1)
+    let mod_slot = GuiDspSlot::new(102, "OpenModulation".to_string());
+    track.effects.push(mod_slot);
+
+    update_lfo_state(track_idx, 1, |lfo| {
+        lfo.waveform = LfoWaveform::SawDown;
+        lfo.sync_mode = LfoSyncMode::TempoSync;
+        lfo.set_sync_rate(SyncRate::Whole2); // 2/1 Tempo Sync
+        lfo.depth = 0.16;
+        lfo.amount = 0.14;
+        lfo.bipolar = true;
+        lfo.target = ModulationTarget::OpenWavetableWtPos;
+    });
+
+    // 3. Capture Track into project file struct
+    let captured_track = hikaru_gui::project::common::capture_track(&track);
+    assert_eq!(captured_track.effects.len(), 2);
+
+    let wt_captured = &captured_track.effects[0];
+    assert_eq!(wt_captured.name, "OpenWavetable");
+    let wt_params = wt_captured.open_wavetable.as_ref().expect("open_wavetable params must be captured");
+    assert_eq!(wt_params.table_name, "Uber Growl");
+    assert_eq!(wt_params.octave, -3);
+    assert!((wt_params.position - 0.640625).abs() < 1e-4);
+    assert!(wt_params.render_mode_3d);
+    assert!(wt_params.render_mode_lines);
+
+    let mod_captured = &captured_track.effects[1];
+    assert_eq!(mod_captured.name, "OpenModulation");
+    let mod_params = mod_captured.open_modulation.as_ref().expect("open_modulation params must be captured");
+    assert_eq!(mod_params.sync_rate, "2/1");
+    assert_eq!(mod_params.sync_mode, "TempoSync");
+    assert_eq!(mod_params.waveform, "SawDown");
+    assert_eq!(mod_params.target, "OpenWavetable: WT POS");
+
+    // 4. Test HDP Single Device Preset Roundtrip
+    let tmp_dir = std::env::temp_dir();
+    let hdp_dev_path = tmp_dir.join(format!("uber_growl_{}.hdp", std::process::id()));
+    let single_preset = HikaruDevicePreset {
+        format_version: hikaru_project_file::FORMAT_VERSION,
+        created_by: "Hikaru OpenLive 2.24.0".into(),
+        preset_type: PresetType::SingleDevice,
+        name: "Uber Growl Preset".into(),
+        author: Some("Skrillex".into()),
+        category: Some("Bass / Growl".into()),
+        description: Some("Uber growl test patch".into()),
+        slot: Some(wt_captured.clone()),
+        chain: None,
+    };
+    save_hdp(&hdp_dev_path, &single_preset).expect("save_hdp single device must succeed");
+    let loaded_single = parse_hdp(&hdp_dev_path).expect("parse_hdp single device must succeed");
+    assert_eq!(loaded_single.name, "Uber Growl Preset");
+    assert_eq!(loaded_single.slot.as_ref().unwrap().name, "OpenWavetable");
+    assert_eq!(loaded_single.slot.as_ref().unwrap().open_wavetable.as_ref().unwrap().octave, -3);
+
+    // 5. Test HDP Chain Preset Roundtrip (Wavetable + Modulation together)
+    let hdp_chain_path = tmp_dir.join(format!("skrillex_chain_{}.hdp", std::process::id()));
+    let chain_preset = HikaruDevicePreset {
+        format_version: hikaru_project_file::FORMAT_VERSION,
+        created_by: "Hikaru OpenLive 2.24.0".into(),
+        preset_type: PresetType::Chain,
+        name: "Skrillex Monster Bass Chain".into(),
+        author: Some("Skrillex".into()),
+        category: Some("Bass / Growl Chain".into()),
+        description: Some("Complete chain with LFO routing".into()),
+        slot: None,
+        chain: Some(captured_track.effects.clone()),
+    };
+    save_hdp(&hdp_chain_path, &chain_preset).expect("save_hdp chain must succeed");
+    let loaded_chain = parse_hdp(&hdp_chain_path).expect("parse_hdp chain must succeed");
+    assert_eq!(loaded_chain.name, "Skrillex Monster Bass Chain");
+    assert_eq!(loaded_chain.chain.as_ref().unwrap().len(), 2);
+
+    // 6. Test Rebuilding Track (like when opening .oplf)
+    let rebuilt_track = hikaru_gui::project::common::build_track(&captured_track);
+    assert_eq!(rebuilt_track.effects.len(), 2);
+
+    let rebuilt_wt = &rebuilt_track.effects[0];
+    assert_eq!(rebuilt_wt.name, "OpenWavetable");
+    assert_eq!(rebuilt_wt.wavetable.table.name, "Uber Growl");
+    assert_eq!(rebuilt_wt.wavetable.octave, -3);
+    assert!((rebuilt_wt.wavetable.position() - 0.640625).abs() < 1e-3);
+    assert_eq!(rebuilt_wt.wavetable.render_mode, hikaru_render::RenderMode::Mode3D);
+
+    let restored_lfo = get_lfo_state(track_idx, 1);
+    assert_eq!(restored_lfo.sync_rate, SyncRate::Whole2);
+    assert_eq!(restored_lfo.sync_mode, LfoSyncMode::TempoSync);
+    assert_eq!(restored_lfo.waveform, LfoWaveform::SawDown);
+    assert_eq!(restored_lfo.target, ModulationTarget::OpenWavetableWtPos);
+    assert!((restored_lfo.depth - 0.16).abs() < 1e-4);
+    assert!((restored_lfo.amount - 0.14).abs() < 1e-4);
+
+    // Clean up temporary files
+    let _ = std::fs::remove_file(&hdp_dev_path);
+    let _ = std::fs::remove_file(&hdp_chain_path);
+}

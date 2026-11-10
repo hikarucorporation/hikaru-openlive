@@ -127,7 +127,7 @@ pub struct Send {
 /// NO el contenido del sintetizador. La tabla de wavetable sí se referencia por
 /// ruta ([`DspSlot::wavetable_path`]); el resto de los parámetros del panel
 /// todavía no entra en el formato. Cuando entren, es agregar campos acá.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DspSlot {
     pub id: usize,
     pub name: String,
@@ -148,6 +148,117 @@ pub struct DspSlot {
     /// "VST3" o "CLAP". Determina con qué cargador se instancia.
     #[serde(default)]
     pub plugin_format: Option<String>,
+    /// Parámetros de síntesis si el slot contiene un Hikaru OpenWavetable.
+    #[serde(default)]
+    pub open_wavetable: Option<OpenWavetableParams>,
+    /// Parámetros de modulación si el slot contiene un Hikaru OpenModulation.
+    #[serde(default)]
+    pub open_modulation: Option<OpenModulationParams>,
+}
+
+/// Parámetros de síntesis de Hikaru OpenWavetable para persistencia en `.oplf` y `.hdp`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenWavetableParams {
+    #[serde(default)]
+    pub table_name: String,
+    pub position: f32,
+    #[serde(default)]
+    pub morph: f32,
+    pub frame: usize,
+    #[serde(default)]
+    pub detune: f32,
+    #[serde(default)]
+    pub phase: f32,
+    #[serde(default = "default_unison")]
+    pub unison: u8,
+    #[serde(default)]
+    pub octave: i8,
+    #[serde(default)]
+    pub pitch: i8,
+    #[serde(default = "default_voices")]
+    pub voices: String,
+    #[serde(default)]
+    pub render_mode_3d: bool,
+    #[serde(default)]
+    pub render_mode_lines: bool,
+    #[serde(default)]
+    pub color_primary: [f32; 3],
+    #[serde(default)]
+    pub color_secondary: [f32; 3],
+    #[serde(default)]
+    pub color_active: [f32; 3],
+}
+
+fn default_unison() -> u8 {
+    1
+}
+
+fn default_voices() -> String {
+    "Poly".to_string()
+}
+
+/// Parámetros de modulación de Hikaru OpenModulation para persistencia en `.oplf` y `.hdp`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenModulationParams {
+    pub waveform: String,
+    pub sync_mode: String,
+    pub rate_hz: f32,
+    pub sync_rate: String,
+    pub depth: f32,
+    pub phase_deg: f32,
+    pub bipolar: bool,
+    pub amount: f32,
+    pub target: String,
+}
+
+// =========================================================================
+// PRESETS DE DEVICE PANEL (*.hdp)
+// =========================================================================
+
+/// Extensión estándar para presets del Device Panel de Hikaru.
+pub const HDP_EXTENSION: &str = "hdp";
+
+/// Filtro del selector de archivos para presets `.hdp`.
+pub const HDP_FILE_FILTER: &str = "Hikaru Device Panel (*.hdp)";
+
+/// Tipo de preset almacenado en un archivo `.hdp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PresetType {
+    /// Preset para un único dispositivo (ej. OpenWavetable u OpenModulation).
+    SingleDevice,
+    /// Preset para una cadena de dispositivos completa de una pista.
+    Chain,
+}
+
+/// Estructura de archivo para presets de Device Panel (`.hdp`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HikaruDevicePreset {
+    pub format_version: u32,
+    pub created_by: String,
+    pub preset_type: PresetType,
+    pub name: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Dispositivo individual (cuando `preset_type == PresetType::SingleDevice`).
+    #[serde(default)]
+    pub slot: Option<DspSlot>,
+    /// Cadena de dispositivos (cuando `preset_type == PresetType::Chain`).
+    #[serde(default)]
+    pub chain: Option<Vec<DspSlot>>,
+}
+
+/// Escribe un archivo `.hdp` en disco.
+pub fn save_hdp(path: &Path, preset: &HikaruDevicePreset) -> Result<PathBuf, ProjectError> {
+    write_json(path, preset)
+}
+
+/// Lee y parsea un archivo de preset `.hdp` desde disco validando la versión de formato.
+pub fn parse_hdp(path: &Path) -> Result<HikaruDevicePreset, ProjectError> {
+    parse_with_probe(path)
 }
 
 // =========================================================================
@@ -290,5 +401,74 @@ mod tests {
 
         let serialized = serde_json::to_string(&parsed_pitch).unwrap();
         assert!(serialized.contains(r#""note":64"#));
+    }
+
+    #[test]
+    fn hdp_single_device_preset_roundtrip() {
+        let preset = HikaruDevicePreset {
+            format_version: FORMAT_VERSION,
+            created_by: "Hikaru OpenLive 2.24.0".to_string(),
+            preset_type: PresetType::SingleDevice,
+            name: "Skrillex Growl".to_string(),
+            author: Some("Skrillex".to_string()),
+            category: Some("Bass / Growl".to_string()),
+            description: Some("Heavy vocal growl patch".to_string()),
+            slot: Some(DspSlot {
+                id: 1,
+                name: "OpenWavetable".to_string(),
+                active: true,
+                wavetable_path: Some("/presets/Uber Growl.wav".to_string()),
+                plugin_path: None,
+                plugin_format: None,
+                open_wavetable: Some(OpenWavetableParams {
+                    table_name: "Uber Growl".to_string(),
+                    position: 0.64,
+                    morph: 0.0,
+                    frame: 41,
+                    detune: 0.0,
+                    phase: 0.0,
+                    unison: 1,
+                    octave: -3,
+                    pitch: 0,
+                    voices: "Poly".to_string(),
+                    render_mode_3d: true,
+                    render_mode_lines: true,
+                    color_primary: [0.9, 0.5, 0.2],
+                    color_secondary: [0.1, 0.6, 0.9],
+                    color_active: [1.0, 0.7, 0.0],
+                }),
+                open_modulation: None,
+            }),
+            chain: None,
+        };
+
+        let mut path = std::env::temp_dir();
+        path.push(format!("test_preset_{}.hdp", std::process::id()));
+        save_hdp(&path, &preset).expect("save_hdp failed");
+
+        let loaded = parse_hdp(&path).expect("parse_hdp failed");
+        assert_eq!(loaded.name, "Skrillex Growl");
+        assert_eq!(loaded.preset_type, PresetType::SingleDevice);
+        let slot = loaded.slot.unwrap();
+        assert_eq!(slot.name, "OpenWavetable");
+        let wt = slot.open_wavetable.unwrap();
+        assert_eq!(wt.octave, -3);
+        assert_eq!(wt.frame, 41);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_dsp_slot_deserialization_without_new_fields() {
+        let legacy_json = r#"{
+            "id": 0,
+            "name": "OpenWavetable",
+            "active": true,
+            "wavetable_path": null
+        }"#;
+        let slot: DspSlot = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(slot.name, "OpenWavetable");
+        assert!(slot.open_wavetable.is_none());
+        assert!(slot.open_modulation.is_none());
     }
 }

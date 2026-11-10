@@ -100,6 +100,93 @@ pub fn handle_delete_key(app: &mut AppState) {
     }
 }
 
+pub fn save_device_chain_dialog(app: &AppState, track_idx: usize) {
+    let Some(track) = app.current_tracks().get(track_idx) else { return };
+    if track.effects.is_empty() {
+        return;
+    }
+    let default_name = format!("{}_chain.hdp", track.name.to_lowercase().replace(' ', "_"));
+    if let Some(path) = rfd::FileDialog::new()
+        .set_file_name(&default_name)
+        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .save_file()
+    {
+        let captured = crate::project::common::capture_track(track);
+        let preset = hikaru_project_file::HikaruDevicePreset {
+            format_version: hikaru_project_file::FORMAT_VERSION,
+            created_by: format!("Hikaru OpenLive {}", crate::version::VERSION),
+            preset_type: hikaru_project_file::PresetType::Chain,
+            name: track.name.clone(),
+            author: None,
+            category: Some("Track Device Chain".to_string()),
+            description: Some(format!("Device chain preset for {}", track.name)),
+            slot: None,
+            chain: Some(captured.effects),
+        };
+        let _ = hikaru_project_file::save_hdp(&path, &preset);
+    }
+}
+
+pub fn load_device_chain_dialog(app: &mut AppState, track_idx: usize) {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .pick_file()
+    {
+        load_device_preset_from_path(app, track_idx, &path);
+    }
+}
+
+pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: &std::path::Path) {
+    let Ok(preset) = hikaru_project_file::parse_hdp(path) else { return };
+    if let Some(chain) = preset.chain {
+        let dummy_track = hikaru_project_file::Track {
+            id: track_idx,
+            name: preset.name,
+            volume: 0.7,
+            pan: 0.0,
+            pan_mode: 0,
+            mute: false,
+            solo: false,
+            arm: false,
+            is_master: track_idx == 0,
+            route_destination_id: 0,
+            sends: Vec::new(),
+            effects: chain,
+            matrix_idx: None,
+        };
+        let built = crate::project::common::build_track(&dummy_track);
+        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+            track.effects = built.effects;
+            if !track.effects.is_empty() {
+                app.selected_slot_index = 0;
+            }
+        }
+    } else if let Some(slot) = preset.slot {
+        let dummy_track = hikaru_project_file::Track {
+            id: track_idx,
+            name: String::new(),
+            volume: 0.7,
+            pan: 0.0,
+            pan_mode: 0,
+            mute: false,
+            solo: false,
+            arm: false,
+            is_master: track_idx == 0,
+            route_destination_id: 0,
+            sends: Vec::new(),
+            effects: vec![slot],
+            matrix_idx: None,
+        };
+        let built = crate::project::common::build_track(&dummy_track);
+        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+            if let Some(new_slot) = built.effects.into_iter().next() {
+                track.effects.push(new_slot);
+                app.selected_slot_index = track.effects.len() - 1;
+            }
+        }
+    }
+}
+
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     let track_idx = app.safe_track_index();
     let is_project_master = track_idx == 0;
@@ -223,7 +310,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
 
                     // Píldora vertical de cabecera de pista a la izquierda de la cadena
                     let pill_h = (content_rect.height() - 2.0).clamp(136.0, RACK_HEIGHT - 10.0);
-                    let (pill_rect, _) = ui.allocate_exact_size(vec2(22.0, pill_h), Sense::hover());
+                    let (pill_rect, pill_resp) = ui.allocate_exact_size(vec2(22.0, pill_h), Sense::click());
+                    pill_resp.context_menu(|ui| {
+                        if ui.button("💾 Guardar Cadena de Pista (*.hdp)...").clicked() {
+                            save_device_chain_dialog(app, track_idx);
+                            ui.close_menu();
+                        }
+                        if ui.button("📂 Cargar Cadena de Pista (*.hdp)...").clicked() {
+                            load_device_chain_dialog(app, track_idx);
+                            ui.close_menu();
+                        }
+                    });
                     if ui.is_rect_visible(pill_rect) {
                         let p = ui.painter();
                         p.rect_filled(pill_rect, 3.0, Color32::from_rgb(0x46, 0x48, 0x4E));
@@ -506,6 +603,15 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         }
                                         ui.close_menu();
                                     }
+                                }
+                                ui.separator();
+                                if ui.button("📂 Cargar Preset / Cadena (*.hdp)...").clicked() {
+                                    load_device_chain_dialog(app, track_idx);
+                                    ui.close_menu();
+                                }
+                                if ui.button("💾 Guardar Cadena de Pista (*.hdp)...").clicked() {
+                                    save_device_chain_dialog(app, track_idx);
+                                    ui.close_menu();
                                 }
                             },
                         );
