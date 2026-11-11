@@ -84,14 +84,16 @@ fn test_move_midi_clip_to_empty_slot() {
     assert_eq!(matrix.selected_slot, Some((0, 1)));
 
     // Verificar comandos enviados al audio proxy
-    let mut cleared_origin = false;
+    let mut moved_clip = false;
     let mut updated_destination = false;
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
-            GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, notes } => {
-                if track_idx == 0 && scene_idx == 0 && notes.is_empty() {
-                    cleared_origin = true;
+            GuiCommand::MoveMatrixClip { src_track, src_scene, dst_track, dst_scene } => {
+                if src_track == 0 && src_scene == 0 && dst_track == 0 && dst_scene == 1 {
+                    moved_clip = true;
                 }
+            }
+            GuiCommand::UpdateMidiClipNotes { track_idx, scene_idx, .. } => {
                 if track_idx == 0 && scene_idx == 1 {
                     updated_destination = true;
                 }
@@ -99,7 +101,7 @@ fn test_move_midi_clip_to_empty_slot() {
             _ => {}
         }
     }
-    assert!(cleared_origin, "Audio proxy debió limpiar notas en origen (0, 0)");
+    assert!(moved_clip, "Audio proxy debió recibir MoveMatrixClip(0, 0 -> 0, 1)");
     assert!(updated_destination, "Audio proxy debió sincronizar notas en destino (0, 1)");
 }
 
@@ -131,25 +133,25 @@ fn test_move_audio_clip_across_tracks_and_scenes() {
     assert_eq!(matrix.grid[1][2].clip.as_ref().unwrap().name, "Kick 42");
     assert_eq!(matrix.selected_slot, Some((1, 2)));
 
-    let mut cleared_events = false;
-    let mut loaded_new_slot = false;
+    let mut moved_clip = false;
+    let mut set_loop_dst = false;
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
-            GuiCommand::SetClipEvents { track_idx, scene_idx, events } => {
-                if track_idx == 0 && scene_idx == 0 && events.is_empty() {
-                    cleared_events = true;
+            GuiCommand::MoveMatrixClip { src_track, src_scene, dst_track, dst_scene } => {
+                if src_track == 0 && src_scene == 0 && dst_track == 1 && dst_scene == 2 {
+                    moved_clip = true;
                 }
             }
-            GuiCommand::LoadClip { track_index, scene_index, clip_id, .. } => {
-                if track_index == 1 && scene_index == 2 && clip_id == 42 {
-                    loaded_new_slot = true;
+            GuiCommand::SetClipLoop { track_idx, scene_idx, .. } => {
+                if track_idx == 1 && scene_idx == 2 {
+                    set_loop_dst = true;
                 }
             }
             _ => {}
         }
     }
-    assert!(cleared_events, "Audio proxy debió vaciar eventos en ranura de origen");
-    assert!(loaded_new_slot, "Audio proxy debió cargar clip en nueva pista y escena");
+    assert!(moved_clip, "Audio proxy debió recibir MoveMatrixClip(0, 0 -> 1, 2)");
+    assert!(set_loop_dst, "Audio proxy debió configurar loop en nueva pista y escena");
 }
 
 #[test]
@@ -171,15 +173,15 @@ fn test_move_playing_clip_stops_old_voice() {
     assert!(matrix.grid[0][1].clip.is_some());
     assert_eq!(matrix.grid[0][1].state, SlotState::Stopped);
 
-    let mut triggered_stop = false;
+    let mut moved_clip = false;
     while let Ok(cmd) = rx.try_recv() {
-        if let GuiCommand::TriggerClip { track_idx, scene_idx } = cmd {
-            if track_idx == 0 && scene_idx == 0 {
-                triggered_stop = true;
+        if let GuiCommand::MoveMatrixClip { src_track, src_scene, dst_track, dst_scene } = cmd {
+            if src_track == 0 && src_scene == 0 && dst_track == 0 && dst_scene == 1 {
+                moved_clip = true;
             }
         }
     }
-    assert!(triggered_stop, "Se debió enviar trigger para detener la voz activa en el origen");
+    assert!(moved_clip, "MoveMatrixClip delega el stop y move atómico al audio engine");
 }
 
 #[test]
@@ -207,16 +209,39 @@ fn test_move_clip_replaces_occupied_slot_cleanly() {
     assert!(matrix.grid[0][1].clip.is_some());
     assert_eq!(matrix.grid[0][1].clip.as_ref().unwrap().name, "Clip A");
 
-    // Verificar que se detuvo y limpió Clip B
-    let mut stopped_b = false;
+    // Verificar que se envía MoveMatrixClip
+    let mut moved_clip = false;
     while let Ok(cmd) = rx.try_recv() {
-        if let GuiCommand::TriggerClip { track_idx, scene_idx } = cmd {
-            if track_idx == 0 && scene_idx == 1 {
-                stopped_b = true;
+        if let GuiCommand::MoveMatrixClip { src_track, src_scene, dst_track, dst_scene } = cmd {
+            if src_track == 0 && src_scene == 0 && dst_track == 0 && dst_scene == 1 {
+                moved_clip = true;
             }
         }
     }
-    assert!(stopped_b, "Clip B que estaba activo debió ser detenido al sobreescribir");
+    assert!(moved_clip, "MoveMatrixClip debe limpiar el destino y reubicar en el engine");
+}
+
+#[test]
+fn test_delete_slot_sends_clear_matrix_slot() {
+    let (mut matrix, proxy, rx) = create_test_state();
+    let clip = create_sample_audio_clip(7, "To Delete");
+    matrix.grid[0][0] = MatrixSlot {
+        state: SlotState::Playing,
+        has_stop_button: true,
+        clip: Some(clip),
+    };
+    matrix.delete_slot(0, 0, &proxy);
+    assert!(matrix.grid[0][0].clip.is_none());
+
+    let mut cleared = false;
+    while let Ok(cmd) = rx.try_recv() {
+        if let GuiCommand::ClearMatrixSlot { track_idx, scene_idx } = cmd {
+            if track_idx == 0 && scene_idx == 0 {
+                cleared = true;
+            }
+        }
+    }
+    assert!(cleared, "Delete slot debe mandar ClearMatrixSlot al backend");
 }
 
 #[test]

@@ -568,14 +568,8 @@ impl SessionMatrixState {
 
     pub fn delete_slot(&mut self, track_idx: usize, scene_idx: usize, audio_proxy: &AudioProxy) {
         if let Some(slot) = self.grid.get_mut(track_idx).and_then(|r| r.get_mut(scene_idx)) {
-            let was_active = matches!(
-                slot.state,
-                SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop
-            );
             *slot = MatrixSlot::default();
-            if was_active {
-                audio_proxy.send(GuiCommand::TriggerClip { track_idx, scene_idx });
-            }
+            audio_proxy.send(GuiCommand::ClearMatrixSlot { track_idx, scene_idx });
         }
     }
 
@@ -602,66 +596,17 @@ impl SessionMatrixState {
             return;
         }
 
-        if matches!(
-            moving_slot.state,
-            SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop
-        ) {
-            audio_proxy.send(GuiCommand::TriggerClip {
-                track_idx: src_track,
-                scene_idx: src_scene,
-            });
-            moving_slot.state = SlotState::Stopped;
-        }
+        moving_slot.state = SlotState::Stopped;
 
-        if let Some(ref c) = moving_slot.clip {
-            match &c.content {
-                ClipData::Midi { .. } => {
-                    audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
-                        track_idx: src_track,
-                        scene_idx: src_scene,
-                        notes: vec![],
-                    });
-                }
-                ClipData::Audio { .. } => {
-                    audio_proxy.send(GuiCommand::SetClipEvents {
-                        track_idx: src_track,
-                        scene_idx: src_scene,
-                        events: vec![],
-                    });
-                }
-            }
-        }
-
-        let dst_slot = &mut self.grid[dst_track][dst_scene];
-        if dst_slot.clip.is_some() {
-            if matches!(
-                dst_slot.state,
-                SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop
-            ) {
-                audio_proxy.send(GuiCommand::TriggerClip {
-                    track_idx: dst_track,
-                    scene_idx: dst_scene,
-                });
-            }
-            if let Some(ref c) = dst_slot.clip {
-                match &c.content {
-                    ClipData::Midi { .. } => {
-                        audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
-                            track_idx: dst_track,
-                            scene_idx: dst_scene,
-                            notes: vec![],
-                        });
-                    }
-                    ClipData::Audio { .. } => {
-                        audio_proxy.send(GuiCommand::SetClipEvents {
-                            track_idx: dst_track,
-                            scene_idx: dst_scene,
-                            events: vec![],
-                        });
-                    }
-                }
-            }
-        }
+        // Avisar al AudioEngine para mover el clip de forma atómica en el backend:
+        // detiene reproducción en origen y destino, limpia el slot destino si estaba ocupado
+        // y transfiere las instancias de clip (audio y midi) a las nuevas coordenadas.
+        audio_proxy.send(GuiCommand::MoveMatrixClip {
+            src_track,
+            src_scene,
+            dst_track,
+            dst_scene,
+        });
 
         self.grid[dst_track][dst_scene] = moving_slot;
 
@@ -672,18 +617,6 @@ impl SessionMatrixState {
                 }
                 ClipData::Audio { .. } => {
                     sync_audio_events_to_engine(clip, audio_proxy, dst_track, dst_scene);
-                    let path_str = clip.path.to_string_lossy().to_string();
-                    if !path_str.is_empty() {
-                        audio_proxy.send(GuiCommand::LoadClip {
-                            clip_id: clip.id,
-                            path: path_str,
-                            position_secs: 0.0,
-                            duration_secs: clip.duration_secs() as f32,
-                            offset_secs: 0.0,
-                            track_index: dst_track,
-                            scene_index: dst_scene,
-                        });
-                    }
                     audio_proxy.set_clip_loop(
                         dst_track,
                         dst_scene,
@@ -725,6 +658,12 @@ impl SessionMatrixState {
         let next_id = self.next_clip_id;
         self.next_clip_id += 1;
 
+        // Limpiar cualquier clip previo en el destino en el backend
+        audio_proxy.send(GuiCommand::ClearMatrixSlot {
+            track_idx: dst_track,
+            scene_idx: dst_scene,
+        });
+
         let is_midi = matches!(
             clip_copy.clip.as_ref().map(|c| &c.content),
             Some(ClipData::Midi { .. })
@@ -733,6 +672,7 @@ impl SessionMatrixState {
         if let Some(clip) = clip_copy.clip.as_mut() {
             clip.id = next_id;
             if !is_midi {
+                sync_audio_events_to_engine(clip, audio_proxy, dst_track, dst_scene);
                 let path_str = clip.path.to_string_lossy().to_string();
                 if !path_str.is_empty() {
                     audio_proxy.send(GuiCommand::LoadClip {
@@ -3006,6 +2946,27 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if let Some((t_idx, s_idx)) = select_slot_action {
         state.matrix_state.selected_slot = Some((t_idx, s_idx));
         select_matrix_track(state, t_idx);
+
+        if let Some(slot) = state.matrix_state.slot(t_idx, s_idx) {
+            if let Some(ref clip) = slot.clip {
+                state.clip_editor.active_target =
+                    Some(crate::views::detail_editor_panel::ClipEditorTarget::Matrix {
+                        track_idx: t_idx,
+                        slot_idx: s_idx,
+                    });
+                state.clip_editor.cached_name = clip.name.clone();
+                state.clip_editor.cached_duration_secs = clip.duration_secs();
+                let first_ev = clip.audio_events().first();
+                state.clip_editor.cached_sample_rate = first_ev.map(|e| e.sample_rate).unwrap_or(44100);
+                state.clip_editor.cached_gain = first_ev.map(|e| e.gain).unwrap_or(1.0);
+                state.clip_editor.cached_pan = 0.0;
+                state.clip_editor.cached_stretch_mode = hikaru_core::audio_clip_event::StretchMode::Raw;
+            } else {
+                state.clip_editor.active_target = None;
+            }
+        } else {
+            state.clip_editor.active_target = None;
+        }
     }
 
     if let Some((t_idx, s_idx, click_pos)) = open_context_menu_action {

@@ -504,17 +504,6 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         }
     }
 
-    if let Some((t_idx, s_idx)) = selected_slot_coord {
-        if app.matrix_state.grid.get(t_idx).and_then(|row| row.get(s_idx)).map_or(false, |slot| slot.clip.is_none()) {
-            super::matrix::create_empty_midi_clip(
-                &mut app.matrix_state,
-                &app.audio_proxy,
-                t_idx,
-                s_idx,
-            );
-        }
-    }
-
     let has_instrument = app.tracks().get(selected_track_idx).map(track_has_instrument).unwrap_or(false);
 
     let track_color = app
@@ -556,8 +545,20 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                             clip_loop_end.max(clip.loop_start + 960);
                         app.piano_roll_state.notes_source_slot = Some((t_idx, s_idx));
                         app.piano_roll_state.clear_note_selection();
+                    } else {
+                        app.piano_roll_state.notes.clear();
+                        app.piano_roll_state.notes_source_slot = Some((t_idx, s_idx));
+                        app.piano_roll_state.clear_note_selection();
                     }
+                } else {
+                    app.piano_roll_state.notes.clear();
+                    app.piano_roll_state.notes_source_slot = Some((t_idx, s_idx));
+                    app.piano_roll_state.clear_note_selection();
                 }
+            } else {
+                app.piano_roll_state.notes.clear();
+                app.piano_roll_state.notes_source_slot = Some((t_idx, s_idx));
+                app.piano_roll_state.clear_note_selection();
             }
         }
     }
@@ -2062,15 +2063,14 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                             notes: updated_notes,
                         };
                     }
+                    super::matrix::sync_midi_clip(
+                        &mut app.matrix_state,
+                        &app.audio_proxy,
+                        t_idx,
+                        s_idx,
+                    );
                 }
             }
-
-            super::matrix::sync_midi_clip(
-                &mut app.matrix_state,
-                &app.audio_proxy,
-                t_idx,
-                s_idx,
-            );
         }
     }
 

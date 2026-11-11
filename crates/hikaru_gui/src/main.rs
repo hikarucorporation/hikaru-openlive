@@ -96,6 +96,16 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.seek(secs);
                     }
                 }
+                GuiCommand::MoveMatrixClip { src_track, src_scene, dst_track, dst_scene } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.move_matrix_clip(src_track, src_scene, dst_track, dst_scene);
+                    }
+                }
+                GuiCommand::ClearMatrixSlot { track_idx, scene_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.clear_matrix_slot(track_idx, scene_idx);
+                    }
+                }
                 GuiCommand::UpdateClipBounds { clip_id, track_index, scene_index, position_secs, duration_secs, offset_secs } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.update_clip_bounds(clip_id, track_index, scene_index, position_secs, duration_secs, offset_secs);

@@ -94,6 +94,16 @@ pub enum GuiCommand {
     Seek { 
         sample_count: u64 
     },
+    MoveMatrixClip {
+        src_track: usize,
+        src_scene: usize,
+        dst_track: usize,
+        dst_scene: usize,
+    },
+    ClearMatrixSlot {
+        track_idx: usize,
+        scene_idx: usize,
+    },
     // ACTUALIZADO: Pasamos el clip_id, su slot (track/scene) y sus límites al cargar
     LoadClip { 
         clip_id: usize,

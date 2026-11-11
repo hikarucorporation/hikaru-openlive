@@ -217,6 +217,7 @@ impl EngineAudioEvent {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct AudioClipInstance {
     pub id: usize,
     pub track_index: usize,
@@ -1782,6 +1783,110 @@ impl<'a> AudioEngine<'a> {
                 !(c.track_index == track_index && c.scene_index == scene_index)
             }
         });
+    }
+
+    pub fn stop_matrix_clip(&mut self, track_index: usize, scene_index: usize) {
+        for clip in self.clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.is_playing = false;
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.is_playing = false;
+                for pitch in 0..128 {
+                    if clip.active_notes[pitch] {
+                        self.dms_voice_pool.kill_pad(dms_pad_key(track_index, pitch));
+                        clip.active_notes[pitch] = false;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn clear_matrix_slot(&mut self, track_index: usize, scene_index: usize) {
+        self.stop_matrix_clip(track_index, scene_index);
+        self.clips.retain(|c| !(c.track_index == track_index && c.scene_index == scene_index));
+        self.midi_clips.retain(|c| !(c.track_index == track_index && c.scene_index == scene_index));
+    }
+
+    pub fn move_matrix_clip(
+        &mut self,
+        src_track: usize,
+        src_scene: usize,
+        dst_track: usize,
+        dst_scene: usize,
+    ) {
+        if src_track == dst_track && src_scene == dst_scene {
+            return;
+        }
+
+        // Stop active voices on destination and remove existing clips there
+        self.clear_matrix_slot(dst_track, dst_scene);
+
+        // Stop active voices on source
+        self.stop_matrix_clip(src_track, src_scene);
+
+        // Move audio clips from src to dst
+        for clip in self.clips.iter_mut() {
+            if clip.track_index == src_track && clip.scene_index == src_scene {
+                clip.track_index = dst_track;
+                clip.scene_index = dst_scene;
+                clip.is_playing = false;
+            }
+        }
+
+        // Move midi clips from src to dst
+        for clip in self.midi_clips.iter_mut() {
+            if clip.track_index == src_track && clip.scene_index == src_scene {
+                clip.track_index = dst_track;
+                clip.scene_index = dst_scene;
+                clip.is_playing = false;
+            }
+        }
+    }
+
+    pub fn copy_matrix_clip(
+        &mut self,
+        src_track: usize,
+        src_scene: usize,
+        dst_track: usize,
+        dst_scene: usize,
+        new_clip_id: usize,
+    ) {
+        if src_track == dst_track && src_scene == dst_scene {
+            return;
+        }
+
+        self.clear_matrix_slot(dst_track, dst_scene);
+
+        let audio_to_clone = self
+            .clips
+            .iter()
+            .find(|c| c.track_index == src_track && c.scene_index == src_scene)
+            .cloned();
+
+        if let Some(mut clone) = audio_to_clone {
+            clone.id = new_clip_id;
+            clone.track_index = dst_track;
+            clone.scene_index = dst_scene;
+            clone.is_playing = false;
+            self.clips.push(clone);
+        }
+
+        let midi_to_clone = self
+            .midi_clips
+            .iter()
+            .find(|c| c.track_index == src_track && c.scene_index == src_scene)
+            .cloned();
+
+        if let Some(mut clone) = midi_to_clone {
+            clone.track_index = dst_track;
+            clone.scene_index = dst_scene;
+            clone.is_playing = false;
+            clone.clear_active_notes();
+            self.midi_clips.push(clone);
+        }
     }
 
     pub fn play(&mut self) {
