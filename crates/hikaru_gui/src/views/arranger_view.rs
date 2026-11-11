@@ -327,17 +327,21 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         ui.painter().rect_filled(s_rect, 1.5, s_bg);
                         let play_rect =
                             Rect::from_min_size(pos2(s_rect.min.x + 3.0, s_rect.min.y + 4.0), vec2(13.0, 13.0));
+                        // Triángulo en gris muy claro (blanqueado) para que
+                        // se distinga del texto blanco de la escena.
                         icons::paint_play_triangle(
                             ui.painter(),
                             play_rect,
-                            Color32::from_rgb(0x14, 0x15, 0x18),
+                            Color32::from_rgb(0xBF, 0xC2, 0xC7),
                         );
+                        // Texto en blanco para que se lea sobre el gris de la
+                        // fila (antes era casi negro y no se distinguía).
                         ui.painter().text(
                             pos2(s_rect.min.x + 18.0, s_rect.center().y),
                             Align2::LEFT_CENTER,
                             &s_name,
                             fonts::semibold(10.5),
-                            Color32::from_rgb(0x12, 0x13, 0x16),
+                            Color32::WHITE,
                         );
                         if s_resp.clicked() {
                             legend_scene_click = Some(scene_idx);
@@ -815,13 +819,15 @@ fn render_channel_strip(
                                 Color32::from_rgb(0x10, 0x11, 0x13),
                             );
                         } else {
+                            // Gris neutro de Bitwig para los pads vacíos
+                            // (#2E2E2E), sin el tinte azulado anterior.
                             ui.painter().rect_filled(
                                 cell,
                                 1.5,
                                 if slot_resp.hovered() {
-                                    Color32::from_rgb(0x38, 0x3A, 0x40)
+                                    Color32::from_rgb(0x3A, 0x3A, 0x3A)
                                 } else {
-                                    Color32::from_rgb(0x2D, 0x2F, 0x34)
+                                    Color32::from_rgb(0x2E, 0x2E, 0x2E)
                                 },
                             );
                             let icon_r = Rect::from_min_size(
@@ -831,10 +837,12 @@ fn render_channel_strip(
                             if arm {
                                 icons::paint_record_circle(ui.painter(), icon_r, REC_RED, false);
                             } else {
+                                // El cuadradito del pad vacío en Bitwig es gris
+                                // medio (#535353), no casi negro.
                                 icons::paint_stop_square(
                                     ui.painter(),
                                     icon_r,
-                                    Color32::from_rgb(0x15, 0x16, 0x19),
+                                    Color32::from_rgb(0x53, 0x53, 0x53),
                                 );
                             }
                         }

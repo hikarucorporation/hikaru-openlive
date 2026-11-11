@@ -1869,17 +1869,21 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 .unwrap_or("Scene");
             let play_r =
                 Rect::from_min_size(pos2(s_rect.min.x + 4.0, s_rect.center().y - 6.0), vec2(12.0, 12.0));
+            // Triángulo en gris muy claro (blanqueado) para que se distinga
+            // del texto blanco de la escena.
             icons::paint_play_triangle(
                 &scene_painter,
                 play_r,
-                Color32::from_rgb(0x14, 0x15, 0x18),
+                Color32::from_rgb(0xBF, 0xC2, 0xC7),
             );
+            // Texto en blanco para que se lea sobre el gris de la cabecera
+            // (antes era casi negro y no se distinguía).
             scene_painter.text(
                 pos2(s_rect.min.x + 18.0, s_rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 s_name,
                 fonts::semibold(10.5),
-                Color32::from_rgb(0x12, 0x13, 0x15),
+                Color32::WHITE,
             );
 
             if primary_clicked && s_hovered {
@@ -2122,13 +2126,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         egui::StrokeKind::Inside,
                     );
                 } else {
-                    // Empty Bitwig Slot (`#303237` slate cell + vector record/stop icon)
+                    // Empty Bitwig Slot: gris neutro #2E2E2E como en Bitwig
+                    // (antes tenía un tinte azulado/slate más oscuro).
                     let empty_bg = if is_matrix_drag_target {
                         Color32::from_rgba_unmultiplied(255, 138, 0, 40)
                     } else if cell_hovered {
-                        Color32::from_rgb(0x3D, 0x3F, 0x45)
+                        Color32::from_rgb(0x3A, 0x3A, 0x3A)
                     } else {
-                        Color32::from_rgb(0x2F, 0x31, 0x36)
+                        Color32::from_rgb(0x2E, 0x2E, 0x2E)
                     };
                     lg_painter.rect_filled(cell_rect, 2.0, empty_bg);
                     if is_selected_slot || is_matrix_drag_target {
@@ -2148,10 +2153,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     if is_armed {
                         icons::paint_record_circle(&lg_painter, ic_rect, REC_RED, false);
                     } else if has_stop_btn {
+                        // Mismo gris medio que usa Bitwig para el cuadradito
+                        // del slot vacío.
                         icons::paint_stop_square(
                             &lg_painter,
                             ic_rect,
-                            Color32::from_rgb(0x17, 0x18, 0x1B),
+                            Color32::from_rgb(0x53, 0x53, 0x53),
                         );
                     }
                 }
