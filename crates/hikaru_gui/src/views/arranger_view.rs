@@ -225,15 +225,22 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     // --- Ventana scrolleable de escenas (Bitwig) ---
     let content_h = scenes_content_h(scenes_count);
+    // Alto de todo lo que NO es la grilla de escenas: cabecera, fila Stop,
+    // Devices/Sends/I/O, bloque de controles (incluye el fader) y pie de 4px,
+    // más los 7 separadores de 1px entre franjas. Antes se calculaba con el
+    // bloque de la columna de leyendas y 8px de gaps, lo que se quedaba 1px
+    // corto y volvía a encender la scrollbar vertical de `ScrollArea::both`.
     let fixed_h = HEADER_BLOCK_H
         + STOP_ROW_H
         + DEVICES_WELL_H
         + SENDS_BOX_H
         + IO_BOX_H
-        + (20.0 + 14.0 + 16.0 + FADER_BAY_H + 8.0)
-        + 8.0;
+        + (FADER_BAY_H + 56.0) // margen 6 + cápsulas 18 + pan 13 + dB 14 + gaps 9 + fader (FADER_BAY_H - 4)
+        + 4.0
+        + 7.0;
     let min_view = (2.0 * (CLIP_SLOT_H + 1.0) - 1.0).min(content_h);
-    let slots_view_h = content_h.min((bg_rect.height() - fixed_h).max(min_view));
+    // 1px de aire para no quedar exactamente contra el borde del viewport.
+    let slots_view_h = content_h.min((bg_rect.height() - fixed_h - 1.0).max(min_view));
     let max_scroll = (content_h - slots_view_h).max(0.0);
     let scroll_id = ui.id().with("mix_scene_scroll");
     let mut scene_scroll: f32 = ui.ctx().data(|d| d.get_temp(scroll_id)).unwrap_or(0.0);
