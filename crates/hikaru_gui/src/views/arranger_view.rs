@@ -31,13 +31,12 @@ const STOP_ROW_H: f32 = 20.0;
 const DEVICES_WELL_H: f32 = 58.0;
 const SENDS_BOX_H: f32 = 46.0;
 const IO_BOX_H: f32 = 36.0;
-// 126 en vez de 136: la suma de todas las franjas verticales daba 588px, o
-// sea 8px más que el alto disponible del panel central a 768p. Eso encendía
-// la scrollbar vertical de `ScrollArea::both` y dejaba la vista scrolleada
-// al fondo, comiéndose 8px de las cabeceras de pista. La bahía del fader es
-// la franja elástica, así que absorbe el sobrante y el strip queda casi
-// pegado al footer (2px de aire).
+// Altura *preferida* de la bahía del fader. La bahía es la franja elástica:
+// cuando el Device Panel (u otro dock inferior) le roba alto al panel central,
+// se comprime hasta `FADER_BAY_MIN_H` para que el strip entre completo, en vez
+// de quedar cortado por abajo como pasaba antes.
 const FADER_BAY_H: f32 = 126.0;
+const FADER_BAY_MIN_H: f32 = 56.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StripTarget {
@@ -225,22 +224,25 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     // --- Ventana scrolleable de escenas (Bitwig) ---
     let content_h = scenes_content_h(scenes_count);
-    // Alto de todo lo que NO es la grilla de escenas: cabecera, fila Stop,
-    // Devices/Sends/I/O, bloque de controles (incluye el fader) y pie de 4px,
-    // más los 7 separadores de 1px entre franjas. Antes se calculaba con el
-    // bloque de la columna de leyendas y 8px de gaps, lo que se quedaba 1px
-    // corto y volvía a encender la scrollbar vertical de `ScrollArea::both`.
-    let fixed_h = HEADER_BLOCK_H
+    // Alto de todo lo que NO es la grilla de escenas ni la bahía del fader:
+    // cabecera, fila Stop, Devices/Sends/I/O, bloque de controles sobre el
+    // fader, pie de 4px y los 7 separadores de 1px entre franjas.
+    let fixed_no_fader_h = HEADER_BLOCK_H
         + STOP_ROW_H
         + DEVICES_WELL_H
         + SENDS_BOX_H
         + IO_BOX_H
-        + (FADER_BAY_H + 56.0) // margen 6 + cápsulas 18 + pan 13 + dB 14 + gaps 9 + fader (FADER_BAY_H - 4)
+        + 56.0 // margen 6 + cápsulas 18 + pan 13 + dB 14 + gaps 9
         + 4.0
         + 7.0;
     let min_view = (2.0 * (CLIP_SLOT_H + 1.0) - 1.0).min(content_h);
     // 1px de aire para no quedar exactamente contra el borde del viewport.
-    let slots_view_h = content_h.min((bg_rect.height() - fixed_h - 1.0).max(min_view));
+    // Primero se reserva el mínimo de la grilla de escenas (2 filas) y lo que
+    // sobra se le da a la bahía del fader, comprimiéndola si el Device Panel
+    // está abierto. Antes la bahía era fija y el strip se cortaba abajo.
+    let grid_and_fader_h = (bg_rect.height() - fixed_no_fader_h - 1.0).max(0.0);
+    let fader_bay_h = (grid_and_fader_h - min_view).clamp(FADER_BAY_MIN_H, FADER_BAY_H);
+    let slots_view_h = content_h.min((grid_and_fader_h - fader_bay_h).max(min_view));
     let max_scroll = (content_h - slots_view_h).max(0.0);
     let scroll_id = ui.id().with("mix_scene_scroll");
     let mut scene_scroll: f32 = ui.ctx().data(|d| d.get_temp(scroll_id)).unwrap_or(0.0);
@@ -419,7 +421,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 }
 
                 // Bloque inferior con el toggle de Clip Launcher en la esquina inferior izquierda
-                let bottom_legend_h = 20.0 + 14.0 + 16.0 + FADER_BAY_H + 8.0;
+                let bottom_legend_h = 20.0 + 14.0 + 16.0 + fader_bay_h + 8.0;
                 let (bot_rect, _) =
                     ui.allocate_exact_size(vec2(LEGEND_COL_W, bottom_legend_h), Sense::hover());
                 ui.painter()
@@ -454,6 +456,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     show_launcher,
                     scenes_count,
                     slots_view_h,
+                    fader_bay_h,
                     scene_scroll,
                     pointer_released,
                     is_dragging_sample,
@@ -509,6 +512,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     show_launcher,
                     scenes_count,
                     slots_view_h,
+                    fader_bay_h,
                     scene_scroll,
                     pointer_released,
                     is_dragging_sample,
@@ -644,6 +648,7 @@ fn render_channel_strip(
     show_launcher: bool,
     scenes_count: usize,
     slots_view_h: f32,
+    fader_bay_h: f32,
     scene_scroll: f32,
     pointer_released: bool,
     is_dragging_sample: bool,
@@ -1228,7 +1233,7 @@ fn render_channel_strip(
 
                         // Escala dB estilo Bitwig (`0, 6, 12, 18, 24, 36, ∞`)
                         let (scale_r, _) =
-                            ui.allocate_exact_size(vec2(14.0, FADER_BAY_H - 4.0), Sense::hover());
+                            ui.allocate_exact_size(vec2(14.0, fader_bay_h - 4.0), Sense::hover());
                         for (t_norm, lbl) in [
                             (0.75_f32, "0"),
                             (0.675, "6"),
@@ -1252,7 +1257,7 @@ fn render_channel_strip(
                         let peak_r = (peak * 0.96).clamp(0.0, 1.0);
                         stereo_meter_bar(
                             ui,
-                            vec2(14.0, FADER_BAY_H - 4.0),
+                            vec2(14.0, fader_bay_h - 4.0),
                             [
                                 peak,
                                 peak_r,
@@ -1265,7 +1270,7 @@ fn render_channel_strip(
                         let fader_w = (inner_w - 14.0 - 14.0 - 6.0).max(28.0);
                         let (vol_resp, vol_changed) = fader_vertical_track_vol(
                             ui,
-                            vec2(fader_w, FADER_BAY_H - 4.0),
+                            vec2(fader_w, fader_bay_h - 4.0),
                             &mut vol,
                             0.75,
                         );
