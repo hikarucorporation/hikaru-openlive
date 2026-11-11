@@ -31,7 +31,13 @@ const STOP_ROW_H: f32 = 20.0;
 const DEVICES_WELL_H: f32 = 58.0;
 const SENDS_BOX_H: f32 = 46.0;
 const IO_BOX_H: f32 = 36.0;
-const FADER_BAY_H: f32 = 136.0;
+// 126 en vez de 136: la suma de todas las franjas verticales daba 588px, o
+// sea 8px más que el alto disponible del panel central a 768p. Eso encendía
+// la scrollbar vertical de `ScrollArea::both` y dejaba la vista scrolleada
+// al fondo, comiéndose 8px de las cabeceras de pista. La bahía del fader es
+// la franja elástica, así que absorbe el sobrante y el strip queda casi
+// pegado al footer (2px de aire).
+const FADER_BAY_H: f32 = 126.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StripTarget {
