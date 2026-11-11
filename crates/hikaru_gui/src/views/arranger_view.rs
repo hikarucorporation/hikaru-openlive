@@ -148,6 +148,10 @@ struct StripActions {
     trigger_slot: Option<(usize, usize)>,
     stop_track: Option<usize>,
     drop_slot: Option<(usize, usize, PathBuf)>,
+    /// Slot destino al soltar un clip arrastrado (estilo Bitwig: drag = mover, Ctrl/Alt+drag = copiar).
+    clip_drop_target: Option<(usize, usize)>,
+    /// Inicio de arrastre de un clip del launcher: (track, scene, clip, grab_offset).
+    clip_drag_start: Option<(usize, usize, matrix::MatrixClip, egui::Vec2)>,
 }
 
 /// Renderiza la vista **Mix** de Bitwig Studio 5.1.7 (`bitwig-mix-panel.png`):
@@ -166,6 +170,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         trigger_slot: None,
         stop_track: None,
         drop_slot: None,
+        clip_drop_target: None,
+        clip_drag_start: None,
     };
     let mut trigger_scene: Option<usize> = None;
     let mut add_scene_clicked = false;
@@ -426,6 +432,84 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         state.dragged_sample = None;
     }
 
+    // --- Drag & drop de clips del launcher (Bitwig: DRAG = mover, Ctrl/Alt+DRAG = copiar) ---
+    if let Some((from_track, from_scene, clip, grab_offset)) = actions.clip_drag_start.take() {
+        let is_copy = ui.input(|i| i.modifiers.ctrl || i.modifiers.alt);
+        state.matrix_state.clip_drag = Some(matrix::MatrixClipDrag {
+            from_track,
+            from_scene,
+            clip,
+            grab_offset,
+            is_copy,
+            moved: true,
+        });
+        state.matrix_state.selected_slot = Some((from_track, from_scene));
+    }
+    if let Some(ref mut drag) = state.matrix_state.clip_drag {
+        drag.is_copy = ui.input(|i| i.modifiers.ctrl || i.modifiers.alt);
+    }
+    if pointer_released {
+        if let Some(drag) = state.matrix_state.clip_drag.take() {
+            if let Some((dst_track, dst_scene)) = actions.clip_drop_target {
+                if (dst_track, dst_scene) != (drag.from_track, drag.from_scene) {
+                    if drag.is_copy {
+                        state.matrix_state.copy_to_slot(
+                            drag.from_track, drag.from_scene, dst_track, dst_scene, &state.audio_proxy,
+                        );
+                    } else {
+                        state.matrix_state.move_slot(
+                            drag.from_track, drag.from_scene, dst_track, dst_scene, &state.audio_proxy,
+                        );
+                    }
+                    state.matrix_state.selected_slot = Some((dst_track, dst_scene));
+                    state.selected_track_index = dst_track + 1;
+                }
+            }
+            // Un drag no debe disparar el clip al soltar.
+            actions.trigger_slot = None;
+        }
+    }
+    // Ghost card flotante pegada al cursor (capa Tooltip, por encima del ScrollArea).
+    if let Some(ref drag) = state.matrix_state.clip_drag {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+            let rect = Rect::from_min_size(pos - drag.grab_offset, vec2(78.0, CLIP_SLOT_H - 1.0));
+            let p = ui.ctx().layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new("mix_clip_drag_ghost"),
+            ));
+            let col = state
+                .tracks()
+                .get(drag.from_track + 1)
+                .map(|t| t.color)
+                .unwrap_or(ACCENT_ORANGE);
+            p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, Color32::from_black_alpha(110));
+            p.rect_filled(rect, 1.5, col.gamma_multiply(0.9));
+            p.rect_stroke(rect, 1.5, Stroke::new(1.0_f32, Color32::WHITE), egui::StrokeKind::Inside);
+            icons::paint_play_triangle(
+                &p,
+                Rect::from_min_size(pos2(rect.min.x + 3.0, rect.min.y + 4.0), vec2(12.0, 12.0)),
+                Color32::from_rgb(0x10, 0x11, 0x13),
+            );
+            let name = if drag.clip.name.chars().count() > 9 {
+                format!("{}…", drag.clip.name.chars().take(8).collect::<String>())
+            } else {
+                drag.clip.name.clone()
+            };
+            p.text(
+                pos2(rect.min.x + 17.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                if drag.is_copy { format!("+ {name}") } else { name },
+                fonts::semibold(9.5),
+                Color32::from_rgb(0x10, 0x11, 0x13),
+            );
+            ui.ctx().set_cursor_icon(if drag.is_copy {
+                egui::CursorIcon::Copy
+            } else {
+                egui::CursorIcon::Grabbing
+            });
+        }
+    }
+
     if let Some((t_idx, s_idx)) = actions.trigger_slot {
         matrix::trigger_pad(&mut state.matrix_state, &state.audio_proxy, t_idx, s_idx);
     }
@@ -452,6 +536,7 @@ fn render_channel_strip(
 ) -> f32 {
     let is_master = idx == 0;
     let is_sel = actions.selected_track_idx == idx;
+    let pointer_pos = ui.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.hover_pos()));
     let strip_w = state.tracks()[idx].width.clamp(MIN_TRACK_WIDTH, 94.0);
 
     let (
@@ -556,21 +641,37 @@ fn render_channel_strip(
                         let slot_state = slot.map(|s| s.state.clone()).unwrap_or(SlotState::Empty);
                         let clip_opt = slot.and_then(|s| s.clip.as_ref());
 
-                        let (slot_rect, slot_resp) =
-                            ui.allocate_exact_size(vec2(strip_w, CLIP_SLOT_H), Sense::click());
+                        let (slot_rect, slot_resp) = ui.allocate_exact_size(
+                            vec2(strip_w, CLIP_SLOT_H),
+                            if clip_opt.is_some() { Sense::click_and_drag() } else { Sense::click() },
+                        );
                         let cell = slot_rect.shrink2(vec2(1.0, 0.5));
+                        let clip_drag_active = state.matrix_state.clip_drag.as_ref();
+                        let is_drag_source = clip_drag_active
+                            .is_some_and(|d| d.from_track == matrix_idx && d.from_scene == scene_idx && !d.is_copy);
+                        let ptr_in_slot = pointer_pos.is_some_and(|p| slot_rect.contains(p));
+                        let is_drag_target = clip_drag_active.is_some() && ptr_in_slot;
 
                         if let Some(clip) = clip_opt {
                             let is_playing = slot_state == SlotState::Playing;
+                            let base = if is_playing {
+                                track_color
+                            } else {
+                                track_color.gamma_multiply(0.75)
+                            };
+                            // Bitwig: el slot origen queda atenuado mientras el clip "vuela".
                             ui.painter().rect_filled(
                                 cell,
                                 1.5,
-                                if is_playing {
-                                    track_color
-                                } else {
-                                    track_color.gamma_multiply(0.75)
-                                },
+                                if is_drag_source { base.gamma_multiply(0.35) } else { base },
                             );
+                            if slot_resp.drag_started_by(egui::PointerButton::Primary) {
+                                let origin = ui
+                                    .input(|i| i.pointer.press_origin())
+                                    .unwrap_or(cell.min);
+                                actions.clip_drag_start =
+                                    Some((matrix_idx, scene_idx, clip.clone(), origin - cell.min));
+                            }
                             let icon_r = Rect::from_min_size(
                                 pos2(cell.min.x + 3.0, cell.min.y + 4.0),
                                 vec2(12.0, 12.0),
@@ -636,6 +737,17 @@ fn render_channel_strip(
                                 if let Some(ref p) = state.dragged_sample {
                                     actions.drop_slot = Some((matrix_idx, scene_idx, p.clone()));
                                 }
+                            }
+                        }
+                        if is_drag_target {
+                            ui.painter().rect_stroke(
+                                cell,
+                                1.5,
+                                Stroke::new(2.0_f32, Color32::WHITE),
+                                egui::StrokeKind::Inside,
+                            );
+                            if pointer_released {
+                                actions.clip_drop_target = Some((matrix_idx, scene_idx));
                             }
                         }
                         if slot_resp.clicked() {
