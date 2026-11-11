@@ -28,6 +28,10 @@ mod tests {
         let detune = ModulationTarget::OpenWavetableDetune;
         assert!(detune.matches("OpenWavetable", "DETUNE"));
 
+        let vol = ModulationTarget::OpenWavetableVolume;
+        assert!(vol.matches("OpenWavetable", "VOL"));
+        assert!(vol.matches("OpenWavetable", "vol"));
+
         let offset = ModulationTarget::SpectralPhaserOffset;
         assert!(offset.matches("OpenSpectral Phaser", "Offset"));
         assert!(offset.matches("OpenSpectralPhaser", "offset"));

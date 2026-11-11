@@ -469,7 +469,7 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub project_dirty: bool,
     pub open_menu: Option<usize>,
-    pub synced_wavetable_fingerprints: [Option<(u64, i8)>; 16],
+    pub synced_wavetable_fingerprints: [Option<(u64, i8, u32)>; 16],
 }
 
 impl AppState {
@@ -650,26 +650,40 @@ impl AppState {
                 }
 
                 let pitch_offset = slot.wavetable.octave * 12 + slot.wavetable.pitch;
+                let vol_mod = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                    tr_idx,
+                    "OpenWavetable",
+                    "VOL",
+                );
+                let effective_vol = if let Some(m) = vol_mod {
+                    (slot.wavetable.volume + m.delta).clamp(0.0, 2.0)
+                } else {
+                    slot.wavetable.volume
+                };
+                let vol_bits = effective_vol.to_bits();
+
                 let fp: u64 = (slot.wavetable.frame as u64)
                     ^ (((slot.wavetable.morph * 10000.0) as u64) << 16)
                     ^ ((slot.wavetable.table.samples.len() as u64) << 32)
                     ^ ((slot.wavetable.smooth as u64) << 48)
                     ^ ((slot.wavetable.table.frames as u64) << 52);
 
-                if self.synced_wavetable_fingerprints[eng_track] != Some((fp, pitch_offset)) {
+                if self.synced_wavetable_fingerprints[eng_track] != Some((fp, pitch_offset, vol_bits)) {
                     let samples = slot.wavetable.current_samples();
                     self.audio_proxy.send(GuiCommand::SetTrackWavetable {
                         track_idx: eng_track,
                         samples,
                         pitch_offset,
+                        volume: effective_vol,
                     });
-                    self.synced_wavetable_fingerprints[eng_track] = Some((fp, pitch_offset));
+                    self.synced_wavetable_fingerprints[eng_track] = Some((fp, pitch_offset, vol_bits));
                 }
             } else if self.synced_wavetable_fingerprints[eng_track].is_some() {
                 self.audio_proxy.send(GuiCommand::SetTrackWavetable {
                     track_idx: eng_track,
                     samples: Vec::new(),
                     pitch_offset: 0,
+                    volume: 1.0,
                 });
                 self.synced_wavetable_fingerprints[eng_track] = None;
             }

@@ -61,7 +61,7 @@ Unlikevertical-column session grids, Bitwig's **Arrange** view always places **h
 - **Left Vertical Strip**: `PROJECT` / `TRACK` tab bar (`24px` wide).
 - **Fixed-Width Device Cards**:
   - Cards enforce both `min_width` and `max_width` (`OPEN_WAVETABLE_CARD_WIDTH = 440.0`, `CARD_WIDTH = 340.0`) and avoid unbounded `Layout::right_to_left` inside horizontal scroll areas.
-  - `OpenWavetable` renders its 3D/2D viewport (`190×112 px`) on the left and compact synth controls (`WT POS`, `Unison`, `Detune`, `Phase`, `Voices`, `Octave`, `Pitch`) on the right, followed immediately by the `+` button to add devices.
+  - `OpenWavetable` renders its 3D/2D viewport (`190×112 px`) on the left and compact synth controls (`WT POS`, `Detune`, `Phase`, `Unison`, `Volume`, `Morph`, `Voices`, `Octave`, `Pitch`) on the right, followed immediately by the `+` button to add devices.
 
 ### 2.5 Right-Side Browser & WAV Drag-and-Drop (`explorer.rs`)
 - Docked on the right side (`SidePanel::right("right_explorer")`, default width `270px`).

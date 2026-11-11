@@ -1220,6 +1220,7 @@ pub struct AudioEngine<'a> {
     pub wavetable_data: Vec<f32>,
     pub track_wavetables: [Option<Vec<f32>>; 16],
     pub track_wavetable_pitch_offsets: [i8; 16],
+    pub track_wavetable_volumes: [f32; 16],
     /// Cadena de efectos externos (VST3/CLAP) por pista.
     ///
     /// Cada pista tiene su propia cadena: los plugins se instancian en el
@@ -1286,6 +1287,7 @@ impl<'a> AudioEngine<'a> {
             },
             track_wavetables: std::array::from_fn(|_| None),
             track_wavetable_pitch_offsets: [0; 16],
+            track_wavetable_volumes: [1.0; 16],
             track_effects: (0..16).map(|_| Vec::new()).collect(),
             effects_sample_rate: sr.get(),
             dms_scratch_l: vec![0.0; MAX_TRACK_BUF],
@@ -2444,21 +2446,39 @@ impl<'a> AudioEngine<'a> {
     }
 
     pub fn set_track_wavetable(&mut self, track_idx: usize, samples: Vec<f32>, pitch_offset: i8) {
+        self.set_track_wavetable_with_volume(track_idx, samples, pitch_offset, 1.0);
+    }
+
+    pub fn set_track_wavetable_with_volume(
+        &mut self,
+        track_idx: usize,
+        samples: Vec<f32>,
+        pitch_offset: i8,
+        volume: f32,
+    ) {
         let ti = track_idx.min(15);
         if samples.len() >= 256 {
             self.track_wavetables[ti] = Some(samples);
             self.track_wavetable_pitch_offsets[ti] = pitch_offset;
+            self.track_wavetable_volumes[ti] = volume.max(0.0);
         } else {
             self.track_wavetables[ti] = None;
             self.track_wavetable_pitch_offsets[ti] = 0;
+            self.track_wavetable_volumes[ti] = 1.0;
             self.wavetable_voice_pool.kill_track_notes(ti);
         }
+    }
+
+    pub fn set_track_wavetable_volume(&mut self, track_idx: usize, volume: f32) {
+        let ti = track_idx.min(15);
+        self.track_wavetable_volumes[ti] = volume.max(0.0);
     }
 
     pub fn clear_track_wavetable(&mut self, track_idx: usize) {
         let ti = track_idx.min(15);
         self.track_wavetables[ti] = None;
         self.track_wavetable_pitch_offsets[ti] = 0;
+        self.track_wavetable_volumes[ti] = 1.0;
         self.wavetable_voice_pool.kill_track_notes(ti);
     }
 
@@ -2848,12 +2868,19 @@ impl<'a> AudioEngine<'a> {
                 self.sample_rate,
             );
             if self.transport.playback_state != TransportPlaybackState::Playing {
+                let mut wt_gains_l = [0.0f32; 16];
+                let mut wt_gains_r = [0.0f32; 16];
+                for t in 0..16 {
+                    let w_vol = self.track_wavetable_volumes[t];
+                    wt_gains_l[t] = dms_gain_l[t] * w_vol;
+                    wt_gains_r[t] = dms_gain_r[t] * w_vol;
+                }
                 self.wavetable_voice_pool.process_all_with_track_tables(
                     &self.track_wavetables,
                     &mut self.dms_scratch_l[..buf_frames],
                     &mut self.dms_scratch_r[..buf_frames],
-                    &dms_gain_l,
-                    &dms_gain_r,
+                    &wt_gains_l,
+                    &wt_gains_r,
                     self.sample_rate,
                 );
             }
@@ -2913,8 +2940,9 @@ impl<'a> AudioEngine<'a> {
             }
 
             for t in 0..16 {
-                let gl = track_gain_l[t];
-                let gr = track_gain_r[t];
+                let w_vol = self.track_wavetable_volumes[t];
+                let gl = track_gain_l[t] * w_vol;
+                let gr = track_gain_r[t] * w_vol;
                 if let Some(table) = &self.track_wavetables[t] {
                     self.wavetable_voice_pool.process_track(
                         t,

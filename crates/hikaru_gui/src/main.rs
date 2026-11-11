@@ -431,9 +431,9 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.release_virtual_note(track_idx, pitch);
                     }
                 }
-                GuiCommand::SetTrackWavetable { track_idx, samples, pitch_offset } => {
+                GuiCommand::SetTrackWavetable { track_idx, samples, pitch_offset, volume } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
-                        engine.set_track_wavetable(track_idx, samples, pitch_offset);
+                        engine.set_track_wavetable_with_volume(track_idx, samples, pitch_offset, volume);
                     }
                 }
                 GuiCommand::LoadExternalPlugin { track_idx, slot_idx, descriptor } => {

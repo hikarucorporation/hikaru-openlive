@@ -249,6 +249,7 @@ pub enum GuiCommand {
         track_idx: usize,
         samples: Vec<f32>,
         pitch_offset: i8,
+        volume: f32,
     },
     /// Carga un plugin externo (VST3/CLAP) en un slot de pista.
     /// El motor instancia el binario y lo inserta en la cadena de efectos.

@@ -177,6 +177,8 @@ pub struct OpenWavetableParams {
     pub pitch: i8,
     #[serde(default = "default_voices")]
     pub voices: String,
+    #[serde(default = "default_volume")]
+    pub volume: f32,
     #[serde(default)]
     pub render_mode_3d: bool,
     #[serde(default)]
@@ -191,6 +193,10 @@ pub struct OpenWavetableParams {
 
 fn default_unison() -> u8 {
     1
+}
+
+fn default_volume() -> f32 {
+    1.0
 }
 
 fn default_voices() -> String {
@@ -431,6 +437,7 @@ mod tests {
                     octave: -3,
                     pitch: 0,
                     voices: "Poly".to_string(),
+                    volume: 0.85,
                     render_mode_3d: true,
                     render_mode_lines: true,
                     color_primary: [0.9, 0.5, 0.2],

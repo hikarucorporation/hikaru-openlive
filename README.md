@@ -1,6 +1,6 @@
 # Hikaru OpenLive
 
-# Thank you to [PixelSoftwareStudios](https://github.com/PixelSoftwareStudios) for listing Hikaru OpenLive in [remade.wiki](https://remade.wiki/projects/hikaru-openlive/): [![Listed on Remade](https://remade.wiki/badges/listed-on-remade.svg)](https://remade.wiki/projects/hikaru-openlive/)
+## Thank you to [PixelSoftwareStudios](https://github.com/PixelSoftwareStudios) for listing Hikaru OpenLive in [remade.wiki](https://remade.wiki/projects/hikaru-openlive/): [![Listed on Remade](https://remade.wiki/badges/listed-on-remade.svg)](https://remade.wiki/projects/hikaru-openlive/)
 
 > Modular, free and cross-platform DAW in Rust for live music production and performance.
 > **Independent FOSS alternative to Ableton Live and Bitwig Studio.** *(In active development)*

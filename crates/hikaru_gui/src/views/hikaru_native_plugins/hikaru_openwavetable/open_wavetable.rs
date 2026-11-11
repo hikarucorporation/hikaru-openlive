@@ -32,6 +32,7 @@ pub enum KnobTarget {
     Unison,
     Detune,
     Phase,
+    Volume,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -79,6 +80,7 @@ pub struct WavetableEditor {
     pub unison: u8,
     pub detune: f32,
     pub phase: f32,
+    pub volume: f32,
     pub pitch: i8,
     pub octave: i8,
     pub voices: VoiceMode,
@@ -115,6 +117,7 @@ impl Default for WavetableEditor {
             unison: 1,
             detune: 0.0,
             phase: 0.0,
+            volume: 1.0,
             pitch: 0,
             octave: 0,
             voices: VoiceMode::Poly,
@@ -174,6 +177,7 @@ impl WavetableEditor {
             KnobTarget::Unison => self.norm_unison(),
             KnobTarget::Detune => self.detune,
             KnobTarget::Phase => self.phase,
+            KnobTarget::Volume => self.volume,
         };
         self.drag_origin_y = if window_y.is_finite() { window_y } else { 0.0 };
     }
@@ -205,6 +209,10 @@ impl WavetableEditor {
             KnobTarget::Phase => {
                 self.phase = value.clamp(0.0, 1.0);
                 self.phase
+            }
+            KnobTarget::Volume => {
+                self.volume = value.clamp(0.0, 2.0);
+                self.volume
             }
         }
     }
@@ -398,6 +406,7 @@ impl WavetableEditor {
             detune: self.detune,
             phase: self.phase,
             unison: self.unison,
+            volume: self.volume,
             octave: self.octave,
             pitch: self.pitch,
             voices: match self.voices {
@@ -419,6 +428,7 @@ impl WavetableEditor {
         }
         self.detune = p.detune;
         self.phase = p.phase;
+        self.volume = p.volume;
         self.unison = p.unison.clamp(1, 16);
         self.octave = p.octave;
         self.pitch = p.pitch;
@@ -1500,13 +1510,13 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         );
         right_ui.spacing_mut().item_spacing.y = 4.0;
 
-        // Row 1: GPU Rotary Knobs (`INDEX`, `DETUNE`, `PHASE`, `UNISON`) with explicit cell rects
+        // Row 1: GPU Rotary Knobs (`WT POS`, `DETUNE`, `PHASE`, `UNISON`, `VOL`) with explicit cell rects
         let knobs_row_h = 42.0;
         let (knobs_row_rect, _) =
             right_ui.allocate_exact_size(egui::vec2(right_w, knobs_row_h), egui::Sense::hover());
-        let col_w = (right_w / 4.0).floor();
+        let col_w = (right_w / 5.0).floor();
 
-        for col_idx in 0..4 {
+        for col_idx in 0..5 {
             let cell_rect = egui::Rect::from_min_size(
                 egui::pos2(knobs_row_rect.min.x + col_idx as f32 * col_w, knobs_row_rect.min.y),
                 egui::vec2(col_w, knobs_row_h),
@@ -1706,7 +1716,7 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
                         );
                     }
                 }
-                _ => {
+                3 => {
                     let mut u_f = editor.unison as f32;
                     let (r_uni, uni_changed) = crate::ui::bitwig_kit::rotary_knob(
                         &mut cell_ui,
@@ -1726,6 +1736,79 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
                             .font(crate::ui::fonts::semibold(8.5))
                             .color(theme::TEXT_SECONDARY),
                     );
+                }
+                _ => {
+                    let is_target = crate::views::hikaru_native_plugins::hikaru_openmodulation::is_mapping_target(
+                        track_idx,
+                        "OpenWavetable",
+                        "VOL",
+                    );
+                    let mod_opt = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        track_idx,
+                        "OpenWavetable",
+                        "VOL",
+                    );
+                    let mut eff_vol = if let Some(m) = mod_opt {
+                        (editor.volume + m.delta).clamp(0.0, 2.0)
+                    } else {
+                        editor.volume
+                    };
+
+                    let (r_vol, vol_changed) = crate::ui::bitwig_kit::rotary_knob(
+                        &mut cell_ui,
+                        28.0,
+                        &mut eff_vol,
+                        0.0..=2.0,
+                        1.0,
+                        if mod_opt.is_some() {
+                            theme::BW_LCD_CYAN
+                        } else {
+                            theme::DAW_AUDIO_YELLOW
+                        },
+                        false,
+                    );
+
+                    if is_target {
+                        cell_ui.painter().rect_stroke(
+                            cell_rect,
+                            3.0,
+                            egui::Stroke::new(1.5_f32, theme::BW_LCD_CYAN),
+                            egui::StrokeKind::Inside,
+                        );
+                        if r_vol.clicked() {
+                            crate::views::hikaru_native_plugins::hikaru_openmodulation::handle_knob_mapping_click(
+                                track_idx,
+                                "OpenWavetable",
+                                "VOL",
+                            );
+                        }
+                    }
+
+                    if vol_changed {
+                        editor.volume = eff_vol;
+                    }
+
+                    let vol_pct = (editor.volume * 100.0).round();
+                    if let Some(m) = mod_opt {
+                        r_vol.on_hover_text(format!(
+                            "Volume [LFO Delta]: {:.0}% (Base: {:.0}%, Delta: {:+.2})",
+                            eff_vol * 100.0,
+                            vol_pct,
+                            m.delta
+                        ));
+                        cell_ui.label(
+                            egui::RichText::new("VOL ●")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::BW_LCD_CYAN),
+                        );
+                    } else {
+                        r_vol.on_hover_text(format!("Master Wavetable Volume: {:.0}%", vol_pct));
+                        cell_ui.label(
+                            egui::RichText::new("VOL")
+                                .font(crate::ui::fonts::semibold(8.5))
+                                .color(theme::TEXT_SECONDARY),
+                        );
+                    }
                 }
             }
         }

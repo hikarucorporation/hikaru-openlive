@@ -745,4 +745,11 @@ fn test_openmodulation_in_catalog_and_lfo_modulates_openwavetable_wt_pos() {
 
     // 6. Probar clic de mapeo interactivo (MOD button)
     let _ = handle_knob_mapping_click(track_idx, "OpenWavetable", "DETUNE");
+
+    // 7. Probar modulación hacia el nuevo knob VOL
+    update_lfo_state(track_idx, slot_idx, |state| {
+        state.target = ModulationTarget::OpenWavetableVolume;
+    });
+    let vol_mod = get_modulation(track_idx, "OpenWavetable", "VOL");
+    assert!(vol_mod.is_some(), "Debe haber modulación activa para VOL");
 }

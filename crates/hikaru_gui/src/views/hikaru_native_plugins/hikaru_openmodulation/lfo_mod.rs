@@ -24,6 +24,7 @@ pub enum ModulationTarget {
     OpenWavetableWtPos,
     OpenWavetableDetune,
     OpenWavetablePhase,
+    OpenWavetableVolume,
     SpectralPhaserOffset,
     SpectralPhaserSpeed,
     SpectralPhaserDepth,
@@ -34,10 +35,11 @@ pub enum ModulationTarget {
 }
 
 impl ModulationTarget {
-    pub const ALL: [ModulationTarget; 10] = [
+    pub const ALL: [ModulationTarget; 11] = [
         ModulationTarget::OpenWavetableWtPos,
         ModulationTarget::OpenWavetableDetune,
         ModulationTarget::OpenWavetablePhase,
+        ModulationTarget::OpenWavetableVolume,
         ModulationTarget::SpectralPhaserOffset,
         ModulationTarget::SpectralPhaserSpeed,
         ModulationTarget::SpectralPhaserDepth,
@@ -52,6 +54,7 @@ impl ModulationTarget {
             ModulationTarget::OpenWavetableWtPos => "OpenWavetable: WT POS",
             ModulationTarget::OpenWavetableDetune => "OpenWavetable: DETUNE",
             ModulationTarget::OpenWavetablePhase => "OpenWavetable: PHASE",
+            ModulationTarget::OpenWavetableVolume => "OpenWavetable: VOL",
             ModulationTarget::SpectralPhaserOffset => "Phaser: Offset",
             ModulationTarget::SpectralPhaserSpeed => "Phaser: Speed",
             ModulationTarget::SpectralPhaserDepth => "Phaser: Depth",
@@ -66,7 +69,8 @@ impl ModulationTarget {
         match self {
             ModulationTarget::OpenWavetableWtPos
             | ModulationTarget::OpenWavetableDetune
-            | ModulationTarget::OpenWavetablePhase => "OpenWavetable",
+            | ModulationTarget::OpenWavetablePhase
+            | ModulationTarget::OpenWavetableVolume => "OpenWavetable",
             ModulationTarget::SpectralPhaserOffset
             | ModulationTarget::SpectralPhaserSpeed
             | ModulationTarget::SpectralPhaserDepth => "OpenSpectral Phaser",
@@ -82,6 +86,7 @@ impl ModulationTarget {
             ModulationTarget::OpenWavetableWtPos => "WT POS",
             ModulationTarget::OpenWavetableDetune => "DETUNE",
             ModulationTarget::OpenWavetablePhase => "PHASE",
+            ModulationTarget::OpenWavetableVolume => "VOL",
             ModulationTarget::SpectralPhaserOffset => "Offset",
             ModulationTarget::SpectralPhaserSpeed => "Speed",
             ModulationTarget::SpectralPhaserDepth => "Depth",
