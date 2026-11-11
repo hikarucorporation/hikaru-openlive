@@ -341,6 +341,16 @@ pub struct SceneMeta {
     pub name: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct MatrixClipDrag {
+    pub from_track: usize,
+    pub from_scene: usize,
+    pub clip: MatrixClip,
+    pub grab_offset: egui::Vec2,
+    pub is_copy: bool,
+    pub moved: bool,
+}
+
 pub struct SessionMatrixState {
     pub grid: Vec<Vec<MatrixSlot>>,
     pub tracks: Vec<TrackMeta>,
@@ -351,6 +361,7 @@ pub struct SessionMatrixState {
     pub editor_zoom_x: f32,
     pub show_editor: bool,
     pub context_menu: Option<crate::views::clip_context_menu::ClipLauncherContextMenu>,
+    pub clip_drag: Option<MatrixClipDrag>,
 }
 
 impl Default for SessionMatrixState {
@@ -387,6 +398,7 @@ impl Default for SessionMatrixState {
             editor_zoom_x: 0.04,
             show_editor: true,
             context_menu: None,
+            clip_drag: None,
         }
     }
 }
@@ -565,6 +577,192 @@ impl SessionMatrixState {
                 audio_proxy.send(GuiCommand::TriggerClip { track_idx, scene_idx });
             }
         }
+    }
+
+    pub fn move_slot(
+        &mut self,
+        src_track: usize,
+        src_scene: usize,
+        dst_track: usize,
+        dst_scene: usize,
+        audio_proxy: &AudioProxy,
+    ) {
+        if src_track == dst_track && src_scene == dst_scene {
+            return;
+        }
+        if src_track >= self.grid.len() || src_scene >= self.scenes.len() {
+            return;
+        }
+        if dst_track >= self.grid.len() || dst_scene >= self.scenes.len() {
+            return;
+        }
+
+        let mut moving_slot = std::mem::take(&mut self.grid[src_track][src_scene]);
+        if moving_slot.clip.is_none() {
+            return;
+        }
+
+        if matches!(
+            moving_slot.state,
+            SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop
+        ) {
+            audio_proxy.send(GuiCommand::TriggerClip {
+                track_idx: src_track,
+                scene_idx: src_scene,
+            });
+            moving_slot.state = SlotState::Stopped;
+        }
+
+        if let Some(ref c) = moving_slot.clip {
+            match &c.content {
+                ClipData::Midi { .. } => {
+                    audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+                        track_idx: src_track,
+                        scene_idx: src_scene,
+                        notes: vec![],
+                    });
+                }
+                ClipData::Audio { .. } => {
+                    audio_proxy.send(GuiCommand::SetClipEvents {
+                        track_idx: src_track,
+                        scene_idx: src_scene,
+                        events: vec![],
+                    });
+                }
+            }
+        }
+
+        let dst_slot = &mut self.grid[dst_track][dst_scene];
+        if dst_slot.clip.is_some() {
+            if matches!(
+                dst_slot.state,
+                SlotState::Playing | SlotState::QueuedToPlay | SlotState::QueuedToStop
+            ) {
+                audio_proxy.send(GuiCommand::TriggerClip {
+                    track_idx: dst_track,
+                    scene_idx: dst_scene,
+                });
+            }
+            if let Some(ref c) = dst_slot.clip {
+                match &c.content {
+                    ClipData::Midi { .. } => {
+                        audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+                            track_idx: dst_track,
+                            scene_idx: dst_scene,
+                            notes: vec![],
+                        });
+                    }
+                    ClipData::Audio { .. } => {
+                        audio_proxy.send(GuiCommand::SetClipEvents {
+                            track_idx: dst_track,
+                            scene_idx: dst_scene,
+                            events: vec![],
+                        });
+                    }
+                }
+            }
+        }
+
+        self.grid[dst_track][dst_scene] = moving_slot;
+
+        if let Some(ref clip) = self.grid[dst_track][dst_scene].clip {
+            match &clip.content {
+                ClipData::Midi { .. } => {
+                    sync_midi_clip(self, audio_proxy, dst_track, dst_scene);
+                }
+                ClipData::Audio { .. } => {
+                    sync_audio_events_to_engine(clip, audio_proxy, dst_track, dst_scene);
+                    let path_str = clip.path.to_string_lossy().to_string();
+                    if !path_str.is_empty() {
+                        audio_proxy.send(GuiCommand::LoadClip {
+                            clip_id: clip.id,
+                            path: path_str,
+                            position_secs: 0.0,
+                            duration_secs: clip.duration_secs() as f32,
+                            offset_secs: 0.0,
+                            track_index: dst_track,
+                            scene_index: dst_scene,
+                        });
+                    }
+                    audio_proxy.set_clip_loop(
+                        dst_track,
+                        dst_scene,
+                        clip.loop_start as f32,
+                        clip.loop_end as f32,
+                        clip.loop_enabled,
+                    );
+                }
+            }
+        }
+
+        if self.selected_slot == Some((src_track, src_scene)) {
+            self.selected_slot = Some((dst_track, dst_scene));
+        }
+    }
+
+    pub fn copy_to_slot(
+        &mut self,
+        src_track: usize,
+        src_scene: usize,
+        dst_track: usize,
+        dst_scene: usize,
+        audio_proxy: &AudioProxy,
+    ) {
+        if src_track >= self.grid.len() || src_scene >= self.scenes.len() {
+            return;
+        }
+        if dst_track >= self.grid.len() || dst_scene >= self.scenes.len() {
+            return;
+        }
+
+        let current_slot = self.grid[src_track][src_scene].clone();
+        if current_slot.clip.is_none() {
+            return;
+        }
+        let mut clip_copy = current_slot;
+        clip_copy.state = SlotState::Stopped;
+
+        let next_id = self.next_clip_id;
+        self.next_clip_id += 1;
+
+        let is_midi = matches!(
+            clip_copy.clip.as_ref().map(|c| &c.content),
+            Some(ClipData::Midi { .. })
+        );
+
+        if let Some(clip) = clip_copy.clip.as_mut() {
+            clip.id = next_id;
+            if !is_midi {
+                let path_str = clip.path.to_string_lossy().to_string();
+                if !path_str.is_empty() {
+                    audio_proxy.send(GuiCommand::LoadClip {
+                        clip_id: next_id,
+                        path: path_str,
+                        position_secs: 0.0,
+                        duration_secs: clip.duration_secs() as f32,
+                        offset_secs: 0.0,
+                        track_index: dst_track,
+                        scene_index: dst_scene,
+                    });
+                }
+                audio_proxy.set_clip_loop(
+                    dst_track,
+                    dst_scene,
+                    clip.loop_start as f32,
+                    clip.loop_end as f32,
+                    clip.loop_enabled,
+                );
+            }
+        }
+
+        self.grid[dst_track][dst_scene] = clip_copy;
+        if is_midi {
+            sync_midi_clip(self, audio_proxy, dst_track, dst_scene);
+        } else if let Some(ref c) = self.grid[dst_track][dst_scene].clip {
+            sync_audio_events_to_engine(c, audio_proxy, dst_track, dst_scene);
+        }
+
+        self.selected_slot = Some((dst_track, dst_scene));
     }
 }
 
@@ -1291,6 +1489,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut drop_slot_action: Option<(usize, usize, PathBuf)> = None;
     let mut drop_timeline_action: Option<(usize, u64, PathBuf)> = None;
     let mut open_context_menu_action: Option<(usize, usize, egui::Pos2)> = None;
+    let mut start_matrix_drag_action: Option<(usize, usize, MatrixClip, egui::Vec2)> = None;
+    let mut drop_matrix_clip_action: Option<(usize, usize)> = None;
 
     for track_idx in 0..tracks_count {
         let row_y0 = tracks_y0 + scroll_y + track_idx as f32 * row_h;
@@ -1828,11 +2028,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 let cell_hovered = pointer_pos
                     .is_some_and(|p| launcher_grid_rect.contains(p) && cell_rect.contains(p));
 
+                let is_drag_source = state.matrix_state.clip_drag.as_ref().is_some_and(|d| {
+                    d.from_track == track_idx && d.from_scene == scene_idx
+                });
+                let is_matrix_drag_target = state.matrix_state.clip_drag.is_some() && cell_hovered;
+
                 if let Some(clip) = clip_opt {
                     // Populated Bitwig Clip Card
                     let is_playing = slot_state == SlotState::Playing;
                     let effective_color = clip.color.unwrap_or(track_color);
-                    let card_bg = if clip.muted {
+                    let card_bg = if is_drag_source {
+                        Color32::from_rgba_unmultiplied(30, 32, 36, 110)
+                    } else if clip.muted {
                         Color32::from_rgb(0x28, 0x2A, 0x2E)
                     } else {
                         Color32::from_rgba_unmultiplied(
@@ -1847,7 +2054,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     // Top colored header strip (16px tall) with vector play/stop icon
                     let top_strip =
                         Rect::from_min_size(cell_rect.min, vec2(cell_rect.width(), 16.0));
-                    let strip_col = if clip.muted {
+                    let strip_col = if is_drag_source {
+                        Color32::from_rgba_unmultiplied(
+                            effective_color.r() / 3,
+                            effective_color.g() / 3,
+                            effective_color.b() / 3,
+                            120,
+                        )
+                    } else if clip.muted {
                         Color32::from_rgb(0x40, 0x43, 0x48)
                     } else {
                         effective_color
@@ -1876,7 +2090,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         egui::Align2::LEFT_CENTER,
                         &clip.name,
                         fonts::semibold(9.5),
-                        Color32::from_rgb(0x10, 0x10, 0x12),
+                        if is_drag_source {
+                            Color32::from_rgba_unmultiplied(16, 16, 18, 120)
+                        } else {
+                            Color32::from_rgb(0x10, 0x10, 0x12)
+                        },
                     );
 
                     // Mini waveform or Mini-Notes inside slot body
@@ -1891,6 +2109,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 let hh = wave_rect.height() * 0.44;
                                 let n = clip.peaks.len();
                                 let step = wave_rect.width() / n as f32;
+                                let wave_alpha = if is_drag_source { 60 } else { 200 };
                                 for (i, &pk) in clip.peaks.iter().enumerate() {
                                     let x = wave_rect.min.x + i as f32 * step;
                                     let h = (pk * hh).max(1.0);
@@ -1898,7 +2117,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         [pos2(x, cy - h), pos2(x, cy + h)],
                                         Stroke::new(
                                             1.0_f32,
-                                            Color32::from_rgba_unmultiplied(255, 255, 255, 200),
+                                            Color32::from_rgba_unmultiplied(255, 255, 255, wave_alpha),
                                         ),
                                     );
                                 }
@@ -1914,6 +2133,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 let min_p = notes.iter().map(|(_, p, _, _)| *p).min().unwrap_or(36).saturating_sub(2);
                                 let max_p = notes.iter().map(|(_, p, _, _)| *p).max().unwrap_or(84).saturating_add(2);
                                 let p_range = (max_p.saturating_sub(min_p)).max(12) as f32;
+                                let note_alpha = if is_drag_source { 70 } else { 220 };
 
                                 for &(st, pitch, _, dur) in notes.iter().take(120) {
                                     let nx = body_rect.min.x + (st as f32 / max_t) * body_rect.width();
@@ -1929,7 +2149,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         lg_painter.rect_filled(
                                             note_rect,
                                             0.5,
-                                            Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+                                            Color32::from_rgba_unmultiplied(255, 255, 255, note_alpha),
                                         );
                                     }
                                 }
@@ -1937,7 +2157,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         }
                     }
 
-                    let border_col = if is_playing {
+                    let border_col = if is_matrix_drag_target {
+                        ACCENT_ORANGE
+                    } else if is_drag_source {
+                        Color32::from_rgba_unmultiplied(100, 102, 108, 120)
+                    } else if is_playing {
                         PLAY_GREEN
                     } else if is_selected_slot {
                         Color32::WHITE
@@ -1948,7 +2172,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         cell_rect,
                         2.5,
                         Stroke::new(
-                            if is_playing || is_selected_slot {
+                            if is_matrix_drag_target || is_playing || is_selected_slot {
                                 1.5_f32
                             } else {
                                 1.0_f32
@@ -1959,13 +2183,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 } else {
                     // Empty Bitwig Slot (`#303237` slate cell + vector record/stop icon)
-                    let empty_bg = if cell_hovered {
+                    let empty_bg = if is_matrix_drag_target {
+                        Color32::from_rgba_unmultiplied(255, 138, 0, 40)
+                    } else if cell_hovered {
                         Color32::from_rgb(0x3D, 0x3F, 0x45)
                     } else {
                         Color32::from_rgb(0x2F, 0x31, 0x36)
                     };
                     lg_painter.rect_filled(cell_rect, 2.0, empty_bg);
-                    if is_selected_slot {
+                    if is_selected_slot || is_matrix_drag_target {
                         lg_painter.rect_stroke(
                             cell_rect,
                             2.0,
@@ -1990,7 +2216,22 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     }
                 }
 
-                // Highlight slot when dragging a WAV sample over it
+                // Drag Target Highlight when a clip is being dragged over this slot
+                if is_matrix_drag_target {
+                    lg_painter.rect_stroke(
+                        cell_rect,
+                        2.5,
+                        Stroke::new(2.0_f32, ACCENT_ORANGE),
+                        egui::StrokeKind::Inside,
+                    );
+                    lg_painter.rect_filled(
+                        cell_rect,
+                        2.5,
+                        Color32::from_rgba_unmultiplied(255, 138, 0, 35),
+                    );
+                }
+
+                // Highlight slot when dragging a WAV sample from explorer over it
                 if is_dragging_sample && cell_hovered {
                     lg_painter.rect_stroke(
                         cell_rect,
@@ -2000,36 +2241,273 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 }
 
-                if cell_hovered {
-                    if double_clicked {
-                        if has_clip {
-                            select_slot_action = Some((track_idx, scene_idx));
-                            open_piano_roll_action = true;
-                        } else {
-                            create_midi_slot_action = Some((track_idx, scene_idx));
-                            open_piano_roll_action = true;
-                        }
-                    } else if primary_clicked {
-                        if has_clip {
-                            trigger_slot_action = Some((track_idx, scene_idx));
-                            select_slot_action = Some((track_idx, scene_idx));
-                        } else {
-                            select_slot_action = Some((track_idx, scene_idx));
-                        }
-                    }
-                    if secondary_clicked {
-                        select_slot_action = Some((track_idx, scene_idx));
-                        open_context_menu_action = Some((
+                // Drag Start Detection for Populated Pads
+                let press_origin = ui.input(|i| i.pointer.press_origin());
+                let pressed_in_cell = press_origin
+                    .is_some_and(|p| launcher_grid_rect.contains(p) && cell_rect.contains(p));
+
+                if has_clip
+                    && (cell_hovered || pressed_in_cell)
+                    && workspace_resp.drag_started_by(egui::PointerButton::Primary)
+                {
+                    if let Some(pos) = pointer_pos.or(press_origin) {
+                        start_matrix_drag_action = Some((
                             track_idx,
                             scene_idx,
-                            pointer_pos.unwrap_or(cell_rect.min),
+                            clip_opt.unwrap().clone(),
+                            pos - cell_rect.min,
                         ));
                     }
-                    if pointer_released {
-                        if let Some(ref sample_path) = state.dragged_sample {
-                            drop_slot_action = Some((track_idx, scene_idx, sample_path.clone()));
+                }
+
+                if cell_hovered {
+                    if state.matrix_state.clip_drag.is_some() {
+                        if pointer_released {
+                            drop_matrix_clip_action = Some((track_idx, scene_idx));
+                        }
+                    } else {
+                        if double_clicked {
+                            if has_clip {
+                                select_slot_action = Some((track_idx, scene_idx));
+                                open_piano_roll_action = true;
+                            } else {
+                                create_midi_slot_action = Some((track_idx, scene_idx));
+                                open_piano_roll_action = true;
+                            }
+                        } else if primary_clicked {
+                            if has_clip {
+                                trigger_slot_action = Some((track_idx, scene_idx));
+                                select_slot_action = Some((track_idx, scene_idx));
+                            } else {
+                                select_slot_action = Some((track_idx, scene_idx));
+                            }
+                        }
+                        if secondary_clicked {
+                            select_slot_action = Some((track_idx, scene_idx));
+                            open_context_menu_action = Some((
+                                track_idx,
+                                scene_idx,
+                                pointer_pos.unwrap_or(cell_rect.min),
+                            ));
+                        }
+                        if pointer_released {
+                            if let Some(ref sample_path) = state.dragged_sample {
+                                drop_slot_action = Some((track_idx, scene_idx, sample_path.clone()));
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        // Register drag start if initiated this frame
+        if let Some((from_t, from_s, clip, grab_offset)) = start_matrix_drag_action {
+            let is_copy = ui.input(|i| i.modifiers.ctrl || i.modifiers.alt);
+            state.matrix_state.clip_drag = Some(MatrixClipDrag {
+                from_track: from_t,
+                from_scene: from_s,
+                clip,
+                grab_offset,
+                is_copy,
+                moved: true,
+            });
+            state.matrix_state.selected_slot = Some((from_t, from_s));
+        }
+
+        // Update drag state while dragging
+        if let Some(ref mut drag) = state.matrix_state.clip_drag {
+            if workspace_resp.dragged_by(egui::PointerButton::Primary) {
+                drag.moved = true;
+                drag.is_copy = ui.input(|i| i.modifiers.ctrl || i.modifiers.alt);
+            }
+        }
+
+        // Handle drop on mouse release
+        if pointer_released {
+            if let Some(drag) = state.matrix_state.clip_drag.take() {
+                if drag.moved {
+                    let target_slot = drop_matrix_clip_action.or_else(|| {
+                        if let Some(pos) = pointer_pos {
+                            if launcher_grid_rect.contains(pos) {
+                                let t = ((pos.y - tracks_y0 - scroll_y) / row_h).floor() as isize;
+                                let s = ((pos.x - launcher_x0) / BITWIG_SCENE_W).floor() as isize;
+                                if t >= 0 && (t as usize) < tracks_count && s >= 0 && (s as usize) < scenes_count {
+                                    Some((t as usize, s as usize))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some((dst_track, dst_scene)) = target_slot {
+                        if (dst_track, dst_scene) != (drag.from_track, drag.from_scene) {
+                            if drag.is_copy {
+                                state.matrix_state.copy_to_slot(
+                                    drag.from_track,
+                                    drag.from_scene,
+                                    dst_track,
+                                    dst_scene,
+                                    &state.audio_proxy,
+                                );
+                            } else {
+                                state.matrix_state.move_slot(
+                                    drag.from_track,
+                                    drag.from_scene,
+                                    dst_track,
+                                    dst_scene,
+                                    &state.audio_proxy,
+                                );
+                            }
+                            select_slot_action = Some((dst_track, dst_scene));
+                            select_matrix_track(state, dst_track);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Render Floating Ghost Clip Card attached to cursor
+        if let Some(ref drag) = state.matrix_state.clip_drag {
+            if let Some(pos) = pointer_pos {
+                let ghost_w = BITWIG_SCENE_W - 3.0;
+                let ghost_h = row_h - 3.5;
+                let ghost_rect = Rect::from_min_size(pos - drag.grab_offset, vec2(ghost_w, ghost_h));
+                let ghost_painter = ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    egui::Id::new("matrix_clip_drag_ghost"),
+                ));
+
+                // Soft ambient drop shadow
+                ghost_painter.rect_filled(
+                    ghost_rect.translate(vec2(2.0, 3.5)),
+                    3.0,
+                    Color32::from_black_alpha(110),
+                );
+
+                let eff_col = drag.clip.color.unwrap_or_else(|| track_color_for(drag.from_track));
+                let ghost_bg = if drag.clip.muted {
+                    Color32::from_rgba_unmultiplied(40, 42, 46, 230)
+                } else {
+                    Color32::from_rgba_unmultiplied(
+                        eff_col.r() / 2,
+                        eff_col.g() / 2,
+                        eff_col.b() / 2,
+                        230,
+                    )
+                };
+                ghost_painter.rect_filled(ghost_rect, 2.5, ghost_bg);
+
+                // Ghost Top colored strip
+                let ghost_top = Rect::from_min_size(ghost_rect.min, vec2(ghost_rect.width(), 16.0));
+                let ghost_strip_col = if drag.clip.muted {
+                    Color32::from_rgb(0x40, 0x43, 0x48)
+                } else {
+                    eff_col
+                };
+                ghost_painter.rect_filled(ghost_top, 2.5, ghost_strip_col);
+
+                let ic_rect = Rect::from_min_size(
+                    pos2(ghost_top.min.x + 3.0, ghost_top.min.y + 2.0),
+                    vec2(12.0, 12.0),
+                );
+                icons::paint_play_triangle(
+                    &ghost_painter,
+                    ic_rect,
+                    Color32::from_rgb(0x10, 0x10, 0x12),
+                );
+                ghost_painter.text(
+                    pos2(ghost_top.min.x + 17.0, ghost_top.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    &drag.clip.name,
+                    fonts::semibold(9.5),
+                    Color32::from_rgb(0x10, 0x10, 0x12),
+                );
+
+                // Waveform or MIDI miniature in ghost
+                match &drag.clip.content {
+                    ClipData::Audio { .. } => {
+                        if !drag.clip.peaks.is_empty() {
+                            let wave_rect = Rect::from_min_max(
+                                pos2(ghost_rect.min.x + 3.0, ghost_rect.min.y + 18.0),
+                                pos2(ghost_rect.max.x - 3.0, ghost_rect.max.y - 3.0),
+                            );
+                            let cy = wave_rect.center().y;
+                            let hh = wave_rect.height() * 0.44;
+                            let n = drag.clip.peaks.len();
+                            let step = wave_rect.width() / n as f32;
+                            for (i, &pk) in drag.clip.peaks.iter().enumerate() {
+                                let x = wave_rect.min.x + i as f32 * step;
+                                let h = (pk * hh).max(1.0);
+                                ghost_painter.line_segment(
+                                    [pos2(x, cy - h), pos2(x, cy + h)],
+                                    Stroke::new(
+                                        1.0_f32,
+                                        Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    ClipData::Midi { notes } => {
+                        if !notes.is_empty() {
+                            let body_rect = Rect::from_min_max(
+                                pos2(ghost_rect.min.x + 3.0, ghost_rect.min.y + 18.0),
+                                pos2(ghost_rect.max.x - 3.0, ghost_rect.max.y - 3.0),
+                            );
+                            let max_t = drag.clip.loop_end.max(3840) as f32;
+                            let min_p = notes.iter().map(|(_, p, _, _)| *p).min().unwrap_or(36).saturating_sub(2);
+                            let max_p = notes.iter().map(|(_, p, _, _)| *p).max().unwrap_or(84).saturating_add(2);
+                            let p_range = (max_p.saturating_sub(min_p)).max(12) as f32;
+
+                            for &(st, pitch, _, dur) in notes.iter().take(80) {
+                                let nx = body_rect.min.x + (st as f32 / max_t) * body_rect.width();
+                                let nw = ((dur as f32 / max_t) * body_rect.width()).clamp(2.0, body_rect.width());
+                                let norm_pitch = (pitch.saturating_sub(min_p) as f32 / p_range).clamp(0.0, 1.0);
+                                let ny = body_rect.max.y - norm_pitch * (body_rect.height() - 3.0) - 2.0;
+
+                                if nx < body_rect.max.x {
+                                    let note_rect = Rect::from_min_size(
+                                        pos2(nx, ny),
+                                        vec2(nw.min(body_rect.max.x - nx), 2.0),
+                                    );
+                                    ghost_painter.rect_filled(
+                                        note_rect,
+                                        0.5,
+                                        Color32::from_rgba_unmultiplied(255, 255, 255, 230),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Ghost outline
+                ghost_painter.rect_stroke(
+                    ghost_rect,
+                    2.5,
+                    Stroke::new(1.5_f32, if drag.is_copy { Color32::WHITE } else { ACCENT_ORANGE }),
+                    egui::StrokeKind::Inside,
+                );
+
+                // Copy badge
+                if drag.is_copy {
+                    let badge_rect = Rect::from_center_size(
+                        ghost_rect.right_top() + vec2(-5.0, 5.0),
+                        vec2(14.0, 14.0),
+                    );
+                    ghost_painter.circle_filled(badge_rect.center(), 7.0, ACCENT_ORANGE);
+                    icons::paint_icon(
+                        &ghost_painter,
+                        badge_rect.shrink(3.0),
+                        icons::PLUS,
+                        Color32::WHITE,
+                        1.8,
+                    );
                 }
             }
         }
