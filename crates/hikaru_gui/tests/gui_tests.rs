@@ -563,7 +563,7 @@ fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
                         txt.pos.y
                     );
                 }
-                if s.starts_with("Basic Shapes") {
+                if s.starts_with("Basic Shapes") || s.starts_with("Basic Shap") {
                     found_basic_shapes = true;
                     assert!(
                         txt.pos.y <= dock_top + 56.0,

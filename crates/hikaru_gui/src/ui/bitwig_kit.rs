@@ -239,7 +239,9 @@ pub fn rotary_knob(
         );
     }
 
-    if response.hovered() || response.dragged() {
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::None);
+    } else if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
     }
 
@@ -290,7 +292,9 @@ pub fn fader_vertical_track_vol(
         );
     }
 
-    if response.hovered() || response.dragged() {
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::None);
+    } else if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
     }
 
@@ -342,7 +346,9 @@ pub fn fader_vertical_db(
         );
     }
 
-    if response.hovered() || response.dragged() {
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::None);
+    } else if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
     }
 
@@ -389,7 +395,9 @@ pub fn fader_horizontal_db(
         );
     }
 
-    if response.hovered() || response.dragged() {
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::None);
+    } else if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
     }
 
@@ -443,7 +451,9 @@ pub fn fader_horizontal_range(
         );
     }
 
-    if response.hovered() || response.dragged() {
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::None);
+    } else if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
     }
 

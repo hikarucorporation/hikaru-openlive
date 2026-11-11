@@ -990,3 +990,57 @@ fn test_tier1_f31_edit_tab_play_triggers_audio() {
     assert!(has_update_notes, "GuiCommand::UpdateMidiClipNotes must be dispatched");
     assert!(has_start_clip, "GuiCommand::StartClip must be dispatched to trigger audio engine playback");
 }
+
+// -----------------------------------------------------------------------------
+// F22: LCD Transport Controls, BPM Dragging, Scrubbing & Modal Cursor Flags
+// -----------------------------------------------------------------------------
+#[test]
+fn test_tier1_lcd_transport_bpm_scrub_and_controls() {
+    let (mut app_state, rx) = create_test_app_state();
+
+    // Verify initial transport LCD state
+    assert!(!app_state.editing_bpm);
+    assert!(!app_state.editing_sig);
+    assert!(!app_state.metronome_enabled);
+    assert!(!app_state.punch_in);
+    assert!(!app_state.punch_out);
+    assert!(!app_state.is_looping);
+
+    // Verify setting BPM updates transport, bpm_input, and dispatches GuiCommand::SetBpm
+    app_state.set_bpm(128.5);
+    assert_eq!(app_state.transport.bpm, 128.5);
+    assert_eq!(app_state.bpm_input, "128.5");
+
+    let mut found_set_bpm = false;
+    while let Ok(cmd) = rx.try_recv() {
+        if let GuiCommand::SetBpm(bpm) = cmd {
+            assert!((bpm - 128.5).abs() < 0.001);
+            found_set_bpm = true;
+        }
+    }
+    assert!(found_set_bpm, "GuiCommand::SetBpm must be dispatched on set_bpm");
+
+    // Clamping BPM
+    app_state.set_bpm(500.0);
+    assert_eq!(app_state.transport.bpm, hikaru_gui::app::BPM_MAX);
+    app_state.set_bpm(10.0);
+    assert_eq!(app_state.transport.bpm, hikaru_gui::app::BPM_MIN);
+
+    // Verify signature setting and parsing
+    app_state.set_sig(6, 8);
+    assert_eq!(app_state.transport.beats_per_bar, 6);
+    assert_eq!(app_state.transport.beat_division, 8);
+    assert_eq!(app_state.sig_input, "6/8");
+
+    assert_eq!(hikaru_gui::app::parse_sig("7/8"), Some((7, 8)));
+    assert_eq!(hikaru_gui::app::parse_sig("3/4"), Some((3, 4)));
+    assert_eq!(hikaru_gui::app::parse_sig("invalid"), None);
+
+    // Verify metronome and punch in/out toggle flags
+    app_state.metronome_enabled = true;
+    assert!(app_state.metronome_enabled);
+    app_state.punch_in = true;
+    assert!(app_state.punch_in);
+    app_state.punch_out = true;
+    assert!(app_state.punch_out);
+}

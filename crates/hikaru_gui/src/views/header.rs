@@ -606,7 +606,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 ui.add_space(6.0);
 
                 // 4. Pantalla LCD hundida en GPU (`paint_lcd_bezel`)
-                let lcd_size = vec2(246.0, 32.0);
+                let lcd_size = vec2(266.0, 32.0);
                 let (lcd_rect, _) = ui.allocate_exact_size(lcd_size, Sense::hover());
                 if ui.is_rect_visible(lcd_rect) {
                     paint_lcd_bezel(ui.painter(), lcd_rect, 3.0);
@@ -619,8 +619,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     let p = ui.painter();
                     let chip_r = Rect::from_min_size(pos2(col_dsp.min.x + 4.0, col_dsp.min.y + 3.0), vec2(13.0, 13.0));
                     let io_r = Rect::from_min_size(pos2(col_dsp.min.x + 4.0, col_dsp.min.y + 16.0), vec2(13.0, 13.0));
-                    icons::paint_cpu_chip(p, chip_r, BW_LCD_CYAN);
-                    icons::paint_io_arrows(p, io_r, BW_LCD_CYAN);
+                    let icon_col = if dsp_resp.hovered() { Color32::WHITE } else { BW_LCD_CYAN };
+                    icons::paint_cpu_chip(p, chip_r, icon_col);
+                    icons::paint_io_arrows(p, io_r, icon_col);
 
                     // Barras horizontales gemelas de carga DSP / pico maestro
                     let meter_x = col_dsp.min.x + 20.0;
@@ -652,75 +653,422 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         Stroke::new(1.0_f32, Color32::from_rgb(36, 38, 44)),
                     );
                 }
-                if dsp_resp.on_hover_text("Audio Engine & DSP Load").clicked() {
+                if dsp_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    set_footer_cues(
+                        state,
+                        Some(("AUDIO ENGINE", "DSP & I/O Monitor")),
+                        &[("CLICK", "Open Audio Engine Settings")],
+                    );
+                }
+                if dsp_resp.clicked() {
                     state.audio_settings_state.is_open = !state.audio_settings_state.is_open;
                 }
 
-                // Sub-sección 4b: BPM (arriba) + Compás 4/4 (abajo) (ancho 56)
-                let col_bpm = Rect::from_min_size(pos2(col_dsp.max.x, lcd_rect.min.y), vec2(56.0, lcd_rect.height()));
+                // Sub-sección 4b: BPM (arriba) + Compás 4/4 (abajo) (ancho 58)
+                let col_bpm = Rect::from_min_size(pos2(col_dsp.max.x, lcd_rect.min.y), vec2(58.0, lcd_rect.height()));
                 let bpm_top = Rect::from_min_max(col_bpm.min, pos2(col_bpm.max.x, col_bpm.center().y));
                 let sig_bot = Rect::from_min_max(pos2(col_bpm.min.x, col_bpm.center().y), col_bpm.max);
 
-                let bpm_resp = ui.interact(bpm_top, ui.id().with("lcd_bpm_drag"), Sense::click_and_drag());
-                if bpm_resp.double_clicked() {
-                    state.transport.bpm = 120.0;
-                    state.audio_proxy.send(GuiCommand::SetBpm(120.0));
-                } else if bpm_resp.dragged() {
-                    let step = if ui.input(|i| i.modifiers.shift) { 0.02 } else { 0.20 };
-                    let next = (state.transport.bpm - (bpm_resp.drag_delta().y as f64) * step).clamp(20.0, 300.0);
-                    state.transport.bpm = next;
-                    state.audio_proxy.send(GuiCommand::SetBpm(next as f32));
-                }
-                if bpm_resp.hovered() {
-                    ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                if state.editing_bpm {
+                    // Procesamiento de entrada de teclado para BPM estilo Bitwig
+                    ui.input(|i| {
+                        for event in &i.events {
+                            if let egui::Event::Text(t) = event {
+                                if state.bpm_input_first_key {
+                                    state.bpm_input.clear();
+                                    state.bpm_input_first_key = false;
+                                }
+                                for ch in t.chars() {
+                                    if ch.is_ascii_digit() || (ch == '.' && !state.bpm_input.contains('.')) {
+                                        if state.bpm_input.len() < 7 {
+                                            state.bpm_input.push(ch);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if i.key_pressed(egui::Key::Backspace) {
+                            if state.bpm_input_first_key {
+                                state.bpm_input.clear();
+                                state.bpm_input_first_key = false;
+                            } else {
+                                state.bpm_input.pop();
+                            }
+                        }
+                        if i.key_pressed(egui::Key::Escape) {
+                            state.editing_bpm = false;
+                        }
+                        if i.key_pressed(egui::Key::Enter) {
+                            if let Ok(v) = state.bpm_input.trim().parse::<f64>() {
+                                state.set_bpm(v);
+                            }
+                            state.editing_bpm = false;
+                        }
+                    });
+
+                    let display_str = if state.bpm_input.is_empty() {
+                        " ".to_string()
+                    } else {
+                        state.bpm_input.clone()
+                    };
+
+                    let font = fonts::lcd(13.0);
+                    let galley = ui.painter().layout_no_wrap(
+                        display_str,
+                        font,
+                        Color32::from_rgb(18, 20, 24),
+                    );
+                    let text_w = galley.size().x.max(8.0);
+                    let text_right = col_bpm.max.x - 6.0;
+                    let text_left = text_right - text_w;
+                    let text_top = bpm_top.center().y - galley.size().y * 0.5;
+                    let pill_rect = Rect::from_min_max(
+                        pos2(text_left - 3.0, bpm_top.min.y + 1.0),
+                        pos2(text_right + 2.0, bpm_top.max.y - 1.0),
+                    );
+
+                    // Clic fuera de la pastilla confirma y sale del modo edición
+                    ui.input(|i| {
+                        if i.pointer.any_pressed() {
+                            if let Some(pos) = i.pointer.interact_pos() {
+                                if !pill_rect.expand(2.0).contains(pos) {
+                                    if let Ok(v) = state.bpm_input.trim().parse::<f64>() {
+                                        state.set_bpm(v);
+                                    }
+                                    state.editing_bpm = false;
+                                }
+                            }
+                        }
+                    });
+
+                    if ui.is_rect_visible(pill_rect) {
+                        let p = ui.painter();
+                        // Pastilla de selección invertida idéntica a Bitwig Studio (fondo blanco, texto negro)
+                        p.rect_filled(pill_rect, 1.5, Color32::WHITE);
+                        p.galley(pos2(text_left, text_top), galley, Color32::from_rgb(18, 20, 24));
+
+                        // Cursor parpadeante si ya comenzó a escribir
+                        if !state.bpm_input_first_key {
+                            let time = ui.input(|i| i.time);
+                            if (time * 2.0).fract() < 0.5 {
+                                let cursor_x = text_right + 0.5;
+                                p.line_segment(
+                                    [pos2(cursor_x, pill_rect.min.y + 2.0), pos2(cursor_x, pill_rect.max.y - 2.0)],
+                                    Stroke::new(1.2_f32, Color32::from_rgb(18, 20, 24)),
+                                );
+                            }
+                        }
+                    }
+
+                    ui.ctx().set_cursor_icon(CursorIcon::Text);
+                    set_footer_cues(
+                        state,
+                        Some(("TEMPO", "Type Exact BPM")),
+                        &[("ENTER", "Confirm BPM"), ("ESC", "Cancel")],
+                    );
+                } else {
+                    let bpm_resp = ui.interact(bpm_top, ui.id().with("lcd_bpm_drag"), Sense::click_and_drag());
+                    if bpm_resp.double_clicked() {
+                        state.editing_bpm = true;
+                        state.bpm_input = format!("{:.2}", state.transport.bpm);
+                        state.bpm_input_first_key = true;
+                    } else if bpm_resp.dragged() {
+                        let fine = ui.input(|i| i.modifiers.shift);
+                        let step = if fine { 0.01 } else { 0.10 };
+                        let delta_y = bpm_resp.drag_delta().y as f64;
+                        if delta_y.abs() > 0.0 {
+                            let next = (state.transport.bpm - delta_y * step).clamp(crate::app::BPM_MIN, crate::app::BPM_MAX);
+                            state.set_bpm(next);
+                        }
+                    }
+
+                    if bpm_resp.dragged() {
+                        ui.ctx().set_cursor_icon(CursorIcon::None);
+                    } else if bpm_resp.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                        set_footer_cues(
+                            state,
+                            Some(("TEMPO", &format!("{:.2} BPM", state.transport.bpm))),
+                            &[
+                                ("DRAG", "Adjust BPM (Up/Down)"),
+                                ("SHIFT+DRAG", "Fine Adjust (0.01)"),
+                                ("DBL-CLICK", "Type Exact BPM"),
+                            ],
+                        );
+                    }
+
+                    if ui.is_rect_visible(bpm_top) {
+                        let bpm_col = if bpm_resp.hovered() || bpm_resp.dragged() {
+                            Color32::WHITE
+                        } else {
+                            BW_LCD_CYAN
+                        };
+                        ui.painter().text(
+                            pos2(col_bpm.max.x - 6.0, bpm_top.center().y + 0.5),
+                            Align2::RIGHT_CENTER,
+                            format!("{:.2}", state.transport.bpm),
+                            fonts::lcd(13.0),
+                            bpm_col,
+                        );
+                    }
                 }
 
-                let sig_resp = ui.interact(sig_bot, ui.id().with("lcd_sig_btn"), Sense::click());
-                if sig_resp.clicked() {
-                    let (num, den) = step_sig(state.transport.beats_per_bar, state.transport.beat_division, 1);
-                    state.transport.beats_per_bar = num;
-                    state.transport.beat_division = den;
+                if state.editing_sig {
+                    // Procesamiento de entrada de teclado para Compás estilo Bitwig
+                    ui.input(|i| {
+                        for event in &i.events {
+                            if let egui::Event::Text(t) = event {
+                                if state.sig_input_first_key {
+                                    state.sig_input.clear();
+                                    state.sig_input_first_key = false;
+                                }
+                                for ch in t.chars() {
+                                    if ch.is_ascii_digit() || (ch == '/' && !state.sig_input.contains('/')) {
+                                        if state.sig_input.len() < 6 {
+                                            state.sig_input.push(ch);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if i.key_pressed(egui::Key::Backspace) {
+                            if state.sig_input_first_key {
+                                state.sig_input.clear();
+                                state.sig_input_first_key = false;
+                            } else {
+                                state.sig_input.pop();
+                            }
+                        }
+                        if i.key_pressed(egui::Key::Escape) {
+                            state.editing_sig = false;
+                        }
+                        if i.key_pressed(egui::Key::Enter) {
+                            if let Some((n, d)) = crate::app::parse_sig(&state.sig_input) {
+                                state.set_sig(n, d);
+                            }
+                            state.editing_sig = false;
+                        }
+                    });
+
+                    let display_str = if state.sig_input.is_empty() {
+                        " ".to_string()
+                    } else {
+                        state.sig_input.clone()
+                    };
+
+                    let font = fonts::lcd(11.5);
+                    let galley = ui.painter().layout_no_wrap(
+                        display_str,
+                        font,
+                        Color32::from_rgb(18, 20, 24),
+                    );
+                    let text_w = galley.size().x.max(8.0);
+                    let text_right = col_bpm.max.x - 6.0;
+                    let text_left = text_right - text_w;
+                    let text_top = sig_bot.center().y - galley.size().y * 0.5;
+                    let pill_rect = Rect::from_min_max(
+                        pos2(text_left - 3.0, sig_bot.min.y + 1.0),
+                        pos2(text_right + 2.0, sig_bot.max.y - 1.0),
+                    );
+
+                    // Clic fuera de la pastilla confirma y sale del modo edición
+                    ui.input(|i| {
+                        if i.pointer.any_pressed() {
+                            if let Some(pos) = i.pointer.interact_pos() {
+                                if !pill_rect.expand(2.0).contains(pos) {
+                                    if let Some((n, d)) = crate::app::parse_sig(&state.sig_input) {
+                                        state.set_sig(n, d);
+                                    }
+                                    state.editing_sig = false;
+                                }
+                            }
+                        }
+                    });
+
+                    if ui.is_rect_visible(pill_rect) {
+                        let p = ui.painter();
+                        p.rect_filled(pill_rect, 1.5, Color32::WHITE);
+                        p.galley(pos2(text_left, text_top), galley, Color32::from_rgb(18, 20, 24));
+
+                        if !state.sig_input_first_key {
+                            let time = ui.input(|i| i.time);
+                            if (time * 2.0).fract() < 0.5 {
+                                let cursor_x = text_right + 0.5;
+                                p.line_segment(
+                                    [pos2(cursor_x, pill_rect.min.y + 2.0), pos2(cursor_x, pill_rect.max.y - 2.0)],
+                                    Stroke::new(1.2_f32, Color32::from_rgb(18, 20, 24)),
+                                );
+                            }
+                        }
+                    }
+
+                    ui.ctx().set_cursor_icon(CursorIcon::Text);
+                    set_footer_cues(
+                        state,
+                        Some(("TIME SIGNATURE", "Type Signature (e.g. 3/4)")),
+                        &[("ENTER", "Confirm Signature"), ("ESC", "Cancel")],
+                    );
+                } else {
+                    let sig_resp = ui.interact(sig_bot, ui.id().with("lcd_sig_btn"), Sense::click_and_drag());
+                    if sig_resp.double_clicked() {
+                        state.editing_sig = true;
+                        state.sig_input = format_sig(state.transport.beats_per_bar, state.transport.beat_division);
+                        state.sig_input_first_key = true;
+                    } else if sig_resp.dragged() {
+                        let delta_y = sig_resp.drag_delta().y;
+                        if delta_y.abs() >= 3.0 {
+                            let step = if delta_y < 0.0 { 1 } else { -1 };
+                            if ui.input(|i| i.modifiers.shift) {
+                                let divs = [2, 4, 8, 16];
+                                let cur_idx = divs.iter().position(|&d| d == state.transport.beat_division).unwrap_or(1);
+                                let next_idx = (cur_idx as isize + step as isize).clamp(0, divs.len() as isize - 1) as usize;
+                                state.set_sig(state.transport.beats_per_bar, divs[next_idx]);
+                            } else {
+                                let next_num = (state.transport.beats_per_bar as i32 + step).clamp(1, 32) as u32;
+                                state.set_sig(next_num, state.transport.beat_division);
+                            }
+                        }
+                    } else if sig_resp.clicked() {
+                        let (num, den) = step_sig(state.transport.beats_per_bar, state.transport.beat_division, 1);
+                        state.set_sig(num, den);
+                    }
+
+                    if sig_resp.dragged() {
+                        ui.ctx().set_cursor_icon(CursorIcon::None);
+                    } else if sig_resp.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                        set_footer_cues(
+                            state,
+                            Some(("TIME SIGNATURE", &sig_text)),
+                            &[
+                                ("CLICK", "Cycle Common Signatures"),
+                                ("DRAG", "Change Numerator"),
+                                ("SHIFT+DRAG", "Change Denominator"),
+                                ("DBL-CLICK", "Type Signature"),
+                            ],
+                        );
+                    }
+
+                    if ui.is_rect_visible(sig_bot) {
+                        let sig_col = if sig_resp.hovered() || sig_resp.dragged() {
+                            Color32::WHITE
+                        } else {
+                            BW_LCD_CYAN
+                        };
+                        ui.painter().text(
+                            pos2(col_bpm.max.x - 6.0, sig_bot.center().y - 0.5),
+                            Align2::RIGHT_CENTER,
+                            &sig_text,
+                            fonts::lcd(11.5),
+                            sig_col,
+                        );
+                    }
                 }
 
                 if ui.is_rect_visible(col_bpm) {
-                    let p = ui.painter();
-                    p.text(
-                        pos2(col_bpm.max.x - 6.0, bpm_top.center().y + 0.5),
-                        Align2::RIGHT_CENTER,
-                        format!("{:.2}", state.transport.bpm),
-                        fonts::lcd(13.0),
-                        BW_LCD_CYAN,
-                    );
-                    p.text(
-                        pos2(col_bpm.max.x - 6.0, sig_bot.center().y - 0.5),
-                        Align2::RIGHT_CENTER,
-                        &sig_text,
-                        fonts::lcd(11.5),
-                        BW_LCD_CYAN,
-                    );
-                    p.line_segment(
+                    ui.painter().line_segment(
                         [pos2(col_bpm.max.x, lcd_rect.min.y + 2.0), pos2(col_bpm.max.x, lcd_rect.max.y - 2.0)],
                         Stroke::new(1.0_f32, Color32::from_rgb(36, 38, 44)),
                     );
                 }
 
-                // Sub-sección 4c: Posición musical 1.1.1.00 + Timecode 0:00.000 (ancho 76)
-                let col_pos = Rect::from_min_size(pos2(col_bpm.max.x, lcd_rect.min.y), vec2(76.0, lcd_rect.height()));
+                // Sub-sección 4c: Posición musical 1.1.1.00 + Timecode 0:00.000 (ancho 84)
+                let col_pos = Rect::from_min_size(pos2(col_bpm.max.x, lcd_rect.min.y), vec2(84.0, lcd_rect.height()));
+                let pos_top = Rect::from_min_max(col_pos.min, pos2(col_pos.max.x, col_pos.center().y));
+                let time_bot = Rect::from_min_max(pos2(col_pos.min.x, col_pos.center().y), col_pos.max);
+
+                let pos_resp = ui.interact(pos_top, ui.id().with("lcd_pos_scrub"), Sense::click_and_drag());
+                if pos_resp.double_clicked() {
+                    state.transport.sample_count = 0;
+                    state.audio_proxy.send(GuiCommand::Seek { sample_count: 0 });
+                } else if pos_resp.dragged() {
+                    let delta_y = pos_resp.drag_delta().y as f64;
+                    if delta_y.abs() > 0.0 {
+                        let fine = ui.input(|i| i.modifiers.shift);
+                        let samples_per_step = if fine {
+                            samples_per_beat * 0.25
+                        } else {
+                            samples_per_beat
+                        };
+                        let delta_samples = (-delta_y * (samples_per_step / 10.0)).round() as i64;
+                        let next_sc = (state.transport.sample_count as i64 + delta_samples).max(0) as u64;
+                        state.transport.sample_count = next_sc;
+                        state.audio_proxy.send(GuiCommand::Seek { sample_count: next_sc });
+                    }
+                }
+
+                if pos_resp.dragged() {
+                    ui.ctx().set_cursor_icon(CursorIcon::None);
+                } else if pos_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                    set_footer_cues(
+                        state,
+                        Some(("PLAYHEAD POSITION", &musical_pos)),
+                        &[
+                            ("DRAG", "Scrub Position (Bars/Beats)"),
+                            ("SHIFT+DRAG", "Fine Scrub (16ths)"),
+                            ("DBL-CLICK", "Rewind to Start"),
+                        ],
+                    );
+                }
+
+                let time_resp = ui.interact(time_bot, ui.id().with("lcd_time_scrub"), Sense::click_and_drag());
+                if time_resp.double_clicked() {
+                    state.transport.sample_count = 0;
+                    state.audio_proxy.send(GuiCommand::Seek { sample_count: 0 });
+                } else if time_resp.dragged() {
+                    let delta_y = time_resp.drag_delta().y as f64;
+                    if delta_y.abs() > 0.0 {
+                        let fine = ui.input(|i| i.modifiers.shift);
+                        let secs_per_px = if fine { 0.02 } else { 0.20 };
+                        let delta_samples = (-delta_y * secs_per_px * sample_rate).round() as i64;
+                        let next_sc = (state.transport.sample_count as i64 + delta_samples).max(0) as u64;
+                        state.transport.sample_count = next_sc;
+                        state.audio_proxy.send(GuiCommand::Seek { sample_count: next_sc });
+                    }
+                }
+
+                if time_resp.dragged() {
+                    ui.ctx().set_cursor_icon(CursorIcon::None);
+                } else if time_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                    set_footer_cues(
+                        state,
+                        Some(("TIMECODE", &timecode_str)),
+                        &[
+                            ("DRAG", "Scrub Timecode (Seconds)"),
+                            ("SHIFT+DRAG", "Fine Scrub (0.02s)"),
+                            ("DBL-CLICK", "Rewind to Start"),
+                        ],
+                    );
+                }
+
                 if ui.is_rect_visible(col_pos) {
                     let p = ui.painter();
+                    let pos_col = if pos_resp.hovered() || pos_resp.dragged() {
+                        Color32::WHITE
+                    } else {
+                        BW_LCD_CYAN
+                    };
                     p.text(
                         pos2(col_pos.max.x - 6.0, col_pos.min.y + 8.5),
                         Align2::RIGHT_CENTER,
                         &musical_pos,
                         fonts::lcd(13.0),
-                        BW_LCD_CYAN,
+                        pos_col,
                     );
+                    let time_col = if time_resp.hovered() || time_resp.dragged() {
+                        Color32::WHITE
+                    } else {
+                        BW_LCD_CYAN
+                    };
                     p.text(
                         pos2(col_pos.max.x - 6.0, col_pos.max.y - 8.5),
                         Align2::RIGHT_CENTER,
                         &timecode_str,
                         fonts::lcd(11.5),
-                        BW_LCD_CYAN,
+                        time_col,
                     );
                     p.line_segment(
                         [pos2(col_pos.max.x, lcd_rect.min.y + 2.0), pos2(col_pos.max.x, lcd_rect.max.y - 2.0)],
@@ -728,15 +1076,28 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 }
 
-                // Sub-sección 4d: Metrónomo dentro del LCD (ancho 24)
-                let col_metro = Rect::from_min_size(pos2(col_pos.max.x, lcd_rect.min.y), vec2(24.0, lcd_rect.height()));
+                // Sub-sección 4d: Metrónomo dentro del LCD (ancho 26)
+                let col_metro = Rect::from_min_size(pos2(col_pos.max.x, lcd_rect.min.y), vec2(26.0, lcd_rect.height()));
                 let metro_resp = ui.interact(col_metro, ui.id().with("lcd_metro"), Sense::click());
+                if metro_resp.clicked() {
+                    state.metronome_enabled = !state.metronome_enabled;
+                }
+                if metro_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    set_footer_cues(
+                        state,
+                        Some(("METRONOME", if state.metronome_enabled { "ON" } else { "OFF" })),
+                        &[("CLICK", "Toggle Metronome Click")],
+                    );
+                }
                 if ui.is_rect_visible(col_metro) {
                     let p = ui.painter();
-                    let col = if metro_resp.hovered() {
+                    let col = if state.metronome_enabled {
                         BW_LCD_CYAN
+                    } else if metro_resp.hovered() {
+                        Color32::WHITE
                     } else {
-                        Color32::from_rgb(138, 142, 150)
+                        Color32::from_rgb(112, 116, 124)
                     };
                     icons::paint_icon(p, col_metro.shrink(5.5), icons::METRONOME, col, 1.3);
                     p.line_segment(
@@ -745,33 +1106,81 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 }
 
-                // Sub-sección 4e: Arranger Loop + Punch In/Out dentro del LCD (ancho 52)
+                // Sub-sección 4e: Arranger Loop + Punch In/Out dentro del LCD (ancho 60)
                 let col_loop = Rect::from_min_max(pos2(col_metro.max.x, lcd_rect.min.y), lcd_rect.max);
-                let loop_resp = ui.interact(col_loop, ui.id().with("lcd_loop_toggle"), Sense::click());
-                let loop_hovered = loop_resp.hovered();
-                if loop_resp.on_hover_text("Toggle Arranger Loop").clicked() {
+                let loop_box = Rect::from_min_size(pos2(col_loop.min.x + 3.0, col_loop.min.y), vec2(28.0, col_loop.height()));
+                let punch_in_box = Rect::from_min_size(pos2(loop_box.max.x + 3.0, col_loop.min.y + 2.0), vec2(21.0, 13.0));
+                let punch_out_box = Rect::from_min_size(pos2(loop_box.max.x + 3.0, col_loop.center().y + 1.0), vec2(21.0, 13.0));
+
+                let loop_resp = ui.interact(loop_box, ui.id().with("lcd_loop_toggle"), Sense::click());
+                if loop_resp.clicked() {
                     state.is_looping = !state.is_looping;
                     state.playlist_state.loop_region_active = state.is_looping;
-                    state
-                        .playlist_state
-                        .ensure_minimum_global_loop(state.is_looping);
+                    state.playlist_state.ensure_minimum_global_loop(state.is_looping);
                 }
+                if loop_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    set_footer_cues(
+                        state,
+                        Some(("LOOP", if is_looping { "ON" } else { "OFF" })),
+                        &[("CLICK", "Toggle Arranger Loop Region")],
+                    );
+                }
+
+                let punch_in_resp = ui.interact(punch_in_box, ui.id().with("lcd_punch_in"), Sense::click());
+                if punch_in_resp.clicked() {
+                    state.punch_in = !state.punch_in;
+                }
+                if punch_in_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    set_footer_cues(
+                        state,
+                        Some(("PUNCH IN", if state.punch_in { "ARMED" } else { "OFF" })),
+                        &[("CLICK", "Toggle Punch In Recording")],
+                    );
+                }
+
+                let punch_out_resp = ui.interact(punch_out_box, ui.id().with("lcd_punch_out"), Sense::click());
+                if punch_out_resp.clicked() {
+                    state.punch_out = !state.punch_out;
+                }
+                if punch_out_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    set_footer_cues(
+                        state,
+                        Some(("PUNCH OUT", if state.punch_out { "ARMED" } else { "OFF" })),
+                        &[("CLICK", "Toggle Punch Out Recording")],
+                    );
+                }
+
                 if ui.is_rect_visible(col_loop) {
                     let p = ui.painter();
-                    let loop_box = Rect::from_min_size(col_loop.min, vec2(28.0, col_loop.height()));
-                    let punch_in_box = Rect::from_min_size(pos2(loop_box.max.x, col_loop.min.y + 2.0), vec2(22.0, 14.0));
-                    let punch_out_box = Rect::from_min_size(pos2(loop_box.max.x, col_loop.center().y), vec2(22.0, 14.0));
-
                     let loop_col = if is_looping {
                         BW_LCD_CYAN
-                    } else if loop_hovered {
+                    } else if loop_resp.hovered() {
                         Color32::WHITE
                     } else {
-                        Color32::from_rgb(142, 146, 154)
+                        Color32::from_rgb(112, 116, 124)
                     };
                     icons::paint_loop_pill(p, loop_box.shrink(4.0), loop_col);
-                    icons::paint_punch_step(p, punch_in_box.shrink(2.0), Color32::from_rgb(122, 126, 134), true);
-                    icons::paint_punch_step(p, punch_out_box.shrink(2.0), Color32::from_rgb(122, 126, 134), false);
+
+                    let punch_in_col = if state.punch_in {
+                        BW_LCD_CYAN
+                    } else if punch_in_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(112, 116, 124)
+                    };
+                    icons::paint_punch_step(p, punch_in_box.shrink(2.0), punch_in_col, true);
+
+                    let punch_out_col = if state.punch_out {
+                        BW_LCD_CYAN
+                    } else if punch_out_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(112, 116, 124)
+                    };
+                    icons::paint_punch_step(p, punch_out_box.shrink(2.0), punch_out_col, false);
                 }
 
                 ui.add_space(6.0);
