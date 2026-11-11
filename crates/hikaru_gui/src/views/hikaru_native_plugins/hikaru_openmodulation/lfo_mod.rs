@@ -511,7 +511,8 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
             .max_rect(left_rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
-    left_ui.set_clip_rect(left_rect);
+    let left_clip = left_rect.intersect(left_ui.clip_rect());
+    left_ui.set_clip_rect(left_clip);
     left_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
     // Oscilloscope Viewport (176 x 78 px)
@@ -695,7 +696,8 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
             .max_rect(right_rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
-    right_ui.set_clip_rect(right_rect);
+    let right_clip = right_rect.intersect(right_ui.clip_rect());
+    right_ui.set_clip_rect(right_clip);
     right_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
     // Row 1: Primary Knobs (RATE, DEPTH, AMOUNT)

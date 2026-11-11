@@ -399,7 +399,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 .max_rect(inner_rect)
                                 .layout(egui::Layout::top_down(egui::Align::Min)),
                         );
-                        card_ui.set_clip_rect(inner_rect);
+                        card_ui.set_clip_rect(inner_rect.intersect(ui.clip_rect()));
                         card_ui.spacing_mut().item_spacing = vec2(4.0, 3.0);
 
                         // Barra de título estilo módulo Bitwig (Power switch vectorial + Título + Close vectorial)
@@ -523,7 +523,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 .max_rect(body_rect)
                                 .layout(egui::Layout::top_down(egui::Align::Min)),
                         );
-                        body_ui.set_clip_rect(body_rect);
+                        body_ui.set_clip_rect(body_rect.intersect(card_ui.clip_rect()));
 
                         // Cuerpo del dispositivo DSP
                         match slot.name.as_str() {
