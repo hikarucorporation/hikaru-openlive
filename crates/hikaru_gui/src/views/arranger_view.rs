@@ -143,6 +143,44 @@ fn format_strip_db(volume: f32) -> String {
     }
 }
 
+/// Alto total de la grilla de escenas (filas de `CLIP_SLOT_H` + 1px de separación).
+fn scenes_content_h(scenes_count: usize) -> f32 {
+    (scenes_count as f32 * (CLIP_SLOT_H + 1.0) - 1.0).max(0.0)
+}
+
+/// "Ventana" del Clip Launcher estilo Bitwig: la grilla de escenas/pads se
+/// renderiza detrás de un viewport recortado de alto `view_h`, desplazada por
+/// `scroll`. Cabeceras de pista arriba y faders abajo quedan fijos.
+fn scene_viewport(
+    ui: &mut Ui,
+    w: f32,
+    view_h: f32,
+    scroll: f32,
+    content_h: f32,
+    salt: impl std::hash::Hash,
+    add: impl FnOnce(&mut Ui),
+) {
+    let (rect, _) = ui.allocate_exact_size(vec2(w, view_h), Sense::hover());
+    let inner = Rect::from_min_size(pos2(rect.min.x, rect.min.y - scroll), vec2(w, content_h.max(view_h)));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(salt)
+            .max_rect(inner)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    add(&mut child);
+    // Sombras internas sutiles cuando hay contenido oculto arriba/abajo.
+    let painter = ui.painter().with_clip_rect(rect);
+    let shade = Color32::from_black_alpha(110);
+    if scroll > 0.5 {
+        painter.rect_filled(Rect::from_min_size(rect.min, vec2(w, 3.0)), 0.0, shade);
+    }
+    if scroll + view_h < content_h - 0.5 {
+        painter.rect_filled(Rect::from_min_size(pos2(rect.min.x, rect.max.y - 3.0), vec2(w, 3.0)), 0.0, shade);
+    }
+}
+
 struct StripActions {
     selected_track_idx: usize,
     trigger_slot: Option<(usize, usize)>,
@@ -185,6 +223,59 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     let viewport_w = bg_rect.width();
 
+    // --- Ventana scrolleable de escenas (Bitwig) ---
+    let content_h = scenes_content_h(scenes_count);
+    let fixed_h = HEADER_BLOCK_H
+        + STOP_ROW_H
+        + DEVICES_WELL_H
+        + SENDS_BOX_H
+        + IO_BOX_H
+        + (20.0 + 14.0 + 16.0 + FADER_BAY_H + 8.0)
+        + 8.0;
+    let min_view = (2.0 * (CLIP_SLOT_H + 1.0) - 1.0).min(content_h);
+    let slots_view_h = content_h.min((bg_rect.height() - fixed_h).max(min_view));
+    let max_scroll = (content_h - slots_view_h).max(0.0);
+    let scroll_id = ui.id().with("mix_scene_scroll");
+    let mut scene_scroll: f32 = ui.ctx().data(|d| d.get_temp(scroll_id)).unwrap_or(0.0);
+    if show_launcher {
+        let band = Rect::from_min_size(
+            pos2(bg_rect.min.x, bg_rect.min.y + HEADER_BLOCK_H + 1.0),
+            vec2(bg_rect.width(), slots_view_h),
+        );
+        let hovering = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| band.contains(p));
+        if hovering {
+            let dy = ui.input(|i| i.smooth_scroll_delta.y);
+            if dy != 0.0 {
+                scene_scroll -= dy;
+                ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+            }
+        }
+        // Middle-drag (ruedita apretada + arrastre) = pan vertical estilo Bitwig.
+        let pan_id = ui.id().with("mix_scene_mid_pan");
+        let (mid_pressed, mid_down, press_origin, delta) = ui.input(|i| {
+            (
+                i.pointer.button_pressed(egui::PointerButton::Middle),
+                i.pointer.button_down(egui::PointerButton::Middle),
+                i.pointer.press_origin(),
+                i.pointer.delta(),
+            )
+        });
+        let mut panning: bool = ui.ctx().data(|d| d.get_temp(pan_id)).unwrap_or(false);
+        if mid_pressed && press_origin.is_some_and(|p| band.contains(p)) {
+            panning = true;
+        }
+        if !mid_down {
+            panning = false;
+        }
+        if panning {
+            scene_scroll -= delta.y;
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(pan_id, panning));
+    }
+    scene_scroll = scene_scroll.clamp(0.0, max_scroll);
+    ui.ctx().data_mut(|d| d.insert_temp(scroll_id, scene_scroll));
+
     ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
 
@@ -208,6 +299,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 );
 
                 if show_launcher {
+                    let mut legend_scene_click = None;
+                    scene_viewport(ui, LEGEND_COL_W, slots_view_h, scene_scroll, content_h, "mix_scene_legend", |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
                     for scene_idx in 0..scenes_count {
                         let s_name = state
                             .matrix_state
@@ -239,8 +333,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             Color32::from_rgb(0x12, 0x13, 0x16),
                         );
                         if s_resp.clicked() {
-                            trigger_scene = Some(scene_idx);
+                            legend_scene_click = Some(scene_idx);
                         }
+                    }
+                    });
+                    if legend_scene_click.is_some() {
+                        trigger_scene = legend_scene_click;
                     }
 
                     // Fila de `+` (Add Scene) + `[■]` (Stop All Clips)
@@ -344,6 +442,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     idx,
                     show_launcher,
                     scenes_count,
+                    slots_view_h,
+                    scene_scroll,
                     pointer_released,
                     is_dragging_sample,
                     &mut actions,
@@ -397,6 +497,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     0,
                     show_launcher,
                     scenes_count,
+                    slots_view_h,
+                    scene_scroll,
                     pointer_released,
                     is_dragging_sample,
                     &mut actions,
@@ -530,6 +632,8 @@ fn render_channel_strip(
     idx: usize,
     show_launcher: bool,
     scenes_count: usize,
+    slots_view_h: f32,
+    scene_scroll: f32,
     pointer_released: bool,
     is_dragging_sample: bool,
     actions: &mut StripActions,
@@ -636,6 +740,8 @@ fn render_channel_strip(
             if show_launcher {
                 if !is_master {
                     let matrix_idx = idx.saturating_sub(1);
+                    scene_viewport(ui, strip_w, slots_view_h, scene_scroll, scenes_content_h(scenes_count), ("mix_slots", idx), |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
                     for scene_idx in 0..scenes_count {
                         let slot = state.matrix_state.slot(matrix_idx, scene_idx);
                         let slot_state = slot.map(|s| s.state.clone()).unwrap_or(SlotState::Empty);
@@ -649,7 +755,7 @@ fn render_channel_strip(
                         let clip_drag_active = state.matrix_state.clip_drag.as_ref();
                         let is_drag_source = clip_drag_active
                             .is_some_and(|d| d.from_track == matrix_idx && d.from_scene == scene_idx && !d.is_copy);
-                        let ptr_in_slot = pointer_pos.is_some_and(|p| slot_rect.contains(p));
+                        let ptr_in_slot = pointer_pos.is_some_and(|p| slot_rect.contains(p) && ui.clip_rect().contains(p));
                         let is_drag_target = clip_drag_active.is_some() && ptr_in_slot;
 
                         if let Some(clip) = clip_opt {
@@ -755,6 +861,7 @@ fn render_channel_strip(
                             actions.selected_track_idx = idx;
                         }
                     }
+                    });
 
                     // Fila Track Stop `[■ | ≡]`
                     let (stop_bar_rect, _) =
@@ -792,8 +899,7 @@ fn render_channel_strip(
                         Color32::from_rgb(0x8E, 0x92, 0x9A),
                     );
                 } else {
-                    let spacer_h =
-                        scenes_count as f32 * (CLIP_SLOT_H + 1.0) + STOP_ROW_H;
+                    let spacer_h = slots_view_h + 1.0 + STOP_ROW_H;
                     let (sp_rect, _) = ui.allocate_exact_size(vec2(strip_w, spacer_h), Sense::hover());
                     ui.painter().rect_filled(sp_rect, 0.0, BW_DARK_WELL);
                 }
