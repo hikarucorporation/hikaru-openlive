@@ -8,6 +8,7 @@
 use egui::{pos2, vec2, Align2, Color32, Context, Id, Order, Pos2, Rect, Sense, Stroke, Ui};
 
 use crate::ui::fonts;
+use crate::ui::icons::{self, VectorIcon};
 
 const MENU_W: f32 = 260.0;
 const PAD_X: f32 = 6.0;
@@ -15,6 +16,21 @@ const ROW_H: f32 = 25.0;
 const SEP_H: f32 = 13.0;
 const SWATCH: f32 = 19.5;
 const SWATCH_GAP: f32 = 4.5;
+const fn vi(d: &'static str) -> VectorIcon {
+    VectorIcon { filled: false, d }
+}
+const IC_COPY: VectorIcon = vi("M 9 9 L 20 9 L 20 20 L 9 20 L 9 9 M 15 9 L 15 4 L 4 4 L 4 15 L 9 15");
+const IC_PASTE: VectorIcon = vi("M 5 5 L 19 5 L 19 21 L 5 21 L 5 5 M 9 3 L 15 3 L 15 7 L 9 7 L 9 3");
+const IC_RENAME: VectorIcon = vi("M 12 4 L 12 20 M 8 4 L 16 4 M 8 20 L 16 20");
+const IC_ACTIVE: VectorIcon = vi("M 12 3 L 12 11 M 7 7 L 5 12 L 7 17 L 12 20 L 17 17 L 19 12 L 17 7");
+const IC_GROUP: VectorIcon = vi("M 4 4 L 20 4 L 20 20 L 4 20 L 4 4 M 4 12 L 20 12 M 12 4 L 12 20");
+const IC_UNGROUP: VectorIcon = vi("M 4 4 L 11 4 L 11 11 L 4 11 L 4 4 M 13 13 L 20 13 L 20 20 L 13 20 L 13 13");
+const IC_ENTER: VectorIcon = vi("M 6 4 L 6 16 L 18 16 M 13 11 L 18 16 L 13 21");
+const IC_EXIT: VectorIcon = vi("M 18 20 L 18 8 L 6 8 M 11 3 L 6 8 L 11 13");
+const IC_INST: VectorIcon = vi("M 4 6 L 20 6 L 20 18 L 4 18 L 4 6 M 8 6 L 8 18 M 12 6 L 12 18 M 16 6 L 16 18");
+const IC_AUDIO: VectorIcon = vi("M 3 12 L 6 12 L 8 6 L 11 18 L 14 4 L 16 20 L 18 12 L 21 12");
+const IC_HYBRID: VectorIcon = vi("M 4 6 L 4 18 M 8 4 L 8 20 M 12 8 L 12 16 M 16 5 L 16 19 M 20 9 L 20 15");
+
 const ICON_ROW_H: f32 = 44.0;
 
 const MENU_BG: Color32 = Color32::from_rgb(0x32, 0x32, 0x32);
@@ -120,7 +136,7 @@ struct Row<'a> {
     label: &'a str,
     shortcut: &'a str,
     enabled: bool,
-    icon: Option<&'a str>,
+    icon: Option<VectorIcon>,
 }
 
 fn paint_row(
@@ -145,13 +161,8 @@ fn paint_row(
         TXT
     };
     if let Some(ic) = row.icon {
-        p.text(
-            pos2(rect.min.x + 12.0, rect.center().y),
-            Align2::CENTER_CENTER,
-            ic,
-            fonts::regular(12.0),
-            fg,
-        );
+        let ir = Rect::from_center_size(pos2(rect.min.x + 12.0, rect.center().y), vec2(14.0, 14.0));
+        icons::paint_icon(p, ir, ic, fg, 1.4);
     }
     p.text(
         pos2(rect.min.x + 30.0, rect.center().y),
@@ -288,12 +299,12 @@ pub fn show(ctx: &Context, key: Id, mc: &MenuContext) -> Option<MenuAction> {
 
             // --- Fila de iconos: Cut / Copy / Paste / Dupl. / Delete ---
             let cell_w = inner_w / 5.0;
-            let icon_items: [(&str, &str, bool, MenuAction); 5] = [
-                ("✂", "CUT", true, MenuAction::Cut),
-                ("⧉", "COPY", true, MenuAction::Copy),
-                ("▯", "PASTE", mc.can_paste, MenuAction::Paste),
-                ("⊞", "DUPL.", true, MenuAction::Duplicate),
-                ("⊗", "DELETE", true, MenuAction::Delete),
+            let icon_items: [(VectorIcon, &str, bool, MenuAction); 5] = [
+                (icons::CUT, "CUT", true, MenuAction::Cut),
+                (IC_COPY, "COPY", true, MenuAction::Copy),
+                (IC_PASTE, "PASTE", mc.can_paste, MenuAction::Paste),
+                (icons::DUPLICATE_PLUS, "DUPL.", true, MenuAction::Duplicate),
+                (icons::CIRCLE_X, "DELETE", true, MenuAction::Delete),
             ];
             for (i, (glyph, label, en, act)) in icon_items.iter().enumerate() {
                 let cr = Rect::from_min_size(
@@ -306,7 +317,7 @@ pub fn show(ctx: &Context, key: Id, mc: &MenuContext) -> Option<MenuAction> {
                     p.rect_filled(cr, 0.0, ROW_HOVER);
                 }
                 let fg = if !*en { TXT_DIM } else if hot { TXT_ON_HOVER } else { TXT };
-                p.text(pos2(cr.center().x, cr.min.y + 15.0), Align2::CENTER_CENTER, *glyph, fonts::regular(15.0), fg);
+                icons::paint_icon(&p, Rect::from_center_size(pos2(cr.center().x, cr.min.y + 15.0), vec2(16.0, 16.0)), *glyph, fg, 1.5);
                 p.text(
                     pos2(cr.center().x, cr.min.y + 33.0),
                     Align2::CENTER_CENTER,
@@ -330,21 +341,21 @@ pub fn show(ctx: &Context, key: Id, mc: &MenuContext) -> Option<MenuAction> {
                 *y += ROW_H;
             };
 
-            simple(ui, &mut y, "rename", Row { label: "Rename", shortcut: "Ctrl+R", enabled: true, icon: Some("I") }, MenuAction::Rename, &mut action);
+            simple(ui, &mut y, "rename", Row { label: "Rename", shortcut: "Ctrl+R", enabled: true, icon: Some(IC_RENAME) }, MenuAction::Rename, &mut action);
             y += 9.0; // aire extra, igual que el original
-            simple(ui, &mut y, "active", Row { label: "Toggle Active", shortcut: "Alt+A", enabled: true, icon: Some("¡") }, MenuAction::ToggleActive, &mut action);
+            simple(ui, &mut y, "active", Row { label: "Toggle Active", shortcut: "Alt+A", enabled: true, icon: Some(IC_ACTIVE) }, MenuAction::ToggleActive, &mut action);
             y -= 9.0;
             sep(&mut y);
 
-            simple(ui, &mut y, "group", Row { label: "Group", shortcut: "Ctrl+G", enabled: true, icon: Some("▦") }, MenuAction::Group, &mut action);
-            simple(ui, &mut y, "ungroup", Row { label: "Ungroup", shortcut: "Ctrl+Shift+G", enabled: mc.can_ungroup, icon: Some("▤") }, MenuAction::Ungroup, &mut action);
-            simple(ui, &mut y, "enter", Row { label: "Enter Group", shortcut: "", enabled: mc.can_enter_group, icon: Some("↳") }, MenuAction::EnterGroup, &mut action);
-            simple(ui, &mut y, "exit", Row { label: "Exit Group", shortcut: "", enabled: mc.can_exit_group, icon: Some("↰") }, MenuAction::ExitGroup, &mut action);
+            simple(ui, &mut y, "group", Row { label: "Group", shortcut: "Ctrl+G", enabled: true, icon: Some(IC_GROUP) }, MenuAction::Group, &mut action);
+            simple(ui, &mut y, "ungroup", Row { label: "Ungroup", shortcut: "Ctrl+Shift+G", enabled: mc.can_ungroup, icon: Some(IC_UNGROUP) }, MenuAction::Ungroup, &mut action);
+            simple(ui, &mut y, "enter", Row { label: "Enter Group", shortcut: "", enabled: mc.can_enter_group, icon: Some(IC_ENTER) }, MenuAction::EnterGroup, &mut action);
+            simple(ui, &mut y, "exit", Row { label: "Exit Group", shortcut: "", enabled: mc.can_exit_group, icon: Some(IC_EXIT) }, MenuAction::ExitGroup, &mut action);
             sep(&mut y);
 
-            simple(ui, &mut y, "c_inst", Row { label: "Convert to Instrument Track", shortcut: "", enabled: mc.can_convert_instrument, icon: Some("♪") }, MenuAction::ConvertToInstrument, &mut action);
-            simple(ui, &mut y, "c_audio", Row { label: "Convert to Audio Track", shortcut: "", enabled: mc.can_convert_audio, icon: Some("∿") }, MenuAction::ConvertToAudio, &mut action);
-            simple(ui, &mut y, "c_hyb", Row { label: "Convert to Hybrid Track", shortcut: "", enabled: mc.can_convert_hybrid, icon: Some("⫼") }, MenuAction::ConvertToHybrid, &mut action);
+            simple(ui, &mut y, "c_inst", Row { label: "Convert to Instrument Track", shortcut: "", enabled: mc.can_convert_instrument, icon: Some(IC_INST) }, MenuAction::ConvertToInstrument, &mut action);
+            simple(ui, &mut y, "c_audio", Row { label: "Convert to Audio Track", shortcut: "", enabled: mc.can_convert_audio, icon: Some(IC_AUDIO) }, MenuAction::ConvertToAudio, &mut action);
+            simple(ui, &mut y, "c_hyb", Row { label: "Convert to Hybrid Track", shortcut: "", enabled: mc.can_convert_hybrid, icon: Some(IC_HYBRID) }, MenuAction::ConvertToHybrid, &mut action);
             sep(&mut y);
 
             // --- Monitor ▶ ---
