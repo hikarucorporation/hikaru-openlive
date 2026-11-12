@@ -754,6 +754,49 @@ fn render_channel_strip(
                 state.show_dsp_rack = !state.show_dsp_rack;
             }
 
+            // Menú contextual (click derecho) estilo Bitwig.
+            if !is_master {
+                use crate::ui::track_context_menu as ctxm;
+                let menu_key = egui::Id::new(("trk_ctx", idx));
+                let ectx = ui.ctx().clone();
+                if hdr_resp.secondary_clicked() {
+                    actions.selected_track_idx = idx;
+                    if let Some(p) = ectx.input(|i| i.pointer.interact_pos()) {
+                        ctxm::open(&ectx, menu_key, p);
+                    }
+                }
+                let mon_id = menu_key.with("monitor_mode");
+                let monitor = ectx
+                    .data(|d| d.get_temp::<u8>(mon_id))
+                    .map(|v| match v {
+                        0 => ctxm::MonitorMode::Off,
+                        2 => ctxm::MonitorMode::On,
+                        _ => ctxm::MonitorMode::Auto,
+                    })
+                    .unwrap_or(ctxm::MonitorMode::Auto);
+                let mc = ctxm::MenuContext {
+                    current_color: state.tracks()[idx].color,
+                    monitor,
+                    ..Default::default()
+                };
+                match ctxm::show(&ectx, menu_key, &mc) {
+                    Some(ctxm::MenuAction::SetColor(c)) => state.tracks_mut()[idx].color = c,
+                    Some(ctxm::MenuAction::ToggleActive) => {
+                        let t = &mut state.tracks_mut()[idx];
+                        t.mute = !t.mute;
+                    }
+                    Some(ctxm::MenuAction::SetMonitor(m)) => {
+                        let v = match m {
+                            ctxm::MonitorMode::Off => 0u8,
+                            ctxm::MonitorMode::Auto => 1,
+                            ctxm::MonitorMode::On => 2,
+                        };
+                        ectx.data_mut(|d| d.insert_temp(mon_id, v));
+                    }
+                    _ => {}
+                }
+            }
+
             // 2. Ranuras verticales del Clip Launcher + fila de Stop por pista
             if show_launcher {
                 if !is_master {
