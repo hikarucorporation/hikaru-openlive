@@ -237,12 +237,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         + 7.0;
     let min_view = (2.0 * (CLIP_SLOT_H + 1.0) - 1.0).min(content_h);
     // 1px de aire para no quedar exactamente contra el borde del viewport.
-    // Primero se reserva el mínimo de la grilla de escenas (2 filas) y lo que
-    // sobra se le da a la bahía del fader, comprimiéndola si el Device Panel
-    // está abierto. Antes la bahía era fija y el strip se cortaba abajo.
+    // La bahía del fader es la franja elástica del strip: se comprime si el
+    // Device Panel le roba alto y se estira si el usuario achica el zoom de
+    // egui (Ctrl+-) y sobra alto. Así el mixer siempre llega hasta el footer
+    // en vez de dejar un hueco negro abajo. La grilla de escenas muestra todas
+    // las filas que entren con la bahía en su alto preferido.
     let grid_and_fader_h = (bg_rect.height() - fixed_no_fader_h - 1.0).max(0.0);
-    let fader_bay_h = (grid_and_fader_h - min_view).clamp(FADER_BAY_MIN_H, FADER_BAY_H);
-    let slots_view_h = content_h.min((grid_and_fader_h - fader_bay_h).max(min_view));
+    let slots_view_h = content_h.min((grid_and_fader_h - FADER_BAY_H).max(min_view));
+    let fader_bay_h = (grid_and_fader_h - slots_view_h).max(FADER_BAY_MIN_H);
     let max_scroll = (content_h - slots_view_h).max(0.0);
     let scroll_id = ui.id().with("mix_scene_scroll");
     let mut scene_scroll: f32 = ui.ctx().data(|d| d.get_temp(scroll_id)).unwrap_or(0.0);
