@@ -17,7 +17,7 @@ use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::render::WavetableViewportHandle;
 use crate::theme;
 use crate::views::{
-    about, arranger_view, audio_settings, clip_editor, detail_editor_panel, control_panel, dsp_rack, explorer,
+    about, arranger_view, audio_detail_editor, audio_settings, clip_editor, detail_editor_panel, control_panel, dsp_rack, explorer,
     external_plugins_settings, footer,
     header, matrix, mcp_port_settings, mixer, modal, piano_roll, playlist,
 };
@@ -1343,7 +1343,7 @@ impl eframe::App for HikaruApp {
                     } else if self.state.panel_layout.show_mixer {
                         mixer::render_bottom_panel(ui, &mut self.state);
                     } else if self.state.show_piano_roll {
-                        piano_roll::render(ui, &mut self.state);
+                        render_edit_or_audio(ui, &mut self.state);
                     } else if self.state.clip_editor.show_editor {
                         detail_editor_panel::render(ui, &mut self.state);
                     }
@@ -1359,14 +1359,14 @@ impl eframe::App for HikaruApp {
                         OpenLiveView::SessionMatrix => matrix::render(ui, &mut self.state),
                         OpenLiveView::ArrangerView => arranger_view::render(ui, &mut self.state),
                         OpenLiveView::EditView => {
-                            piano_roll::render(ui, &mut self.state);
+                            render_edit_or_audio(ui, &mut self.state);
                         }
                     },
                     AppMode::OpenStudio => match self.state.openstudio_view {
                         OpenStudioView::Playlist => playlist::render(ui, &mut self.state),
                         OpenStudioView::ArrangerMixer => arranger_view::render(ui, &mut self.state),
                         OpenStudioView::EditView => {
-                            piano_roll::render(ui, &mut self.state);
+                            render_edit_or_audio(ui, &mut self.state);
                         }
                     },
                 }
@@ -1420,5 +1420,15 @@ impl eframe::App for HikaruApp {
         external_plugins_settings::render(ctx, &mut self.state);
         mcp_port_settings::render(ctx, &mut self.state);
         control_panel::render(ctx, &mut self.state);
+    }
+}
+
+/// Editor de la pestaña ARRANGE/EDIT: Detail Editor de audio si el clip seleccionado
+/// es audio; Piano Roll en cualquier otro caso.
+fn render_edit_or_audio(ui: &mut egui::Ui, state: &mut AppState) {
+    if let Some(slot) = audio_detail_editor::selected_audio_slot(state) {
+        audio_detail_editor::render(ui, state, slot);
+    } else {
+        piano_roll::render(ui, state);
     }
 }

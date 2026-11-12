@@ -35,6 +35,7 @@ pub mod waveform;
 pub mod detail_editor_panel;
 pub use detail_editor_panel as clip_editor;
 pub mod piano_roll;
+pub mod audio_detail_editor;
 pub mod external_plugins_settings;
 pub mod mcp_port_settings;
 pub mod control_panel;
