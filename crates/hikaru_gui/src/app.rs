@@ -704,6 +704,43 @@ impl AppState {
         }
     }
 
+    /// Deletes a non-master track by its mixer index (`>= 1`), keeping
+    /// `matrix_state`, `live_tracks`, `studio_tracks`, and selections in sync.
+    pub fn delete_track(&mut self, mixer_idx: usize) {
+        if mixer_idx == 0 || self.matrix_state.tracks.len() <= 1 {
+            return;
+        }
+        let matrix_idx = mixer_idx - 1;
+        if matrix_idx < self.matrix_state.tracks.len() {
+            self.matrix_state.tracks.remove(matrix_idx);
+            self.matrix_state.grid.remove(matrix_idx);
+            if let Some((t, s)) = self.matrix_state.selected_slot {
+                if t == matrix_idx {
+                    self.matrix_state.selected_slot = None;
+                } else if t > matrix_idx {
+                    self.matrix_state.selected_slot = Some((t - 1, s));
+                }
+            }
+        }
+        if mixer_idx < self.live_tracks.len() {
+            self.live_tracks.remove(mixer_idx);
+        }
+        if mixer_idx < self.studio_tracks.len() {
+            self.studio_tracks.remove(mixer_idx);
+        }
+        for (i, tr) in self.live_tracks.iter_mut().enumerate().skip(1) {
+            tr.matrix_idx = Some(i - 1);
+        }
+        for (i, tr) in self.studio_tracks.iter_mut().enumerate().skip(1) {
+            tr.matrix_idx = Some(i - 1);
+        }
+        if self.selected_track_index == mixer_idx {
+            self.selected_track_index = self.selected_track_index.saturating_sub(1);
+        } else if self.selected_track_index > mixer_idx {
+            self.selected_track_index -= 1;
+        }
+    }
+
     pub fn current_tracks(&self) -> &Vec<mixer::Track> {
         self.tracks()
     }
@@ -1269,6 +1306,8 @@ impl eframe::App for HikaruApp {
                     let selected = self.state.playlist_state.selected_clips.clone();
                     self.state.playlist_state.clips.retain(|(_, c)| !selected.contains(&c.id));
                     self.state.playlist_state.selected_clips.clear();
+                } else if self.state.selected_track_index > 0 {
+                    self.state.delete_track(self.state.selected_track_index);
                 }
             }
         });

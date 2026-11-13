@@ -282,12 +282,12 @@ pub fn parse(path: &Path) -> Result<OpenLiveProject, ProjectError> {
 // =========================================================================
 
 /// Filas (pistas) de la Session Matrix por omisión.
-pub const DEFAULT_TRACKS: usize = 8;
+pub const DEFAULT_TRACKS: usize = 2;
 
 /// Columnas (escenas) de la Session Matrix por omisión.
 pub const DEFAULT_SCENES: usize = 8;
 
-/// La Session Matrix por omisión: 8 pistas por 8 escenas, todos los pads vacíos.
+/// La Session Matrix por omisión: 2 pistas por 8 escenas, todos los pads vacíos.
 ///
 /// Es la fuente ÚNICA de la forma por omisión de la matriz: de acá salen la
 /// plantilla del archivo ([`template`]) y el estado vivo de la GUI
@@ -334,8 +334,8 @@ pub fn default_matrix() -> Matrix {
 /// librería de formato no tiene por qué saber qué versión se está compilando
 /// (ver el doc comment de [`OpenLiveProject::created_by`]).
 ///
-/// La grilla es de 8 pistas por 8 escenas, que es la que trae la Session
-/// Matrix de la app. Las pistas se llaman "Track 1".."Track 8" y las escenas
+/// La grilla es de 2 pistas por 8 escenas, que es la que trae la Session
+/// Matrix de la app. Las pistas se llaman "Track 1".."Track 2" y las escenas
 /// "Scene 1".."Scene 8": los mismos nombres que escribe la GUI.
 pub fn template(created_by: &str) -> OpenLiveProject {
     let matrix = default_matrix();

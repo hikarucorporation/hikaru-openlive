@@ -58,6 +58,10 @@ pub enum MonitorMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
+    AddInstrumentTrack,
+    AddAudioTrack,
+    AddFxTrack,
+    AddGroupTrack,
     SetColor(Color32),
     ToggleFillHeader,
     Cut,
@@ -201,6 +205,8 @@ pub fn show(ctx: &Context, key: Id, mc: &MenuContext) -> Option<MenuAction> {
     let inner_w = MENU_W - PAD_X * 2.0;
     let palette_h = 3.0 * SWATCH + 2.0 * SWATCH_GAP + 12.0;
     let total_h = 4.0
+        + ROW_H * 4.0 // Add Instrument/Audio/FX/Group Track
+        + SEP_H
         + palette_h
         + ROW_H // Fill header backgrounds
         + SEP_H
@@ -234,6 +240,31 @@ pub fn show(ctx: &Context, key: Id, mc: &MenuContext) -> Option<MenuAction> {
 
             let mut y = rect.min.y + 4.0;
             let x0 = rect.min.x + PAD_X;
+
+            // --- Add Track actions ---
+            for (label, shortcut, icon, act) in [
+                ("Add Instrument Track", "Ctrl+T", IC_INST, MenuAction::AddInstrumentTrack),
+                ("Add Audio Track", "Ctrl+Shift+T", IC_AUDIO, MenuAction::AddAudioTrack),
+                ("Add FX Track", "Ctrl+Alt+T", IC_HYBRID, MenuAction::AddFxTrack),
+                ("Add Group Track", "Ctrl+Alt+G", IC_GROUP, MenuAction::AddGroupTrack),
+            ] {
+                let r = Rect::from_min_size(pos2(x0, y), vec2(inner_w, ROW_H));
+                let resp = paint_row(
+                    ui,
+                    r,
+                    key.with(label),
+                    &Row { label, shortcut, enabled: true, icon: Some(icon) },
+                    false,
+                    false,
+                );
+                if resp.clicked() {
+                    action = Some(act);
+                }
+                y += ROW_H;
+            }
+            let ly = (y + SEP_H * 0.5).round() - 0.5;
+            p.line_segment([pos2(x0, ly), pos2(x0 + inner_w, ly)], Stroke::new(1.0_f32, SEP));
+            y += SEP_H;
 
             // --- Paleta ---
             let pal_rect = Rect::from_min_size(

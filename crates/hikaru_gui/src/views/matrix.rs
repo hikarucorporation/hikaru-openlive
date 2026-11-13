@@ -1425,6 +1425,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut stop_track_action: Option<usize> = None;
     let mut trigger_scene_action: Option<usize> = None;
     let mut add_track_action = false;
+    let mut delete_track_action: Option<usize> = None;
     let mut add_scene_action = false;
     let mut drop_slot_action: Option<(usize, usize, PathBuf)> = None;
     let mut drop_timeline_action: Option<(usize, u64, PathBuf)> = None;
@@ -1678,6 +1679,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         select_matrix_track(state, track_idx);
                     }
                 }
+                if secondary_clicked {
+                    select_matrix_track(state, track_idx);
+                    crate::ui::track_context_menu::open(
+                        ui.ctx(),
+                        egui::Id::new(("matrix_trk_ctx", track_idx)),
+                        pos,
+                    );
+                }
                 if double_clicked
                     && !r_rect.contains(pos)
                     && !s_rect.contains(pos)
@@ -1712,6 +1721,49 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         volume_db: new_vol,
                     });
                 }
+            }
+        }
+
+        // Menú contextual (click derecho) estilo Bitwig en el Clip Launcher.
+        {
+            use crate::ui::track_context_menu as ctxm;
+            let menu_key = egui::Id::new(("matrix_trk_ctx", track_idx));
+            let ectx = ui.ctx();
+            let mon_id = menu_key.with("monitor_mode");
+            let monitor = ectx
+                .data(|d| d.get_temp::<u8>(mon_id))
+                .map(|v| match v {
+                    0 => ctxm::MonitorMode::Off,
+                    2 => ctxm::MonitorMode::On,
+                    _ => ctxm::MonitorMode::Auto,
+                })
+                .unwrap_or(ctxm::MonitorMode::Auto);
+            let mc = ctxm::MenuContext {
+                current_color: track_color,
+                monitor,
+                ..Default::default()
+            };
+            match ctxm::show(ectx, menu_key, &mc) {
+                Some(ctxm::MenuAction::SetColor(c)) => {
+                    if let Some(tr) = state.live_tracks.get_mut(mixer_idx) {
+                        tr.color = c;
+                    }
+                }
+                Some(ctxm::MenuAction::ToggleActive) => {
+                    toggle_mute_action = Some(track_idx);
+                }
+                Some(ctxm::MenuAction::Delete) => {
+                    delete_track_action = Some(mixer_idx);
+                }
+                Some(ctxm::MenuAction::SetMonitor(m)) => {
+                    let v = match m {
+                        ctxm::MonitorMode::Off => 0u8,
+                        ctxm::MonitorMode::Auto => 1,
+                        ctxm::MonitorMode::On => 2,
+                    };
+                    ectx.data_mut(|d| d.insert_temp(mon_id, v));
+                }
+                _ => {}
             }
         }
     }
@@ -2838,6 +2890,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // =========================================================================
     // 5. DEFERRED ACTIONS (Clips, Drops, Track/Scene Mutations)
     // =========================================================================
+    if let Some(mixer_idx) = delete_track_action {
+        state.delete_track(mixer_idx);
+    }
+
     if add_track_action {
         state.matrix_state.add_track();
         let new_idx = state.matrix_state.tracks.len();
