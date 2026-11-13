@@ -1,6 +1,6 @@
 # Hikaru OpenLive
 
-![BANNER](/hikaru-openlive/assets/hikaru-openlive-banner-1.png)
+[BANNER](/hikaru-openlive/assets/hikaru-openlive-banner-1.png)
 
 ## Thank you to [PixelSoftwareStudios](https://github.com/PixelSoftwareStudios) for listing Hikaru OpenLive in [remade.wiki](https://remade.wiki/projects/hikaru-openlive/): [![Listed on Remade](https://remade.wiki/badges/listed-on-remade.svg)](https://remade.wiki/projects/hikaru-openlive/)
 
