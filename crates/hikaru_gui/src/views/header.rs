@@ -364,8 +364,67 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
+    // Indicador derecho de estado del motor de audio + controles de ventana internos (Minimize / Maximize / Close)
+    let win_btn_w = 28.0;
+    let win_btn_h = top_rect.height();
+    let close_rect = Rect::from_min_size(pos2(top_rect.max.x - win_btn_w, top_rect.min.y), vec2(win_btn_w, win_btn_h));
+    let max_rect = Rect::from_min_size(pos2(close_rect.min.x - win_btn_w, top_rect.min.y), vec2(win_btn_w, win_btn_h));
+    let min_rect = Rect::from_min_size(pos2(max_rect.min.x - win_btn_w, top_rect.min.y), vec2(win_btn_w, win_btn_h));
+
+    let is_maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+
+    let min_resp = ui.interact(min_rect, ui.id().with("win_btn_min"), Sense::click());
+    let max_resp = ui.interact(max_rect, ui.id().with("win_btn_max"), Sense::click());
+    let close_win_resp = ui.interact(close_rect, ui.id().with("win_btn_close"), Sense::click());
+
+    if ui.is_rect_visible(min_rect) {
+        let p = ui.painter();
+        if min_resp.hovered() {
+            p.rect_filled(min_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
+        }
+        let col = if min_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(190, 194, 200) };
+        let c = min_rect.center();
+        p.line_segment([pos2(c.x - 4.5, c.y + 3.0), pos2(c.x + 4.5, c.y + 3.0)], Stroke::new(1.2, col));
+    }
+    if min_resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+
+    if ui.is_rect_visible(max_rect) {
+        let p = ui.painter();
+        if max_resp.hovered() {
+            p.rect_filled(max_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
+        }
+        let col = if max_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(190, 194, 200) };
+        let sq = Rect::from_center_size(max_rect.center(), vec2(9.0, 9.0));
+        if is_maximized {
+            let back = sq.translate(vec2(1.5, -1.5));
+            let front = sq.translate(vec2(-1.5, 1.5));
+            p.rect_stroke(back, 0.5, Stroke::new(1.1, col), egui::StrokeKind::Inside);
+            p.rect_filled(front, 0.5, top_bar_bg);
+            p.rect_stroke(front, 0.5, Stroke::new(1.1, col), egui::StrokeKind::Inside);
+        } else {
+            p.rect_stroke(sq, 0.5, Stroke::new(1.2, col), egui::StrokeKind::Inside);
+        }
+    }
+    if max_resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+    }
+
+    if ui.is_rect_visible(close_rect) {
+        let p = ui.painter();
+        if close_win_resp.hovered() {
+            p.rect_filled(close_rect, 0.0, Color32::from_rgb(205, 52, 48));
+        }
+        let col = if close_win_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(190, 194, 200) };
+        icons::paint_icon(p, Rect::from_center_size(close_rect.center(), vec2(10.0, 10.0)), icons::X_CLOSE, col, 1.3);
+    }
+    if close_win_resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     // Indicador derecho de estado del motor de audio
-    let eng_dot_rect = Rect::from_center_size(pos2(top_rect.max.x - 18.0, top_rect.center().y), vec2(16.0, 16.0));
+    let eng_dot_rect = Rect::from_center_size(pos2(min_rect.min.x - 14.0, top_rect.center().y), vec2(16.0, 16.0));
     let eng_resp = ui.interact(eng_dot_rect, ui.id().with("top_audio_status_dot"), Sense::click());
     if ui.is_rect_visible(eng_dot_rect) {
         let active_col = if state.audio_settings_state.is_open {
@@ -377,6 +436,21 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
     if eng_resp.clicked() {
         state.audio_settings_state.is_open = !state.audio_settings_state.is_open;
+    }
+
+    // Arrastrar ventana o doble clic para maximizar en las zonas libres de la barra superior
+    let drag_left = Rect::from_min_max(pos2(tab_rect.max.x + 2.0, top_rect.min.y), pos2(emblem_rect.min.x - 2.0, top_rect.max.y));
+    let drag_right = Rect::from_min_max(pos2(emblem_rect.max.x + 2.0, top_rect.min.y), pos2(eng_dot_rect.min.x - 2.0, top_rect.max.y));
+    for (idx, drag_rect) in [drag_left, drag_right].into_iter().enumerate() {
+        if drag_rect.width() > 4.0 {
+            let drag_resp = ui.interact(drag_rect, ui.id().with(("top_bar_window_drag", idx)), Sense::click_and_drag());
+            if drag_resp.drag_started_by(egui::PointerButton::Primary) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if drag_resp.double_clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+            }
+        }
     }
 
     // =====================================================================

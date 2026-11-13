@@ -517,6 +517,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_min_inner_size([960.0, 540.0])
+            .with_decorations(false)
             .with_title("Hikaru OpenLive"),
         ..Default::default()
     };
