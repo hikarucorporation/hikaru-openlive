@@ -605,6 +605,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 });
 
                             if let Some((sel_pad, note_lbl, maybe_smp)) = pad_fx_info {
+                                let fx_blue = Color32::from_rgb(0x4A, 0x90, 0xE2);
+                                // Indicador azul superior derecho estilo Bitwig cuando FX está abierto
+                                ui.painter().rect_filled(
+                                    Rect::from_min_size(
+                                        pos2(card_rect.max.x - 1.0, card_rect.min.y + 1.0),
+                                        vec2(5.0, 5.0),
+                                    ),
+                                    1.0,
+                                    fx_blue,
+                                );
+
                                 if let Some(mut pad_smp) = maybe_smp {
                                     let (smp_card_rect, _) = ui.allocate_exact_size(
                                         vec2(SAMPLER_CARD_WIDTH, card_h),
@@ -715,33 +726,84 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         }
                                     }
                                 } else {
-                                    // Botón para insertar Hikaru Sampler en el pad seleccionado
-                                    ui.vertical(|ui| {
-                                        ui.add_space(46.0);
-                                        if ui
-                                            .button(
-                                                RichText::new(format!("+ Sampler ({note_lbl})"))
+                                    // Ranura `+` estilo Bitwig para insertar dispositivo en la cadena FX del pad
+                                    let (slot_col, _) = ui.allocate_exact_size(
+                                        vec2(18.0, card_h),
+                                        Sense::hover(),
+                                    );
+                                    let plus_btn_rect = Rect::from_center_size(
+                                        slot_col.center(),
+                                        vec2(16.0, 26.0),
+                                    );
+                                    let plus_id = ui
+                                        .id()
+                                        .with(("dms_fx_insert_btn", track_idx, slot_idx, sel_pad));
+                                    let plus_resp = ui
+                                        .interact(plus_btn_rect, plus_id, Sense::click())
+                                        .on_hover_text(format!("Insert device ({note_lbl})"));
+                                    if ui.is_rect_visible(plus_btn_rect) {
+                                        let p = ui.painter();
+                                        let dot_center =
+                                            pos2(plus_btn_rect.center().x, plus_btn_rect.min.y + 4.0);
+                                        p.circle_filled(dot_center, 2.0, fx_blue);
+                                        p.text(
+                                            pos2(plus_btn_rect.center().x, plus_btn_rect.center().y + 3.0),
+                                            Align2::CENTER_CENTER,
+                                            "+",
+                                            fonts::semibold(13.0),
+                                            if plus_resp.hovered() {
+                                                Color32::WHITE
+                                            } else {
+                                                theme::TEXT_SECONDARY
+                                            },
+                                        );
+                                    }
+                                    if plus_resp.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    let popup_id = ui.id().with((
+                                        "dms_fx_insert_popup",
+                                        track_idx,
+                                        slot_idx,
+                                        sel_pad,
+                                    ));
+                                    if plus_resp.clicked() {
+                                        ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                    }
+                                    egui::popup_below_widget(
+                                        ui,
+                                        popup_id,
+                                        &plus_resp,
+                                        egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        |ui| {
+                                            ui.set_min_width(185.0);
+                                            ui.label(
+                                                RichText::new(format!("Insert Device ({note_lbl})"))
                                                     .font(fonts::semibold(11.0))
                                                     .color(theme::ACCENT_ORANGE),
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some(track) =
-                                                app.current_tracks_mut().get_mut(track_idx)
-                                            {
-                                                if let Some(s) = track.effects.get_mut(slot_idx) {
-                                                    if let Some(ref mut dms) = s.dms_state {
-                                                        if let Some(pad) =
-                                                            dms.pads.get_mut(sel_pad)
-                                                        {
-                                                            pad.sampler =
-                                                                Some(crate::views::hikaru_native_plugins::HikaruSampler::default());
+                                            );
+                                            ui.separator();
+                                            if ui.button("Hikaru Sampler  [Sampler]").clicked() {
+                                                if let Some(track) =
+                                                    app.current_tracks_mut().get_mut(track_idx)
+                                                {
+                                                    if let Some(s) = track.effects.get_mut(slot_idx)
+                                                    {
+                                                        if let Some(ref mut dms) = s.dms_state {
+                                                            if let Some(pad) =
+                                                                dms.pads.get_mut(sel_pad)
+                                                            {
+                                                                pad.sampler = Some(
+                                                                    crate::views::hikaru_native_plugins::HikaruSampler::default(),
+                                                                );
+                                                            }
                                                         }
                                                     }
                                                 }
+                                                ui.close_menu();
                                             }
-                                        }
-                                    });
+                                        },
+                                    );
                                 }
                             }
                         }

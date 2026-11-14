@@ -521,44 +521,94 @@ pub fn render_dms_ui(
                 ui.add_space(2.0);
 
                 // Columna FX + Output estilo Bitwig Drum Machine
-                ui.vertical(|ui| {
-                    ui.set_width(48.0);
-                    ui.spacing_mut().item_spacing.y = 8.0;
-                    if capsule_text_button(
-                        ui,
-                        egui::vec2(46.0, 22.0),
-                        "FX",
-                        10.0,
-                        dms.fx_open,
-                        BW_ACCENT_ORANGE,
-                        JoinSide::Standalone,
-                        false,
-                    )
-                    .on_hover_text("Mostrar/ocultar cadena FX / Sampler del pad")
-                    .clicked()
-                    {
-                        dms.fx_open = !dms.fx_open;
-                    }
+                let fx_col_stroke = if dms.fx_open {
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x52, 0x7A, 0xB8))
+                } else {
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x42, 0x45, 0x4C))
+                };
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgb(0x28, 0x2A, 0x2E))
+                    .stroke(fx_col_stroke)
+                    .corner_radius(3.5)
+                    .inner_margin(egui::Margin::symmetric(3, 4))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(42.0);
+                            ui.spacing_mut().item_spacing.y = 6.0;
 
-                    ui.add_space(28.0);
-                    ui.vertical_centered(|ui| {
-                        let (r_out, _) = rotary_knob(
-                            ui,
-                            28.0,
-                            &mut dms.output_vol,
-                            0.0..=1.0,
-                            0.75,
-                            BW_ACCENT_ORANGE,
-                            false,
-                        );
-                        r_out.on_hover_text(format!("Output: {:.0}%", dms.output_vol * 100.0));
-                        ui.label(
-                            egui::RichText::new("Output")
-                                .font(fonts::regular(9.0))
-                                .color(theme::TEXT_SECONDARY),
-                        );
+                            let (fx_rect, fx_resp) = ui.allocate_exact_size(
+                                egui::vec2(42.0, 20.0),
+                                egui::Sense::click(),
+                            );
+                            if ui.is_rect_visible(fx_rect) {
+                                let fx_bg = if dms.fx_open {
+                                    egui::Color32::from_rgb(0x22, 0x24, 0x28)
+                                } else if fx_resp.hovered() {
+                                    egui::Color32::from_rgb(0x3D, 0x40, 0x47)
+                                } else {
+                                    egui::Color32::from_rgb(0x32, 0x34, 0x3A)
+                                };
+                                let fx_border = if dms.fx_open {
+                                    egui::Color32::from_rgb(0x6E, 0x9C, 0xDC)
+                                } else if fx_resp.hovered() {
+                                    egui::Color32::from_rgb(0x78, 0x7D, 0x88)
+                                } else {
+                                    egui::Color32::from_rgb(0x4E, 0x52, 0x5B)
+                                };
+                                let fx_fg = if dms.fx_open || fx_resp.hovered() {
+                                    egui::Color32::WHITE
+                                } else {
+                                    egui::Color32::from_rgb(0xD0, 0xD4, 0xDC)
+                                };
+                                let p = ui.painter();
+                                p.rect_filled(fx_rect, 2.5, fx_bg);
+                                p.rect_stroke(
+                                    fx_rect,
+                                    2.5,
+                                    egui::Stroke::new(1.0_f32, fx_border),
+                                    egui::StrokeKind::Inside,
+                                );
+                                p.text(
+                                    fx_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "FX",
+                                    fonts::semibold(10.0),
+                                    fx_fg,
+                                );
+                            }
+                            if fx_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if fx_resp
+                                .on_hover_text("Mostrar/ocultar cadena FX / Sampler del pad")
+                                .clicked()
+                            {
+                                dms.fx_open = !dms.fx_open;
+                            }
+
+                            ui.add_space(22.0);
+                            ui.vertical_centered(|ui| {
+                                let (r_out, _) = rotary_knob(
+                                    ui,
+                                    28.0,
+                                    &mut dms.output_vol,
+                                    0.0..=1.0,
+                                    0.75,
+                                    BW_ACCENT_ORANGE,
+                                    false,
+                                );
+                                r_out.on_hover_text(format!(
+                                    "Output: {:.0}%",
+                                    dms.output_vol * 100.0
+                                ));
+                                ui.label(
+                                    egui::RichText::new("Output")
+                                        .font(fonts::regular(9.0))
+                                        .color(theme::TEXT_SECONDARY),
+                                );
+                            });
+                        });
                     });
-                });
             });
         });
 
