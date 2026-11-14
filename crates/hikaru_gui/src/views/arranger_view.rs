@@ -817,24 +817,39 @@ fn render_channel_strip(
                     })
                 });
             if let Some((dms_slot_idx, chains_expanded)) = dms_chain_info {
-                let corner_sz = 12.0_f32;
+                let corner_w = 18.0_f32;
+                let step_h = 5.0_f32;
                 let corner_rect = Rect::from_min_max(
-                    pos2(hdr_rect.max.x - corner_sz, hdr_rect.min.y),
-                    pos2(hdr_rect.max.x, hdr_rect.min.y + corner_sz),
+                    pos2(hdr_rect.max.x - corner_w - 2.0, hdr_rect.min.y),
+                    pos2(hdr_rect.max.x, hdr_rect.min.y + step_h + 6.0),
                 );
-                ui.painter().add(egui::Shape::convex_polygon(
-                    vec![
-                        pos2(hdr_rect.max.x - corner_sz, hdr_rect.min.y),
-                        hdr_rect.right_top(),
-                        pos2(hdr_rect.max.x, hdr_rect.min.y + corner_sz),
-                    ],
-                    if chains_expanded {
-                        Color32::from_rgb(0x1E, 0x20, 0x24)
-                    } else {
-                        Color32::from_rgb(0xE8, 0xEA, 0xEE)
-                    },
-                    Stroke::NONE,
-                ));
+                if chains_expanded {
+                    // Escalón diagonal superior derecho estilo carpeta Bitwig Drum Machine
+                    let p0 = pos2(hdr_rect.max.x - corner_w, hdr_rect.min.y);
+                    let p1 = pos2(hdr_rect.max.x - corner_w + 6.0, hdr_rect.min.y + step_h);
+                    let p2 = pos2(hdr_rect.max.x, hdr_rect.min.y + step_h);
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        vec![p0, hdr_rect.right_top(), p2, p1],
+                        Color32::from_rgb(0x18, 0x19, 0x1D),
+                        Stroke::NONE,
+                    ));
+                    // Borde claro/color siguiendo la pestaña de carpeta
+                    let tab_stroke = Stroke::new(1.5_f32, Color32::from_rgb(0xD8, 0xDC, 0xE4));
+                    ui.painter().line_segment([hdr_rect.left_top(), p0], tab_stroke);
+                    ui.painter().line_segment([p0, p1], tab_stroke);
+                    ui.painter().line_segment([p1, p2], Stroke::new(2.0_f32, track_color));
+                } else {
+                    // Esquina plegada cuando los sub-canales están ocultos
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        vec![
+                            pos2(hdr_rect.max.x - 11.0, hdr_rect.min.y + 1.0),
+                            pos2(hdr_rect.max.x - 1.0, hdr_rect.min.y + 1.0),
+                            pos2(hdr_rect.max.x - 1.0, hdr_rect.min.y + 11.0),
+                        ],
+                        Color32::from_rgb(0x1E, 0x20, 0x24),
+                        Stroke::NONE,
+                    ));
+                }
                 if hdr_resp.clicked()
                     && hdr_resp
                         .interact_pointer_pos()
@@ -1576,32 +1591,74 @@ fn render_dms_pad_channel_strip(
         ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
 
         ui.vertical(|ui| {
-            // 1. Cabecera del pad con el mismo color del track padre (estilo Bitwig Drum Chain)
+            // 1. Cabecera del pad estilo Bitwig Drum Chain: escalón superior + riel de color + tinte desaturado
             let (hdr_rect, hdr_resp) =
                 ui.allocate_exact_size(vec2(strip_w, HEADER_BLOCK_H), Sense::click());
-            ui.painter().rect_filled(hdr_rect, 1.0, track_color);
+            let step_h = 5.0_f32;
+            ui.painter().rect_filled(
+                Rect::from_min_size(hdr_rect.min, vec2(strip_w, step_h)),
+                0.0,
+                Color32::from_rgb(0x18, 0x19, 0x1D),
+            );
+            let sub_hdr_rect = Rect::from_min_max(
+                pos2(hdr_rect.min.x, hdr_rect.min.y + step_h),
+                hdr_rect.max,
+            );
+            let child_hdr_color = Color32::from_rgb(
+                ((track_color.r() as u16 * 55 + 0x42 * 45) / 100) as u8,
+                ((track_color.g() as u16 * 55 + 0x44 * 45) / 100) as u8,
+                ((track_color.b() as u16 * 55 + 0x4A * 45) / 100) as u8,
+            );
+            ui.painter().rect_filled(sub_hdr_rect, 1.0, child_hdr_color);
+            ui.painter().rect_filled(
+                Rect::from_min_size(sub_hdr_rect.min, vec2(strip_w, 2.0)),
+                0.0,
+                track_color,
+            );
             if is_pad_sel {
                 ui.painter().rect_stroke(
-                    hdr_rect.shrink(1.0),
+                    sub_hdr_rect.shrink(0.5),
                     1.0,
-                    Stroke::new(1.5_f32, Color32::WHITE),
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 170)),
                     egui::StrokeKind::Inside,
                 );
             }
-            let short_name: String = if pad_name.chars().count() > 11 {
-                let mut s: String = pad_name.chars().take(10).collect();
-                s.push('…');
-                s
+            let clean_name = pad_name.trim_end_matches(".wav").trim_end_matches(".WAV");
+            let chars: Vec<char> = clean_name.chars().collect();
+            let line1: String = chars.iter().take(12).collect();
+            let line2: String = if chars.len() > 12 {
+                let mut l2: String = chars.iter().skip(12).take(11).collect();
+                if chars.len() > 23 {
+                    l2.push('…');
+                }
+                l2
             } else {
-                pad_name.clone()
+                String::new()
             };
-            ui.painter().text(
-                hdr_rect.center(),
-                Align2::CENTER_CENTER,
-                &short_name,
-                fonts::semibold(10.0),
-                Color32::from_rgb(0x11, 0x12, 0x14),
-            );
+            if line2.is_empty() {
+                ui.painter().text(
+                    sub_hdr_rect.center(),
+                    Align2::CENTER_CENTER,
+                    &line1,
+                    fonts::semibold(10.0),
+                    Color32::from_rgb(0x11, 0x12, 0x14),
+                );
+            } else {
+                ui.painter().text(
+                    pos2(sub_hdr_rect.center().x, sub_hdr_rect.center().y - 5.5),
+                    Align2::CENTER_CENTER,
+                    &line1,
+                    fonts::semibold(9.5),
+                    Color32::from_rgb(0x11, 0x12, 0x14),
+                );
+                ui.painter().text(
+                    pos2(sub_hdr_rect.center().x, sub_hdr_rect.center().y + 5.5),
+                    Align2::CENTER_CENTER,
+                    &line2,
+                    fonts::semibold(9.5),
+                    Color32::from_rgb(0x11, 0x12, 0x14),
+                );
+            }
             if hdr_resp.on_hover_text(&pad_name).clicked() {
                 actions.selected_track_idx = track_idx;
                 state.selected_slot_index = slot_idx;
@@ -1621,7 +1678,19 @@ fn render_dms_pad_channel_strip(
                 let (empty_slots_r, _) =
                     ui.allocate_exact_size(vec2(strip_w, slots_view_h), Sense::hover());
                 ui.painter()
-                    .rect_filled(empty_slots_r, 0.0, Color32::from_rgb(0x18, 0x19, 0x1C));
+                    .rect_filled(empty_slots_r, 0.0, Color32::from_rgb(0x22, 0x24, 0x28));
+                let row_step = CLIP_SLOT_H + 1.0;
+                let mut line_y = empty_slots_r.min.y + row_step;
+                while line_y < empty_slots_r.max.y {
+                    ui.painter().line_segment(
+                        [
+                            pos2(empty_slots_r.min.x, line_y),
+                            pos2(empty_slots_r.max.x, line_y),
+                        ],
+                        Stroke::new(1.0_f32, Color32::from_rgb(0x18, 0x19, 0x1D)),
+                    );
+                    line_y += row_step;
+                }
 
                 let (play_row_r, play_resp) =
                     ui.allocate_exact_size(vec2(strip_w, STOP_ROW_H), Sense::click());
@@ -1713,13 +1782,44 @@ fn render_dms_pad_channel_strip(
                         }
                     }
                 }
+                ui.painter().text(
+                    pos2(dev_rect.min.x + 7.0, chip_r.max.y + 9.0),
+                    Align2::LEFT_CENTER,
+                    "+",
+                    fonts::semibold(11.0),
+                    Color32::from_rgb(0x9A, 0x9E, 0xA6),
+                );
             }
 
-            // 4. Caja de Sends (alineada con el track padre)
+            // 4. Caja de Sends (`FX 1` + perilla rotatoria estilo Bitwig)
             let (sends_rect, _) =
                 ui.allocate_exact_size(vec2(strip_w, SENDS_BOX_H), Sense::hover());
             ui.painter()
                 .rect_filled(sends_rect, 0.0, Color32::from_rgb(0x46, 0x48, 0x4E));
+            {
+                let mut s_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(sends_rect.shrink2(vec2(4.0, 3.0)))
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                s_ui.spacing_mut().item_spacing.x = 3.0;
+                s_ui.label(
+                    RichText::new("FX 1")
+                        .font(fonts::regular(9.0))
+                        .color(Color32::from_rgb(0x14, 0x15, 0x18)),
+                );
+                let mut dummy_send = 0.0_f32;
+                let (s_resp, _) = rotary_knob(
+                    &mut s_ui,
+                    22.0,
+                    &mut dummy_send,
+                    0.0..=1.0,
+                    0.0,
+                    BW_FADER_AMBER,
+                    false,
+                );
+                s_resp.on_hover_text("Pad FX 1 Send");
+            }
 
             // 5. Sección I/O (alineada con el track padre)
             let (io_rect, _) = ui.allocate_exact_size(vec2(strip_w, IO_BOX_H), Sense::hover());
@@ -1814,6 +1914,13 @@ fn render_dms_pad_channel_strip(
 
                     let (db_row, _) = ui.allocate_exact_size(vec2(inner_w, 14.0), Sense::hover());
                     ui.painter().text(
+                        pos2(db_row.min.x + 1.0, db_row.center().y),
+                        Align2::LEFT_CENTER,
+                        "-inf",
+                        fonts::lcd(9.5),
+                        Color32::from_rgb(0x88, 0x8C, 0x94),
+                    );
+                    ui.painter().text(
                         pos2(db_row.max.x - 1.0, db_row.center().y),
                         Align2::RIGHT_CENTER,
                         format_strip_db(pad_vol),
@@ -1823,12 +1930,39 @@ fn render_dms_pad_channel_strip(
 
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 3.0;
-                        let fader_w = (inner_w - 6.0).max(28.0);
+                        let (scale_r, _) =
+                            ui.allocate_exact_size(vec2(14.0, fader_bay_h - 4.0), Sense::hover());
+                        for (t_norm, lbl) in [
+                            (0.75_f32, "0"),
+                            (0.675, "6"),
+                            (0.58, "12"),
+                            (0.47, "18"),
+                            (0.35, "24"),
+                            (0.20, "36"),
+                            (0.03, "inf"),
+                        ] {
+                            let y = scale_r.max.y - scale_r.height() * t_norm;
+                            ui.painter().text(
+                                pos2(scale_r.max.x - 1.0, y),
+                                Align2::RIGHT_CENTER,
+                                lbl,
+                                fonts::regular(8.0),
+                                Color32::from_rgb(0x8C, 0x90, 0x98),
+                            );
+                        }
+
+                        stereo_meter_bar(
+                            ui,
+                            vec2(12.0, fader_bay_h - 4.0),
+                            [0.0, 0.0, 0.0, 0.0],
+                        );
+
+                        let fader_w = (inner_w - 14.0 - 12.0 - 6.0).max(24.0);
                         let (vol_resp, vol_changed) = fader_vertical_track_vol(
                             ui,
                             vec2(fader_w, fader_bay_h - 4.0),
                             &mut pad_vol,
-                            1.0,
+                            0.75,
                         );
                         vol_resp.on_hover_text("Pad Volume");
                         if vol_changed {

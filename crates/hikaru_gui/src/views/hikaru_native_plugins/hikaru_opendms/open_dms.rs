@@ -41,7 +41,7 @@ impl DmsPad {
             midi_note,
             name: format!("Pad {:02}", id + 1),
             sample_path: None,
-            volume: 1.0,
+            volume: 0.75,
             pan: 0.0,
             pitch: 0.0,
             mute: false,
