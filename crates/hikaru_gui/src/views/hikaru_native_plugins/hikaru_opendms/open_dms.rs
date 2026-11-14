@@ -105,7 +105,7 @@ pub fn render_dms_ui(
     let text_note = egui::Color32::from_rgb(200, 200, 205);
     let text_plus = egui::Color32::from_rgb(160, 160, 165);
 
-    egui::Frame::NONE
+    let frame_resp = egui::Frame::NONE
         .fill(frame_fill)
         .corner_radius(4.0)
         .inner_margin(egui::Margin::same(4))
@@ -247,4 +247,13 @@ pub fn render_dms_ui(
                     });
             });
         });
+
+    if frame_resp.response.hovered() || ui.rect_contains_pointer(frame_resp.response.rect) {
+        let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll_y > 0.0 {
+            dms.active_bank = (dms.active_bank + 1).min(8);
+        } else if scroll_y < 0.0 {
+            dms.active_bank = dms.active_bank.saturating_sub(1);
+        }
+    }
 }
