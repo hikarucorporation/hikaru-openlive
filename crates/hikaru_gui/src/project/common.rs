@@ -98,6 +98,11 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                 } else {
                     None
                 };
+                let sampler = if matches!(e.name.as_str(), "Sampler" | "Hikaru Sampler") {
+                    e.sampler_state.as_ref().map(|s| s.to_project_params())
+                } else {
+                    None
+                };
                 DspSlot {
                     id: e.id,
                     name: e.name.clone(),
@@ -118,6 +123,7 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     }),
                     open_wavetable,
                     open_modulation,
+                    sampler,
                 }
             })
             .collect(),
@@ -196,6 +202,15 @@ pub fn build_track(t: &Track) -> mixer::Track {
                             st.apply_params(p);
                         },
                     );
+                }
+            }
+
+            // Reconstruir estado de Hikaru Sampler
+            if matches!(e.name.as_str(), "Sampler" | "Hikaru Sampler") {
+                if let Some(ref p) = e.sampler {
+                    let mut smp = crate::views::hikaru_native_plugins::HikaruSampler::default();
+                    smp.apply_project_params(p);
+                    slot.sampler_state = Some(smp);
                 }
             }
 

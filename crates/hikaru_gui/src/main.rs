@@ -408,10 +408,10 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         let sr = engine.sample_rate;
                         let adsr = hikaru_audio_engine::DmsAdsrParams {
-                            attack_rate: if attack_ms > 0.0 { 1.0 / (attack_ms * 0.001 * sr) } else { sr },
-                            decay_rate: if decay_ms > 0.0 { (1.0 - sustain) / (decay_ms * 0.001 * sr) } else { sr },
+                            attack_rate: if attack_ms > 0.0 { 1.0 / (attack_ms * 0.001) } else { sr },
+                            decay_rate: if decay_ms > 0.0 { (1.0 - sustain) / (decay_ms * 0.001) } else { sr },
                             sustain_level: sustain.clamp(0.0, 1.0),
-                            release_rate: if release_ms > 0.0 { sustain / (release_ms * 0.001 * sr) } else { sr },
+                            release_rate: if release_ms > 0.0 { sustain / (release_ms * 0.001) } else { sr },
                         };
                         engine.trigger_dms_note(pad_idx, gain, pan, velocity, play_speed, &adsr, 0);
                     }
@@ -434,6 +434,16 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                 GuiCommand::SetTrackWavetable { track_idx, samples, pitch_offset, volume } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_track_wavetable_with_volume(track_idx, samples, pitch_offset, volume);
+                    }
+                }
+                GuiCommand::SetTrackSamplerSample { track_idx, samples, channels, sample_rate } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_track_sampler_sample(track_idx, samples, channels, sample_rate);
+                    }
+                }
+                GuiCommand::SetTrackSamplerParams { track_idx, params } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_track_sampler_params(track_idx, params);
                     }
                 }
                 GuiCommand::LoadExternalPlugin { track_idx, slot_idx, descriptor } => {

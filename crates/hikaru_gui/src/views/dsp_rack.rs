@@ -12,11 +12,13 @@ use crate::views::hikaru_native_plugins::hikaru_openeq3;
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATION_CARD_WIDTH};
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
 use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
+use crate::views::hikaru_native_plugins::hikaru_sampler::{sampler_editor, SAMPLER_CARD_WIDTH};
 use crate::views::mixer::DspSlot;
 
 pub const RACK_HEIGHT: f32 = 178.0;
 pub const CARD_WIDTH: f32 = 340.0;
 pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 446.0;
+pub const OPEN_DMS_CARD_WIDTH: f32 = 376.0;
 pub const PHASER_CARD_WIDTH: f32 = 480.0;
 pub const EXTERNAL_CARD_WIDTH: f32 = 360.0;
 
@@ -27,7 +29,7 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 5] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 6] = [
     PluginEntry {
         category: "Audio FX",
         name: "OpenEQ3",
@@ -42,6 +44,11 @@ pub const PLUGIN_CATALOG: [PluginEntry; 5] = [
         category: "Polysynth",
         name: "OpenWavetable",
         label: "Hikaru OpenWavetable",
+    },
+    PluginEntry {
+        category: "Sampler",
+        name: "Sampler",
+        label: "Hikaru Sampler",
     },
     PluginEntry {
         category: "Drum Synth",
@@ -368,6 +375,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                         let is_selected = app.selected_slot_index == slot_idx;
                         let card_w = match slot.name.as_str() {
                             "OpenWavetable" => OPEN_WAVETABLE_CARD_WIDTH,
+                            "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
+                            "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
                             "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => MODULATION_CARD_WIDTH,
                             _ => CARD_WIDTH,
@@ -530,6 +539,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             "OpenWavetable" => {
                                 open_wavetable::render_module(&mut body_ui, app, track_idx, slot_idx);
                             }
+                            "Sampler" | "Hikaru Sampler" => {
+                                sampler_editor::render_module(&mut body_ui, app, track_idx, slot_idx);
+                            }
                             "Hikaru OpenDMS" => {
                                 render_rack_card(&mut body_ui, app, track_idx, slot_idx);
                             }
@@ -566,6 +578,171 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                             .color(theme::TEXT_MUTED),
                                     );
                                 });
+                            }
+                        }
+
+                        // Cadena FX anidada del pad seleccionado en Hikaru OpenDMS (ej. Hikaru Sampler)
+                        if slot.name == "Hikaru OpenDMS" {
+                            let pad_fx_info = app
+                                .current_tracks()
+                                .get(track_idx)
+                                .and_then(|t| t.effects.get(slot_idx))
+                                .and_then(|s| s.dms_state.as_ref())
+                                .filter(|dms| dms.fx_open)
+                                .map(|dms| {
+                                    let sel = dms.selected_pad.min(dms.pads.len().saturating_sub(1));
+                                    let note_lbl = dms
+                                        .pads
+                                        .get(sel)
+                                        .map(|p| {
+                                            crate::views::hikaru_native_plugins::midi_note_name(
+                                                p.midi_note,
+                                            )
+                                        })
+                                        .unwrap_or_else(|| "Pad".to_string());
+                                    let smp = dms.pads.get(sel).and_then(|p| p.sampler.clone());
+                                    (sel, note_lbl, smp)
+                                });
+
+                            if let Some((sel_pad, note_lbl, maybe_smp)) = pad_fx_info {
+                                if let Some(mut pad_smp) = maybe_smp {
+                                    let (smp_card_rect, _) = ui.allocate_exact_size(
+                                        vec2(SAMPLER_CARD_WIDTH, card_h),
+                                        Sense::hover(),
+                                    );
+                                    let sp = ui.painter();
+                                    sp.rect_filled(
+                                        smp_card_rect,
+                                        3.5,
+                                        Color32::from_rgb(0x2E, 0x30, 0x35),
+                                    );
+                                    sp.rect_stroke(
+                                        smp_card_rect,
+                                        3.5,
+                                        Stroke::new(1.0_f32, theme::ACCENT_ORANGE),
+                                        egui::StrokeKind::Inside,
+                                    );
+
+                                    let smp_inner = smp_card_rect.shrink2(vec2(6.0, 4.0));
+                                    let mut smp_card_ui = ui.new_child(
+                                        egui::UiBuilder::new()
+                                            .max_rect(smp_inner)
+                                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                                    );
+                                    smp_card_ui.set_clip_rect(smp_inner.intersect(ui.clip_rect()));
+
+                                    let (shdr, _) = smp_card_ui.allocate_exact_size(
+                                        vec2(smp_inner.width(), 20.0),
+                                        Sense::hover(),
+                                    );
+                                    let pill_title = format!("Sampler ({note_lbl})");
+                                    let pill_w = (pill_title.len() as f32 * 6.4 + 12.0).min(180.0);
+                                    smp_card_ui.painter().rect_filled(
+                                        Rect::from_min_size(
+                                            pos2(shdr.min.x, shdr.center().y - 8.5),
+                                            vec2(pill_w, 17.0),
+                                        ),
+                                        2.5,
+                                        theme::ACCENT_ORANGE,
+                                    );
+                                    smp_card_ui.painter().text(
+                                        pos2(shdr.min.x + 6.0, shdr.center().y),
+                                        Align2::LEFT_CENTER,
+                                        &pill_title,
+                                        fonts::semibold(11.0),
+                                        Color32::from_rgb(0x12, 0x13, 0x15),
+                                    );
+
+                                    let close_r = Rect::from_min_size(
+                                        pos2(shdr.max.x - 18.0, shdr.center().y - 9.0),
+                                        vec2(18.0, 18.0),
+                                    );
+                                    let close_resp = smp_card_ui.interact(
+                                        close_r,
+                                        smp_card_ui.id().with(("dms_pad_smp_close", slot_idx, sel_pad)),
+                                        Sense::click(),
+                                    );
+                                    icons::paint_icon(
+                                        smp_card_ui.painter(),
+                                        close_r.shrink(3.5),
+                                        icons::X_CLOSE,
+                                        if close_resp.hovered() {
+                                            Color32::WHITE
+                                        } else {
+                                            theme::TEXT_MUTED
+                                        },
+                                        1.7,
+                                    );
+                                    let remove_pad_smp = close_resp
+                                        .on_hover_text("Quitar Sampler del pad")
+                                        .clicked();
+
+                                    let s_sep_y = shdr.max.y + 1.5;
+                                    smp_card_ui.painter().line_segment(
+                                        [
+                                            pos2(smp_inner.min.x, s_sep_y),
+                                            pos2(smp_inner.max.x, s_sep_y),
+                                        ],
+                                        Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x25)),
+                                    );
+                                    let s_body = Rect::from_min_max(
+                                        pos2(smp_inner.min.x, (s_sep_y + 3.0).min(smp_inner.max.y)),
+                                        smp_inner.max,
+                                    );
+                                    let mut s_body_ui = smp_card_ui.new_child(
+                                        egui::UiBuilder::new()
+                                            .max_rect(s_body)
+                                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                                    );
+                                    s_body_ui.set_clip_rect(s_body.intersect(smp_card_ui.clip_rect()));
+                                    sampler_editor::render_sampler_state(
+                                        &mut s_body_ui,
+                                        &mut pad_smp,
+                                        slot_idx * 256 + sel_pad + 1000,
+                                    );
+
+                                    if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+                                        if let Some(s) = track.effects.get_mut(slot_idx) {
+                                            if let Some(ref mut dms) = s.dms_state {
+                                                if let Some(pad) = dms.pads.get_mut(sel_pad) {
+                                                    pad.sampler = if remove_pad_smp {
+                                                        None
+                                                    } else {
+                                                        Some(pad_smp)
+                                                    };
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Botón para insertar Hikaru Sampler en el pad seleccionado
+                                    ui.vertical(|ui| {
+                                        ui.add_space(46.0);
+                                        if ui
+                                            .button(
+                                                RichText::new(format!("+ Sampler ({note_lbl})"))
+                                                    .font(fonts::semibold(11.0))
+                                                    .color(theme::ACCENT_ORANGE),
+                                            )
+                                            .clicked()
+                                        {
+                                            if let Some(track) =
+                                                app.current_tracks_mut().get_mut(track_idx)
+                                            {
+                                                if let Some(s) = track.effects.get_mut(slot_idx) {
+                                                    if let Some(ref mut dms) = s.dms_state {
+                                                        if let Some(pad) =
+                                                            dms.pads.get_mut(sel_pad)
+                                                        {
+                                                            pad.sampler =
+                                                                Some(crate::views::hikaru_native_plugins::HikaruSampler::default());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
                             }
                         }
                     }

@@ -470,6 +470,7 @@ pub struct AppState {
     pub project_dirty: bool,
     pub open_menu: Option<usize>,
     pub synced_wavetable_fingerprints: [Option<(u64, i8, u32)>; 16],
+    pub synced_sampler_revs: [Option<(u64, u64)>; 16],
 }
 
 impl AppState {
@@ -611,6 +612,7 @@ impl AppState {
             project_dirty: false,
             open_menu: None,
             synced_wavetable_fingerprints: [None; 16],
+            synced_sampler_revs: [None; 16],
         };
         state.audio_proxy.send(GuiCommand::SetAppMode(false));
         state
@@ -686,6 +688,50 @@ impl AppState {
                     volume: 1.0,
                 });
                 self.synced_wavetable_fingerprints[eng_track] = None;
+            }
+        }
+    }
+
+    pub fn sync_samplers_to_engine(&mut self) {
+        let tracks_len = self.current_tracks().len();
+        for mixer_idx in 1..tracks_len {
+            let eng_track = mixer_idx - 1;
+            if eng_track >= 16 {
+                break;
+            }
+            let smp_slot = self.current_tracks()[mixer_idx]
+                .effects
+                .iter()
+                .find(|s| matches!(s.name.as_str(), "Sampler" | "Hikaru Sampler") && s.active);
+
+            if let Some(slot) = smp_slot {
+                if let Some(ref smp) = slot.sampler_state {
+                    let prev = self.synced_sampler_revs[eng_track];
+                    let (prev_s, prev_p) = prev.unwrap_or((u64::MAX, u64::MAX));
+                    if prev.is_none() || prev_s != smp.sample_rev {
+                        self.audio_proxy.send(GuiCommand::SetTrackSamplerSample {
+                            track_idx: eng_track,
+                            samples: smp.samples.clone(),
+                            channels: smp.channels,
+                            sample_rate: smp.sample_rate,
+                        });
+                    }
+                    if prev.is_none() || prev_p != smp.params_rev {
+                        self.audio_proxy.send(GuiCommand::SetTrackSamplerParams {
+                            track_idx: eng_track,
+                            params: smp.to_dsp_params(),
+                        });
+                    }
+                    self.synced_sampler_revs[eng_track] = Some((smp.sample_rev, smp.params_rev));
+                }
+            } else if self.synced_sampler_revs[eng_track].is_some() {
+                self.audio_proxy.send(GuiCommand::SetTrackSamplerSample {
+                    track_idx: eng_track,
+                    samples: Vec::new(),
+                    channels: 1,
+                    sample_rate: 44100.0,
+                });
+                self.synced_sampler_revs[eng_track] = None;
             }
         }
     }
@@ -1020,6 +1066,7 @@ impl AppState {
         let is_studio = self.mode == AppMode::OpenStudio;
         self.audio_proxy.send(GuiCommand::SetAppMode(is_studio));
         self.sync_wavetables_to_engine();
+        self.sync_samplers_to_engine();
         self.transport.playback_state = TransportPlaybackState::Playing;
         crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_play(self.transport.sample_count);
         self.audio_proxy.send(GuiCommand::Play);
@@ -1256,6 +1303,7 @@ impl HikaruApp {
         }
 
         self.state.sync_wavetables_to_engine();
+        self.state.sync_samplers_to_engine();
 
         if !self.state.is_playing() {
             let piano_tracks = self.state.tracks().clone();

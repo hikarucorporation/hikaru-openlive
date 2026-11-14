@@ -1,8 +1,13 @@
 // La grilla de pads del sampler Hikaru OpenDMS.
 use std::path::PathBuf;
 
-use crate::audio_proxy::AudioProxy;
+use crate::audio_proxy::{AudioProxy, GuiCommand};
 use crate::theme;
+use crate::ui::bitwig_kit::{
+    capsule_text_button, fader_vertical_track_vol, rotary_knob, JoinSide, BW_ACCENT_ORANGE,
+};
+use crate::ui::fonts;
+use crate::views::hikaru_native_plugins::hikaru_sampler::HikaruSampler;
 use super::open_dms_sampler::{self, DmsSampler};
 
 const MIDI_NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -26,6 +31,7 @@ pub struct DmsPad {
     pub solo: bool,
     pub waveform_peaks: Vec<f32>,
     cached_peak_path: Option<String>,
+    pub sampler: Option<HikaruSampler>,
 }
 
 impl DmsPad {
@@ -42,6 +48,7 @@ impl DmsPad {
             solo: false,
             waveform_peaks: Vec::new(),
             cached_peak_path: None,
+            sampler: None,
         }
     }
 
@@ -55,6 +62,12 @@ impl DmsPad {
     }
 
     pub fn display_filename(&self) -> String {
+        if let Some(ref smp) = self.sampler {
+            if !smp.sample_name.is_empty() {
+                return smp.sample_name.clone();
+            }
+            return "Sampler".to_string();
+        }
         match &self.sample_path {
             Some(p) => std::path::Path::new(p)
                 .file_name()
@@ -72,6 +85,8 @@ pub struct OpenDms {
     pub pad_count: usize,
     pub active_bank: usize,
     pub sampler: DmsSampler,
+    pub fx_open: bool,
+    pub output_vol: f32,
 }
 
 impl Default for OpenDms {
@@ -87,6 +102,8 @@ impl Default for OpenDms {
             pad_count,
             active_bank: 0,
             sampler: DmsSampler::default(),
+            fx_open: false,
+            output_vol: 0.75,
         }
     }
 }
@@ -96,7 +113,7 @@ pub fn render_dms_ui(
     dms: &mut OpenDms,
     _project_bpm: f32,
     _dragged_sample: &mut Option<PathBuf>,
-    _audio_proxy: &AudioProxy,
+    audio_proxy: &AudioProxy,
 ) {
     let frame_fill = egui::Color32::from_rgb(38, 38, 40);
     let pad_fill = egui::Color32::from_rgb(70, 70, 74);
@@ -180,6 +197,8 @@ pub fn render_dms_ui(
                 let cols = 4usize;
                 let rows = 4usize;
                 let base_idx = dms.active_bank * 16;
+                let output_vol = dms.output_vol;
+                let default_adsr = dms.sampler.adsr;
                 egui::Grid::new("dms_pads_grid")
                     .spacing(egui::vec2(3.0, 3.0))
                     .show(ui, |ui| {
@@ -203,50 +222,362 @@ pub fn render_dms_ui(
                                 };
                                 painter.rect_filled(rect, 3.0, fill);
 
+                                if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                    let is_loaded = pad.sampler.is_some() || pad.sample_path.is_some();
+                                    if is_loaded {
+                                        // Nombre del sample o Sampler arriba
+                                        let name_color = if pad.mute {
+                                            egui::Color32::from_rgb(150, 150, 155)
+                                        } else {
+                                            theme::ACCENT_PRIMARY
+                                        };
+                                        painter.text(
+                                            rect.min + egui::vec2(4.0, 2.0),
+                                            egui::Align2::LEFT_TOP,
+                                            pad.display_filename(),
+                                            egui::FontId::proportional(8.5),
+                                            name_color,
+                                        );
+
+                                        // Barra inferior estilo Bitwig con Play (▶), Solo (S) y Mute (M)
+                                        let bar_rect = egui::Rect::from_min_max(
+                                            egui::pos2(rect.min.x + 1.0, rect.max.y - 12.0),
+                                            egui::pos2(rect.max.x - 1.0, rect.max.y - 1.0),
+                                        );
+                                        painter.rect_filled(
+                                            bar_rect,
+                                            egui::CornerRadius {
+                                                nw: 0,
+                                                ne: 0,
+                                                sw: 2,
+                                                se: 2,
+                                            },
+                                            egui::Color32::from_rgb(24, 24, 26),
+                                        );
+
+                                        // Botón Play (▶) a la izquierda
+                                        let play_rect = egui::Rect::from_min_size(
+                                            egui::pos2(bar_rect.min.x + 1.0, bar_rect.min.y),
+                                            egui::vec2(14.0, bar_rect.height()),
+                                        );
+                                        let play_resp = ui.interact(
+                                            play_rect,
+                                            ui.id().with(("dms_pad_play", pad_idx)),
+                                            egui::Sense::click(),
+                                        );
+                                        if play_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        let tri_center = play_rect.center();
+                                        let tri_color = if play_resp.is_pointer_button_down_on() {
+                                            BW_ACCENT_ORANGE
+                                        } else if play_resp.hovered() {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            egui::Color32::from_rgb(200, 200, 205)
+                                        };
+                                        painter.add(egui::Shape::convex_polygon(
+                                            vec![
+                                                tri_center + egui::vec2(-2.5, -3.2),
+                                                tri_center + egui::vec2(3.2, 0.0),
+                                                tri_center + egui::vec2(-2.5, 3.2),
+                                            ],
+                                            tri_color,
+                                            egui::Stroke::NONE,
+                                        ));
+                                        if play_resp.on_hover_text("Reproducir pad").clicked() {
+                                            dms.selected_pad = pad_idx;
+                                            let (play_speed, attack_ms, decay_ms, sustain, release_ms) =
+                                                if let Some(ref smp) = pad.sampler {
+                                                    let speed = smp.speed as f64
+                                                        * 2.0_f64.powf(
+                                                            (pad.pitch
+                                                                + smp.pitch_semitones
+                                                                + smp.fine_cents / 100.0)
+                                                                as f64
+                                                                / 12.0,
+                                                        );
+                                                    (
+                                                        speed,
+                                                        smp.attack_ms,
+                                                        smp.decay_ms,
+                                                        smp.sustain,
+                                                        smp.release_ms,
+                                                    )
+                                                } else {
+                                                    (
+                                                        2.0_f64.powf(pad.pitch as f64 / 12.0),
+                                                        default_adsr.attack,
+                                                        default_adsr.decay,
+                                                        default_adsr.sustain,
+                                                        default_adsr.release,
+                                                    )
+                                                };
+                                            audio_proxy.send(GuiCommand::DmsNoteOn {
+                                                pad_idx,
+                                                gain: pad.volume * output_vol,
+                                                pan: pad.pan,
+                                                velocity: 1.0,
+                                                play_speed,
+                                                attack_ms,
+                                                decay_ms,
+                                                sustain,
+                                                release_ms,
+                                            });
+                                        }
+
+                                        // Botón Solo (S)
+                                        let solo_rect = egui::Rect::from_min_size(
+                                            egui::pos2(bar_rect.max.x - 27.0, bar_rect.min.y + 1.0),
+                                            egui::vec2(12.0, bar_rect.height() - 2.0),
+                                        );
+                                        let solo_resp = ui.interact(
+                                            solo_rect,
+                                            ui.id().with(("dms_pad_solo", pad_idx)),
+                                            egui::Sense::click(),
+                                        );
+                                        if solo_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        let solo_bg = if pad.solo {
+                                            egui::Color32::from_rgb(0x3B, 0x82, 0xF6)
+                                        } else if solo_resp.hovered() {
+                                            egui::Color32::from_rgb(58, 58, 64)
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        };
+                                        if solo_bg != egui::Color32::TRANSPARENT {
+                                            painter.rect_filled(solo_rect, 2.0, solo_bg);
+                                        }
+                                        let solo_fg = if pad.solo || solo_resp.hovered() {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            egui::Color32::from_rgb(175, 175, 182)
+                                        };
+                                        painter.text(
+                                            solo_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "S",
+                                            fonts::semibold(8.0),
+                                            solo_fg,
+                                        );
+                                        if solo_resp.on_hover_text("Solo pad").clicked() {
+                                            pad.solo = !pad.solo;
+                                        }
+
+                                        // Botón Mute (M)
+                                        let mute_rect = egui::Rect::from_min_size(
+                                            egui::pos2(bar_rect.max.x - 13.0, bar_rect.min.y + 1.0),
+                                            egui::vec2(12.0, bar_rect.height() - 2.0),
+                                        );
+                                        let mute_resp = ui.interact(
+                                            mute_rect,
+                                            ui.id().with(("dms_pad_mute", pad_idx)),
+                                            egui::Sense::click(),
+                                        );
+                                        if mute_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        let mute_bg = if pad.mute {
+                                            BW_ACCENT_ORANGE
+                                        } else if mute_resp.hovered() {
+                                            egui::Color32::from_rgb(58, 58, 64)
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        };
+                                        if mute_bg != egui::Color32::TRANSPARENT {
+                                            painter.rect_filled(mute_rect, 2.0, mute_bg);
+                                        }
+                                        let mute_fg = if pad.mute {
+                                            egui::Color32::from_rgb(18, 18, 20)
+                                        } else if mute_resp.hovered() {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            egui::Color32::from_rgb(175, 175, 182)
+                                        };
+                                        painter.text(
+                                            mute_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "M",
+                                            fonts::semibold(8.0),
+                                            mute_fg,
+                                        );
+                                        if mute_resp.on_hover_text("Mutear pad").clicked() {
+                                            pad.mute = !pad.mute;
+                                        }
+                                    } else {
+                                        // Pad vacío: nota arriba a la izquierda y '+' abajo a la derecha
+                                        let note_str = midi_note_name(pad.midi_note);
+                                        painter.text(
+                                            rect.min + egui::vec2(5.0, 3.0),
+                                            egui::Align2::LEFT_TOP,
+                                            note_str,
+                                            egui::FontId::proportional(10.0),
+                                            text_note,
+                                        );
+
+                                        let plus_rect = egui::Rect::from_min_max(
+                                            rect.max - egui::vec2(16.0, 14.0),
+                                            rect.max,
+                                        );
+                                        let plus_resp = ui.interact(
+                                            plus_rect,
+                                            ui.id().with(("dms_pad_plus", pad_idx)),
+                                            egui::Sense::click(),
+                                        );
+                                        painter.text(
+                                            rect.max - egui::vec2(5.0, 3.0),
+                                            egui::Align2::RIGHT_BOTTOM,
+                                            "+",
+                                            egui::FontId::proportional(11.5),
+                                            if plus_resp.hovered() {
+                                                egui::Color32::WHITE
+                                            } else {
+                                                text_plus
+                                            },
+                                        );
+                                        if plus_resp
+                                            .on_hover_text("Insertar Hikaru Sampler en este pad")
+                                            .clicked()
+                                        {
+                                            dms.selected_pad = pad_idx;
+                                            if pad.sampler.is_none() {
+                                                pad.sampler = Some(HikaruSampler::default());
+                                            }
+                                            dms.fx_open = true;
+                                        }
+                                    }
+                                }
+
                                 let stroke = if is_selected {
                                     egui::Stroke::new(1.5_f32, theme::ACCENT_PRIMARY)
                                 } else {
                                     egui::Stroke::new(1.0_f32, pad_border)
                                 };
                                 painter.rect_stroke(rect, 3.0, stroke, egui::StrokeKind::Inside);
-
-                                if let Some(pad) = dms.pads.get(pad_idx) {
-                                    // Nombre de nota arriba a la izquierda (ej. C-1, C-2)
-                                    let note_str = midi_note_name(pad.midi_note);
-                                    painter.text(
-                                        rect.min + egui::vec2(5.0, 4.0),
-                                        egui::Align2::LEFT_TOP,
-                                        note_str,
-                                        egui::FontId::proportional(11.0),
-                                        text_note,
-                                    );
-
-                                    // Nombre del sample si está cargado
-                                    if pad.sample_path.is_some() {
-                                        painter.text(
-                                            rect.min + egui::vec2(5.0, 18.0),
-                                            egui::Align2::LEFT_TOP,
-                                            pad.display_filename(),
-                                            egui::FontId::proportional(9.5),
-                                            theme::ACCENT_PRIMARY,
-                                        );
-                                    }
-
-                                    // Símbolo '+' abajo a la derecha
-                                    painter.text(
-                                        rect.max - egui::vec2(6.0, 4.0),
-                                        egui::Align2::RIGHT_BOTTOM,
-                                        "+",
-                                        egui::FontId::proportional(12.0),
-                                        text_plus,
-                                    );
-                                }
                             }
                             ui.end_row();
                         }
                     });
+
+                ui.add_space(4.0);
+
+                // Derecha: tira de canal del pad seleccionado (Pan + Fader + S/M) y FX + Output
+                let sel_idx = dms.selected_pad.min(dms.pads.len().saturating_sub(1));
+                ui.vertical(|ui| {
+                    ui.set_width(28.0);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    if let Some(pad) = dms.pads.get_mut(sel_idx) {
+                        let (r_pan, _) = rotary_knob(
+                            ui,
+                            20.0,
+                            &mut pad.pan,
+                            -1.0..=1.0,
+                            0.0,
+                            egui::Color32::from_rgb(0xB8, 0xBC, 0xC6),
+                            true,
+                        );
+                        r_pan.on_hover_text(format!("Pad Pan: {:+.0}%", pad.pan * 100.0));
+
+                        let (r_vol, _) = fader_vertical_track_vol(
+                            ui,
+                            egui::vec2(16.0, 56.0),
+                            &mut pad.volume,
+                            1.0,
+                        );
+                        r_vol.on_hover_text(format!("Pad Volume: {:.0}%", pad.volume * 100.0));
+
+                        if capsule_text_button(
+                            ui,
+                            egui::vec2(24.0, 14.0),
+                            "S",
+                            8.5,
+                            pad.solo,
+                            egui::Color32::from_rgb(0x3B, 0x82, 0xF6),
+                            JoinSide::Standalone,
+                            false,
+                        )
+                        .clicked()
+                        {
+                            pad.solo = !pad.solo;
+                        }
+                        if capsule_text_button(
+                            ui,
+                            egui::vec2(24.0, 14.0),
+                            "M",
+                            8.5,
+                            pad.mute,
+                            BW_ACCENT_ORANGE,
+                            JoinSide::Standalone,
+                            false,
+                        )
+                        .clicked()
+                        {
+                            pad.mute = !pad.mute;
+                        }
+                    }
+                });
+
+                ui.add_space(2.0);
+
+                // Columna FX + Output estilo Bitwig Drum Machine
+                ui.vertical(|ui| {
+                    ui.set_width(48.0);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    if capsule_text_button(
+                        ui,
+                        egui::vec2(46.0, 22.0),
+                        "FX",
+                        10.0,
+                        dms.fx_open,
+                        BW_ACCENT_ORANGE,
+                        JoinSide::Standalone,
+                        false,
+                    )
+                    .on_hover_text("Mostrar/ocultar cadena FX / Sampler del pad")
+                    .clicked()
+                    {
+                        dms.fx_open = !dms.fx_open;
+                    }
+
+                    ui.add_space(28.0);
+                    ui.vertical_centered(|ui| {
+                        let (r_out, _) = rotary_knob(
+                            ui,
+                            28.0,
+                            &mut dms.output_vol,
+                            0.0..=1.0,
+                            0.75,
+                            BW_ACCENT_ORANGE,
+                            false,
+                        );
+                        r_out.on_hover_text(format!("Output: {:.0}%", dms.output_vol * 100.0));
+                        ui.label(
+                            egui::RichText::new("Output")
+                                .font(fonts::regular(9.0))
+                                .color(theme::TEXT_SECONDARY),
+                        );
+                    });
+                });
             });
         });
+
+    // Sincronizar sample del Sampler del pad al motor DMS si cargó un WAV nuevo
+    let sel_idx = dms.selected_pad.min(dms.pads.len().saturating_sub(1));
+    if let Some(pad) = dms.pads.get_mut(sel_idx) {
+        if let Some(ref smp) = pad.sampler {
+            if let Some(ref path) = smp.sample_path {
+                let path_str = path.to_string_lossy().to_string();
+                if pad.sample_path.as_deref() != Some(&path_str) {
+                    pad.load_sample(path_str.clone());
+                    audio_proxy.send(GuiCommand::LoadDmsSample {
+                        pad_idx: sel_idx,
+                        path: path_str,
+                    });
+                }
+            }
+        }
+    }
 
     if frame_resp.response.hovered() || ui.rect_contains_pointer(frame_resp.response.rect) {
         let scroll_y = ui.input(|i| i.raw_scroll_delta.y);

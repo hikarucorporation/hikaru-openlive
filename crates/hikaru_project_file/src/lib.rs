@@ -154,6 +154,92 @@ pub struct DspSlot {
     /// Parámetros de modulación si el slot contiene un Hikaru OpenModulation.
     #[serde(default)]
     pub open_modulation: Option<OpenModulationParams>,
+    /// Parámetros del sampler si el slot contiene un Hikaru Sampler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampler: Option<SamplerParams>,
+}
+
+/// Parámetros de Hikaru Sampler para persistencia en `.oplf`, `.opsf` y `.hdp`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SamplerParams {
+    pub sample_path: Option<String>,
+    pub sample_name: String,
+    pub playback_mode: String,
+    pub speed: f32,
+    pub reverse: bool,
+    pub freeze: bool,
+    pub ram_mode: bool,
+    pub root_note: u8,
+    pub fine_cents: f32,
+    pub pitch_semitones: f32,
+    pub glide_ms: f32,
+    pub legato: bool,
+    pub select_pos: f32,
+    pub play_start: f32,
+    pub play_end: f32,
+    pub loop_mode: String,
+    pub loop_start: f32,
+    pub loop_len: f32,
+    pub loop_crossfade: f32,
+    pub offset_mode: String,
+    pub filter_mode: String,
+    pub filter_cutoff_hz: f32,
+    pub filter_resonance: f32,
+    pub filter_keytrack: f32,
+    pub attack_ms: f32,
+    pub hold_ms: f32,
+    pub decay_ms: f32,
+    pub sustain: f32,
+    pub release_ms: f32,
+    pub gain_db: f32,
+    pub pan: f32,
+    pub output_db: f32,
+    pub velocity_sens: f32,
+    pub note_trigger: bool,
+    pub release_trigger: bool,
+}
+
+impl Default for SamplerParams {
+    fn default() -> Self {
+        Self {
+            sample_path: None,
+            sample_name: String::new(),
+            playback_mode: "Repitch".to_string(),
+            speed: 1.0,
+            reverse: false,
+            freeze: false,
+            ram_mode: true,
+            root_note: 60,
+            fine_cents: 0.0,
+            pitch_semitones: 0.0,
+            glide_ms: 0.0,
+            legato: false,
+            select_pos: 0.0,
+            play_start: 0.0,
+            play_end: 1.0,
+            loop_mode: "Off".to_string(),
+            loop_start: 0.0,
+            loop_len: 1.0,
+            loop_crossfade: 0.0,
+            offset_mode: "Play".to_string(),
+            filter_mode: "LowPass12".to_string(),
+            filter_cutoff_hz: 2640.0,
+            filter_resonance: 0.0,
+            filter_keytrack: 0.0,
+            attack_ms: 2.0,
+            hold_ms: 0.0,
+            decay_ms: 200.0,
+            sustain: 1.0,
+            release_ms: 50.0,
+            gain_db: 0.0,
+            pan: 0.0,
+            output_db: 0.0,
+            velocity_sens: 1.0,
+            note_trigger: true,
+            release_trigger: false,
+        }
+    }
 }
 
 /// Parámetros de síntesis de Hikaru OpenWavetable para persistencia en `.oplf` y `.hdp`.
@@ -445,6 +531,7 @@ mod tests {
                     color_active: [1.0, 0.7, 0.0],
                 }),
                 open_modulation: None,
+                sampler: None,
             }),
             chain: None,
         };

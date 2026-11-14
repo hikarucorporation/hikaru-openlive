@@ -251,6 +251,16 @@ pub enum GuiCommand {
         pitch_offset: i8,
         volume: f32,
     },
+    SetTrackSamplerSample {
+        track_idx: usize,
+        samples: Vec<f32>,
+        channels: usize,
+        sample_rate: f32,
+    },
+    SetTrackSamplerParams {
+        track_idx: usize,
+        params: hikaru_dsp::synth::sampler::SamplerDspParams,
+    },
     /// Carga un plugin externo (VST3/CLAP) en un slot de pista.
     /// El motor instancia el binario y lo inserta en la cadena de efectos.
     LoadExternalPlugin {

@@ -63,6 +63,7 @@ pub struct DspSlot {
     pub is_open: bool,
     pub wavetable: WavetableEditor,
     pub dms_state: Option<OpenDms>,
+    pub sampler_state: Option<crate::views::hikaru_native_plugins::HikaruSampler>,
     pub menu_open: bool,
     pub options_open: bool,
     pub external: Option<hikaru_plugin_host::PluginDescriptor>,
@@ -88,6 +89,7 @@ impl DspSlot {
             is_open: false,
             wavetable: WavetableEditor::new(),
             dms_state: None,
+            sampler_state: None,
             menu_open: false,
             options_open: false,
             external: None,
@@ -103,7 +105,7 @@ impl DspSlot {
         if self.external.is_some() {
             return self.external.as_ref().is_some_and(|p| p.has_gui);
         }
-        matches!(self.name.as_str(), "OpenWavetable" | "Hikaru OpenDMS")
+        matches!(self.name.as_str(), "OpenWavetable" | "Hikaru OpenDMS" | "Sampler" | "Hikaru Sampler")
     }
 
     pub fn is_empty_slot(&self) -> bool {

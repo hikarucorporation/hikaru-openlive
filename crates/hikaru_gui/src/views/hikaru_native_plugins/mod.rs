@@ -63,6 +63,7 @@ pub mod hikaru_openeq3;
 pub mod hikaru_openmodulation;
 pub mod hikaru_openspectral_phaser;
 pub mod hikaru_openwavetable;
+pub mod hikaru_sampler;
 
 // Reexports de superficie. Los que el resto de la app usa por nombre;
 // dejarlos acá evita repetir la cadena completa
@@ -73,3 +74,4 @@ pub use hikaru_opendms::open_dms_sampler::{AdsrEnvelope, DmsSampler};
 pub use hikaru_openmodulation::lfo_mod::{LfoModState, ModulationTarget};
 pub use hikaru_openwavetable::open_wavetable::WavetableEditor;
 pub use hikaru_openwavetable::wavetable_io::Wavetable;
+pub use hikaru_sampler::{HikaruSampler, SAMPLER_CARD_WIDTH};

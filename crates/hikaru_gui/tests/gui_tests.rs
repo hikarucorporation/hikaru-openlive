@@ -523,6 +523,7 @@ fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
     state.selected_slot_index = 0;
 
     let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
     hikaru_gui::theme::apply_theme(&ctx);
 
     let dock_h = RACK_HEIGHT + 6.0;
@@ -752,4 +753,150 @@ fn test_openmodulation_in_catalog_and_lfo_modulates_openwavetable_wt_pos() {
     });
     let vol_mod = get_modulation(track_idx, "OpenWavetable", "VOL");
     assert!(vol_mod.is_some(), "Debe haber modulación activa para VOL");
+}
+
+#[test]
+fn hikaru_sampler_renders_in_rack_and_roundtrips_params() {
+    use hikaru_audio_engine::AudioEngine;
+    use hikaru_core::SampleRate;
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::AudioProxy;
+    use hikaru_gui::views::dsp_rack::{render as render_dsp_rack, PLUGIN_CATALOG};
+    use hikaru_gui::views::hikaru_native_plugins::HikaruSampler;
+    use hikaru_gui::views::mixer::DspSlot;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let has_sampler = PLUGIN_CATALOG
+        .iter()
+        .any(|e| e.name == "Sampler" && e.label == "Hikaru Sampler");
+    assert!(has_sampler, "Hikaru Sampler debe estar registrado en PLUGIN_CATALOG");
+
+    let (tx, _rx) = mpsc::channel();
+    let proxy = AudioProxy::new(tx);
+    let clock = Arc::new(AtomicU64::new(0));
+    let level = Arc::new(AtomicU32::new(0));
+    static WT: [f32; 2048] = [0.0f32; 2048];
+    let engine = AudioEngine::new(SampleRate::new(48000.0), &WT, clock.clone());
+    let mut state = AppState::new(proxy, clock, level, Some(Arc::new(Mutex::new(engine))));
+
+    state.selected_track_index = 1;
+    let mut slot = DspSlot::new(42, "Sampler".to_string());
+    let mut smp = HikaruSampler::default();
+    smp.filter_cutoff_hz = 1850.0;
+    smp.loop_mode = hikaru_dsp::synth::sampler::SamplerLoopMode::PingPong;
+    let params = smp.to_project_params();
+    let mut restored = HikaruSampler::default();
+    restored.apply_project_params(&params);
+    assert!((restored.filter_cutoff_hz - 1850.0).abs() < 0.01);
+    assert_eq!(restored.loop_mode, hikaru_dsp::synth::sampler::SamplerLoopMode::PingPong);
+
+    slot.sampler_state = Some(smp);
+    state.live_tracks[1].effects.push(slot);
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 260.0))),
+        ..Default::default()
+    };
+    let out = ctx.run(input, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            render_dsp_rack(ui, &mut state);
+        });
+    });
+    assert!(!out.shapes.is_empty(), "Hikaru Sampler debe renderizar shapes en el DSP Rack");
+}
+
+#[test]
+fn opendms_loaded_pad_play_solo_mute_buttons_respond_to_clicks() {
+    use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_opendms::open_dms::render_dms_ui;
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_sampler::HikaruSampler;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let audio_proxy = AudioProxy::new(tx);
+    let mut dms = OpenDms::default();
+    dms.pads[0].sampler = Some(HikaruSampler::default());
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+
+    let click_at = |ctx: &egui::Context,
+                    dms: &mut OpenDms,
+                    pos: egui::Pos2| {
+        let mut dragged = None;
+        // Frame 1: pointer down
+        let mut raw_down = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+            ..Default::default()
+        };
+        raw_down.events.push(egui::Event::PointerMoved(pos));
+        raw_down.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(raw_down, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_dms_ui(ui, dms, 120.0, &mut dragged, &audio_proxy);
+            });
+        });
+
+        // Frame 2: pointer up
+        let mut raw_up = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+            ..Default::default()
+        };
+        raw_up.events.push(egui::Event::PointerMoved(pos));
+        raw_up.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(raw_up, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_dms_ui(ui, dms, 120.0, &mut dragged, &audio_proxy);
+            });
+        });
+    };
+
+    // Primer frame sin clicks para estabilizar el layout y obtener el rect del pad 0
+    let mut dragged = None;
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_dms_ui(ui, &mut dms, 120.0, &mut dragged, &audio_proxy);
+            });
+        },
+    );
+
+    // Pad 0 está en la fila inferior izquierda de la grilla 4x4.
+    // CentralPanel margin (8) + Frame margin (4) + bank strip (12) + spacing (8) + add_space(6) = x ~ 38..96
+    // Fila 3 (y): 8 + 4 + 3*(26+3) = 99 .. 125; barra inferior en y ~ 114..124 -> centro y ~ 119
+    let play_pos = egui::pos2(47.0, 119.0);
+    let solo_pos = egui::pos2(74.0, 119.0);
+    let mute_pos = egui::pos2(88.0, 119.0);
+
+    click_at(&ctx, &mut dms, play_pos);
+    let cmds: Vec<_> = rx.try_iter().collect();
+    assert!(
+        cmds.iter().any(|c| matches!(c, GuiCommand::DmsNoteOn { pad_idx: 0, .. })),
+        "Click en Play del pad 0 debe enviar GuiCommand::DmsNoteOn, recibidos: {:?}",
+        cmds.len()
+    );
+
+    assert!(!dms.pads[0].solo);
+    click_at(&ctx, &mut dms, solo_pos);
+    assert!(dms.pads[0].solo, "Click en S del pad 0 debe activar solo");
+
+    assert!(!dms.pads[0].mute);
+    click_at(&ctx, &mut dms, mute_pos);
+    assert!(dms.pads[0].mute, "Click en M del pad 0 debe activar mute");
 }

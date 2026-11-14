@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use hikaru_core::{AudioBuffer, SampleRate};
 use hikaru_dsp::effects::filter::StateVariableFilter;
+use hikaru_dsp::synth::sampler::{SamplerDspParams, SamplerSampleData, SamplerVoicePool};
 use hikaru_dsp::synth::wavetable::WavetableOscillator;
 use hikaru_sequencer::TrackMatrix;
 use hikaru_transport::{TransportPlaybackState, TransportPosition};
@@ -1221,6 +1222,9 @@ pub struct AudioEngine<'a> {
     pub track_wavetables: [Option<Vec<f32>>; 16],
     pub track_wavetable_pitch_offsets: [i8; 16],
     pub track_wavetable_volumes: [f32; 16],
+    pub sampler_voice_pool: SamplerVoicePool,
+    pub track_sampler_samples: [Option<Arc<SamplerSampleData>>; 16],
+    pub track_sampler_params: [SamplerDspParams; 16],
     /// Cadena de efectos externos (VST3/CLAP) por pista.
     ///
     /// Cada pista tiene su propia cadena: los plugins se instancian en el
@@ -1288,6 +1292,9 @@ impl<'a> AudioEngine<'a> {
             track_wavetables: std::array::from_fn(|_| None),
             track_wavetable_pitch_offsets: [0; 16],
             track_wavetable_volumes: [1.0; 16],
+            sampler_voice_pool: SamplerVoicePool::new(),
+            track_sampler_samples: std::array::from_fn(|_| None),
+            track_sampler_params: std::array::from_fn(|_| SamplerDspParams::default()),
             track_effects: (0..16).map(|_| Vec::new()).collect(),
             effects_sample_rate: sr.get(),
             dms_scratch_l: vec![0.0; MAX_TRACK_BUF],
@@ -1912,6 +1919,7 @@ impl<'a> AudioEngine<'a> {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
         self.wavetable_voice_pool.kill_all();
+        self.sampler_voice_pool.kill_all();
         for clip in self.midi_clips.iter_mut() {
             for pitch in 0..128 {
                 if clip.active_notes[pitch] {
@@ -2282,6 +2290,7 @@ impl<'a> AudioEngine<'a> {
             }
         }
         self.wavetable_voice_pool.kill_track_notes(track_index);
+        self.sampler_voice_pool.kill_track_notes(track_index);
     }
 
     // ─── OpenDMS Polyphonic Methods ──────────────────────────────
@@ -2379,6 +2388,13 @@ impl<'a> AudioEngine<'a> {
             self.wavetable_voice_pool.trigger(eff_pitch, velocity, ti, &adsr, table_len, self.sample_rate);
         }
 
+        if let Some(sample) = &self.track_sampler_samples[ti] {
+            let params = &self.track_sampler_params[ti];
+            if params.note_trigger {
+                self.sampler_voice_pool.trigger(pitch, velocity, ti, sample, params);
+            }
+        }
+
         let key = dms_pad_key(ti, pitch as usize);
         let (samples_ref, channels) = if let Some(Some(ref s)) = self.dms_samples.get(key) {
             (s.as_slice(), self.dms_channels.get(key).copied().unwrap_or(1))
@@ -2420,6 +2436,16 @@ impl<'a> AudioEngine<'a> {
         let offset = self.track_wavetable_pitch_offsets[ti];
         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
         self.wavetable_voice_pool.release_note(eff_pitch, ti);
+        if let Some(sample) = &self.track_sampler_samples[ti] {
+            let params = &self.track_sampler_params[ti];
+            if params.release_trigger {
+                self.sampler_voice_pool.trigger(pitch, 1.0, ti, sample, params);
+            } else {
+                self.sampler_voice_pool.release_note(pitch, ti);
+            }
+        } else {
+            self.sampler_voice_pool.release_note(pitch, ti);
+        }
         let key = dms_pad_key(ti, pitch as usize);
         self.dms_voice_pool.release_pad(key);
         self.dms_voice_pool.release_pad(pitch as usize);
@@ -2435,6 +2461,7 @@ impl<'a> AudioEngine<'a> {
         let offset = self.track_wavetable_pitch_offsets[ti];
         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
         self.wavetable_voice_pool.kill_note(eff_pitch, ti);
+        self.sampler_voice_pool.kill_note(pitch, ti);
         let key = dms_pad_key(ti, pitch as usize);
         self.dms_voice_pool.kill_pad(key);
         self.dms_voice_pool.kill_pad(pitch as usize);
@@ -2482,6 +2509,34 @@ impl<'a> AudioEngine<'a> {
         self.wavetable_voice_pool.kill_track_notes(ti);
     }
 
+    pub fn set_track_sampler_sample(
+        &mut self,
+        track_idx: usize,
+        samples: Vec<f32>,
+        channels: usize,
+        sample_rate: f32,
+    ) {
+        let ti = track_idx.min(15);
+        if samples.is_empty() {
+            self.track_sampler_samples[ti] = None;
+            self.sampler_voice_pool.kill_track_notes(ti);
+        } else {
+            self.track_sampler_samples[ti] =
+                Some(Arc::new(SamplerSampleData::new(samples, channels, sample_rate)));
+        }
+    }
+
+    pub fn set_track_sampler_params(&mut self, track_idx: usize, params: SamplerDspParams) {
+        let ti = track_idx.min(15);
+        self.track_sampler_params[ti] = params;
+    }
+
+    pub fn sampler_playhead(&self, track_idx: usize) -> Option<f32> {
+        let ti = track_idx.min(15);
+        let sample = self.track_sampler_samples[ti].as_ref()?;
+        self.sampler_voice_pool.active_playhead(ti, sample.total_frames)
+    }
+
     pub fn process(&mut self, out_buffer: &mut AudioBuffer<'_>) {
         let samples = out_buffer.get_samples_mut();
         let num_channels = 2;
@@ -2500,6 +2555,9 @@ impl<'a> AudioEngine<'a> {
         let wavetable_voice_pool = &mut self.wavetable_voice_pool;
         let track_wavetables = &self.track_wavetables;
         let track_wavetable_pitch_offsets = &self.track_wavetable_pitch_offsets;
+        let sampler_voice_pool = &mut self.sampler_voice_pool;
+        let track_sampler_samples = &self.track_sampler_samples;
+        let track_sampler_params = &self.track_sampler_params;
         let track_midi_events = &mut self.track_midi_events;
         let midi_clips = &mut self.midi_clips;
 
@@ -2533,6 +2591,7 @@ impl<'a> AudioEngine<'a> {
                                         let offset = track_wavetable_pitch_offsets[ti];
                                         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                         wavetable_voice_pool.kill_note(eff_pitch, ti);
+                                        sampler_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2575,6 +2634,12 @@ impl<'a> AudioEngine<'a> {
                                         let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                         wavetable_voice_pool.trigger(eff_pitch, (vel as f32) / 127.0, ti, &wt_adsr, table.len(), sample_rate);
                                     }
+                                    if let Some(sample) = &track_sampler_samples[ti] {
+                                        let sp = &track_sampler_params[ti];
+                                        if sp.note_trigger {
+                                            sampler_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti, sample, sp);
+                                        }
+                                    }
                                     clip.active_notes[pitch.min(127)] = true;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                         status: 0x90 | (ti as u8 & 0x0F),
@@ -2590,6 +2655,16 @@ impl<'a> AudioEngine<'a> {
                                 let offset = track_wavetable_pitch_offsets[ti];
                                 let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                 wavetable_voice_pool.release_note(eff_pitch, ti);
+                                            if let Some(sample) = &track_sampler_samples[ti] {
+                                                let sp = &track_sampler_params[ti];
+                                                if sp.release_trigger {
+                                                    sampler_voice_pool.trigger(pitch as u8, 1.0, ti, sample, sp);
+                                                } else {
+                                                    sampler_voice_pool.release_note(pitch as u8, ti);
+                                                }
+                                            } else {
+                                                sampler_voice_pool.release_note(pitch as u8, ti);
+                                            }
                                 clip.active_notes[pitch.min(127)] = false;
                                 track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                     status: 0x80 | (ti as u8 & 0x0F),
@@ -2634,6 +2709,7 @@ impl<'a> AudioEngine<'a> {
                                         let offset = track_wavetable_pitch_offsets[ti];
                                         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                         wavetable_voice_pool.kill_note(eff_pitch, ti);
+                                        sampler_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2676,6 +2752,12 @@ impl<'a> AudioEngine<'a> {
                                             let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                             wavetable_voice_pool.trigger(eff_pitch, (vel as f32) / 127.0, ti, &wt_adsr, table.len(), sample_rate);
                                         }
+                                        if let Some(sample) = &track_sampler_samples[ti] {
+                                            let sp = &track_sampler_params[ti];
+                                            if sp.note_trigger {
+                                                sampler_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti, sample, sp);
+                                            }
+                                        }
                                         clip.active_notes[pitch.min(127)] = true;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x90 | (ti as u8 & 0x0F),
@@ -2691,6 +2773,16 @@ impl<'a> AudioEngine<'a> {
                                     let offset = track_wavetable_pitch_offsets[ti];
                                     let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                     wavetable_voice_pool.release_note(eff_pitch, ti);
+                                            if let Some(sample) = &track_sampler_samples[ti] {
+                                                let sp = &track_sampler_params[ti];
+                                                if sp.release_trigger {
+                                                    sampler_voice_pool.trigger(pitch as u8, 1.0, ti, sample, sp);
+                                                } else {
+                                                    sampler_voice_pool.release_note(pitch as u8, ti);
+                                                }
+                                            } else {
+                                                sampler_voice_pool.release_note(pitch as u8, ti);
+                                            }
                                     clip.active_notes[pitch.min(127)] = false;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                         status: 0x80 | (ti as u8 & 0x0F),
@@ -2708,6 +2800,7 @@ impl<'a> AudioEngine<'a> {
                                         let offset = track_wavetable_pitch_offsets[ti];
                                         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                         wavetable_voice_pool.kill_note(eff_pitch, ti);
+                                        sampler_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2776,6 +2869,12 @@ impl<'a> AudioEngine<'a> {
                                                 let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                                 wavetable_voice_pool.trigger(eff_pitch, (vel as f32) / 127.0, ti, &wt_adsr, table.len(), sample_rate);
                                             }
+                                            if let Some(sample) = &track_sampler_samples[ti] {
+                                                let sp = &track_sampler_params[ti];
+                                                if sp.note_trigger {
+                                                    sampler_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti, sample, sp);
+                                                }
+                                            }
                                             clip.active_notes[pitch.min(127)] = true;
                                             track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                                 status: 0x90 | (ti as u8 & 0x0F),
@@ -2791,6 +2890,16 @@ impl<'a> AudioEngine<'a> {
                                         let offset = track_wavetable_pitch_offsets[ti];
                                         let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                         wavetable_voice_pool.release_note(eff_pitch, ti);
+                                            if let Some(sample) = &track_sampler_samples[ti] {
+                                                let sp = &track_sampler_params[ti];
+                                                if sp.release_trigger {
+                                                    sampler_voice_pool.trigger(pitch as u8, 1.0, ti, sample, sp);
+                                                } else {
+                                                    sampler_voice_pool.release_note(pitch as u8, ti);
+                                                }
+                                            } else {
+                                                sampler_voice_pool.release_note(pitch as u8, ti);
+                                            }
                                         clip.active_notes[pitch.min(127)] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -2810,6 +2919,16 @@ impl<'a> AudioEngine<'a> {
                                             let offset = track_wavetable_pitch_offsets[ti];
                                             let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                             wavetable_voice_pool.release_note(eff_pitch, ti);
+                                            if let Some(sample) = &track_sampler_samples[ti] {
+                                                let sp = &track_sampler_params[ti];
+                                                if sp.release_trigger {
+                                                    sampler_voice_pool.trigger(pitch as u8, 1.0, ti, sample, sp);
+                                                } else {
+                                                    sampler_voice_pool.release_note(pitch as u8, ti);
+                                                }
+                                            } else {
+                                                sampler_voice_pool.release_note(pitch as u8, ti);
+                                            }
                                             clip.active_notes[pitch] = false;
                                             track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                                 status: 0x80 | (ti as u8 & 0x0F),
@@ -2883,6 +3002,15 @@ impl<'a> AudioEngine<'a> {
                     &wt_gains_r,
                     self.sample_rate,
                 );
+                self.sampler_voice_pool.process_all_idle(
+                    &self.track_sampler_samples,
+                    &self.track_sampler_params,
+                    &mut self.dms_scratch_l[..buf_frames],
+                    &mut self.dms_scratch_r[..buf_frames],
+                    &dms_gain_l,
+                    &dms_gain_r,
+                    self.sample_rate,
+                );
             }
             for i in 0..buf_frames {
                 samples[i * 2] += self.dms_scratch_l[i];
@@ -2950,6 +3078,18 @@ impl<'a> AudioEngine<'a> {
                         &mut self.track_output_bufs[t],
                         gl,
                         gr,
+                        buffer_frames as usize,
+                        self.sample_rate,
+                    );
+                }
+                if let Some(sample) = &self.track_sampler_samples[t] {
+                    self.sampler_voice_pool.process_track(
+                        t,
+                        sample,
+                        &self.track_sampler_params[t],
+                        &mut self.track_output_bufs[t],
+                        track_gain_l[t],
+                        track_gain_r[t],
                         buffer_frames as usize,
                         self.sample_rate,
                     );
