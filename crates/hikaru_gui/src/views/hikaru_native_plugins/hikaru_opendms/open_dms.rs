@@ -130,13 +130,13 @@ pub fn render_dms_ui(
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 // Izquierda: barra vertical de 9 mini-drumpads (scroll de bancos)
                 ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 1.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 1.5);
                     let num_banks = 9usize;
                     for rev_b in 0..num_banks {
                         let bank = num_banks - 1 - rev_b;
                         let is_active = dms.active_bank == bank;
                         let (rect, response) =
-                            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::click());
+                            ui.allocate_exact_size(egui::vec2(15.0, 19.0), egui::Sense::click());
                         if response.clicked() {
                             dms.active_bank = bank;
                         }
@@ -159,10 +159,10 @@ pub fn render_dms_ui(
                         }
 
                         // Mini grilla 4x4 dentro de cada banco
-                        let cell = 2.0;
+                        let cell = 2.5;
                         let gap = 1.0;
-                        let start_x = rect.min.x + 1.5;
-                        let start_y = rect.min.y + 1.5;
+                        let start_x = rect.min.x + 1.0;
+                        let start_y = rect.min.y + 3.0;
                         for mr in 0..4 {
                             for mc in 0..4 {
                                 let pad_idx = bank * 16 + (3 - mr) * 4 + mc;
@@ -206,7 +206,7 @@ pub fn render_dms_ui(
                             for c in 0..cols {
                                 let pad_idx = base_idx + (rows - 1 - r) * cols + c;
                                 let (rect, response) = ui.allocate_exact_size(
-                                    egui::vec2(58.0, 26.0),
+                                    egui::vec2(64.0, 44.0),
                                     egui::Sense::click(),
                                 );
                                 if response.clicked() {
@@ -466,7 +466,7 @@ pub fn render_dms_ui(
                 let sel_idx = dms.selected_pad.min(dms.pads.len().saturating_sub(1));
                 ui.vertical(|ui| {
                     ui.set_width(28.0);
-                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.spacing_mut().item_spacing.y = 3.0;
                     if let Some(pad) = dms.pads.get_mut(sel_idx) {
                         let (r_pan, _) = rotary_knob(
                             ui,
@@ -481,7 +481,7 @@ pub fn render_dms_ui(
 
                         let (r_vol, _) = fader_vertical_track_vol(
                             ui,
-                            egui::vec2(16.0, 56.0),
+                            egui::vec2(16.0, 110.0),
                             &mut pad.volume,
                             1.0,
                         );
@@ -489,7 +489,7 @@ pub fn render_dms_ui(
 
                         if capsule_text_button(
                             ui,
-                            egui::vec2(24.0, 14.0),
+                            egui::vec2(24.0, 16.0),
                             "S",
                             8.5,
                             pad.solo,
@@ -503,7 +503,7 @@ pub fn render_dms_ui(
                         }
                         if capsule_text_button(
                             ui,
-                            egui::vec2(24.0, 14.0),
+                            egui::vec2(24.0, 16.0),
                             "M",
                             8.5,
                             pad.mute,
@@ -518,7 +518,7 @@ pub fn render_dms_ui(
                     }
                 });
 
-                ui.add_space(2.0);
+                ui.add_space(3.0);
 
                 // Columna FX + Output estilo Bitwig Drum Machine
                 let fx_col_stroke = if dms.fx_open {
@@ -533,11 +533,11 @@ pub fn render_dms_ui(
                     .inner_margin(egui::Margin::symmetric(3, 4))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
-                            ui.set_width(42.0);
+                            ui.set_width(48.0);
                             ui.spacing_mut().item_spacing.y = 6.0;
 
                             let (fx_rect, fx_resp) = ui.allocate_exact_size(
-                                egui::vec2(42.0, 20.0),
+                                egui::vec2(48.0, 26.0),
                                 egui::Sense::click(),
                             );
                             if ui.is_rect_visible(fx_rect) {
@@ -586,11 +586,11 @@ pub fn render_dms_ui(
                                 dms.fx_open = !dms.fx_open;
                             }
 
-                            ui.add_space(22.0);
+                            ui.add_space(74.0);
                             ui.vertical_centered(|ui| {
                                 let (r_out, _) = rotary_knob(
                                     ui,
-                                    28.0,
+                                    30.0,
                                     &mut dms.output_vol,
                                     0.0..=1.0,
                                     0.75,

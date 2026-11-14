@@ -828,7 +828,7 @@ fn opendms_loaded_pad_play_solo_mute_buttons_respond_to_clicks() {
         let mut dragged = None;
         // Frame 1: pointer down
         let mut raw_down = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 220.0))),
             ..Default::default()
         };
         raw_down.events.push(egui::Event::PointerMoved(pos));
@@ -846,7 +846,7 @@ fn opendms_loaded_pad_play_solo_mute_buttons_respond_to_clicks() {
 
         // Frame 2: pointer up
         let mut raw_up = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 220.0))),
             ..Default::default()
         };
         raw_up.events.push(egui::Event::PointerMoved(pos));
@@ -867,7 +867,7 @@ fn opendms_loaded_pad_play_solo_mute_buttons_respond_to_clicks() {
     let mut dragged = None;
     let _ = ctx.run(
         egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 220.0))),
             ..Default::default()
         },
         |ctx| {
@@ -878,11 +878,11 @@ fn opendms_loaded_pad_play_solo_mute_buttons_respond_to_clicks() {
     );
 
     // Pad 0 está en la fila inferior izquierda de la grilla 4x4.
-    // CentralPanel margin (8) + Frame margin (4) + bank strip (12) + spacing (8) + add_space(6) = x ~ 38..96
-    // Fila 3 (y): 8 + 4 + 3*(26+3) = 99 .. 125; barra inferior en y ~ 114..124 -> centro y ~ 119
-    let play_pos = egui::pos2(47.0, 119.0);
-    let solo_pos = egui::pos2(74.0, 119.0);
-    let mute_pos = egui::pos2(88.0, 119.0);
+    // CentralPanel margin (8) + Frame margin (4) + bank strip (15) + spacing (8) + add_space(6) = x ~ 41..105
+    // Fila 3 (y): 8 + 4 + 3*(44+3) = 153 .. 197; barra inferior en y ~ 185..196 -> centro y ~ 191
+    let play_pos = egui::pos2(50.0, 191.0);
+    let solo_pos = egui::pos2(83.0, 191.0);
+    let mute_pos = egui::pos2(97.0, 191.0);
 
     click_at(&ctx, &mut dms, play_pos);
     let cmds: Vec<_> = rx.try_iter().collect();

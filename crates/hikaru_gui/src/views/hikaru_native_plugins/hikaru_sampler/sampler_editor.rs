@@ -14,7 +14,7 @@ use crate::theme;
 use crate::ui::bitwig_kit::{capsule_text_button, rotary_knob, JoinSide};
 use crate::ui::fonts;
 
-pub const SAMPLER_CARD_WIDTH: f32 = 684.0;
+pub const SAMPLER_CARD_WIDTH: f32 = 794.0;
 
 const WAVE_BG: Color32 = Color32::from_rgb(0x0E, 0x0F, 0x12);
 const PANEL_BG: Color32 = Color32::from_rgb(0x23, 0x25, 0x2A);
@@ -478,18 +478,18 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
     let mut pick_file_requested = false;
 
     let body_rect = ui.available_rect_before_wrap();
-    let h = body_rect.height().max(134.0);
+    let h = body_rect.height().max(185.0);
 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
 
         // ── COL 1: Modulator / Expressions (Bitwig left strip) ──────────────
         ui.vertical(|ui| {
-            ui.set_width(78.0);
+            ui.set_width(80.0);
             ui.spacing_mut().item_spacing.y = 3.0;
 
             // MW Sine card
-            let (mw_rect, _) = ui.allocate_exact_size(vec2(78.0, 38.0), Sense::hover());
+            let (mw_rect, _) = ui.allocate_exact_size(vec2(80.0, 46.0), Sense::hover());
             let p = ui.painter();
             p.rect_filled(mw_rect, 2.5, PANEL_BG);
             p.rect_stroke(mw_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
@@ -505,14 +505,14 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                 .map(|i| {
                     let t = i as f32 / 24.0;
                     let x = mw_rect.left() + 6.0 + t * (mw_rect.width() - 12.0);
-                    let y = mw_rect.center().y - (t * std::f32::consts::TAU).sin() * 9.0;
+                    let y = mw_rect.center().y - (t * std::f32::consts::TAU).sin() * 11.0;
                     pos2(x, y)
                 })
                 .collect();
             p.add(egui::Shape::line(wave_pts, Stroke::new(1.4_f32, BW_ORANGE)));
 
             // Expressions box
-            let (expr_rect, _) = ui.allocate_exact_size(vec2(78.0, 62.0), Sense::hover());
+            let (expr_rect, _) = ui.allocate_exact_size(vec2(80.0, 68.0), Sense::hover());
             let p = ui.painter();
             p.rect_filled(expr_rect, 2.5, PANEL_BG);
             p.rect_stroke(expr_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
@@ -557,7 +557,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
             }
 
             // `+` Modulator button
-            let (plus_rect, plus_resp) = ui.allocate_exact_size(vec2(78.0, (h - 106.0).max(24.0)), Sense::click());
+            let (plus_rect, plus_resp) = ui.allocate_exact_size(vec2(80.0, (h - 120.0).max(24.0)), Sense::click());
             ui.painter().rect_filled(plus_rect, 2.5, PANEL_BG);
             ui.painter().rect_stroke(plus_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
             ui.painter().text(
@@ -574,20 +574,20 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
             ui.set_width(50.0);
             ui.spacing_mut().item_spacing.y = 1.0;
 
-            let (col_rect, _) = ui.allocate_exact_size(vec2(50.0, h.min(134.0)), Sense::hover());
+            let (col_rect, _) = ui.allocate_exact_size(vec2(50.0, h), Sense::hover());
             ui.painter().rect_filled(col_rect, 2.5, PANEL_BG);
             ui.painter().rect_stroke(col_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
 
             let mut col_ui = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(col_rect.shrink(3.0))
+                    .max_rect(col_rect.shrink2(vec2(3.0, 6.0)))
                     .layout(egui::Layout::top_down(egui::Align::Center)),
             );
-            col_ui.spacing_mut().item_spacing.y = 1.0;
+            col_ui.spacing_mut().item_spacing.y = 6.0;
 
             let (r_sel, c_sel) = rotary_knob(
                 &mut col_ui,
-                22.0,
+                25.0,
                 &mut sampler.select_pos,
                 0.0..=1.0,
                 0.0,
@@ -602,7 +602,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
             let (r_pit, c_pit) = rotary_knob(
                 &mut col_ui,
-                22.0,
+                25.0,
                 &mut sampler.pitch_semitones,
                 -36.0..=36.0,
                 0.0,
@@ -617,7 +617,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
             let (r_gld, c_gld) = rotary_knob(
                 &mut col_ui,
-                22.0,
+                25.0,
                 &mut sampler.glide_ms,
                 0.0..=1000.0,
                 0.0,
@@ -649,13 +649,14 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
         });
 
         // ── COL 3: Center Waveform + Repitch / Offsets / Filter / AHDSR ─────
-        let center_w = 456.0;
+        let center_w = 550.0;
+        let wf_h = (h * 0.56).round().clamp(76.0, 126.0);
         ui.vertical(|ui| {
             ui.set_width(center_w);
             ui.spacing_mut().item_spacing.y = 3.0;
 
-            // Top Half: Waveform Display (76px)
-            let (wf_box, _) = ui.allocate_exact_size(vec2(center_w, 76.0), Sense::hover());
+            // Top Half: Waveform Display (scales with panel height, ~112px at 200px)
+            let (wf_box, _) = ui.allocate_exact_size(vec2(center_w, wf_h), Sense::hover());
             ui.painter().rect_filled(wf_box, 2.5, Color32::from_rgb(0x18, 0x1A, 0x1E));
             ui.painter().rect_stroke(wf_box, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
 
@@ -695,7 +696,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
             } else {
                 // Loaded State (Bitwig style)
                 let top_bar = Rect::from_min_size(wf_box.min, vec2(center_w, 16.0));
-                let wave_rect = Rect::from_min_size(pos2(wf_box.min.x + 2.0, wf_box.min.y + 16.0), vec2(center_w - 4.0, 43.0));
+                let wave_rect = Rect::from_min_size(pos2(wf_box.min.x + 2.0, wf_box.min.y + 16.0), vec2(center_w - 4.0, (wf_h - 33.0).max(40.0)));
                 let bot_bar = Rect::from_min_size(pos2(wf_box.min.x, wf_box.max.y - 17.0), vec2(center_w, 17.0));
 
                 // Top info bar: Sample name | ROOT C3 | GAIN 0.0 dB
@@ -879,13 +880,13 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                 );
             }
 
-            // Bottom Half: Repitch | Offsets | Filter | AHDSR (56px)
-            let bot_h = (h - 79.0).max(54.0);
+            // Bottom Half: Repitch | Offsets | Filter | AHDSR
+            let bot_h = (h - wf_h - 3.0).max(54.0);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
 
-                // 1. Repitch / Speed Box (88px)
-                let (rep_rect, _) = ui.allocate_exact_size(vec2(88.0, bot_h), Sense::hover());
+                // 1. Repitch / Speed Box (104px)
+                let (rep_rect, _) = ui.allocate_exact_size(vec2(104.0, bot_h), Sense::hover());
                 ui.painter().rect_filled(rep_rect, 2.5, PANEL_BG);
                 ui.painter().rect_stroke(rep_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
                 let mut rep_ui = ui.new_child(
@@ -967,8 +968,8 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                     });
                 });
 
-                // 2. Offsets Box (44px)
-                let (off_rect, _) = ui.allocate_exact_size(vec2(44.0, bot_h), Sense::hover());
+                // 2. Offsets Box (48px)
+                let (off_rect, _) = ui.allocate_exact_size(vec2(48.0, bot_h), Sense::hover());
                 ui.painter().rect_filled(off_rect, 2.5, PANEL_BG);
                 ui.painter().rect_stroke(off_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
                 let mut off_ui = ui.new_child(
@@ -1000,20 +1001,20 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                     }
                 }
 
-                // 3. Filter Box (124px)
-                let (flt_rect, _) = ui.allocate_exact_size(vec2(124.0, bot_h), Sense::hover());
+                // 3. Filter Box (150px)
+                let (flt_rect, _) = ui.allocate_exact_size(vec2(150.0, bot_h), Sense::hover());
                 ui.painter().rect_filled(flt_rect, 2.5, PANEL_BG);
                 ui.painter().rect_stroke(flt_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
                 let mut flt_ui = ui.new_child(
                     egui::UiBuilder::new()
-                        .max_rect(flt_rect.shrink(3.0))
+                        .max_rect(flt_rect.shrink(4.0))
                         .layout(egui::Layout::top_down(egui::Align::Min)),
                 );
-                flt_ui.spacing_mut().item_spacing.y = 2.0;
+                flt_ui.spacing_mut().item_spacing.y = 4.0;
 
                 // 6 Filter mode icons
                 flt_ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.spacing_mut().item_spacing.x = 3.0;
                     for (fm, tip) in [
                         (SamplerFilterMode::Off, "Filter Off"),
                         (SamplerFilterMode::LowPass12, "LP 12dB"),
@@ -1023,7 +1024,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                         (SamplerFilterMode::Notch, "Notch"),
                     ] {
                         let active = sampler.filter_mode == fm;
-                        let (ir, iresp) = ui.allocate_exact_size(vec2(17.0, 13.0), Sense::click());
+                        let (ir, iresp) = ui.allocate_exact_size(vec2(20.0, 15.0), Sense::click());
                         if active {
                             ui.painter().rect_filled(ir, 2.0, Color32::from_rgb(0x3E, 0x42, 0x4C));
                         }
@@ -1042,10 +1043,10 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
                 // 3 Filter knobs: Cutoff, Res, Keytrack
                 flt_ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 12.0;
                     ui.vertical(|ui| {
                         let mut cut_norm = cutoff_to_norm(sampler.filter_cutoff_hz);
-                        let (r, c) = rotary_knob(ui, 21.0, &mut cut_norm, 0.0..=1.0, cutoff_to_norm(2640.0), BW_ORANGE, false);
+                        let (r, c) = rotary_knob(ui, 24.0, &mut cut_norm, 0.0..=1.0, cutoff_to_norm(2640.0), BW_ORANGE, false);
                         if c {
                             sampler.filter_cutoff_hz = norm_to_cutoff(cut_norm);
                             changed = true;
@@ -1056,7 +1057,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                     ui.vertical(|ui| {
                         let (r, c) = rotary_knob(
                             ui,
-                            21.0,
+                            24.0,
                             &mut sampler.filter_resonance,
                             0.0..=1.0,
                             0.0,
@@ -1072,7 +1073,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                     ui.vertical(|ui| {
                         let (r, c) = rotary_knob(
                             ui,
-                            21.0,
+                            24.0,
                             &mut sampler.filter_keytrack,
                             0.0..=1.0,
                             0.0,
@@ -1087,20 +1088,20 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                     });
                 });
 
-                // 4. AHDSR Box (191px)
-                let (env_rect, _) = ui.allocate_exact_size(vec2(191.0, bot_h), Sense::hover());
+                // 4. AHDSR Box (239px)
+                let (env_rect, _) = ui.allocate_exact_size(vec2(239.0, bot_h), Sense::hover());
                 ui.painter().rect_filled(env_rect, 2.5, PANEL_BG);
                 ui.painter().rect_stroke(env_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
                 let mut env_ui = ui.new_child(
                     egui::UiBuilder::new()
-                        .max_rect(env_rect.shrink(3.0))
+                        .max_rect(env_rect.shrink(4.0))
                         .layout(egui::Layout::top_down(egui::Align::Min)),
                 );
-                env_ui.spacing_mut().item_spacing.y = 1.0;
+                env_ui.spacing_mut().item_spacing.y = 3.0;
                 env_ui.horizontal(|ui| {
                     ui.label(RichText::new("AHDSR").font(fonts::semibold(8.5)).color(theme::TEXT_PRIMARY));
                     // Mini AHDSR orange curve preview
-                    let (cr, _) = ui.allocate_exact_size(vec2(118.0, 14.0), Sense::hover());
+                    let (cr, _) = ui.allocate_exact_size(vec2(162.0, 20.0), Sense::hover());
                     let a = (sampler.attack_ms / 1500.0).clamp(0.02, 0.22);
                     let h_w = (sampler.hold_ms / 1500.0).clamp(0.0, 0.15);
                     let d = (sampler.decay_ms / 2500.0).clamp(0.05, 0.25);
@@ -1120,7 +1121,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
                 // 5 AHDSR mini knobs: A, H, D, S, R
                 env_ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 7.0;
+                    ui.spacing_mut().item_spacing.x = 12.0;
                     for (lbl, val, range, def, unit) in [
                         ("A", &mut sampler.attack_ms, 0.0..=1500.0, 2.0, "ms"),
                         ("H", &mut sampler.hold_ms, 0.0..=1500.0, 0.0, "ms"),
@@ -1130,7 +1131,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                     ] {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
-                            let (resp, c) = rotary_knob(ui, 18.0, val, range, def, BW_ORANGE, false);
+                            let (resp, c) = rotary_knob(ui, 22.0, val, range, def, BW_ORANGE, false);
                             if c {
                                 changed = true;
                             }
@@ -1149,15 +1150,15 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
         // ── COL 4: Right Output & Trigger Panel ─────────────────────────────
         ui.vertical(|ui| {
-            ui.set_width(76.0);
-            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.set_width(88.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
 
             // Note | Release joined capsule
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 if capsule_text_button(
                     ui,
-                    vec2(36.0, 17.0),
+                    vec2(42.0, 19.0),
                     "Note",
                     8.5,
                     sampler.note_trigger,
@@ -1173,7 +1174,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                 }
                 if capsule_text_button(
                     ui,
-                    vec2(40.0, 17.0),
+                    vec2(46.0, 19.0),
                     "Release",
                     8.5,
                     sampler.release_trigger,
@@ -1191,7 +1192,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
             if capsule_text_button(
                 ui,
-                vec2(76.0, 17.0),
+                vec2(88.0, 19.0),
                 "FX",
                 8.5,
                 sampler.fx_expanded,
@@ -1204,22 +1205,22 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
                 sampler.fx_expanded = !sampler.fx_expanded;
             }
 
-            let (out_rect, _) = ui.allocate_exact_size(vec2(76.0, (h - 42.0).max(86.0)), Sense::hover());
+            let (out_rect, _) = ui.allocate_exact_size(vec2(88.0, (h - 46.0).max(86.0)), Sense::hover());
             ui.painter().rect_filled(out_rect, 2.5, PANEL_BG);
             ui.painter().rect_stroke(out_rect, 2.5, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
 
             let mut out_ui = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(out_rect.shrink(3.0))
+                    .max_rect(out_rect.shrink2(vec2(4.0, 8.0)))
                     .layout(egui::Layout::top_down(egui::Align::Center)),
             );
-            out_ui.spacing_mut().item_spacing.y = 1.0;
+            out_ui.spacing_mut().item_spacing.y = 6.0;
 
             out_ui.horizontal(|ui| {
                 ui.label(RichText::new("L").font(fonts::regular(7.5)).color(theme::TEXT_MUTED));
                 let (r_pan, c_pan) = rotary_knob(
                     ui,
-                    20.0,
+                    22.0,
                     &mut sampler.pan,
                     -1.0..=1.0,
                     0.0,
@@ -1235,7 +1236,7 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
             let (r_out, c_out) = rotary_knob(
                 &mut out_ui,
-                24.0,
+                28.0,
                 &mut sampler.output_db,
                 -60.0..=6.0,
                 0.0,

@@ -18,7 +18,7 @@ use crate::views::mixer::DspSlot;
 pub const RACK_HEIGHT: f32 = 241.0;
 pub const CARD_WIDTH: f32 = 340.0;
 pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 446.0;
-pub const OPEN_DMS_CARD_WIDTH: f32 = 376.0;
+pub const OPEN_DMS_CARD_WIDTH: f32 = 404.0;
 pub const PHASER_CARD_WIDTH: f32 = 480.0;
 pub const EXTERNAL_CARD_WIDTH: f32 = 360.0;
 
