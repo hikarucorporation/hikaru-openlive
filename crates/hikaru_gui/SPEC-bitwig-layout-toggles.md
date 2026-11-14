@@ -57,7 +57,7 @@ Unlikevertical-column session grids, Bitwig's **Arrange** view always places **h
   - `MASTER` strip pinned on the right.
 
 ### 2.4 Compact Bottom Device Panel (`dsp_rack.rs` & `open_wavetable.rs`)
-- **Dock Height**: `184px` total (`RACK_HEIGHT = 178.0`).
+- **Dock Height**: `247px` total (`RACK_HEIGHT = 241.0`).
 - **Left Vertical Strip**: `PROJECT` / `TRACK` tab bar (`24px` wide).
 - **Fixed-Width Device Cards**:
   - Cards enforce both `min_width` and `max_width` (`OPEN_WAVETABLE_CARD_WIDTH = 440.0`, `CARD_WIDTH = 340.0`) and avoid unbounded `Layout::right_to_left` inside horizontal scroll areas.

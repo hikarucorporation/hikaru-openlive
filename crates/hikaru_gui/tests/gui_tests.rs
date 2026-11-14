@@ -485,10 +485,10 @@ fn bitwig_layout_toggles_mode_and_view_coherence() {
     }
     assert!(!layout.show_clip_launcher && layout.show_arranger);
 
-    // 4. Compact Device Panel & OpenWavetable dimensions (matching bitwig-device-panel-(in-the-clip-launcher).png)
+    // 4. Bitwig-matched Device Panel & OpenWavetable dimensions (247px total dock height)
     assert!(
-        RACK_HEIGHT <= 185.0,
-        "El Device Panel debe ser compacto (<= 185px), quedó en {RACK_HEIGHT}"
+        (235.0..=250.0).contains(&RACK_HEIGHT),
+        "El Device Panel debe coincidir con la altura de Bitwig (~241px rack / ~247px dock), quedó en {RACK_HEIGHT}"
     );
     assert!(
         OPEN_WAVETABLE_CARD_WIDTH <= 460.0,

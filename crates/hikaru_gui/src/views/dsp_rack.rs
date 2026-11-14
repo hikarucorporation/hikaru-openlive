@@ -15,7 +15,7 @@ use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::hikaru_native_plugins::hikaru_sampler::{sampler_editor, SAMPLER_CARD_WIDTH};
 use crate::views::mixer::DspSlot;
 
-pub const RACK_HEIGHT: f32 = 178.0;
+pub const RACK_HEIGHT: f32 = 241.0;
 pub const CARD_WIDTH: f32 = 340.0;
 pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 446.0;
 pub const OPEN_DMS_CARD_WIDTH: f32 = 376.0;
@@ -617,9 +617,55 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 );
 
                                 if let Some(mut pad_smp) = maybe_smp {
-                                    let (smp_card_rect, _) = ui.allocate_exact_size(
-                                        vec2(SAMPLER_CARD_WIDTH, card_h),
+                                    // Contenedor con corchetes azules estilo Bitwig para dispositivos dentro de FX
+                                    let fx_bracket_color = Color32::from_rgb(0x3E, 0x74, 0xB5);
+                                    let (nested_outer_rect, _) = ui.allocate_exact_size(
+                                        vec2(SAMPLER_CARD_WIDTH + 18.0, card_h),
                                         Sense::hover(),
+                                    );
+                                    {
+                                        let np = ui.painter();
+                                        np.rect_filled(
+                                            nested_outer_rect,
+                                            2.5,
+                                            Color32::from_rgb(0x18, 0x1A, 0x1E),
+                                        );
+
+                                        let top_y = nested_outer_rect.min.y + 1.0;
+                                        let bot_y = nested_outer_rect.max.y - 1.0;
+                                        let left_x = nested_outer_rect.min.x + 1.0;
+                                        let right_x = nested_outer_rect.max.x - 1.0;
+                                        let bracket_stroke = Stroke::new(1.5_f32, fx_bracket_color);
+
+                                        // Línea horizontal superior e inferior conectando desde OpenDMS
+                                        np.line_segment(
+                                            [pos2(card_rect.max.x, top_y), pos2(right_x, top_y)],
+                                            bracket_stroke,
+                                        );
+                                        np.line_segment(
+                                            [pos2(card_rect.max.x, bot_y), pos2(right_x, bot_y)],
+                                            bracket_stroke,
+                                        );
+                                        // Corchete izquierdo `[` y corchete derecho `]`
+                                        np.line_segment(
+                                            [pos2(left_x, top_y), pos2(left_x, bot_y)],
+                                            bracket_stroke,
+                                        );
+                                        np.line_segment(
+                                            [pos2(right_x, top_y), pos2(right_x, bot_y)],
+                                            bracket_stroke,
+                                        );
+                                    }
+
+                                    let smp_card_rect = Rect::from_min_max(
+                                        pos2(
+                                            nested_outer_rect.min.x + 9.0,
+                                            nested_outer_rect.min.y + 5.0,
+                                        ),
+                                        pos2(
+                                            nested_outer_rect.max.x - 9.0,
+                                            nested_outer_rect.max.y - 5.0,
+                                        ),
                                     );
                                     let sp = ui.painter();
                                     sp.rect_filled(
@@ -630,7 +676,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                     sp.rect_stroke(
                                         smp_card_rect,
                                         3.5,
-                                        Stroke::new(1.0_f32, theme::ACCENT_ORANGE),
+                                        Stroke::new(1.0_f32, Color32::from_rgb(0x46, 0x49, 0x52)),
                                         egui::StrokeKind::Inside,
                                     );
 
