@@ -451,6 +451,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // =================================================================
             let mut used_w = LEGEND_COL_W + 1.0;
             for idx in 1..tracks_count {
+                if !crate::views::mixer::is_track_visible(state.tracks(), idx) {
+                    continue;
+                }
                 let w = render_channel_strip(
                     ui,
                     state,
@@ -674,6 +677,7 @@ fn render_channel_strip(
         peak,
         effects_list,
         track_names,
+        is_group,
     ) = {
         let tracks = state.tracks();
         let t = &tracks[idx];
@@ -712,6 +716,7 @@ fn render_channel_strip(
             peak,
             fx,
             names,
+            t.is_group,
         )
     };
 
@@ -731,6 +736,27 @@ fn render_channel_strip(
             let (hdr_rect, hdr_resp) =
                 ui.allocate_exact_size(vec2(strip_w, HEADER_BLOCK_H), Sense::click());
             ui.painter().rect_filled(hdr_rect, 1.0, track_color);
+            if is_group {
+                let f_rect = Rect::from_center_size(
+                    pos2(hdr_rect.center().x, hdr_rect.max.y - 9.0),
+                    vec2(13.0, 9.0),
+                );
+                ui.painter().rect_filled(f_rect, 1.5, Color32::from_rgb(0x1E, 0x20, 0x24));
+                ui.painter().rect_filled(
+                    Rect::from_min_size(pos2(f_rect.min.x, f_rect.min.y - 2.0), vec2(5.0, 3.0)),
+                    1.0,
+                    Color32::from_rgb(0x1E, 0x20, 0x24),
+                );
+                if hdr_resp.clicked()
+                    && hdr_resp
+                        .interact_pointer_pos()
+                        .is_some_and(|p| f_rect.expand(5.0).contains(p))
+                {
+                    if let Some(tr) = state.live_tracks.get_mut(idx) {
+                        tr.is_expanded = !tr.is_expanded;
+                    }
+                }
+            }
             if is_sel {
                 ui.painter().rect_stroke(
                     hdr_rect.shrink(1.0),
@@ -813,6 +839,55 @@ fn render_channel_strip(
                             if clip_opt.is_some() { Sense::click_and_drag() } else { Sense::click() },
                         );
                         let cell = slot_rect.shrink2(vec2(1.0, 0.5));
+                        if is_group {
+                            let g_bg = if slot_resp.hovered() {
+                                Color32::from_rgb(0x52, 0x54, 0x5A)
+                            } else {
+                                Color32::from_rgb(0x42, 0x44, 0x4A)
+                            };
+                            ui.painter().rect_filled(cell, 1.5, g_bg);
+                            let tri_rect = Rect::from_min_size(
+                                pos2(cell.min.x + 6.0, cell.center().y - 4.0),
+                                vec2(6.5, 8.0),
+                            );
+                            icons::paint_play_triangle(
+                                ui.painter(),
+                                tri_rect,
+                                Color32::from_rgb(0xAA, 0xAC, 0xB2),
+                            );
+                            let scene_label = state
+                                .matrix_state
+                                .scenes
+                                .get(scene_idx)
+                                .map(|s| s.name.as_str())
+                                .unwrap_or("Scene");
+                            ui.painter().text(
+                                pos2(tri_rect.max.x + 5.0, cell.center().y),
+                                Align2::LEFT_CENTER,
+                                scene_label,
+                                fonts::regular(10.5),
+                                Color32::from_rgb(0xD2, 0xD4, 0xDA),
+                            );
+                            if slot_resp.clicked() {
+                                if let Some(grp_id) = state.live_tracks.get(idx).map(|t| t.id) {
+                                    let children = crate::views::mixer::group_children_indices(
+                                        &state.live_tracks,
+                                        grp_id,
+                                    );
+                                    for child_mixer_idx in children {
+                                        if child_mixer_idx > 0 {
+                                            matrix::trigger_pad(
+                                                &mut state.matrix_state,
+                                                &state.audio_proxy,
+                                                child_mixer_idx - 1,
+                                                scene_idx,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         let clip_drag_active = state.matrix_state.clip_drag.as_ref();
                         let is_drag_source = clip_drag_active
                             .is_some_and(|d| d.from_track == matrix_idx && d.from_scene == scene_idx && !d.is_copy);

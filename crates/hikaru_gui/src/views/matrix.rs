@@ -443,6 +443,22 @@ impl SessionMatrixState {
         self.grid.push(vec![MatrixSlot::default(); scene_count]);
     }
 
+    pub fn insert_track(&mut self, idx: usize, name: String) {
+        let idx = idx.min(self.tracks.len());
+        self.tracks.insert(
+            idx,
+            TrackMeta {
+                name,
+                muted: false,
+                soloed: false,
+                volume: 0.75,
+                pan: 0.0,
+            },
+        );
+        let scene_count = self.scenes.len();
+        self.grid.insert(idx, vec![MatrixSlot::default(); scene_count]);
+    }
+
     pub fn remove_track(&mut self) {
         if self.tracks.len() > 1 {
             self.tracks.pop();
@@ -1418,6 +1434,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut trigger_slot_action: Option<(usize, usize)> = None;
     let mut select_slot_action: Option<(usize, usize)> = None;
     let mut create_midi_slot_action: Option<(usize, usize)> = None;
+    let mut add_group_action = false;
+    let mut group_track_action: Option<usize> = None;
+    let mut toggle_group_expand_action: Option<usize> = None;
+    let mut trigger_group_scene_action: Option<(usize, usize)> = None; // (group_mixer_idx, scene_idx)
+
+    let visible_tracks: Vec<usize> = (0..tracks_count)
+        .filter(|&ti| {
+            let mi = mixer_index_of_matrix_track(ti);
+            crate::views::mixer::is_track_visible(&state.live_tracks, mi)
+        })
+        .collect();
     let mut open_piano_roll_action = false;
     let mut toggle_mute_action: Option<usize> = None;
     let mut toggle_solo_action: Option<usize> = None;
@@ -1433,8 +1460,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut start_matrix_drag_action: Option<(usize, usize, MatrixClip, egui::Vec2)> = None;
     let mut drop_matrix_clip_action: Option<(usize, usize)> = None;
 
-    for track_idx in 0..tracks_count {
-        let row_y0 = tracks_y0 + scroll_y + track_idx as f32 * row_h;
+    for (vis_idx, &track_idx) in visible_tracks.iter().enumerate() {
+        let row_y0 = tracks_y0 + scroll_y + vis_idx as f32 * row_h;
         let row_y1 = row_y0 + row_h;
         if row_y1 < tracks_y0 || row_y0 > tracks_y1 {
             continue;
@@ -1483,16 +1510,59 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             Stroke::new(1.0_f32, Color32::from_rgb(0x16, 0x17, 0x1A)),
         );
 
-        // 5px solid Bitwig Track Color Bar on left edge
+        let group_depth = crate::views::mixer::track_group_depth(&state.live_tracks, mixer_idx);
+        let is_group = state.live_tracks.get(mixer_idx).is_some_and(|t| t.is_group);
+        let is_expanded = state.live_tracks.get(mixer_idx).is_some_and(|t| t.is_expanded);
+        let parent_group_color = state
+            .live_tracks
+            .get(mixer_idx)
+            .and_then(|t| t.parent_group_id)
+            .and_then(|pid| state.live_tracks.iter().find(|p| p.id == pid))
+            .map(|p| p.color);
+        let indent_x = group_depth as f32 * 8.0;
+
+        // If inside a group, draw the outer group color rail on the left
+        if let Some(gcol) = parent_group_color {
+            tracks_painter.rect_filled(
+                Rect::from_min_size(row_rect.min, vec2(4.0, row_h)),
+                0.0,
+                gcol,
+            );
+        }
+
+        // 5px solid Bitwig Track Color Bar on left edge (indented if inside a group)
         tracks_painter.rect_filled(
-            Rect::from_min_size(row_rect.min, vec2(5.0, row_h - 1.0)),
+            Rect::from_min_size(pos2(row_rect.min.x + indent_x, row_rect.min.y), vec2(5.0, row_h - 1.0)),
             0.0,
             track_color,
         );
 
+        let mut title_x = header_x0 + indent_x + 11.0;
+        let folder_rect = Rect::from_min_size(pos2(title_x - 2.0, row_y0 + 4.0), vec2(16.0, 16.0));
+        if is_group {
+            let arrow = if is_expanded { "▼" } else { "▶" };
+            tracks_painter.text(
+                pos2(title_x, row_y0 + 5.0),
+                egui::Align2::LEFT_TOP,
+                arrow,
+                fonts::semibold(10.0),
+                Color32::from_rgb(0x10, 0x11, 0x13),
+            );
+            title_x += 13.0;
+            // Small folder badge
+            let f_rect = Rect::from_min_size(pos2(title_x, row_y0 + 6.0), vec2(12.0, 9.0));
+            tracks_painter.rect_filled(f_rect, 1.5, Color32::from_rgb(0x1E, 0x20, 0x24));
+            tracks_painter.rect_filled(
+                Rect::from_min_size(pos2(f_rect.min.x, f_rect.min.y - 2.0), vec2(5.0, 3.0)),
+                1.0,
+                Color32::from_rgb(0x1E, 0x20, 0x24),
+            );
+            title_x += 16.0;
+        }
+
         // Track Title in crisp dark `#101113` ink (exact to `bitwig-clip-launcher-and-playlist.png`)
         tracks_painter.text(
-            pos2(header_x0 + 11.0, row_y0 + 5.0),
+            pos2(title_x, row_y0 + 5.0),
             egui::Align2::LEFT_TOP,
             &track_name,
             fonts::semibold(11.5),
@@ -1667,7 +1737,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         if let Some(pos) = pointer_pos {
             if tracks_col_rect.contains(pos) && row_rect.contains(pos) {
                 if primary_clicked {
-                    if r_rect.contains(pos) {
+                    if is_group && folder_rect.contains(pos) {
+                        toggle_group_expand_action = Some(mixer_idx);
+                    } else if r_rect.contains(pos) {
                         toggle_arm_action = Some(track_idx);
                     } else if s_rect.contains(pos) {
                         toggle_solo_action = Some(track_idx);
@@ -1738,9 +1810,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     _ => ctxm::MonitorMode::Auto,
                 })
                 .unwrap_or(ctxm::MonitorMode::Auto);
+            let is_group_track = state.live_tracks.get(mixer_idx).is_some_and(|t| t.is_group);
+            let is_in_group = state.live_tracks.get(mixer_idx).is_some_and(|t| t.parent_group_id.is_some());
             let mc = ctxm::MenuContext {
                 current_color: track_color,
                 monitor,
+                can_enter_group: is_group_track,
+                can_exit_group: is_in_group || is_group_track,
                 ..Default::default()
             };
             match ctxm::show(ectx, menu_key, &mc) {
@@ -1754,6 +1830,21 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 }
                 Some(ctxm::MenuAction::Delete) => {
                     delete_track_action = Some(mixer_idx);
+                }
+                Some(ctxm::MenuAction::AddGroupTrack) => {
+                    add_group_action = true;
+                }
+                Some(ctxm::MenuAction::Group) => {
+                    group_track_action = Some(mixer_idx);
+                }
+                Some(ctxm::MenuAction::EnterGroup) | Some(ctxm::MenuAction::ExitGroup) => {
+                    if is_group_track {
+                        toggle_group_expand_action = Some(mixer_idx);
+                    } else if let Some(pid) = state.live_tracks.get(mixer_idx).and_then(|t| t.parent_group_id) {
+                        if let Some(p_idx) = state.live_tracks.iter().position(|t| t.id == pid) {
+                            toggle_group_expand_action = Some(p_idx);
+                        }
+                    }
                 }
                 Some(ctxm::MenuAction::SetMonitor(m)) => {
                     let v = match m {
@@ -1769,7 +1860,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     // Compact Bitwig `+` Add Track button inside the `#0A0A0C` black void below last track
-    let add_track_y0 = tracks_y0 + scroll_y + tracks_count as f32 * row_h;
+    let add_track_y0 = tracks_y0 + scroll_y + visible_tracks.len() as f32 * row_h;
     if add_track_y0 + 26.0 < tracks_y1 {
         let add_tr_rect =
             Rect::from_min_size(pos2(header_x1 - 22.0, add_track_y0 + 4.0), vec2(20.0, 20.0));
@@ -1978,8 +2069,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         let lg_painter = painter.with_clip_rect(launcher_grid_rect);
         lg_painter.rect_filled(launcher_grid_rect, 0.0, BW_DARK_WELL);
 
-        for track_idx in 0..tracks_count {
-            let row_y0 = tracks_y0 + scroll_y + track_idx as f32 * row_h;
+        for (vis_idx, &track_idx) in visible_tracks.iter().enumerate() {
+            let row_y0 = tracks_y0 + scroll_y + vis_idx as f32 * row_h;
             let row_y1 = row_y0 + row_h;
             if row_y1 < tracks_y0 || row_y0 > tracks_y1 {
                 continue;
@@ -1992,6 +2083,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 .map(|t| t.color)
                 .unwrap_or_else(|| track_color_for(track_idx));
             let is_armed = state.live_tracks.get(mixer_idx).map(|t| t.arm).unwrap_or(false);
+            let is_group = state.live_tracks.get(mixer_idx).is_some_and(|t| t.is_group);
 
             // Track row slot bed
             lg_painter.rect_filled(
@@ -2023,6 +2115,37 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     state.matrix_state.selected_slot == Some((track_idx, scene_idx));
                 let cell_hovered = pointer_pos
                     .is_some_and(|p| launcher_grid_rect.contains(p) && cell_rect.contains(p));
+
+                if is_group {
+                    let g_bg = if cell_hovered {
+                        Color32::from_rgb(0x52, 0x54, 0x5A)
+                    } else {
+                        Color32::from_rgb(0x42, 0x44, 0x4A)
+                    };
+                    lg_painter.rect_filled(cell_rect, 2.0, g_bg);
+                    let tri_rect = Rect::from_min_size(
+                        pos2(cell_rect.min.x + 6.0, cell_rect.center().y - 4.0),
+                        vec2(7.0, 8.0),
+                    );
+                    icons::paint_play_triangle(&lg_painter, tri_rect, Color32::from_rgb(0xAA, 0xAC, 0xB2));
+                    let scene_label = state
+                        .matrix_state
+                        .scenes
+                        .get(scene_idx)
+                        .map(|s| s.name.as_str())
+                        .unwrap_or("Scene");
+                    lg_painter.text(
+                        pos2(tri_rect.max.x + 5.0, cell_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        scene_label,
+                        fonts::regular(11.0),
+                        Color32::from_rgb(0xD2, 0xD4, 0xDA),
+                    );
+                    if cell_hovered && primary_clicked {
+                        trigger_group_scene_action = Some((mixer_idx, scene_idx));
+                    }
+                    continue;
+                }
 
                 let is_drag_source = state.matrix_state.clip_drag.as_ref().is_some_and(|d| {
                     d.from_track == track_idx && d.from_scene == scene_idx
@@ -2608,8 +2731,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         tl_painter.rect_filled(tl_grid_rect, 0.0, Color32::from_rgb(0x5C, 0x5E, 0x62));
 
         // Active Track Lanes in Bitwig's signature light-medium neutral grey (`#74767B` / `#6E7075`)
-        for track_idx in 0..tracks_count {
-            let row_y0 = tracks_y0 + scroll_y + track_idx as f32 * row_h;
+        for (vis_idx, &track_idx) in visible_tracks.iter().enumerate() {
+            let row_y0 = tracks_y0 + scroll_y + vis_idx as f32 * row_h;
             let row_y1 = row_y0 + row_h;
             if row_y1 < tracks_y0 || row_y0 > tracks_y1 {
                 continue;
@@ -2890,6 +3013,51 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // =========================================================================
     // 5. DEFERRED ACTIONS (Clips, Drops, Track/Scene Mutations)
     // =========================================================================
+    if add_group_action {
+        let next_id = state.live_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let name = format!("Group {}", next_id);
+        state.matrix_state.add_track();
+        if let Some(last) = state.matrix_state.tracks.last_mut() {
+            last.name = name.clone();
+        }
+        let tr = crate::views::mixer::Track::new_group(next_id, name);
+        state.live_tracks.push(tr);
+    }
+    if let Some(target_mixer_idx) = group_track_action {
+        if target_mixer_idx > 0 && target_mixer_idx < state.live_tracks.len() {
+            let next_id = state.live_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+            let name = format!("Group {}", next_id);
+            let parent_of_target = state.live_tracks[target_mixer_idx].parent_group_id;
+            let parent_route = state.live_tracks[target_mixer_idx].route_destination_id;
+            let mut grp = crate::views::mixer::Track::new_group(next_id, name.clone());
+            grp.parent_group_id = parent_of_target;
+            grp.route_destination_id = parent_route;
+            state.live_tracks[target_mixer_idx].parent_group_id = Some(next_id);
+            state.live_tracks[target_mixer_idx].route_destination_id = next_id;
+            state.live_tracks.insert(target_mixer_idx, grp);
+            let matrix_idx = target_mixer_idx - 1;
+            state.matrix_state.insert_track(matrix_idx, name);
+            state.selected_track_index = target_mixer_idx;
+        }
+    }
+    if let Some(grp_mixer_idx) = toggle_group_expand_action {
+        if let Some(tr) = state.live_tracks.get_mut(grp_mixer_idx) {
+            if tr.is_group {
+                tr.is_expanded = !tr.is_expanded;
+            }
+        }
+    }
+    if let Some((grp_mixer_idx, scene_idx)) = trigger_group_scene_action {
+        if let Some(grp_id) = state.live_tracks.get(grp_mixer_idx).map(|t| t.id) {
+            let children = crate::views::mixer::group_children_indices(&state.live_tracks, grp_id);
+            for child_mixer_idx in children {
+                if child_mixer_idx > 0 {
+                    let child_matrix_idx = child_mixer_idx - 1;
+                    trigger_pad(&mut state.matrix_state, &state.audio_proxy, child_matrix_idx, scene_idx);
+                }
+            }
+        }
+    }
     if let Some(mixer_idx) = delete_track_action {
         state.delete_track(mixer_idx);
     }

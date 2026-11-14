@@ -156,6 +156,9 @@ pub struct Track {
     pub solo: bool,
     pub arm: bool,
     pub is_master: bool,
+    pub is_group: bool,
+    pub parent_group_id: Option<usize>,
+    pub is_expanded: bool,
     pub route_destination_id: usize,
     pub sends: Vec<SendConnection>,
     pub effects: Vec<DspSlot>,
@@ -191,6 +194,9 @@ impl Track {
             solo: false,
             arm: false,
             is_master,
+            is_group: false,
+            parent_group_id: None,
+            is_expanded: true,
             route_destination_id: 0,
             sends: Vec::new(),
             effects: Vec::new(),
@@ -198,6 +204,57 @@ impl Track {
             width: arranger_view::DEFAULT_TRACK_WIDTH,
         }
     }
+
+    pub fn new_group(id: usize, name: String) -> Self {
+        let mut tr = Self::new(id, name, false);
+        tr.is_group = true;
+        tr.color = Color32::from_rgb(0xE5, 0xAE, 0x19); // Bitwig Group Yellow
+        tr
+    }
+}
+
+/// Returns `true` if the track at `idx` is visible (all ancestor groups are expanded).
+pub fn is_track_visible(tracks: &[Track], idx: usize) -> bool {
+    let mut cur = tracks.get(idx).and_then(|t| t.parent_group_id);
+    let mut guard = 0;
+    while let Some(gid) = cur {
+        guard += 1;
+        if guard > 32 {
+            break;
+        }
+        if let Some(parent) = tracks.iter().find(|t| t.id == gid) {
+            if !parent.is_expanded {
+                return false;
+            }
+            cur = parent.parent_group_id;
+        } else {
+            break;
+        }
+    }
+    true
+}
+
+/// Returns the nesting depth of `tracks[idx]` (0 for top-level tracks).
+pub fn track_group_depth(tracks: &[Track], idx: usize) -> usize {
+    let mut depth = 0;
+    let mut cur = tracks.get(idx).and_then(|t| t.parent_group_id);
+    while let Some(gid) = cur {
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
+        cur = tracks.iter().find(|t| t.id == gid).and_then(|p| p.parent_group_id);
+    }
+    depth
+}
+
+/// Returns indices of direct children of `group_id`.
+pub fn group_children_indices(tracks: &[Track], group_id: usize) -> Vec<usize> {
+    tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| (t.parent_group_id == Some(group_id)).then_some(i))
+        .collect()
 }
 
 pub fn duplicate_device_chain(slots: &[DspSlot]) -> Vec<DspSlot> {
