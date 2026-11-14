@@ -18,7 +18,7 @@ use crate::views::mixer::DspSlot;
 pub const RACK_HEIGHT: f32 = 241.0;
 pub const CARD_WIDTH: f32 = 340.0;
 pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 446.0;
-pub const OPEN_DMS_CARD_WIDTH: f32 = 404.0;
+pub const OPEN_DMS_CARD_WIDTH: f32 = 430.0;
 pub const PHASER_CARD_WIDTH: f32 = 480.0;
 pub const EXTERNAL_CARD_WIDTH: f32 = 360.0;
 
@@ -194,14 +194,239 @@ pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: 
     }
 }
 
+fn paint_rotated_label(
+    painter: &egui::Painter,
+    center_x: f32,
+    bottom_y: f32,
+    max_chars: usize,
+    text: &str,
+    font_size: f32,
+    color: Color32,
+) {
+    let display: String = if text.chars().count() > max_chars {
+        let mut s: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        text.to_string()
+    };
+    let galley = painter.layout_no_wrap(display, fonts::semibold(font_size), color);
+    let mut ts = egui::epaint::TextShape::new(
+        pos2(center_x - font_size * 0.58, bottom_y),
+        galley,
+        color,
+    );
+    ts.angle = -std::f32::consts::FRAC_PI_2;
+    painter.add(egui::Shape::Text(ts));
+}
+
+struct DeviceSidebarOutcome {
+    toggled_power: bool,
+    clicked_folder: bool,
+    clicked_title: bool,
+}
+
+fn render_bitwig_device_sidebar(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id_salt: impl std::hash::Hash + Copy,
+    title: &str,
+    active: bool,
+    is_selected: bool,
+) -> DeviceSidebarOutcome {
+    let mut out = DeviceSidebarOutcome {
+        toggled_power: false,
+        clicked_folder: false,
+        clicked_title: false,
+    };
+
+    let bg = if is_selected {
+        Color32::from_rgb(0x36, 0x39, 0x41)
+    } else {
+        Color32::from_rgb(0x26, 0x28, 0x2D)
+    };
+    let p = ui.painter();
+    p.rect_filled(
+        rect,
+        egui::CornerRadius {
+            nw: 3,
+            ne: 0,
+            sw: 3,
+            se: 0,
+        },
+        bg,
+    );
+    p.line_segment(
+        [pos2(rect.max.x, rect.min.y), pos2(rect.max.x, rect.max.y)],
+        Stroke::new(1.0_f32, Color32::from_rgb(0x1C, 0x1E, 0x23)),
+    );
+
+    // Power switch (arriba)
+    let pwr_r = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 13.0), vec2(14.0, 14.0));
+    let pwr_resp = ui.interact(pwr_r, ui.id().with((id_salt, "pwr")), Sense::click());
+    icons::paint_power_switch(
+        ui.painter(),
+        pwr_r,
+        if active {
+            theme::ACCENT_ORANGE
+        } else {
+            Color32::from_rgb(0x44, 0x47, 0x50)
+        },
+        if active {
+            Color32::from_rgb(0x14, 0x12, 0x10)
+        } else {
+            Color32::from_rgb(0xB8, 0xBC, 0xC4)
+        },
+    );
+    if pwr_resp.on_hover_text("Device Active / Bypass").clicked() {
+        out.toggled_power = true;
+    }
+
+    // Folder / Preset icon (debajo del power)
+    let fld_r = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 32.0), vec2(13.0, 13.0));
+    let fld_resp = ui.interact(fld_r, ui.id().with((id_salt, "fld")), Sense::click());
+    icons::paint_icon(
+        ui.painter(),
+        fld_r,
+        icons::FOLDER,
+        if fld_resp.hovered() {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(0x9C, 0xA2, 0xAC)
+        },
+        1.5,
+    );
+    if fld_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if fld_resp.on_hover_text("Load Sample / Preset").clicked() {
+        out.clicked_folder = true;
+    }
+
+    // Título vertical rotado (centro)
+    let title_r = Rect::from_min_max(
+        pos2(rect.min.x, rect.min.y + 42.0),
+        pos2(rect.max.x, rect.max.y - 24.0),
+    );
+    let title_resp = ui.interact(title_r, ui.id().with((id_salt, "title")), Sense::click());
+    let title_col = if is_selected {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(0xC6, 0xCA, 0xD2)
+    };
+    paint_rotated_label(
+        ui.painter(),
+        rect.center().x,
+        title_r.max.y - 4.0,
+        21,
+        title,
+        9.5,
+        title_col,
+    );
+    if title_resp.clicked() {
+        out.clicked_title = true;
+    }
+
+    // Ícono moduladores / remoto (abajo)
+    let mod_r = Rect::from_center_size(pos2(rect.center().x, rect.max.y - 12.0), vec2(12.0, 12.0));
+    icons::paint_icon(
+        ui.painter(),
+        mod_r,
+        icons::LINK,
+        Color32::from_rgb(0x88, 0x8E, 0x98),
+        1.4,
+    );
+
+    out
+}
+
+fn render_dms_fx_plus_slot(
+    ui: &mut egui::Ui,
+    app: &mut AppState,
+    track_idx: usize,
+    slot_idx: usize,
+    sel_pad: usize,
+    note_lbl: &str,
+    card_h: f32,
+    salt: &str,
+) {
+    let (slot_col, _) = ui.allocate_exact_size(vec2(18.0, card_h), Sense::hover());
+    let plus_btn_rect = Rect::from_center_size(slot_col.center(), vec2(16.0, 26.0));
+    let plus_id = ui
+        .id()
+        .with(("dms_fx_insert_btn", track_idx, slot_idx, sel_pad, salt));
+    let plus_resp = ui
+        .interact(plus_btn_rect, plus_id, Sense::click())
+        .on_hover_text(format!("Insert device ({note_lbl})"));
+    if ui.is_rect_visible(plus_btn_rect) {
+        let p = ui.painter();
+        let dot_center = pos2(plus_btn_rect.center().x, plus_btn_rect.min.y + 4.0);
+        p.circle_filled(dot_center, 2.0, Color32::from_rgb(0x40, 0x6A, 0x80));
+        p.text(
+            pos2(plus_btn_rect.center().x, plus_btn_rect.center().y + 3.0),
+            Align2::CENTER_CENTER,
+            "+",
+            fonts::semibold(13.0),
+            if plus_resp.hovered() {
+                Color32::WHITE
+            } else {
+                theme::TEXT_SECONDARY
+            },
+        );
+    }
+    if plus_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let popup_id = ui
+        .id()
+        .with(("dms_fx_insert_popup", track_idx, slot_idx, sel_pad, salt));
+    if plus_resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    egui::popup_below_widget(
+        ui,
+        popup_id,
+        &plus_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(185.0);
+            ui.label(
+                RichText::new(format!("Insert Device ({note_lbl})"))
+                    .font(fonts::semibold(11.0))
+                    .color(theme::ACCENT_ORANGE),
+            );
+            ui.separator();
+            if ui.button("Hikaru Sampler  [Sampler]").clicked() {
+                if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+                    if let Some(s) = track.effects.get_mut(slot_idx) {
+                        if let Some(ref mut dms) = s.dms_state {
+                            if let Some(pad) = dms.pads.get_mut(sel_pad) {
+                                if pad.sampler.is_none() {
+                                    pad.sampler = Some(
+                                        crate::views::hikaru_native_plugins::HikaruSampler::default(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                ui.close_menu();
+            }
+        },
+    );
+}
+
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     let track_idx = app.safe_track_index();
     let is_project_master = track_idx == 0;
-    let (track_name, track_color) = app
+    let (track_name, track_color, has_opendms) = app
         .current_tracks()
         .get(track_idx)
-        .map(|t| (t.name.clone(), t.color))
-        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE));
+        .map(|t| {
+            let dms = t.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
+            (t.name.clone(), t.color, dms)
+        })
+        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE, false));
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -240,19 +465,19 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                     Color32::from_rgb(0x9E, 0xA2, 0xAA)
                 },
             );
-            for (ci, ch) in "PROJ".chars().enumerate() {
-                p.text(
-                    pos2(proj_tab.center().x, proj_tab.min.y + 27.0 + ci as f32 * 10.5),
-                    Align2::CENTER_CENTER,
-                    ch.to_string(),
-                    fonts::semibold(8.5),
-                    if is_project_master {
-                        Color32::from_rgb(0x11, 0x12, 0x14)
-                    } else {
-                        Color32::from_rgb(0xA6, 0xAA, 0xB2)
-                    },
-                );
-            }
+            paint_rotated_label(
+                p,
+                proj_tab.center().x,
+                proj_tab.max.y - 10.0,
+                10,
+                "PROJECT",
+                8.5,
+                if is_project_master {
+                    Color32::from_rgb(0x11, 0x12, 0x14)
+                } else {
+                    Color32::from_rgb(0xA6, 0xAA, 0xB2)
+                },
+            );
 
             p.rect_filled(
                 trk_tab,
@@ -268,19 +493,35 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                 0.0,
                 track_color,
             );
-            for (ci, ch) in "TRACK".chars().enumerate() {
-                p.text(
-                    pos2(trk_tab.center().x + 1.0, trk_tab.min.y + 14.0 + ci as f32 * 11.0),
-                    Align2::CENTER_CENTER,
-                    ch.to_string(),
-                    fonts::semibold(8.5),
-                    if !is_project_master {
-                        Color32::from_rgb(0x11, 0x12, 0x14)
-                    } else {
-                        Color32::from_rgb(0xA6, 0xAA, 0xB2)
-                    },
-                );
-            }
+            icons::paint_icon(
+                p,
+                Rect::from_center_size(pos2(trk_tab.center().x + 1.0, trk_tab.min.y + 12.0), vec2(12.0, 10.0)),
+                icons::KEYBOARD,
+                if !is_project_master {
+                    Color32::from_rgb(0x11, 0x12, 0x14)
+                } else {
+                    Color32::from_rgb(0x9E, 0xA2, 0xAA)
+                },
+                1.4,
+            );
+            let trk_label = if has_opendms {
+                "DRUM MACHINE"
+            } else {
+                "TRACK"
+            };
+            paint_rotated_label(
+                p,
+                trk_tab.center().x + 1.0,
+                trk_tab.max.y - 8.0,
+                14,
+                trk_label,
+                8.0,
+                if !is_project_master {
+                    Color32::from_rgb(0x11, 0x12, 0x14)
+                } else {
+                    Color32::from_rgb(0xA6, 0xAA, 0xB2)
+                },
+            );
 
             p.line_segment(
                 [strip_rect.right_top(), strip_rect.right_bottom()],
@@ -401,183 +642,238 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             egui::StrokeKind::Inside,
                         );
 
-                        let inner_rect = card_rect.shrink2(vec2(6.0, 4.0));
-                        let inner_w = inner_rect.width();
-                        let mut card_ui = ui.new_child(
-                            egui::UiBuilder::new()
-                                .max_rect(inner_rect)
-                                .layout(egui::Layout::top_down(egui::Align::Min)),
-                        );
-                        card_ui.set_clip_rect(inner_rect.intersect(ui.clip_rect()));
-                        card_ui.spacing_mut().item_spacing = vec2(4.0, 3.0);
-
-                        // Barra de título estilo módulo Bitwig (Power switch vectorial + Título + Close vectorial)
-                        let (hdr_rect, _) =
-                            card_ui.allocate_exact_size(vec2(inner_w, 20.0), Sense::hover());
-                        {
-                            let active = slot.active;
-                            let pwr_r = Rect::from_min_size(
-                                pos2(hdr_rect.min.x, hdr_rect.center().y - 9.0),
-                                vec2(18.0, 18.0),
+                        if slot.name == "Hikaru OpenDMS" {
+                            let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let sb_out = render_bitwig_device_sidebar(
+                                ui,
+                                sb_rect,
+                                ("dms_sb", slot_idx),
+                                "DRUM MACHINE",
+                                slot.active,
+                                is_selected,
                             );
-                            let pwr_resp = card_ui.interact(
-                                pwr_r,
-                                card_ui.id().with(("dsp_pwr", slot_idx)),
-                                Sense::click(),
-                            );
-                            icons::paint_power_switch(
-                                card_ui.painter(),
-                                pwr_r,
-                                if active {
-                                    theme::ACCENT_ORANGE
-                                } else {
-                                    Color32::from_rgb(0x44, 0x47, 0x50)
-                                },
-                                if active {
-                                    Color32::from_rgb(0x14, 0x12, 0x10)
-                                } else {
-                                    Color32::from_rgb(0xB8, 0xBC, 0xC4)
-                                },
-                            );
-                            if pwr_resp.on_hover_text("Device Active / Bypass").clicked() {
+                            if sb_out.toggled_power {
                                 if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
                                     if let Some(s) = t.effects.get_mut(slot_idx) {
                                         s.active = !s.active;
                                     }
                                 }
                             }
-
-                            let title_r = Rect::from_min_max(
-                                pos2(pwr_r.max.x + 5.0, hdr_rect.min.y),
-                                pos2(hdr_rect.max.x - 22.0, hdr_rect.max.y),
-                            );
-                            let title_resp = card_ui.interact(
-                                title_r,
-                                card_ui.id().with(("dsp_title", slot_idx)),
-                                Sense::click(),
-                            );
-                            if is_selected {
-                                let pill_w =
-                                    (slot.name.len() as f32 * 6.6 + 12.0).min(title_r.width());
-                                let title_pill = Rect::from_min_size(
-                                    pos2(title_r.min.x, hdr_rect.center().y - 8.5),
-                                    vec2(pill_w, 17.0),
-                                );
-                                card_ui
-                                    .painter()
-                                    .rect_filled(title_pill, 2.5, theme::ACCENT_ORANGE);
-                            }
-                            card_ui.painter().text(
-                                pos2(title_r.min.x + 5.0, hdr_rect.center().y),
-                                Align2::LEFT_CENTER,
-                                &slot.name,
-                                fonts::semibold(11.0),
-                                if is_selected {
-                                    Color32::from_rgb(0x12, 0x13, 0x15)
-                                } else {
-                                    theme::TEXT_PRIMARY
-                                },
-                            );
-                            if title_resp.clicked() {
+                            if sb_out.clicked_title {
                                 app.selected_slot_index = slot_idx;
                             }
 
-                            let close_r = Rect::from_min_size(
-                                pos2(hdr_rect.max.x - 18.0, hdr_rect.center().y - 9.0),
-                                vec2(18.0, 18.0),
+                            let body_rect = Rect::from_min_max(
+                                pos2(sb_rect.max.x + 3.0, card_rect.min.y + 4.0),
+                                pos2(card_rect.max.x - 4.0, card_rect.max.y - 4.0),
                             );
-                            let close_resp = card_ui.interact(
+                            let mut body_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                            render_rack_card(&mut body_ui, app, track_idx, slot_idx);
+
+                            let close_r = Rect::from_min_size(
+                                pos2(card_rect.max.x - 16.0, card_rect.min.y + 3.0),
+                                vec2(13.0, 13.0),
+                            );
+                            let close_resp = ui.interact(
                                 close_r,
-                                card_ui.id().with(("dsp_close", slot_idx)),
+                                ui.id().with(("dsp_close", slot_idx)),
                                 Sense::click(),
                             );
-                            if close_resp.hovered() {
-                                card_ui.painter().rect_filled(
-                                    close_r,
-                                    2.5,
-                                    Color32::from_rgb(0x48, 0x4A, 0x52),
-                                );
-                            }
                             icons::paint_icon(
-                                card_ui.painter(),
-                                close_r.shrink(3.5),
+                                ui.painter(),
+                                close_r.shrink(2.5),
                                 icons::X_CLOSE,
                                 if close_resp.hovered() {
                                     Color32::WHITE
                                 } else {
                                     theme::TEXT_MUTED
                                 },
-                                1.7,
+                                1.5,
                             );
                             if close_resp.on_hover_text("Remove Device (Del)").clicked() {
                                 slot_to_remove = Some(slot_idx);
                             }
-                        }
+                        } else {
+                            let inner_rect = card_rect.shrink2(vec2(6.0, 4.0));
+                            let inner_w = inner_rect.width();
+                            let mut card_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(inner_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            card_ui.set_clip_rect(inner_rect.intersect(ui.clip_rect()));
+                            card_ui.spacing_mut().item_spacing = vec2(4.0, 3.0);
 
-                        let sep_y = hdr_rect.max.y + 1.5;
-                        card_ui.painter().line_segment(
-                            [
-                                pos2(inner_rect.min.x, sep_y),
-                                pos2(inner_rect.max.x, sep_y),
-                            ],
-                            Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x25)),
-                        );
-
-                        let body_rect = Rect::from_min_max(
-                            pos2(inner_rect.min.x, (sep_y + 3.0).min(inner_rect.max.y)),
-                            inner_rect.max,
-                        );
-                        let mut body_ui = card_ui.new_child(
-                            egui::UiBuilder::new()
-                                .max_rect(body_rect)
-                                .layout(egui::Layout::top_down(egui::Align::Min)),
-                        );
-                        body_ui.set_clip_rect(body_rect.intersect(card_ui.clip_rect()));
-
-                        // Cuerpo del dispositivo DSP
-                        match slot.name.as_str() {
-                            "OpenWavetable" => {
-                                open_wavetable::render_module(&mut body_ui, app, track_idx, slot_idx);
-                            }
-                            "Sampler" | "Hikaru Sampler" => {
-                                sampler_editor::render_module(&mut body_ui, app, track_idx, slot_idx);
-                            }
-                            "Hikaru OpenDMS" => {
-                                render_rack_card(&mut body_ui, app, track_idx, slot_idx);
-                            }
-                            "OpenEQ3" => {
-                                hikaru_openeq3::render_module(&mut body_ui);
-                            }
-                            "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
-                                openspectral_phaser::render_module(
-                                    &mut body_ui,
-                                    app,
-                                    track_idx,
-                                    slot_idx,
+                            // Barra de título estilo módulo Bitwig (Power switch vectorial + Título + Close vectorial)
+                            let (hdr_rect, _) =
+                                card_ui.allocate_exact_size(vec2(inner_w, 20.0), Sense::hover());
+                            {
+                                let active = slot.active;
+                                let pwr_r = Rect::from_min_size(
+                                    pos2(hdr_rect.min.x, hdr_rect.center().y - 9.0),
+                                    vec2(18.0, 18.0),
                                 );
-                            }
-                            "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => {
-                                hikaru_openmodulation::render_module(
-                                    &mut body_ui,
-                                    app,
-                                    track_idx,
-                                    slot_idx,
+                                let pwr_resp = card_ui.interact(
+                                    pwr_r,
+                                    card_ui.id().with(("dsp_pwr", slot_idx)),
+                                    Sense::click(),
                                 );
+                                icons::paint_power_switch(
+                                    card_ui.painter(),
+                                    pwr_r,
+                                    if active {
+                                        theme::ACCENT_ORANGE
+                                    } else {
+                                        Color32::from_rgb(0x44, 0x47, 0x50)
+                                    },
+                                    if active {
+                                        Color32::from_rgb(0x14, 0x12, 0x10)
+                                    } else {
+                                        Color32::from_rgb(0xB8, 0xBC, 0xC4)
+                                    },
+                                );
+                                if pwr_resp.on_hover_text("Device Active / Bypass").clicked() {
+                                    if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                        if let Some(s) = t.effects.get_mut(slot_idx) {
+                                            s.active = !s.active;
+                                        }
+                                    }
+                                }
+
+                                let title_r = Rect::from_min_max(
+                                    pos2(pwr_r.max.x + 5.0, hdr_rect.min.y),
+                                    pos2(hdr_rect.max.x - 22.0, hdr_rect.max.y),
+                                );
+                                let title_resp = card_ui.interact(
+                                    title_r,
+                                    card_ui.id().with(("dsp_title", slot_idx)),
+                                    Sense::click(),
+                                );
+                                if is_selected {
+                                    let pill_w =
+                                        (slot.name.len() as f32 * 6.6 + 12.0).min(title_r.width());
+                                    let title_pill = Rect::from_min_size(
+                                        pos2(title_r.min.x, hdr_rect.center().y - 8.5),
+                                        vec2(pill_w, 17.0),
+                                    );
+                                    card_ui
+                                        .painter()
+                                        .rect_filled(title_pill, 2.5, theme::ACCENT_ORANGE);
+                                }
+                                card_ui.painter().text(
+                                    pos2(title_r.min.x + 5.0, hdr_rect.center().y),
+                                    Align2::LEFT_CENTER,
+                                    &slot.name,
+                                    fonts::semibold(11.0),
+                                    if is_selected {
+                                        Color32::from_rgb(0x12, 0x13, 0x15)
+                                    } else {
+                                        theme::TEXT_PRIMARY
+                                    },
+                                );
+                                if title_resp.clicked() {
+                                    app.selected_slot_index = slot_idx;
+                                }
+
+                                let close_r = Rect::from_min_size(
+                                    pos2(hdr_rect.max.x - 18.0, hdr_rect.center().y - 9.0),
+                                    vec2(18.0, 18.0),
+                                );
+                                let close_resp = card_ui.interact(
+                                    close_r,
+                                    card_ui.id().with(("dsp_close", slot_idx)),
+                                    Sense::click(),
+                                );
+                                if close_resp.hovered() {
+                                    card_ui.painter().rect_filled(
+                                        close_r,
+                                        2.5,
+                                        Color32::from_rgb(0x48, 0x4A, 0x52),
+                                    );
+                                }
+                                icons::paint_icon(
+                                    card_ui.painter(),
+                                    close_r.shrink(3.5),
+                                    icons::X_CLOSE,
+                                    if close_resp.hovered() {
+                                        Color32::WHITE
+                                    } else {
+                                        theme::TEXT_MUTED
+                                    },
+                                    1.7,
+                                );
+                                if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                    slot_to_remove = Some(slot_idx);
+                                }
                             }
-                            _ => {
-                                body_ui.vertical_centered(|ui| {
-                                    ui.add_space(16.0);
-                                    ui.label(
-                                        RichText::new(&slot.name)
-                                            .font(fonts::semibold(12.0))
-                                            .color(theme::TEXT_SECONDARY),
+
+                            let sep_y = hdr_rect.max.y + 1.5;
+                            card_ui.painter().line_segment(
+                                [
+                                    pos2(inner_rect.min.x, sep_y),
+                                    pos2(inner_rect.max.x, sep_y),
+                                ],
+                                Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x25)),
+                            );
+
+                            let body_rect = Rect::from_min_max(
+                                pos2(inner_rect.min.x, (sep_y + 3.0).min(inner_rect.max.y)),
+                                inner_rect.max,
+                            );
+                            let mut body_ui = card_ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            body_ui.set_clip_rect(body_rect.intersect(card_ui.clip_rect()));
+
+                            // Cuerpo del dispositivo DSP
+                            match slot.name.as_str() {
+                                "OpenWavetable" => {
+                                    open_wavetable::render_module(&mut body_ui, app, track_idx, slot_idx);
+                                }
+                                "Sampler" | "Hikaru Sampler" => {
+                                    sampler_editor::render_module(&mut body_ui, app, track_idx, slot_idx);
+                                }
+                                "OpenEQ3" => {
+                                    hikaru_openeq3::render_module(&mut body_ui);
+                                }
+                                "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
+                                    openspectral_phaser::render_module(
+                                        &mut body_ui,
+                                        app,
+                                        track_idx,
+                                        slot_idx,
                                     );
-                                    ui.label(
-                                        RichText::new("External Plugin")
-                                            .font(fonts::regular(10.0))
-                                            .color(theme::TEXT_MUTED),
+                                }
+                                "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => {
+                                    hikaru_openmodulation::render_module(
+                                        &mut body_ui,
+                                        app,
+                                        track_idx,
+                                        slot_idx,
                                     );
-                                });
+                                }
+                                _ => {
+                                    body_ui.vertical_centered(|ui| {
+                                        ui.add_space(16.0);
+                                        ui.label(
+                                            RichText::new(&slot.name)
+                                                .font(fonts::semibold(12.0))
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                        ui.label(
+                                            RichText::new("External Plugin")
+                                                .font(fonts::regular(10.0))
+                                                .color(theme::TEXT_MUTED),
+                                        );
+                                    });
+                                }
                             }
                         }
 
@@ -605,11 +901,23 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 });
 
                             if let Some((sel_pad, note_lbl, maybe_smp)) = pad_fx_info {
+                                // Ranura `+` antes del dispositivo del pad (estilo Bitwig)
+                                render_dms_fx_plus_slot(
+                                    ui,
+                                    app,
+                                    track_idx,
+                                    slot_idx,
+                                    sel_pad,
+                                    &note_lbl,
+                                    card_h,
+                                    "before",
+                                );
+
                                 if let Some(mut pad_smp) = maybe_smp {
                                     // Corchete superior azul estilo Bitwig (`┍━━━━━━━━━━┑`) para dispositivos dentro de FX
                                     let fx_bracket_color = Color32::from_rgb(0x40, 0x6A, 0x80);
                                     let (nested_outer_rect, _) = ui.allocate_exact_size(
-                                        vec2(SAMPLER_CARD_WIDTH + 18.0, card_h),
+                                        vec2(SAMPLER_CARD_WIDTH + 24.0 + 18.0, card_h),
                                         Sense::hover(),
                                     );
                                     {
@@ -680,78 +988,66 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         egui::StrokeKind::Inside,
                                     );
 
-                                    let smp_inner = smp_card_rect.shrink2(vec2(6.0, 4.0));
-                                    let mut smp_card_ui = ui.new_child(
-                                        egui::UiBuilder::new()
-                                            .max_rect(smp_inner)
-                                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                                    let smp_sb_rect = Rect::from_min_size(
+                                        smp_card_rect.min,
+                                        vec2(22.0, smp_card_rect.height()),
                                     );
-                                    smp_card_ui.set_clip_rect(smp_inner.intersect(ui.clip_rect()));
-
-                                    let (shdr, _) = smp_card_ui.allocate_exact_size(
-                                        vec2(smp_inner.width(), 20.0),
-                                        Sense::hover(),
+                                    let smp_title = if pad_smp.sample_name.is_empty() {
+                                        format!("Sampler ({note_lbl})")
+                                    } else {
+                                        pad_smp.sample_name.clone()
+                                    };
+                                    let smp_sb = render_bitwig_device_sidebar(
+                                        ui,
+                                        smp_sb_rect,
+                                        ("dms_pad_smp_sb", slot_idx * 256 + sel_pad),
+                                        &smp_title,
+                                        true,
+                                        true,
                                     );
-                                    let pill_title = format!("Sampler ({note_lbl})");
-                                    let pill_w = (pill_title.len() as f32 * 6.4 + 12.0).min(180.0);
-                                    smp_card_ui.painter().rect_filled(
-                                        Rect::from_min_size(
-                                            pos2(shdr.min.x, shdr.center().y - 8.5),
-                                            vec2(pill_w, 17.0),
-                                        ),
-                                        2.5,
-                                        theme::ACCENT_ORANGE,
-                                    );
-                                    smp_card_ui.painter().text(
-                                        pos2(shdr.min.x + 6.0, shdr.center().y),
-                                        Align2::LEFT_CENTER,
-                                        &pill_title,
-                                        fonts::semibold(11.0),
-                                        Color32::from_rgb(0x12, 0x13, 0x15),
-                                    );
+                                    if smp_sb.clicked_folder {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Audio WAV", &["wav", "WAV"])
+                                            .pick_file()
+                                        {
+                                            let _ = pad_smp.load_wav(&path);
+                                        }
+                                    }
 
                                     let close_r = Rect::from_min_size(
-                                        pos2(shdr.max.x - 18.0, shdr.center().y - 9.0),
-                                        vec2(18.0, 18.0),
+                                        pos2(smp_card_rect.max.x - 16.0, smp_card_rect.min.y + 3.0),
+                                        vec2(13.0, 13.0),
                                     );
-                                    let close_resp = smp_card_ui.interact(
+                                    let close_resp = ui.interact(
                                         close_r,
-                                        smp_card_ui.id().with(("dms_pad_smp_close", slot_idx, sel_pad)),
+                                        ui.id().with(("dms_pad_smp_close", slot_idx, sel_pad)),
                                         Sense::click(),
                                     );
                                     icons::paint_icon(
-                                        smp_card_ui.painter(),
-                                        close_r.shrink(3.5),
+                                        ui.painter(),
+                                        close_r.shrink(2.5),
                                         icons::X_CLOSE,
                                         if close_resp.hovered() {
                                             Color32::WHITE
                                         } else {
                                             theme::TEXT_MUTED
                                         },
-                                        1.7,
+                                        1.5,
                                     );
                                     let remove_pad_smp = close_resp
                                         .on_hover_text("Quitar Sampler del pad")
                                         .clicked();
 
-                                    let s_sep_y = shdr.max.y + 1.5;
-                                    smp_card_ui.painter().line_segment(
-                                        [
-                                            pos2(smp_inner.min.x, s_sep_y),
-                                            pos2(smp_inner.max.x, s_sep_y),
-                                        ],
-                                        Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x25)),
-                                    );
                                     let s_body = Rect::from_min_max(
-                                        pos2(smp_inner.min.x, (s_sep_y + 3.0).min(smp_inner.max.y)),
-                                        smp_inner.max,
+                                        pos2(smp_sb_rect.max.x + 4.0, smp_card_rect.min.y + 4.0),
+                                        pos2(smp_card_rect.max.x - 4.0, smp_card_rect.max.y - 4.0),
                                     );
-                                    let mut s_body_ui = smp_card_ui.new_child(
+                                    let mut s_body_ui = ui.new_child(
                                         egui::UiBuilder::new()
                                             .max_rect(s_body)
                                             .layout(egui::Layout::top_down(egui::Align::Min)),
                                     );
-                                    s_body_ui.set_clip_rect(s_body.intersect(smp_card_ui.clip_rect()));
+                                    s_body_ui.set_clip_rect(s_body.intersect(ui.clip_rect()));
                                     sampler_editor::render_sampler_state(
                                         &mut s_body_ui,
                                         &mut pad_smp,
@@ -771,88 +1067,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                             }
                                         }
                                     }
-                                } else {
-                                    // Ranura `+` estilo Bitwig para insertar dispositivo en la cadena FX del pad
-                                    let (slot_col, _) = ui.allocate_exact_size(
-                                        vec2(18.0, card_h),
-                                        Sense::hover(),
-                                    );
-                                    let plus_btn_rect = Rect::from_center_size(
-                                        slot_col.center(),
-                                        vec2(16.0, 26.0),
-                                    );
-                                    let plus_id = ui
-                                        .id()
-                                        .with(("dms_fx_insert_btn", track_idx, slot_idx, sel_pad));
-                                    let plus_resp = ui
-                                        .interact(plus_btn_rect, plus_id, Sense::click())
-                                        .on_hover_text(format!("Insert device ({note_lbl})"));
-                                    if ui.is_rect_visible(plus_btn_rect) {
-                                        let p = ui.painter();
-                                        let dot_center =
-                                            pos2(plus_btn_rect.center().x, plus_btn_rect.min.y + 4.0);
-                                        p.circle_filled(
-                                            dot_center,
-                                            2.0,
-                                            Color32::from_rgb(0x40, 0x6A, 0x80),
-                                        );
-                                        p.text(
-                                            pos2(plus_btn_rect.center().x, plus_btn_rect.center().y + 3.0),
-                                            Align2::CENTER_CENTER,
-                                            "+",
-                                            fonts::semibold(13.0),
-                                            if plus_resp.hovered() {
-                                                Color32::WHITE
-                                            } else {
-                                                theme::TEXT_SECONDARY
-                                            },
-                                        );
-                                    }
-                                    if plus_resp.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
-                                    let popup_id = ui.id().with((
-                                        "dms_fx_insert_popup",
+
+                                    // Ranura `+` después del Sampler (estilo Bitwig)
+                                    render_dms_fx_plus_slot(
+                                        ui,
+                                        app,
                                         track_idx,
                                         slot_idx,
                                         sel_pad,
-                                    ));
-                                    if plus_resp.clicked() {
-                                        ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                    }
-                                    egui::popup_below_widget(
-                                        ui,
-                                        popup_id,
-                                        &plus_resp,
-                                        egui::PopupCloseBehavior::CloseOnClickOutside,
-                                        |ui| {
-                                            ui.set_min_width(185.0);
-                                            ui.label(
-                                                RichText::new(format!("Insert Device ({note_lbl})"))
-                                                    .font(fonts::semibold(11.0))
-                                                    .color(theme::ACCENT_ORANGE),
-                                            );
-                                            ui.separator();
-                                            if ui.button("Hikaru Sampler  [Sampler]").clicked() {
-                                                if let Some(track) =
-                                                    app.current_tracks_mut().get_mut(track_idx)
-                                                {
-                                                    if let Some(s) = track.effects.get_mut(slot_idx)
-                                                    {
-                                                        if let Some(ref mut dms) = s.dms_state {
-                                                            if let Some(pad) =
-                                                                dms.pads.get_mut(sel_pad)
-                                                            {
-                                                                pad.sampler = Some(
-                                                                    crate::views::hikaru_native_plugins::HikaruSampler::default(),
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                ui.close_menu();
-                                            }
-                                        },
+                                        &note_lbl,
+                                        card_h,
+                                        "after",
                                     );
                                 }
                             }

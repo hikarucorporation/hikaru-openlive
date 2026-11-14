@@ -468,6 +468,48 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     &mut actions,
                 );
                 used_w += w + 1.0;
+
+                // Sub-canales de mixer por cada pad con sample cargado en Hikaru OpenDMS (estilo Bitwig Drum Machine)
+                let dms_loaded_pads: Vec<(usize, usize)> = state
+                    .tracks()
+                    .get(idx)
+                    .map(|t| {
+                        t.effects
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(s_idx, s)| {
+                                (s.name == "Hikaru OpenDMS")
+                                    .then_some(s.dms_state.as_ref())
+                                    .flatten()
+                                    .filter(|dms| dms.chains_expanded)
+                                    .map(|dms| {
+                                        dms.pads
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(_, p)| p.sampler.is_some() || p.sample_path.is_some())
+                                            .map(move |(p_idx, _)| (s_idx, p_idx))
+                                            .collect::<Vec<_>>()
+                                    })
+                            })
+                            .flatten()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for (slot_idx, pad_idx) in dms_loaded_pads {
+                    let pw = render_dms_pad_channel_strip(
+                        ui,
+                        state,
+                        idx,
+                        slot_idx,
+                        pad_idx,
+                        show_launcher,
+                        slots_view_h,
+                        fader_bay_h,
+                        &mut actions,
+                    );
+                    used_w += pw + 1.0;
+                }
             }
 
             // Botón `+` (Add Track) inmediatamente a la derecha de la última pista de usuario
@@ -754,6 +796,56 @@ fn render_channel_strip(
                 {
                     if let Some(tr) = state.live_tracks.get_mut(idx) {
                         tr.is_expanded = !tr.is_expanded;
+                    }
+                }
+            }
+            // Esquina desplegable estilo Bitwig Drum Machine cuando hay pads cargados en OpenDMS
+            let dms_chain_info = state
+                .tracks()
+                .get(idx)
+                .and_then(|t| {
+                    t.effects.iter().enumerate().find_map(|(s_idx, s)| {
+                        (s.name == "Hikaru OpenDMS")
+                            .then_some(s.dms_state.as_ref())
+                            .flatten()
+                            .filter(|dms| {
+                                dms.pads
+                                    .iter()
+                                    .any(|p| p.sampler.is_some() || p.sample_path.is_some())
+                            })
+                            .map(|dms| (s_idx, dms.chains_expanded))
+                    })
+                });
+            if let Some((dms_slot_idx, chains_expanded)) = dms_chain_info {
+                let corner_sz = 12.0_f32;
+                let corner_rect = Rect::from_min_max(
+                    pos2(hdr_rect.max.x - corner_sz, hdr_rect.min.y),
+                    pos2(hdr_rect.max.x, hdr_rect.min.y + corner_sz),
+                );
+                ui.painter().add(egui::Shape::convex_polygon(
+                    vec![
+                        pos2(hdr_rect.max.x - corner_sz, hdr_rect.min.y),
+                        hdr_rect.right_top(),
+                        pos2(hdr_rect.max.x, hdr_rect.min.y + corner_sz),
+                    ],
+                    if chains_expanded {
+                        Color32::from_rgb(0x1E, 0x20, 0x24)
+                    } else {
+                        Color32::from_rgb(0xE8, 0xEA, 0xEE)
+                    },
+                    Stroke::NONE,
+                ));
+                if hdr_resp.clicked()
+                    && hdr_resp
+                        .interact_pointer_pos()
+                        .is_some_and(|p| corner_rect.expand(4.0).contains(p))
+                {
+                    if let Some(tr) = state.tracks_mut().get_mut(idx) {
+                        if let Some(slot) = tr.effects.get_mut(dms_slot_idx) {
+                            if let Some(ref mut dms) = slot.dms_state {
+                                dms.chains_expanded = !dms.chains_expanded;
+                            }
+                        }
                     }
                 }
             }
@@ -1412,6 +1504,348 @@ fn render_channel_strip(
                 });
 
             // 7. Pie inferior sólido de 4px del color de la pista
+            let (foot_r, _) = ui.allocate_exact_size(vec2(strip_w, 4.0), Sense::hover());
+            ui.painter().rect_filled(foot_r, 0.5, track_color);
+        });
+    });
+
+    strip_w
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_dms_pad_channel_strip(
+    ui: &mut Ui,
+    state: &mut AppState,
+    track_idx: usize,
+    slot_idx: usize,
+    pad_idx: usize,
+    show_launcher: bool,
+    slots_view_h: f32,
+    fader_bay_h: f32,
+    actions: &mut StripActions,
+) -> f32 {
+    let strip_w = 78.0_f32;
+    let Some((track_color, pad_name, mut pad_vol, mut pad_pan, mut pad_solo, mut pad_mute, is_pad_sel, has_sampler, attack_ms, decay_ms, sustain, release_ms, play_speed, dms_output_vol)) =
+        state.tracks().get(track_idx).and_then(|t| {
+            let dms = t.effects.get(slot_idx)?.dms_state.as_ref()?;
+            let pad = dms.pads.get(pad_idx)?;
+            let is_sel = state.safe_track_index() == track_idx && dms.selected_pad == pad_idx;
+            let (spd, a, d, s, r) = if let Some(ref smp) = pad.sampler {
+                let speed = smp.speed as f64
+                    * 2.0_f64.powf((pad.pitch + smp.pitch_semitones + smp.fine_cents / 100.0) as f64 / 12.0);
+                (speed, smp.attack_ms, smp.decay_ms, smp.sustain, smp.release_ms)
+            } else {
+                (
+                    2.0_f64.powf(pad.pitch as f64 / 12.0),
+                    dms.sampler.adsr.attack,
+                    dms.sampler.adsr.decay,
+                    dms.sampler.adsr.sustain,
+                    dms.sampler.adsr.release,
+                )
+            };
+            Some((
+                t.color,
+                pad.display_filename(),
+                pad.volume,
+                pad.pan,
+                pad.solo,
+                pad.mute,
+                is_sel,
+                pad.sampler.is_some(),
+                a,
+                d,
+                s,
+                r,
+                spd,
+                dms.output_vol,
+            ))
+        })
+    else {
+        return 0.0;
+    };
+
+    let strip_bg = if is_pad_sel {
+        Color32::from_rgb(0x34, 0x36, 0x3B)
+    } else {
+        Color32::from_rgb(0x24, 0x26, 0x2A)
+    };
+
+    egui::Frame::NONE.fill(strip_bg).show(ui, |ui| {
+        ui.set_min_width(strip_w);
+        ui.set_max_width(strip_w);
+        ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
+
+        ui.vertical(|ui| {
+            // 1. Cabecera del pad con el mismo color del track padre (estilo Bitwig Drum Chain)
+            let (hdr_rect, hdr_resp) =
+                ui.allocate_exact_size(vec2(strip_w, HEADER_BLOCK_H), Sense::click());
+            ui.painter().rect_filled(hdr_rect, 1.0, track_color);
+            if is_pad_sel {
+                ui.painter().rect_stroke(
+                    hdr_rect.shrink(1.0),
+                    1.0,
+                    Stroke::new(1.5_f32, Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            let short_name: String = if pad_name.chars().count() > 11 {
+                let mut s: String = pad_name.chars().take(10).collect();
+                s.push('…');
+                s
+            } else {
+                pad_name.clone()
+            };
+            ui.painter().text(
+                hdr_rect.center(),
+                Align2::CENTER_CENTER,
+                &short_name,
+                fonts::semibold(10.0),
+                Color32::from_rgb(0x11, 0x12, 0x14),
+            );
+            if hdr_resp.on_hover_text(&pad_name).clicked() {
+                actions.selected_track_idx = track_idx;
+                state.selected_slot_index = slot_idx;
+                state.show_dsp_rack = true;
+                if let Some(tr) = state.tracks_mut().get_mut(track_idx) {
+                    if let Some(slot) = tr.effects.get_mut(slot_idx) {
+                        if let Some(ref mut dms) = slot.dms_state {
+                            dms.selected_pad = pad_idx;
+                            dms.fx_open = true;
+                        }
+                    }
+                }
+            }
+
+            // 2. Área del Clip Launcher + botón ▶ para disparar el pad
+            if show_launcher {
+                let (empty_slots_r, _) =
+                    ui.allocate_exact_size(vec2(strip_w, slots_view_h), Sense::hover());
+                ui.painter()
+                    .rect_filled(empty_slots_r, 0.0, Color32::from_rgb(0x18, 0x19, 0x1C));
+
+                let (play_row_r, play_resp) =
+                    ui.allocate_exact_size(vec2(strip_w, STOP_ROW_H), Sense::click());
+                ui.painter().rect_filled(
+                    play_row_r,
+                    0.0,
+                    if play_resp.hovered() {
+                        Color32::from_rgb(0x36, 0x38, 0x3F)
+                    } else {
+                        Color32::from_rgb(0x28, 0x2A, 0x2F)
+                    },
+                );
+                icons::paint_play_triangle(
+                    ui.painter(),
+                    Rect::from_center_size(play_row_r.center(), vec2(8.0, 9.0)),
+                    if play_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(0xB8, 0xBC, 0xC4)
+                    },
+                );
+                if play_resp.on_hover_text("Disparar pad").clicked() {
+                    state.audio_proxy.send(GuiCommand::DmsNoteOn {
+                        pad_idx,
+                        gain: pad_vol * dms_output_vol,
+                        pan: pad_pan,
+                        velocity: 1.0,
+                        play_speed,
+                        attack_ms,
+                        decay_ms,
+                        sustain,
+                        release_ms,
+                    });
+                }
+            }
+
+            // 3. Pozo de Devices del pad (muestra Sampler si está cargado)
+            let (dev_rect, _) =
+                ui.allocate_exact_size(vec2(strip_w, DEVICES_WELL_H), Sense::hover());
+            ui.painter()
+                .rect_filled(dev_rect, 0.0, Color32::from_rgb(0x1B, 0x1C, 0x1F));
+            ui.painter().rect_stroke(
+                dev_rect,
+                0.0,
+                Stroke::new(1.0_f32, Color32::from_rgb(0x10, 0x11, 0x13)),
+                egui::StrokeKind::Inside,
+            );
+            if has_sampler {
+                let chip_r = Rect::from_min_size(
+                    pos2(dev_rect.min.x + 4.0, dev_rect.min.y + 6.0),
+                    vec2(strip_w - 8.0, 15.0),
+                );
+                let chip_resp = ui.interact(
+                    chip_r,
+                    ui.id().with(("dms_pad_chip", track_idx, slot_idx, pad_idx)),
+                    Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    chip_r,
+                    2.0,
+                    if chip_resp.hovered() {
+                        Color32::from_rgb(0x42, 0x45, 0x4D)
+                    } else {
+                        Color32::from_rgb(0x36, 0x38, 0x3E)
+                    },
+                );
+                ui.painter().circle_filled(
+                    pos2(chip_r.min.x + 5.0, chip_r.center().y),
+                    2.2,
+                    ACCENT_ORANGE,
+                );
+                ui.painter().text(
+                    pos2(chip_r.min.x + 10.5, chip_r.center().y),
+                    Align2::LEFT_CENTER,
+                    "Sampler",
+                    fonts::semibold(9.0),
+                    TEXT_PRIMARY,
+                );
+                if chip_resp.clicked() {
+                    actions.selected_track_idx = track_idx;
+                    state.selected_slot_index = slot_idx;
+                    state.show_dsp_rack = true;
+                    if let Some(tr) = state.tracks_mut().get_mut(track_idx) {
+                        if let Some(slot) = tr.effects.get_mut(slot_idx) {
+                            if let Some(ref mut dms) = slot.dms_state {
+                                dms.selected_pad = pad_idx;
+                                dms.fx_open = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Caja de Sends (alineada con el track padre)
+            let (sends_rect, _) =
+                ui.allocate_exact_size(vec2(strip_w, SENDS_BOX_H), Sense::hover());
+            ui.painter()
+                .rect_filled(sends_rect, 0.0, Color32::from_rgb(0x46, 0x48, 0x4E));
+
+            // 5. Sección I/O (alineada con el track padre)
+            let (io_rect, _) = ui.allocate_exact_size(vec2(strip_w, IO_BOX_H), Sense::hover());
+            ui.painter()
+                .rect_filled(io_rect, 0.0, Color32::from_rgb(0x32, 0x34, 0x39));
+
+            // 6. Botones S / M + Pan + dB + Fader vertical del pad
+            egui::Frame::NONE
+                .fill(strip_bg)
+                .inner_margin(egui::Margin::symmetric(4, 3))
+                .show(ui, |ui| {
+                    let inner_w = strip_w - 8.0;
+                    ui.set_min_width(inner_w);
+                    ui.set_max_width(inner_w);
+                    ui.spacing_mut().item_spacing.y = 3.0;
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let half_w = (inner_w * 0.5).floor();
+                        if capsule_text_button(
+                            ui,
+                            vec2(half_w, 18.0),
+                            "S",
+                            9.5,
+                            pad_solo,
+                            SOLO_YELLOW,
+                            JoinSide::Left,
+                            false,
+                        )
+                        .on_hover_text("Solo Pad")
+                        .clicked()
+                        {
+                            pad_solo = !pad_solo;
+                            if let Some(tr) = state.tracks_mut().get_mut(track_idx) {
+                                if let Some(slot) = tr.effects.get_mut(slot_idx) {
+                                    if let Some(ref mut dms) = slot.dms_state {
+                                        if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                            pad.solo = pad_solo;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if capsule_text_button(
+                            ui,
+                            vec2(inner_w - half_w, 18.0),
+                            "M",
+                            9.5,
+                            pad_mute,
+                            MUTE_BLUE,
+                            JoinSide::Right,
+                            false,
+                        )
+                        .on_hover_text("Mute Pad")
+                        .clicked()
+                        {
+                            pad_mute = !pad_mute;
+                            if let Some(tr) = state.tracks_mut().get_mut(track_idx) {
+                                if let Some(slot) = tr.effects.get_mut(slot_idx) {
+                                    if let Some(ref mut dms) = slot.dms_state {
+                                        if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                            pad.mute = pad_mute;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    let (pan_resp, pan_changed) = fader_horizontal_range(
+                        ui,
+                        vec2(inner_w, 13.0),
+                        &mut pad_pan,
+                        -1.0..=1.0,
+                        0.0,
+                        BW_FADER_AMBER,
+                        BW_FADER_ORANGE,
+                        true,
+                    );
+                    pan_resp.on_hover_text("Pad Pan (double-click to center)");
+                    if pan_changed {
+                        if let Some(tr) = state.tracks_mut().get_mut(track_idx) {
+                            if let Some(slot) = tr.effects.get_mut(slot_idx) {
+                                if let Some(ref mut dms) = slot.dms_state {
+                                    if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                        pad.pan = pad_pan;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let (db_row, _) = ui.allocate_exact_size(vec2(inner_w, 14.0), Sense::hover());
+                    ui.painter().text(
+                        pos2(db_row.max.x - 1.0, db_row.center().y),
+                        Align2::RIGHT_CENTER,
+                        format_strip_db(pad_vol),
+                        fonts::lcd(10.5),
+                        BW_FADER_ORANGE,
+                    );
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        let fader_w = (inner_w - 6.0).max(28.0);
+                        let (vol_resp, vol_changed) = fader_vertical_track_vol(
+                            ui,
+                            vec2(fader_w, fader_bay_h - 4.0),
+                            &mut pad_vol,
+                            1.0,
+                        );
+                        vol_resp.on_hover_text("Pad Volume");
+                        if vol_changed {
+                            if let Some(tr) = state.tracks_mut().get_mut(track_idx) {
+                                if let Some(slot) = tr.effects.get_mut(slot_idx) {
+                                    if let Some(ref mut dms) = slot.dms_state {
+                                        if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                            pad.volume = pad_vol;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+
+            // 7. Pie inferior sólido de 4px del color de la pista padre
             let (foot_r, _) = ui.allocate_exact_size(vec2(strip_w, 4.0), Sense::hover());
             ui.painter().rect_filled(foot_r, 0.5, track_color);
         });

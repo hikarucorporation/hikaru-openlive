@@ -86,6 +86,7 @@ pub struct OpenDms {
     pub active_bank: usize,
     pub sampler: DmsSampler,
     pub fx_open: bool,
+    pub chains_expanded: bool,
     pub output_vol: f32,
 }
 
@@ -103,6 +104,7 @@ impl Default for OpenDms {
             active_bank: 0,
             sampler: DmsSampler::default(),
             fx_open: false,
+            chains_expanded: true,
             output_vol: 0.75,
         }
     }
@@ -112,7 +114,7 @@ pub fn render_dms_ui(
     ui: &mut egui::Ui,
     dms: &mut OpenDms,
     _project_bpm: f32,
-    _dragged_sample: &mut Option<PathBuf>,
+    dragged_sample: &mut Option<PathBuf>,
     audio_proxy: &AudioProxy,
 ) {
     let frame_fill = egui::Color32::from_rgb(38, 38, 40);
@@ -211,11 +213,42 @@ pub fn render_dms_ui(
                                 );
                                 if response.clicked() {
                                     dms.selected_pad = pad_idx;
+                                    if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                        if pad.sampler.is_none() {
+                                            if let Some(ref p) = pad.sample_path {
+                                                let mut smp = HikaruSampler::default();
+                                                let _ = smp.load_wav(std::path::Path::new(p));
+                                                pad.sampler = Some(smp);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let pointer_over_pad = rect.contains(
+                                    ui.input(|i| i.pointer.hover_pos()).unwrap_or(egui::Pos2::new(-1.0, -1.0)),
+                                );
+                                let is_drop_target = dragged_sample.is_some() && pointer_over_pad;
+                                if is_drop_target && ui.input(|i| i.pointer.any_released()) {
+                                    if let Some(path) = dragged_sample.take() {
+                                        if let Some(pad) = dms.pads.get_mut(pad_idx) {
+                                            let mut smp = pad.sampler.take().unwrap_or_default();
+                                            let _ = smp.load_wav(&path);
+                                            pad.sampler = Some(smp);
+                                            let path_str = path.to_string_lossy().to_string();
+                                            pad.load_sample(path_str.clone());
+                                            audio_proxy.send(GuiCommand::LoadDmsSample {
+                                                pad_idx,
+                                                path: path_str,
+                                            });
+                                        }
+                                        dms.selected_pad = pad_idx;
+                                        dms.fx_open = true;
+                                    }
                                 }
 
                                 let is_selected = dms.selected_pad == pad_idx;
                                 let painter = ui.painter_at(rect);
-                                let fill = if response.hovered() {
+                                let fill = if is_drop_target || response.hovered() {
                                     pad_hover_fill
                                 } else {
                                     pad_fill
@@ -449,7 +482,9 @@ pub fn render_dms_ui(
                                     }
                                 }
 
-                                let stroke = if is_selected {
+                                let stroke = if is_drop_target {
+                                    egui::Stroke::new(2.0_f32, BW_ACCENT_ORANGE)
+                                } else if is_selected {
                                     egui::Stroke::new(1.5_f32, theme::ACCENT_PRIMARY)
                                 } else {
                                     egui::Stroke::new(1.0_f32, pad_border)
