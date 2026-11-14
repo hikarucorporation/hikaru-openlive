@@ -816,13 +816,32 @@ fn render_channel_strip(
                             .map(|dms| (s_idx, dms.chains_expanded))
                     })
                 });
+            if is_sel {
+                ui.painter().rect_stroke(
+                    hdr_rect.shrink(1.0),
+                    1.0,
+                    Stroke::new(1.5_f32, Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+            }
             if let Some((dms_slot_idx, chains_expanded)) = dms_chain_info {
                 let corner_w = 18.0_f32;
                 let step_h = 5.0_f32;
                 let corner_rect = Rect::from_min_max(
-                    pos2(hdr_rect.max.x - corner_w - 2.0, hdr_rect.min.y),
-                    pos2(hdr_rect.max.x, hdr_rect.min.y + step_h + 6.0),
+                    pos2(hdr_rect.max.x - corner_w - 4.0, hdr_rect.min.y),
+                    pos2(hdr_rect.max.x, hdr_rect.min.y + step_h + 8.0),
                 );
+                let corner_hovered = ui
+                    .input(|i| i.pointer.hover_pos())
+                    .is_some_and(|p| corner_rect.contains(p));
+                if corner_hovered {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let tab_stroke_col = if corner_hovered {
+                    Color32::from_rgb(0xE8, 0xEC, 0xF2)
+                } else {
+                    Color32::from_rgb(0x26, 0x28, 0x2E)
+                };
                 if chains_expanded {
                     // Escalón diagonal superior derecho estilo carpeta Bitwig Drum Machine
                     let p0 = pos2(hdr_rect.max.x - corner_w, hdr_rect.min.y);
@@ -833,27 +852,46 @@ fn render_channel_strip(
                         Color32::from_rgb(0x18, 0x19, 0x1D),
                         Stroke::NONE,
                     ));
-                    // Borde claro/color siguiendo la pestaña de carpeta
-                    let tab_stroke = Stroke::new(1.5_f32, Color32::from_rgb(0xD8, 0xDC, 0xE4));
+                    // Borde de la pestaña: se alumbra al pasar el cursor, se apaga al sacarlo
+                    let tab_stroke = Stroke::new(1.5_f32, tab_stroke_col);
                     ui.painter().line_segment([hdr_rect.left_top(), p0], tab_stroke);
                     ui.painter().line_segment([p0, p1], tab_stroke);
-                    ui.painter().line_segment([p1, p2], Stroke::new(2.0_f32, track_color));
+                    ui.painter().line_segment(
+                        [p1, p2],
+                        Stroke::new(
+                            2.0_f32,
+                            if corner_hovered {
+                                tab_stroke_col
+                            } else {
+                                track_color
+                            },
+                        ),
+                    );
                 } else {
                     // Esquina plegada cuando los sub-canales están ocultos
+                    let p0 = pos2(hdr_rect.max.x - 10.0, hdr_rect.min.y);
+                    let p1 = pos2(hdr_rect.max.x, hdr_rect.min.y + 10.0);
                     ui.painter().add(egui::Shape::convex_polygon(
-                        vec![
-                            pos2(hdr_rect.max.x - 11.0, hdr_rect.min.y + 1.0),
-                            pos2(hdr_rect.max.x - 1.0, hdr_rect.min.y + 1.0),
-                            pos2(hdr_rect.max.x - 1.0, hdr_rect.min.y + 11.0),
-                        ],
-                        Color32::from_rgb(0x1E, 0x20, 0x24),
+                        vec![p0, hdr_rect.right_top(), p1],
+                        Color32::from_rgb(0x18, 0x19, 0x1D),
                         Stroke::NONE,
                     ));
+                    ui.painter().line_segment(
+                        [p0, p1],
+                        Stroke::new(
+                            1.5_f32,
+                            if corner_hovered {
+                                Color32::from_rgb(0xE8, 0xEC, 0xF2)
+                            } else {
+                                Color32::from_rgb(0x9A, 0x9E, 0xA6)
+                            },
+                        ),
+                    );
                 }
                 if hdr_resp.clicked()
                     && hdr_resp
                         .interact_pointer_pos()
-                        .is_some_and(|p| corner_rect.expand(4.0).contains(p))
+                        .is_some_and(|p| corner_rect.contains(p))
                 {
                     if let Some(tr) = state.tracks_mut().get_mut(idx) {
                         if let Some(slot) = tr.effects.get_mut(dms_slot_idx) {
@@ -863,14 +901,6 @@ fn render_channel_strip(
                         }
                     }
                 }
-            }
-            if is_sel {
-                ui.painter().rect_stroke(
-                    hdr_rect.shrink(1.0),
-                    1.0,
-                    Stroke::new(1.5_f32, Color32::WHITE),
-                    egui::StrokeKind::Inside,
-                );
             }
             ui.painter().text(
                 hdr_rect.center(),
