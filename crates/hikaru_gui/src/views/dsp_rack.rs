@@ -605,20 +605,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 });
 
                             if let Some((sel_pad, note_lbl, maybe_smp)) = pad_fx_info {
-                                let fx_blue = Color32::from_rgb(0x4A, 0x90, 0xE2);
-                                // Indicador azul superior derecho estilo Bitwig cuando FX está abierto
-                                ui.painter().rect_filled(
-                                    Rect::from_min_size(
-                                        pos2(card_rect.max.x - 1.0, card_rect.min.y + 1.0),
-                                        vec2(5.0, 5.0),
-                                    ),
-                                    1.0,
-                                    fx_blue,
-                                );
-
                                 if let Some(mut pad_smp) = maybe_smp {
-                                    // Contenedor con corchetes azules estilo Bitwig para dispositivos dentro de FX
-                                    let fx_bracket_color = Color32::from_rgb(0x3E, 0x74, 0xB5);
+                                    // Corchete superior azul estilo Bitwig (`┍━━━━━━━━━━┑`) para dispositivos dentro de FX
+                                    let fx_bracket_color = Color32::from_rgb(0x40, 0x6A, 0x80);
                                     let (nested_outer_rect, _) = ui.allocate_exact_size(
                                         vec2(SAMPLER_CARD_WIDTH + 18.0, card_h),
                                         Sense::hover(),
@@ -631,29 +620,40 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                             Color32::from_rgb(0x18, 0x1A, 0x1E),
                                         );
 
-                                        let top_y = nested_outer_rect.min.y + 1.0;
-                                        let bot_y = nested_outer_rect.max.y - 1.0;
-                                        let left_x = nested_outer_rect.min.x + 1.0;
-                                        let right_x = nested_outer_rect.max.x - 1.0;
-                                        let bracket_stroke = Stroke::new(1.5_f32, fx_bracket_color);
-
-                                        // Línea horizontal superior e inferior conectando desde OpenDMS
-                                        np.line_segment(
-                                            [pos2(card_rect.max.x, top_y), pos2(right_x, top_y)],
-                                            bracket_stroke,
+                                        let bar_h = 4.5_f32;
+                                        let foot_w = 8.0_f32;
+                                        let foot_h = 9.0_f32;
+                                        // Barra horizontal superior
+                                        np.rect_filled(
+                                            Rect::from_min_max(
+                                                nested_outer_rect.min,
+                                                pos2(
+                                                    nested_outer_rect.max.x,
+                                                    nested_outer_rect.min.y + bar_h,
+                                                ),
+                                            ),
+                                            1.0,
+                                            fx_bracket_color,
                                         );
-                                        np.line_segment(
-                                            [pos2(card_rect.max.x, bot_y), pos2(right_x, bot_y)],
-                                            bracket_stroke,
+                                        // Pie izquierdo y pie derecho hacia abajo
+                                        np.rect_filled(
+                                            Rect::from_min_size(
+                                                nested_outer_rect.min,
+                                                vec2(foot_w, foot_h),
+                                            ),
+                                            1.0,
+                                            fx_bracket_color,
                                         );
-                                        // Corchete izquierdo `[` y corchete derecho `]`
-                                        np.line_segment(
-                                            [pos2(left_x, top_y), pos2(left_x, bot_y)],
-                                            bracket_stroke,
-                                        );
-                                        np.line_segment(
-                                            [pos2(right_x, top_y), pos2(right_x, bot_y)],
-                                            bracket_stroke,
+                                        np.rect_filled(
+                                            Rect::from_min_size(
+                                                pos2(
+                                                    nested_outer_rect.max.x - foot_w,
+                                                    nested_outer_rect.min.y,
+                                                ),
+                                                vec2(foot_w, foot_h),
+                                            ),
+                                            1.0,
+                                            fx_bracket_color,
                                         );
                                     }
 
@@ -791,7 +791,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         let p = ui.painter();
                                         let dot_center =
                                             pos2(plus_btn_rect.center().x, plus_btn_rect.min.y + 4.0);
-                                        p.circle_filled(dot_center, 2.0, fx_blue);
+                                        p.circle_filled(
+                                            dot_center,
+                                            2.0,
+                                            Color32::from_rgb(0x40, 0x6A, 0x80),
+                                        );
                                         p.text(
                                             pos2(plus_btn_rect.center().x, plus_btn_rect.center().y + 3.0),
                                             Align2::CENTER_CENTER,

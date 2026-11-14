@@ -521,11 +521,8 @@ pub fn render_dms_ui(
                 ui.add_space(3.0);
 
                 // Columna FX + Output estilo Bitwig Drum Machine
-                let fx_col_stroke = if dms.fx_open {
-                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x52, 0x7A, 0xB8))
-                } else {
-                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x42, 0x45, 0x4C))
-                };
+                let fx_col_stroke =
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x42, 0x45, 0x4C));
                 egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(0x28, 0x2A, 0x2E))
                     .stroke(fx_col_stroke)
@@ -548,12 +545,15 @@ pub fn render_dms_ui(
                                 } else {
                                     egui::Color32::from_rgb(0x32, 0x34, 0x3A)
                                 };
-                                let fx_border = if dms.fx_open {
-                                    egui::Color32::from_rgb(0x6E, 0x9C, 0xDC)
-                                } else if fx_resp.hovered() {
-                                    egui::Color32::from_rgb(0x78, 0x7D, 0x88)
+                                let fx_border = if fx_resp.hovered() {
+                                    egui::Color32::from_rgb(0x68, 0x6D, 0x78)
                                 } else {
-                                    egui::Color32::from_rgb(0x4E, 0x52, 0x5B)
+                                    egui::Color32::from_rgb(0x42, 0x45, 0x4C)
+                                };
+                                let fx_bracket_col = if dms.fx_open {
+                                    egui::Color32::from_rgb(0x40, 0x6A, 0x80)
+                                } else {
+                                    egui::Color32::from_rgb(0x2E, 0x43, 0x50)
                                 };
                                 let fx_fg = if dms.fx_open || fx_resp.hovered() {
                                     egui::Color32::WHITE
@@ -568,8 +568,36 @@ pub fn render_dms_ui(
                                     egui::Stroke::new(1.0_f32, fx_border),
                                     egui::StrokeKind::Inside,
                                 );
+                                // Corchete superior estilo Bitwig (`┌───┐`) dentro del botón FX
+                                let bx0 = fx_rect.min.x + 3.0;
+                                let bx1 = fx_rect.max.x - 3.0;
+                                let by0 = fx_rect.min.y + 3.0;
+                                p.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(bx0, by0),
+                                        egui::pos2(bx1, by0 + 2.0),
+                                    ),
+                                    0.0,
+                                    fx_bracket_col,
+                                );
+                                p.rect_filled(
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(bx0, by0),
+                                        egui::vec2(2.0, 4.0),
+                                    ),
+                                    0.0,
+                                    fx_bracket_col,
+                                );
+                                p.rect_filled(
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(bx1 - 2.0, by0),
+                                        egui::vec2(2.0, 4.0),
+                                    ),
+                                    0.0,
+                                    fx_bracket_col,
+                                );
                                 p.text(
-                                    fx_rect.center(),
+                                    fx_rect.center() + egui::vec2(0.0, 1.5),
                                     egui::Align2::CENTER_CENTER,
                                     "FX",
                                     fonts::semibold(10.0),
