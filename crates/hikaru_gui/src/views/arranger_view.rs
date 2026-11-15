@@ -189,6 +189,8 @@ struct StripActions {
     clip_drop_target: Option<(usize, usize)>,
     /// Inicio de arrastre de un clip del launcher: (track, scene, clip, grab_offset).
     clip_drag_start: Option<(usize, usize, matrix::MatrixClip, egui::Vec2)>,
+    /// Apertura del menú contextual estilo Bitwig sobre un pad del Clip Launcher: (track, scene, pos).
+    open_context_menu: Option<(usize, usize, egui::Pos2)>,
 }
 
 /// Renderiza la vista **Mix** de Bitwig Studio 5.1.7 (`bitwig-mix-panel.png`):
@@ -209,6 +211,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         drop_slot: None,
         clip_drop_target: None,
         clip_drag_start: None,
+        open_context_menu: None,
     };
     let mut trigger_scene: Option<usize> = None;
     let mut add_scene_clicked = false;
@@ -641,11 +644,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 egui::Order::Tooltip,
                 egui::Id::new("mix_clip_drag_ghost"),
             ));
-            let col = state
-                .tracks()
-                .get(drag.from_track + 1)
-                .map(|t| t.color)
-                .unwrap_or(ACCENT_ORANGE);
+            let col = drag.clip.color.unwrap_or_else(|| {
+                state
+                    .tracks()
+                    .get(drag.from_track + 1)
+                    .map(|t| t.color)
+                    .unwrap_or(ACCENT_ORANGE)
+            });
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, Color32::from_black_alpha(110));
             p.rect_filled(rect, 1.5, col.gamma_multiply(0.9));
             p.rect_stroke(rect, 1.5, Stroke::new(1.0_f32, Color32::WHITE), egui::StrokeKind::Inside);
@@ -685,6 +690,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if let Some(s_idx) = trigger_scene {
         matrix::trigger_scene(&mut state.matrix_state, &state.audio_proxy, s_idx);
     }
+
+    if let Some((t_idx, s_idx, click_pos)) = actions.open_context_menu {
+        state.matrix_state.selected_slot = Some((t_idx, s_idx));
+        state.matrix_state.context_menu =
+            Some(crate::views::clip_context_menu::ClipLauncherContextMenu {
+                track_idx: t_idx,
+                scene_idx: s_idx,
+                click_pos,
+            });
+    }
+
+    crate::views::clip_context_menu::render_clip_context_menu(ui, state);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1033,10 +1050,13 @@ fn render_channel_strip(
 
                         if let Some(clip) = clip_opt {
                             let is_playing = slot_state == SlotState::Playing;
-                            let base = if is_playing {
-                                track_color
+                            let eff_color = clip.color.unwrap_or(track_color);
+                            let base = if clip.muted {
+                                Color32::from_rgb(0x40, 0x43, 0x48)
+                            } else if is_playing {
+                                eff_color
                             } else {
-                                track_color.gamma_multiply(0.75)
+                                eff_color.gamma_multiply(0.75)
                             };
                             // Bitwig: el slot origen queda atenuado mientras el clip "vuela".
                             ui.painter().rect_filled(
@@ -1135,6 +1155,13 @@ fn render_channel_strip(
                         }
                         if slot_resp.clicked() {
                             actions.trigger_slot = Some((matrix_idx, scene_idx));
+                            actions.selected_track_idx = idx;
+                        }
+                        if slot_resp.secondary_clicked() {
+                            let click_pos = ui
+                                .input(|i| i.pointer.interact_pos())
+                                .unwrap_or(cell.min);
+                            actions.open_context_menu = Some((matrix_idx, scene_idx, click_pos));
                             actions.selected_track_idx = idx;
                         }
                     }

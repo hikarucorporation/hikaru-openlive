@@ -165,6 +165,13 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
         .map(|c| c.loop_enabled)
         .unwrap_or(true);
 
+    let has_time_selection = state
+        .matrix_state
+        .slot(track_idx, scene_idx)
+        .and_then(|s| s.clip.as_ref())
+        .map(|c| c.has_time_selection)
+        .unwrap_or(false);
+
     let screen_rect = ui.ctx().screen_rect();
     // Para clips con contenido, usamos diseño comprimido a dos columnas (w ~ 484px, h ~ 300px)
     let menu_width = if target_type == SlotTargetType::Empty {
@@ -354,9 +361,11 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
                                 render_separator(ui);
 
                                 // Loop Selected & Consolidate
-                                if menu_item(ui, "Loop Selected Region", Some("Ctrl+L"), true, None).clicked() {
-                                    action = Some(ContextMenuAction::LoopSelectedRegion);
-                                    close_menu = true;
+                                if menu_item(ui, "Loop Selected Region", Some("Ctrl+L"), has_time_selection, None).clicked() {
+                                    if has_time_selection {
+                                        action = Some(ContextMenuAction::LoopSelectedRegion);
+                                        close_menu = true;
+                                    }
                                 }
                                 if menu_item(ui, "Consolidate", Some("Ctrl+J"), true, None).clicked() {
                                     action = Some(ContextMenuAction::Consolidate);
@@ -659,14 +668,23 @@ fn execute_context_menu_action(
         ContextMenuAction::Scale50 => {
             if let Some(slot) = state.matrix_state.slot_mut(track_idx, scene_idx) {
                 if let Some(clip) = &mut slot.clip {
-                    if let ClipData::Midi { notes } = &mut clip.content {
-                        for n in notes.iter_mut() {
-                            n.0 /= 2;
-                            n.3 = (n.3 / 2).max(60);
+                    match &mut clip.content {
+                        ClipData::Midi { notes } => {
+                            for n in notes.iter_mut() {
+                                n.0 /= 2;
+                                n.3 = (n.3 / 2).max(60);
+                            }
+                            clip.loop_start /= 2;
+                            clip.loop_end = (clip.loop_end / 2).max(1);
+                            clip.duration_secs /= 2.0;
                         }
-                        clip.loop_start /= 2;
-                        clip.loop_end = (clip.loop_end / 2).max(1);
-                        clip.duration_secs /= 2.0;
+                        ClipData::Audio { events, .. } => {
+                            for ev in events.iter_mut() {
+                                ev.start_secs *= 0.5;
+                            }
+                            clip.duration_secs = (clip.duration_secs * 0.5).max(0.05);
+                            clip.refresh_preview();
+                        }
                     }
                 }
             }
@@ -674,14 +692,23 @@ fn execute_context_menu_action(
         ContextMenuAction::Scale200 => {
             if let Some(slot) = state.matrix_state.slot_mut(track_idx, scene_idx) {
                 if let Some(clip) = &mut slot.clip {
-                    if let ClipData::Midi { notes } = &mut clip.content {
-                        for n in notes.iter_mut() {
-                            n.0 *= 2;
-                            n.3 *= 2;
+                    match &mut clip.content {
+                        ClipData::Midi { notes } => {
+                            for n in notes.iter_mut() {
+                                n.0 *= 2;
+                                n.3 *= 2;
+                            }
+                            clip.loop_start *= 2;
+                            clip.loop_end *= 2;
+                            clip.duration_secs *= 2.0;
                         }
-                        clip.loop_start *= 2;
-                        clip.loop_end *= 2;
-                        clip.duration_secs *= 2.0;
+                        ClipData::Audio { events, .. } => {
+                            for ev in events.iter_mut() {
+                                ev.start_secs *= 2.0;
+                            }
+                            clip.duration_secs *= 2.0;
+                            clip.refresh_preview();
+                        }
                     }
                 }
             }
