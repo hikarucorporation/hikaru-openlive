@@ -180,8 +180,33 @@ fn scene_viewport(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum StripKind {
+    Master,
+    User(usize),
+    Fx(usize),
+}
+
+fn strip_track(state: &AppState, kind: StripKind) -> &Track {
+    match kind {
+        StripKind::Master => &state.tracks()[0],
+        StripKind::User(idx) => &state.tracks()[idx],
+        StripKind::Fx(fx_idx) => &state.fx_tracks[fx_idx],
+    }
+}
+
+fn strip_track_mut(state: &mut AppState, kind: StripKind) -> &mut Track {
+    match kind {
+        StripKind::Master => &mut state.tracks_mut()[0],
+        StripKind::User(idx) => &mut state.tracks_mut()[idx],
+        StripKind::Fx(fx_idx) => &mut state.fx_tracks[fx_idx],
+    }
+}
+
 struct StripActions {
     selected_track_idx: usize,
+    selected_fx_idx: Option<usize>,
+    delete_strip: Option<StripKind>,
     trigger_slot: Option<(usize, usize)>,
     stop_track: Option<usize>,
     drop_slot: Option<(usize, usize, PathBuf)>,
@@ -206,6 +231,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     let mut actions = StripActions {
         selected_track_idx: state.selected_track_index,
+        selected_fx_idx: state.selected_fx_index,
+        delete_strip: None,
         trigger_slot: None,
         stop_track: None,
         drop_slot: None,
@@ -227,13 +254,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     // --- Ventana scrolleable de escenas (Bitwig) ---
     let content_h = scenes_content_h(scenes_count);
+    let fx_count = state.fx_tracks.len().max(1);
+    let sends_box_h = SENDS_BOX_H.max(fx_count.min(4) as f32 * 22.0 + 4.0);
     // Alto de todo lo que NO es la grilla de escenas ni la bahía del fader:
     // cabecera, fila Stop, Devices/Sends/I/O, bloque de controles sobre el
     // fader, pie de 4px y los 7 separadores de 1px entre franjas.
     let fixed_no_fader_h = HEADER_BLOCK_H
         + STOP_ROW_H
         + DEVICES_WELL_H
-        + SENDS_BOX_H
+        + sends_box_h
         + IO_BOX_H
         + 56.0 // margen 6 + cápsulas 18 + pan 13 + dB 14 + gaps 9
         + 4.0
@@ -411,7 +440,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 // Bloques de leyenda lateral: Devices | Sends | I/O
                 for (label, blk_h, fill) in [
                     ("Devices", DEVICES_WELL_H, Color32::from_rgb(0x2C, 0x2E, 0x33)),
-                    ("Sends", SENDS_BOX_H, Color32::from_rgb(0x36, 0x38, 0x3E)),
+                    ("Sends", sends_box_h, Color32::from_rgb(0x36, 0x38, 0x3E)),
                     ("I/O", IO_BOX_H, Color32::from_rgb(0x2C, 0x2E, 0x33)),
                 ] {
                     let (r, _) = ui.allocate_exact_size(vec2(LEGEND_COL_W, blk_h), Sense::hover());
@@ -460,10 +489,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 let w = render_channel_strip(
                     ui,
                     state,
-                    idx,
+                    StripKind::User(idx),
                     show_launcher,
                     scenes_count,
                     slots_view_h,
+                    sends_box_h,
                     fader_bay_h,
                     scene_scroll,
                     pointer_released,
@@ -508,6 +538,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         pad_idx,
                         show_launcher,
                         slots_view_h,
+                        sends_box_h,
                         fader_bay_h,
                         &mut actions,
                     );
@@ -559,11 +590,16 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             used_w += 29.0;
 
             // =================================================================
-            // 3. VACÍO NEGRO PROFUNDO + CANAL MASTER ANCLADO A LA DERECHA
+            // 3. VACÍO NEGRO PROFUNDO + CANALES FX + CANAL MASTER A LA DERECHA
             // =================================================================
             if tracks_count > 0 {
+                let fx_total_w: f32 = state
+                    .fx_tracks
+                    .iter()
+                    .map(|t| t.width.clamp(MIN_TRACK_WIDTH, 94.0) + 1.0)
+                    .sum();
                 let master_w = state.tracks()[0].width.clamp(MIN_TRACK_WIDTH, 94.0);
-                let void_w = (viewport_w - used_w - master_w - 4.0).max(8.0);
+                let void_w = (viewport_w - used_w - fx_total_w - master_w - 4.0).max(8.0);
                 let void_h = ui.available_height().max(1.0);
                 let (_, void_resp) = ui.allocate_exact_size(vec2(void_w, void_h), Sense::click());
                 if void_resp.secondary_clicked() {
@@ -576,13 +612,31 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     }
                 }
 
+                for fx_idx in 0..state.fx_tracks.len() {
+                    render_channel_strip(
+                        ui,
+                        state,
+                        StripKind::Fx(fx_idx),
+                        show_launcher,
+                        scenes_count,
+                        slots_view_h,
+                        sends_box_h,
+                        fader_bay_h,
+                        scene_scroll,
+                        pointer_released,
+                        is_dragging_sample,
+                        &mut actions,
+                    );
+                }
+
                 render_channel_strip(
                     ui,
                     state,
-                    0,
+                    StripKind::Master,
                     show_launcher,
                     scenes_count,
                     slots_view_h,
+                    sends_box_h,
                     fader_bay_h,
                     scene_scroll,
                     pointer_released,
@@ -594,6 +648,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     });
 
     state.selected_track_index = actions.selected_track_idx;
+    state.selected_fx_index = actions.selected_fx_idx;
+
+    if let Some(del_kind) = actions.delete_strip {
+        match del_kind {
+            StripKind::User(u_idx) => state.delete_track(u_idx),
+            StripKind::Fx(fx_idx) => state.delete_fx_track(fx_idx),
+            StripKind::Master => {}
+        }
+    }
 
     if add_scene_clicked {
         state.matrix_state.add_scene();
@@ -753,9 +816,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 state.selected_track_index = state.live_tracks.len().saturating_sub(1);
             }
             VoidMenuAction::AddFxTrack => {
-                let fx_num = state.fx_tracks.len() + 1;
-                let fx = Track::new(fx_num.saturating_sub(1), format!("FX {fx_num}"), false);
-                state.fx_tracks.push(fx);
+                let fx_idx = state.add_fx_track();
+                state.selected_fx_index = Some(fx_idx);
             }
             VoidMenuAction::AddGroupTrack => {
                 let next_id = state.live_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
@@ -797,20 +859,32 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 fn render_channel_strip(
     ui: &mut Ui,
     state: &mut AppState,
-    idx: usize,
+    kind: StripKind,
     show_launcher: bool,
     scenes_count: usize,
     slots_view_h: f32,
+    sends_box_h: f32,
     fader_bay_h: f32,
     scene_scroll: f32,
     pointer_released: bool,
     is_dragging_sample: bool,
     actions: &mut StripActions,
 ) -> f32 {
-    let is_master = idx == 0;
-    let is_sel = actions.selected_track_idx == idx;
+    let is_master = matches!(kind, StripKind::Master);
+    let is_fx = matches!(kind, StripKind::Fx(_));
+    let user_idx = match kind {
+        StripKind::User(i) => Some(i),
+        _ => None,
+    };
+    let is_sel = match kind {
+        StripKind::Master => actions.selected_fx_idx.is_none() && actions.selected_track_idx == 0,
+        StripKind::User(idx) => {
+            actions.selected_fx_idx.is_none() && actions.selected_track_idx == idx
+        }
+        StripKind::Fx(fx_idx) => actions.selected_fx_idx == Some(fx_idx),
+    };
     let pointer_pos = ui.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.hover_pos()));
-    let strip_w = state.tracks()[idx].width.clamp(MIN_TRACK_WIDTH, 94.0);
+    let strip_w = strip_track(state, kind).width.clamp(MIN_TRACK_WIDTH, 94.0);
 
     let (
         name,
@@ -820,7 +894,7 @@ fn render_channel_strip(
         mut mute,
         mut solo,
         mut arm,
-        mut send_amt,
+        sends_list,
         route_dest_id,
         peak,
         effects_list,
@@ -828,15 +902,15 @@ fn render_channel_strip(
         is_group,
     ) = {
         let tracks = state.tracks();
-        let t = &tracks[idx];
-        let peak = if is_master {
-            state.smoothed_master_peak
-        } else {
-            state
+        let t = strip_track(state, kind);
+        let peak = match kind {
+            StripKind::Master => state.smoothed_master_peak,
+            StripKind::User(idx) => state
                 .smoothed_track_peaks
                 .get(idx.saturating_sub(1))
                 .copied()
-                .unwrap_or(0.0)
+                .unwrap_or(0.0),
+            StripKind::Fx(_) => 0.0,
         };
         let fx: Vec<(usize, String, bool)> = t
             .effects
@@ -844,7 +918,7 @@ fn render_channel_strip(
             .enumerate()
             .map(|(i, s)| (i, s.name.clone(), s.active))
             .collect();
-        let send0 = t.sends.first().map(|s| s.amount).unwrap_or(0.0);
+        let sends_list = t.sends.clone();
         let names: Vec<String> = tracks.iter().map(|tr| tr.name.clone()).collect();
         let col = if is_master {
             Color32::from_rgb(0x82, 0x84, 0x88)
@@ -859,7 +933,7 @@ fn render_channel_strip(
             t.mute,
             t.solo,
             t.arm,
-            send0,
+            sends_list,
             t.route_destination_id,
             peak,
             fx,
@@ -900,15 +974,16 @@ fn render_channel_strip(
                         .interact_pointer_pos()
                         .is_some_and(|p| f_rect.expand(5.0).contains(p))
                 {
-                    if let Some(tr) = state.live_tracks.get_mut(idx) {
-                        tr.is_expanded = !tr.is_expanded;
+                    if let Some(u_idx) = user_idx {
+                        if let Some(tr) = state.live_tracks.get_mut(u_idx) {
+                            tr.is_expanded = !tr.is_expanded;
+                        }
                     }
                 }
             }
             // Esquina desplegable estilo Bitwig Drum Machine cuando hay pads cargados en OpenDMS
-            let dms_chain_info = state
-                .tracks()
-                .get(idx)
+            let dms_chain_info = user_idx
+                .and_then(|u_idx| state.tracks().get(u_idx))
                 .and_then(|t| {
                     t.effects.iter().enumerate().find_map(|(s_idx, s)| {
                         (s.name == "Hikaru OpenDMS")
@@ -999,10 +1074,12 @@ fn render_channel_strip(
                         .interact_pointer_pos()
                         .is_some_and(|p| corner_rect.contains(p))
                 {
-                    if let Some(tr) = state.tracks_mut().get_mut(idx) {
-                        if let Some(slot) = tr.effects.get_mut(dms_slot_idx) {
-                            if let Some(ref mut dms) = slot.dms_state {
-                                dms.chains_expanded = !dms.chains_expanded;
+                    if let Some(u_idx) = user_idx {
+                        if let Some(tr) = state.tracks_mut().get_mut(u_idx) {
+                            if let Some(slot) = tr.effects.get_mut(dms_slot_idx) {
+                                if let Some(ref mut dms) = slot.dms_state {
+                                    dms.chains_expanded = !dms.chains_expanded;
+                                }
                             }
                         }
                     }
@@ -1015,21 +1092,38 @@ fn render_channel_strip(
                 fonts::semibold(11.5),
                 Color32::from_rgb(0x11, 0x12, 0x14),
             );
+            let select_strip = |actions: &mut StripActions| match kind {
+                StripKind::Master => {
+                    actions.selected_track_idx = 0;
+                    actions.selected_fx_idx = None;
+                }
+                StripKind::User(i) => {
+                    actions.selected_track_idx = i;
+                    actions.selected_fx_idx = None;
+                }
+                StripKind::Fx(fx_i) => {
+                    actions.selected_fx_idx = Some(fx_i);
+                }
+            };
             if hdr_resp.clicked() {
-                actions.selected_track_idx = idx;
+                select_strip(actions);
             }
             if hdr_resp.double_clicked() {
-                actions.selected_track_idx = idx;
+                select_strip(actions);
                 state.show_dsp_rack = !state.show_dsp_rack;
             }
 
             // Menú contextual (click derecho) estilo Bitwig.
             if !is_master {
                 use crate::ui::track_context_menu as ctxm;
-                let menu_key = egui::Id::new(("trk_ctx", idx));
+                let menu_key = match kind {
+                    StripKind::User(i) => egui::Id::new(("trk_ctx", i)),
+                    StripKind::Fx(i) => egui::Id::new(("fx_ctx", i)),
+                    StripKind::Master => egui::Id::new("master_ctx"),
+                };
                 let ectx = ui.ctx().clone();
                 if hdr_resp.secondary_clicked() {
-                    actions.selected_track_idx = idx;
+                    select_strip(actions);
                     if let Some(p) = ectx.input(|i| i.pointer.interact_pos()) {
                         ctxm::open(&ectx, menu_key, p);
                     }
@@ -1044,15 +1138,22 @@ fn render_channel_strip(
                     })
                     .unwrap_or(ctxm::MonitorMode::Auto);
                 let mc = ctxm::MenuContext {
-                    current_color: state.tracks()[idx].color,
+                    current_color: strip_track(state, kind).color,
                     monitor,
                     ..Default::default()
                 };
                 match ctxm::show(&ectx, menu_key, &mc) {
-                    Some(ctxm::MenuAction::SetColor(c)) => state.tracks_mut()[idx].color = c,
+                    Some(ctxm::MenuAction::SetColor(c)) => strip_track_mut(state, kind).color = c,
                     Some(ctxm::MenuAction::ToggleActive) => {
-                        let t = &mut state.tracks_mut()[idx];
+                        let t = strip_track_mut(state, kind);
                         t.mute = !t.mute;
+                    }
+                    Some(ctxm::MenuAction::Delete) => {
+                        actions.delete_strip = Some(kind);
+                    }
+                    Some(ctxm::MenuAction::AddFxTrack) => {
+                        let fx_idx = state.add_fx_track();
+                        actions.selected_fx_idx = Some(fx_idx);
                     }
                     Some(ctxm::MenuAction::SetMonitor(m)) => {
                         let v = match m {
@@ -1068,7 +1169,7 @@ fn render_channel_strip(
 
             // 2. Ranuras verticales del Clip Launcher + fila de Stop por pista
             if show_launcher {
-                if !is_master {
+                if let Some(idx) = user_idx {
                     let matrix_idx = idx.saturating_sub(1);
                     scene_viewport(ui, strip_w, slots_view_h, scene_scroll, scenes_content_h(scenes_count), ("mix_slots", idx), |ui| {
                     ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
@@ -1321,8 +1422,8 @@ fn render_channel_strip(
                         if ui.button(plugin.label).clicked() {
                             let mut slot = DspSlot::default();
                             slot.name = plugin.name.to_string();
-                            state.tracks_mut()[idx].effects.push(slot);
-                            actions.selected_track_idx = idx;
+                            strip_track_mut(state, kind).effects.push(slot);
+                            select_strip(actions);
                             state.show_dsp_rack = true;
                             ui.close_menu();
                         }
@@ -1361,7 +1462,7 @@ fn render_channel_strip(
                     TEXT_PRIMARY,
                 );
                 if chip_resp.clicked() {
-                    actions.selected_track_idx = idx;
+                    select_strip(actions);
                     state.selected_slot_index = *fx_idx;
                     state.show_dsp_rack = true;
                 }
@@ -1369,49 +1470,91 @@ fn render_channel_strip(
 
             // 4. Caja de SENDS con perilla rotatoria GPU (`wgpu` SDF!)
             let (sends_rect, _) =
-                ui.allocate_exact_size(vec2(strip_w, SENDS_BOX_H), Sense::hover());
+                ui.allocate_exact_size(vec2(strip_w, sends_box_h), Sense::hover());
             ui.painter()
                 .rect_filled(sends_rect, 0.0, Color32::from_rgb(0x46, 0x48, 0x4E));
             if !is_master {
+                let fx_labels: Vec<String> =
+                    state.fx_tracks.iter().map(|t| t.name.clone()).collect();
+                let knob_size = if fx_labels.len() > 1 { 18.0 } else { 24.0 };
                 let mut s_ui = ui.new_child(
                     egui::UiBuilder::new()
-                        .max_rect(sends_rect.shrink2(vec2(4.0, 3.0)))
-                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        .max_rect(sends_rect.shrink2(vec2(4.0, 2.0)))
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
                 );
-                s_ui.spacing_mut().item_spacing.x = 4.0;
-                s_ui.label(
-                    RichText::new("FX 1")
-                        .font(fonts::regular(9.5))
-                        .color(Color32::from_rgb(0x14, 0x15, 0x18)),
-                );
-                let (s_resp, s_changed) = rotary_knob(
-                    &mut s_ui,
-                    24.0,
-                    &mut send_amt,
-                    0.0..=1.0,
-                    0.0,
-                    BW_FADER_AMBER,
-                    false,
-                );
-                s_resp.on_hover_text("FX 1 Send");
-                if s_changed {
-                    let tr = &mut state.tracks_mut()[idx];
-                    if let Some(first_send) = tr.sends.first_mut() {
-                        first_send.amount = send_amt;
-                    } else {
-                        tr.sends.push(SendConnection {
-                            target_id: mixer::ROUTE_FX_BASE,
-                            amount: send_amt,
+                s_ui.spacing_mut().item_spacing.y = 2.0;
+                let mut render_sends_rows = |ui: &mut Ui| {
+                    for (fx_i, fx_name) in fx_labels.iter().enumerate() {
+                        let is_self_fx = matches!(kind, StripKind::Fx(own) if own == fx_i);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let target_id = mixer::ROUTE_FX_BASE + fx_i;
+                            let mut send_amt = sends_list
+                                .iter()
+                                .find(|s| s.target_id == target_id)
+                                .map(|s| s.amount)
+                                .unwrap_or(0.0);
+                            if is_self_fx {
+                                ui.label(
+                                    RichText::new("↺")
+                                        .font(fonts::regular(10.0))
+                                        .color(Color32::from_rgb(0x28, 0x2A, 0x2E)),
+                                )
+                                .on_hover_text(format!("{fx_name} (self-send disabled)"));
+                            } else {
+                                ui.label(
+                                    RichText::new(fx_name)
+                                        .font(fonts::regular(9.5))
+                                        .color(Color32::from_rgb(0x14, 0x15, 0x18)),
+                                );
+                                let (s_resp, s_changed) = rotary_knob(
+                                    ui,
+                                    knob_size,
+                                    &mut send_amt,
+                                    0.0..=1.0,
+                                    0.0,
+                                    BW_FADER_AMBER,
+                                    false,
+                                );
+                                s_resp.on_hover_text(format!("{fx_name} Send"));
+                                if s_changed {
+                                    let tr = strip_track_mut(state, kind);
+                                    if let Some(existing) =
+                                        tr.sends.iter_mut().find(|s| s.target_id == target_id)
+                                    {
+                                        existing.amount = send_amt;
+                                    } else {
+                                        tr.sends.push(SendConnection {
+                                            target_id,
+                                            amount: send_amt,
+                                        });
+                                    }
+                                }
+                            }
                         });
                     }
+                };
+                if fx_labels.len() > 4 {
+                    ScrollArea::vertical()
+                        .id_salt(("sends_scroll", kind))
+                        .max_height(sends_box_h - 4.0)
+                        .show(&mut s_ui, render_sends_rows);
+                } else {
+                    render_sends_rows(&mut s_ui);
                 }
             }
 
-            // 5. Sección I/O (`All Ins` / `Master` o `Out 1/2`)
+            // 5. Sección I/O (`All Ins` / `No input` / `Audio In` -> `Master` o `Out 1/2`)
             let (io_rect, _) = ui.allocate_exact_size(vec2(strip_w, IO_BOX_H), Sense::hover());
             ui.painter()
                 .rect_filled(io_rect, 0.0, Color32::from_rgb(0x32, 0x34, 0x39));
-            let in_label = if is_master { "Audio In" } else { "All Ins" };
+            let in_label = if is_master {
+                "Audio In"
+            } else if is_fx {
+                "No input"
+            } else {
+                "All Ins"
+            };
             let out_label = mixer::route_dest_label(route_dest_id, is_master, &track_names);
             for (row_i, text) in [in_label, out_label.as_str()].into_iter().enumerate() {
                 let pill_r = Rect::from_min_size(
@@ -1451,7 +1594,7 @@ fn render_channel_strip(
                     // Grupo unido `[● | S | M]` renderizado en wgpu
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        if !is_master {
+                        if let Some(u_idx) = user_idx {
                             let seg_w = (inner_w / 3.0).floor();
                             if capsule_icon_button(
                                 ui,
@@ -1465,7 +1608,7 @@ fn render_channel_strip(
                             .clicked()
                             {
                                 arm = !arm;
-                                state.tracks_mut()[idx].arm = arm;
+                                state.tracks_mut()[u_idx].arm = arm;
                             }
 
                             if capsule_text_button(
@@ -1482,8 +1625,8 @@ fn render_channel_strip(
                             .clicked()
                             {
                                 solo = !solo;
-                                state.tracks_mut()[idx].solo = solo;
-                                let m_idx = idx.saturating_sub(1);
+                                state.tracks_mut()[u_idx].solo = solo;
+                                let m_idx = u_idx.saturating_sub(1);
                                 if let Some(mt) = state.matrix_state.tracks.get_mut(m_idx) {
                                     mt.soloed = solo;
                                 }
@@ -1507,8 +1650,8 @@ fn render_channel_strip(
                             .clicked()
                             {
                                 mute = !mute;
-                                state.tracks_mut()[idx].mute = mute;
-                                let m_idx = idx.saturating_sub(1);
+                                state.tracks_mut()[u_idx].mute = mute;
+                                let m_idx = u_idx.saturating_sub(1);
                                 if let Some(mt) = state.matrix_state.tracks.get_mut(m_idx) {
                                     mt.muted = mute;
                                 }
@@ -1532,7 +1675,7 @@ fn render_channel_strip(
                             .clicked()
                             {
                                 solo = !solo;
-                                state.tracks_mut()[idx].solo = solo;
+                                strip_track_mut(state, kind).solo = solo;
                             }
                             if capsule_text_button(
                                 ui,
@@ -1547,7 +1690,7 @@ fn render_channel_strip(
                             .clicked()
                             {
                                 mute = !mute;
-                                state.tracks_mut()[idx].mute = mute;
+                                strip_track_mut(state, kind).mute = mute;
                             }
                         }
                     });
@@ -1565,9 +1708,9 @@ fn render_channel_strip(
                     );
                     pan_resp.on_hover_text("Pan (double-click to center)");
                     if pan_changed {
-                        state.tracks_mut()[idx].pan = pan;
-                        if !is_master {
-                            let m_idx = idx.saturating_sub(1);
+                        strip_track_mut(state, kind).pan = pan;
+                        if let Some(u_idx) = user_idx {
+                            let m_idx = u_idx.saturating_sub(1);
                             if let Some(mt) = state.matrix_state.tracks.get_mut(m_idx) {
                                 mt.pan = pan;
                             }
@@ -1649,17 +1792,19 @@ fn render_channel_strip(
                         );
                         vol_resp.on_hover_text("Volume Fader (double-click for 0.0 dB)");
                         if vol_changed {
-                            state.tracks_mut()[idx].volume = vol;
-                            let eng_idx = if is_master { 0 } else { idx.saturating_sub(1) };
-                            if !is_master {
-                                if let Some(mt) = state.matrix_state.tracks.get_mut(eng_idx) {
-                                    mt.volume = vol;
+                            strip_track_mut(state, kind).volume = vol;
+                            if !is_fx {
+                                let eng_idx = user_idx.map_or(0, |i| i.saturating_sub(1));
+                                if user_idx.is_some() {
+                                    if let Some(mt) = state.matrix_state.tracks.get_mut(eng_idx) {
+                                        mt.volume = vol;
+                                    }
                                 }
+                                state.audio_proxy.send(GuiCommand::SetTrackVolume {
+                                    track_idx: eng_idx,
+                                    volume_db: vol,
+                                });
                             }
-                            state.audio_proxy.send(GuiCommand::SetTrackVolume {
-                                track_idx: eng_idx,
-                                volume_db: vol,
-                            });
                         }
                     });
                 });
@@ -1682,6 +1827,7 @@ fn render_dms_pad_channel_strip(
     pad_idx: usize,
     show_launcher: bool,
     slots_view_h: f32,
+    sends_box_h: f32,
     fader_bay_h: f32,
     actions: &mut StripActions,
 ) -> f32 {
@@ -1939,7 +2085,7 @@ fn render_dms_pad_channel_strip(
 
             // 4. Caja de Sends (`FX 1` + perilla rotatoria estilo Bitwig)
             let (sends_rect, _) =
-                ui.allocate_exact_size(vec2(strip_w, SENDS_BOX_H), Sense::hover());
+                ui.allocate_exact_size(vec2(strip_w, sends_box_h), Sense::hover());
             ui.painter()
                 .rect_filled(sends_rect, 0.0, Color32::from_rgb(0x46, 0x48, 0x4E));
             {

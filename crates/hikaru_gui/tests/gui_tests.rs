@@ -900,3 +900,51 @@ fn opendms_loaded_pad_play_solo_mute_buttons_respond_to_clicks() {
     click_at(&ctx, &mut dms, mute_pos);
     assert!(dms.pads[0].mute, "Click en M del pad 0 debe activar mute");
 }
+
+#[test]
+fn test_add_fx_track_creates_right_side_mixer_channel() {
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::AudioProxy;
+    use hikaru_gui::views::arranger_view;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::Arc;
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let proxy = AudioProxy::new(tx);
+    let clock = Arc::new(AtomicU64::new(0));
+    let level = Arc::new(AtomicU32::new(0));
+    let mut state = AppState::new(proxy, clock, level, None);
+
+    assert_eq!(state.fx_tracks.len(), 1);
+    assert_eq!(state.fx_tracks[0].name, "FX 1");
+
+    let fx2_idx = state.add_fx_track();
+    assert_eq!(fx2_idx, 1);
+    assert_eq!(state.fx_tracks.len(), 2);
+    assert_eq!(state.fx_tracks[1].name, "FX 2");
+    assert_eq!(state.fx_tracks[1].color, egui::Color32::from_rgb(0x9A, 0x9C, 0xA2));
+
+    state.selected_fx_index = Some(fx2_idx);
+    assert_eq!(state.selected_track().map(|t| t.name.as_str()), Some("FX 2"));
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0))),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                arranger_view::render(ui, &mut state);
+            });
+        },
+    );
+
+    let live_count_before = state.live_tracks.len();
+    state.delete_fx_track(fx2_idx);
+    assert_eq!(state.live_tracks.len(), live_count_before);
+    assert_eq!(state.fx_tracks.len(), 1);
+    assert_eq!(state.fx_tracks[0].name, "FX 1");
+    assert_eq!(state.selected_fx_index, Some(0));
+}

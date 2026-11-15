@@ -213,6 +213,12 @@ impl Track {
         tr.color = Color32::from_rgb(0xE5, 0xAE, 0x19); // Bitwig Group Yellow
         tr
     }
+
+    pub fn new_fx(id: usize, name: String) -> Self {
+        let mut tr = Self::new(id, name, false);
+        tr.color = Color32::from_rgb(0x9A, 0x9C, 0xA2); // Bitwig FX Track light grey
+        tr
+    }
 }
 
 /// Returns `true` if the track at `idx` is visible (all ancestor groups are expanded).

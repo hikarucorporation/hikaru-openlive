@@ -1435,6 +1435,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut select_slot_action: Option<(usize, usize)> = None;
     let mut create_midi_slot_action: Option<(usize, usize)> = None;
     let mut add_group_action = false;
+    let mut add_fx_action = false;
     let mut group_track_action: Option<usize> = None;
     let mut toggle_group_expand_action: Option<usize> = None;
     let mut trigger_group_scene_action: Option<(usize, usize)> = None; // (group_mixer_idx, scene_idx)
@@ -1830,6 +1831,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 }
                 Some(ctxm::MenuAction::Delete) => {
                     delete_track_action = Some(mixer_idx);
+                }
+                Some(ctxm::MenuAction::AddFxTrack) => {
+                    add_fx_action = true;
                 }
                 Some(ctxm::MenuAction::AddGroupTrack) => {
                     add_group_action = true;
@@ -3013,6 +3017,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // =========================================================================
     // 5. DEFERRED ACTIONS (Clips, Drops, Track/Scene Mutations)
     // =========================================================================
+    if add_fx_action {
+        let fx_idx = state.add_fx_track();
+        state.selected_fx_index = Some(fx_idx);
+    }
     if add_group_action {
         let next_id = state.live_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
         let name = format!("Group {}", next_id);

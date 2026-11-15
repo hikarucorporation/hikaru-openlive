@@ -423,6 +423,7 @@ pub struct AppState {
     pub fx_tracks: Vec<mixer::Track>,
 
     pub selected_track_index: usize,
+    pub selected_fx_index: Option<usize>,
     pub selected_slot_index: usize,
     pub footer_context_help: Option<(String, String)>,
     pub footer_context_cues: Vec<(String, String)>,
@@ -509,7 +510,7 @@ impl AppState {
         for t in &mut studio_tracks {
             t.volume = 0.70;
         }
-        let fx_tracks = vec![mixer::Track::new(0, "FX 1".to_string(), false)];
+        let fx_tracks = vec![mixer::Track::new_fx(0, "FX 1".to_string())];
 
         let track_peak_bits: Vec<Arc<AtomicU32>> = if let Some(ref handle) = engine_handle {
             if let Ok(engine) = handle.try_lock() {
@@ -571,6 +572,7 @@ impl AppState {
             studio_tracks,
             fx_tracks,
             selected_track_index: 1,
+            selected_fx_index: None,
             selected_slot_index: 0,
             footer_context_help: None,
             footer_context_cues: Vec::new(),
@@ -787,6 +789,34 @@ impl AppState {
         }
     }
 
+    /// Deletes an FX track by its index in `fx_tracks`, updating sends and selection.
+    pub fn delete_fx_track(&mut self, fx_idx: usize) {
+        if fx_idx >= self.fx_tracks.len() {
+            return;
+        }
+        self.fx_tracks.remove(fx_idx);
+        let removed_target = crate::views::mixer::ROUTE_FX_BASE + fx_idx;
+        let adjust_sends = |tracks: &mut Vec<mixer::Track>| {
+            for tr in tracks.iter_mut() {
+                tr.sends.retain(|s| s.target_id != removed_target);
+                for s in &mut tr.sends {
+                    if s.target_id > removed_target {
+                        s.target_id -= 1;
+                    }
+                }
+            }
+        };
+        adjust_sends(&mut self.live_tracks);
+        adjust_sends(&mut self.studio_tracks);
+        adjust_sends(&mut self.fx_tracks);
+
+        if self.fx_tracks.is_empty() {
+            self.selected_fx_index = None;
+        } else {
+            self.selected_fx_index = Some(fx_idx.min(self.fx_tracks.len() - 1));
+        }
+    }
+
     pub fn current_tracks(&self) -> &Vec<mixer::Track> {
         self.tracks()
     }
@@ -795,8 +825,34 @@ impl AppState {
         self.tracks_mut()
     }
 
+    pub fn add_fx_track(&mut self) -> usize {
+        let fx_num = self.fx_tracks.len() + 1;
+        let fx = mixer::Track::new_fx(fx_num.saturating_sub(1), format!("FX {fx_num}"));
+        self.fx_tracks.push(fx);
+        self.fx_tracks.len() - 1
+    }
+
     pub fn safe_track_index(&self) -> usize {
         self.selected_track_index.min(self.tracks().len().saturating_sub(1))
+    }
+
+    pub fn selected_track(&self) -> Option<&mixer::Track> {
+        if let Some(fx_idx) = self.selected_fx_index {
+            if let Some(fx) = self.fx_tracks.get(fx_idx) {
+                return Some(fx);
+            }
+        }
+        self.tracks().get(self.safe_track_index())
+    }
+
+    pub fn selected_track_mut(&mut self) -> Option<&mut mixer::Track> {
+        if let Some(fx_idx) = self.selected_fx_index {
+            if fx_idx < self.fx_tracks.len() {
+                return self.fx_tracks.get_mut(fx_idx);
+            }
+        }
+        let idx = self.safe_track_index();
+        self.tracks_mut().get_mut(idx)
     }
 
     pub fn engine_track_index(&self) -> Option<usize> {
@@ -1354,6 +1410,8 @@ impl eframe::App for HikaruApp {
                     let selected = self.state.playlist_state.selected_clips.clone();
                     self.state.playlist_state.clips.retain(|(_, c)| !selected.contains(&c.id));
                     self.state.playlist_state.selected_clips.clear();
+                } else if let Some(fx_idx) = self.state.selected_fx_index {
+                    self.state.delete_fx_track(fx_idx);
                 } else if self.state.selected_track_index > 0 {
                     self.state.delete_track(self.state.selected_track_index);
                 }
