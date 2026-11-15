@@ -294,7 +294,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 v.ppb = (zd.ppb0 * (dy * 0.01).exp()).clamp(MIN_PPB, MAX_PPB);
                 v.scroll_beats = zd.anchor_beat - ((cur.x - main.min.x) / v.ppb) as f64;
             }
-            ui.ctx().set_cursor_icon(egui::CursorIcon::AllScroll);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         } else {
             ui.ctx().data_mut(|d| d.remove::<ZoomPanDrag>(zoom_id));
         }
