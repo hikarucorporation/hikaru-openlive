@@ -544,6 +544,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 if plus_resp.on_hover_text("Add Audio Track").clicked() {
                     add_track_clicked = true;
                 }
+                let rem_h = ui.available_height().max(1.0);
+                let (_, rem_resp) = ui.allocate_exact_size(vec2(26.0, rem_h), Sense::click());
+                if rem_resp.secondary_clicked() {
+                    if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                        crate::ui::arranger_context_menu::open(
+                            ui.ctx(),
+                            egui::Id::new("arranger_void_ctx"),
+                            p,
+                        );
+                    }
+                }
             });
             used_w += 29.0;
 
@@ -553,7 +564,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             if tracks_count > 0 {
                 let master_w = state.tracks()[0].width.clamp(MIN_TRACK_WIDTH, 94.0);
                 let void_w = (viewport_w - used_w - master_w - 4.0).max(8.0);
-                ui.add_space(void_w);
+                let void_h = ui.available_height().max(1.0);
+                let (_, void_resp) = ui.allocate_exact_size(vec2(void_w, void_h), Sense::click());
+                if void_resp.secondary_clicked() {
+                    if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                        crate::ui::arranger_context_menu::open(
+                            ui.ctx(),
+                            egui::Id::new("arranger_void_ctx"),
+                            p,
+                        );
+                    }
+                }
 
                 render_channel_strip(
                     ui,
@@ -702,6 +723,74 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     crate::views::clip_context_menu::render_clip_context_menu(ui, state);
+
+    if let Some(void_act) =
+        crate::ui::arranger_context_menu::show(ui.ctx(), egui::Id::new("arranger_void_ctx"))
+    {
+        use crate::ui::arranger_context_menu::VoidMenuAction;
+        match void_act {
+            VoidMenuAction::AddInstrumentTrack => {
+                state.matrix_state.add_track();
+                let new_idx = state.matrix_state.tracks.len();
+                let name = format!("Inst {new_idx}");
+                if let Some(last) = state.matrix_state.tracks.last_mut() {
+                    last.name = name.clone();
+                }
+                let mut tr = Track::new(new_idx, name, false);
+                tr.matrix_idx = Some(new_idx - 1);
+                state.live_tracks.push(tr.clone());
+                state.studio_tracks.push(tr);
+                state.selected_track_index = state.live_tracks.len().saturating_sub(1);
+            }
+            VoidMenuAction::AddAudioTrack => {
+                state.matrix_state.add_track();
+                let new_idx = state.matrix_state.tracks.len();
+                let name = format!("Audio {new_idx}");
+                let mut tr = Track::new(new_idx, name, false);
+                tr.matrix_idx = Some(new_idx - 1);
+                state.live_tracks.push(tr.clone());
+                state.studio_tracks.push(tr);
+                state.selected_track_index = state.live_tracks.len().saturating_sub(1);
+            }
+            VoidMenuAction::AddFxTrack => {
+                let fx_num = state.fx_tracks.len() + 1;
+                let fx = Track::new(fx_num.saturating_sub(1), format!("FX {fx_num}"), false);
+                state.fx_tracks.push(fx);
+            }
+            VoidMenuAction::AddGroupTrack => {
+                let next_id = state.live_tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                let name = format!("Group {next_id}");
+                state.matrix_state.add_track();
+                if let Some(last) = state.matrix_state.tracks.last_mut() {
+                    last.name = name.clone();
+                }
+                let mut tr = Track::new_group(next_id, name);
+                tr.matrix_idx = Some(state.matrix_state.tracks.len().saturating_sub(1));
+                state.live_tracks.push(tr.clone());
+                state.studio_tracks.push(tr);
+                state.selected_track_index = state.live_tracks.len().saturating_sub(1);
+            }
+            VoidMenuAction::AddScene => {
+                state.matrix_state.add_scene();
+            }
+            VoidMenuAction::AddSceneFromPlayingClips => {
+                state.matrix_state.add_scene();
+                let new_scene_idx = state.matrix_state.scenes.len().saturating_sub(1);
+                for t_idx in 0..state.matrix_state.grid.len() {
+                    let playing_clip = state.matrix_state.grid[t_idx]
+                        .iter()
+                        .find(|s| s.state == SlotState::Playing && s.clip.is_some())
+                        .and_then(|s| s.clip.clone());
+                    if let Some(clip) = playing_clip {
+                        if let Some(dst) = state.matrix_state.slot_mut(t_idx, new_scene_idx) {
+                            dst.clip = Some(clip);
+                            dst.state = SlotState::Stopped;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
