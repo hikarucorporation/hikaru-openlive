@@ -195,7 +195,7 @@ pub struct MatrixClip {
 }
 
 impl MatrixClip {
-    pub const PEAK_BINS: usize = 56;
+    pub const PEAK_BINS: usize = 256;
 
     pub fn duration_secs(&self) -> f64 {
         self.duration_secs
@@ -1185,6 +1185,99 @@ pub fn pan_knob_ex(ui: &mut Ui, pan: &mut f32, size: f32) {
     );
 }
 
+/// Darker clip-tinted body background for Clip Launcher pads (Bitwig-style).
+fn pad_body_color(clip_color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        ((clip_color.r() as u16 * 3) / 10) as u8,
+        ((clip_color.g() as u16 * 3) / 10) as u8,
+        ((clip_color.b() as u16 * 3) / 10) as u8,
+        alpha,
+    )
+}
+
+/// Renders a high-density, clip-tinted peak + RMS waveform inside a Clip Launcher pad.
+fn paint_pad_waveform(
+    painter: &egui::Painter,
+    wave_rect: Rect,
+    peaks: &[f32],
+    clip_color: Color32,
+    muted: bool,
+    alpha_scale: f32,
+) {
+    let width = wave_rect.width();
+    let height = wave_rect.height();
+    if peaks.is_empty() || width <= 1.0 || height <= 2.0 {
+        return;
+    }
+
+    let base = if muted {
+        Color32::from_rgb(0x78, 0x7C, 0x84)
+    } else {
+        clip_color
+    };
+    let scale = alpha_scale.clamp(0.0, 1.0);
+    let zero_col = Color32::from_rgba_unmultiplied(
+        base.r(),
+        base.g(),
+        base.b(),
+        (42.0 * scale) as u8,
+    );
+    let peak_col = Color32::from_rgba_unmultiplied(
+        base.r(),
+        base.g(),
+        base.b(),
+        (95.0 * scale) as u8,
+    );
+    let rms_col = Color32::from_rgba_unmultiplied(
+        base.r(),
+        base.g(),
+        base.b(),
+        (165.0 * scale) as u8,
+    );
+
+    let cy = wave_rect.center().y;
+    let hh = height * 0.44;
+
+    // Subtle zero-crossing baseline
+    painter.line_segment(
+        [pos2(wave_rect.min.x, cy), pos2(wave_rect.max.x, cy)],
+        Stroke::new(1.0_f32, zero_col),
+    );
+
+    let cols = (width.floor() as usize).clamp(1, 512);
+    let step = width / cols as f32;
+    for col in 0..cols {
+        let p0 = (col * peaks.len()) / cols;
+        let p1 = (((col + 1) * peaks.len()) / cols)
+            .max(p0 + 1)
+            .min(peaks.len());
+        let mut peak = 0.0_f32;
+        let mut sum_sq = 0.0_f32;
+        for &v in &peaks[p0..p1] {
+            let av = if v.is_finite() { v.abs().clamp(0.0, 1.0) } else { 0.0 };
+            if av > peak {
+                peak = av;
+            }
+            sum_sq += av * av;
+        }
+        let rms = (sum_sq / (p1 - p0) as f32).sqrt();
+        let x = wave_rect.min.x + (col as f32 + 0.5) * step;
+        let peak_h = (peak * hh).max(0.75);
+        let rms_h = (rms * 0.72 * hh).clamp(0.5, peak_h);
+
+        painter.line_segment(
+            [pos2(x, cy - peak_h), pos2(x, cy + peak_h)],
+            Stroke::new(1.0_f32, peak_col),
+        );
+        if rms_h > 0.75 {
+            painter.line_segment(
+                [pos2(x, cy - rms_h), pos2(x, cy + rms_h)],
+                Stroke::new(1.0_f32, rms_col),
+            );
+        }
+    }
+}
+
 pub fn compact_level_meter(ui: &mut Ui, level: f32, height: f32) {
     let lvl = if level.is_finite() { level.clamp(0.0, 1.0) } else { 0.0 };
     let (rect, _) = ui.allocate_exact_size(vec2(4.0, height.max(16.0)), Sense::hover());
@@ -2165,12 +2258,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     } else if clip.muted {
                         Color32::from_rgb(0x28, 0x2A, 0x2E)
                     } else {
-                        Color32::from_rgba_unmultiplied(
-                            effective_color.r() / 2,
-                            effective_color.g() / 2,
-                            effective_color.b() / 2,
-                            240,
-                        )
+                        pad_body_color(effective_color, 242)
                     };
                     lg_painter.rect_filled(cell_rect, 2.5, card_bg);
 
@@ -2223,28 +2311,19 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     // Mini waveform or Mini-Notes inside slot body
                     match &clip.content {
                         ClipData::Audio { .. } => {
-                            if !clip.peaks.is_empty() {
-                                let wave_rect = Rect::from_min_max(
-                                    pos2(cell_rect.min.x + 3.0, cell_rect.min.y + 18.0),
-                                    pos2(cell_rect.max.x - 3.0, cell_rect.max.y - 3.0),
-                                );
-                                let cy = wave_rect.center().y;
-                                let hh = wave_rect.height() * 0.44;
-                                let n = clip.peaks.len();
-                                let step = wave_rect.width() / n as f32;
-                                let wave_alpha = if is_drag_source { 60 } else { 200 };
-                                for (i, &pk) in clip.peaks.iter().enumerate() {
-                                    let x = wave_rect.min.x + i as f32 * step;
-                                    let h = (pk * hh).max(1.0);
-                                    lg_painter.line_segment(
-                                        [pos2(x, cy - h), pos2(x, cy + h)],
-                                        Stroke::new(
-                                            1.0_f32,
-                                            Color32::from_rgba_unmultiplied(255, 255, 255, wave_alpha),
-                                        ),
-                                    );
-                                }
-                            }
+                            let wave_rect = Rect::from_min_max(
+                                pos2(cell_rect.min.x + 2.0, cell_rect.min.y + 17.5),
+                                pos2(cell_rect.max.x - 2.0, cell_rect.max.y - 2.5),
+                            );
+                            let alpha_scale = if is_drag_source { 0.30 } else { 1.0 };
+                            paint_pad_waveform(
+                                &lg_painter,
+                                wave_rect,
+                                &clip.peaks,
+                                effective_color,
+                                clip.muted,
+                                alpha_scale,
+                            );
                         }
                         ClipData::Midi { notes } => {
                             if !notes.is_empty() {
@@ -2519,12 +2598,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 let ghost_bg = if drag.clip.muted {
                     Color32::from_rgba_unmultiplied(40, 42, 46, 230)
                 } else {
-                    Color32::from_rgba_unmultiplied(
-                        eff_col.r() / 2,
-                        eff_col.g() / 2,
-                        eff_col.b() / 2,
-                        230,
-                    )
+                    pad_body_color(eff_col, 230)
                 };
                 ghost_painter.rect_filled(ghost_rect, 2.5, ghost_bg);
 
@@ -2557,27 +2631,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 // Waveform or MIDI miniature in ghost
                 match &drag.clip.content {
                     ClipData::Audio { .. } => {
-                        if !drag.clip.peaks.is_empty() {
-                            let wave_rect = Rect::from_min_max(
-                                pos2(ghost_rect.min.x + 3.0, ghost_rect.min.y + 18.0),
-                                pos2(ghost_rect.max.x - 3.0, ghost_rect.max.y - 3.0),
-                            );
-                            let cy = wave_rect.center().y;
-                            let hh = wave_rect.height() * 0.44;
-                            let n = drag.clip.peaks.len();
-                            let step = wave_rect.width() / n as f32;
-                            for (i, &pk) in drag.clip.peaks.iter().enumerate() {
-                                let x = wave_rect.min.x + i as f32 * step;
-                                let h = (pk * hh).max(1.0);
-                                ghost_painter.line_segment(
-                                    [pos2(x, cy - h), pos2(x, cy + h)],
-                                    Stroke::new(
-                                        1.0_f32,
-                                        Color32::from_rgba_unmultiplied(255, 255, 255, 220),
-                                    ),
-                                );
-                            }
-                        }
+                        let wave_rect = Rect::from_min_max(
+                            pos2(ghost_rect.min.x + 2.0, ghost_rect.min.y + 17.5),
+                            pos2(ghost_rect.max.x - 2.0, ghost_rect.max.y - 2.5),
+                        );
+                        paint_pad_waveform(
+                            &ghost_painter,
+                            wave_rect,
+                            &drag.clip.peaks,
+                            eff_col,
+                            drag.clip.muted,
+                            0.92,
+                        );
                     }
                     ClipData::Midi { notes } => {
                         if !notes.is_empty() {
