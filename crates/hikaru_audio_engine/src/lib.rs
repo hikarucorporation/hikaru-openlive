@@ -1188,6 +1188,25 @@ pub fn create_default_synth_table() -> Vec<f32> {
     table
 }
 
+/// Empaqueta `(scene_index, frame)` en un `u64` atómico para reportar el
+/// playhead interno del clip activo por pista sin locks desde el hilo de audio.
+#[inline]
+pub fn pack_clip_playhead(scene_index: usize, frame: u64) -> u64 {
+    (1u64 << 63) | (((scene_index as u64) & 0x7FFF) << 48) | (frame & 0x0000_FFFF_FFFF_FFFF)
+}
+
+/// Desempaqueta `(scene_index, frame)` de un `u64` producido por [`pack_clip_playhead`].
+/// Retorna `None` si no hay ningún clip reproduciéndose en esa pista.
+#[inline]
+pub fn unpack_clip_playhead(packed: u64) -> Option<(usize, u64)> {
+    if (packed & (1u64 << 63)) == 0 {
+        return None;
+    }
+    let scene_index = ((packed >> 48) & 0x7FFF) as usize;
+    let frame = packed & 0x0000_FFFF_FFFF_FFFF;
+    Some((scene_index, frame))
+}
+
 pub struct AudioEngine<'a> {
     pub transport: TransportPosition,
     pub mode: EngineMode,
@@ -1206,6 +1225,7 @@ pub struct AudioEngine<'a> {
     pub absolute_frame: u64,
     pub output_level_bits: Arc<AtomicU32>,
     pub track_peak_bits: [Arc<AtomicU32>; 16],
+    pub track_clip_playhead: [Arc<AtomicU64>; 16],
     track_output_bufs: Vec<Vec<f32>>,
     pub track_volumes: [AtomicU32; 16],
     pub track_pans: [AtomicU32; 16],
@@ -1272,6 +1292,7 @@ impl<'a> AudioEngine<'a> {
             absolute_frame: 0,
             output_level_bits: Arc::new(AtomicU32::new(0.0f32.to_bits())),
             track_peak_bits: std::array::from_fn(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))),
+            track_clip_playhead: std::array::from_fn(|_| Arc::new(AtomicU64::new(0))),
             track_output_bufs: (0..16).map(|_| Vec::with_capacity(MAX_TRACK_BUF)).collect(),
             track_volumes: std::array::from_fn(|_| AtomicU32::new(0.75f32.to_bits())),
             track_pans: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
@@ -3313,9 +3334,63 @@ impl<'a> AudioEngine<'a> {
 
             self.transport.sample_count = self.transport.wrap_sample_count(frame_start + buffer_frames);
             self.absolute_frame = self.absolute_frame.saturating_add(buffer_frames);
+
+            let mut track_playheads = [0u64; 16];
+            if mode == EngineMode::OpenLive {
+                for clip in &self.clips {
+                    if !clip.is_playing || clip.track_index >= 16 || self.absolute_frame < clip.start_absolute {
+                        continue;
+                    }
+                    let elapsed = self.absolute_frame - clip.start_absolute;
+                    let natural = clip.natural_frames();
+                    if natural == 0 {
+                        continue;
+                    }
+                    let frame_opt = if !clip.events.is_empty() {
+                        clip.clip_frame_for_elapsed(elapsed, &self.transport)
+                    } else if clip.has_valid_clip_loop() {
+                        let ls = clip.clip_loop_start.min(natural);
+                        let len = clip.quantized_loop_len(&self.transport);
+                        let le = ls + len;
+                        Some(if elapsed < le {
+                            elapsed
+                        } else {
+                            ls + ((elapsed - le) % len)
+                        })
+                    } else {
+                        let emission = clip.emission_len_frames();
+                        if elapsed < emission {
+                            Some(elapsed)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(frame) = frame_opt {
+                        track_playheads[clip.track_index] = pack_clip_playhead(clip.scene_index, frame);
+                    }
+                }
+            } else {
+                let global_frame = self.transport.sample_count;
+                for clip in &self.clips {
+                    if clip.track_index >= 16 {
+                        continue;
+                    }
+                    let clip_frame_end = clip.start_frame.saturating_add(clip.duration_frames);
+                    if global_frame >= clip.start_frame && global_frame < clip_frame_end {
+                        let rel = global_frame - clip.start_frame;
+                        track_playheads[clip.track_index] = pack_clip_playhead(clip.scene_index, rel);
+                    }
+                }
+            }
+            for (t, &packed) in track_playheads.iter().enumerate() {
+                self.track_clip_playhead[t].store(packed, Ordering::Relaxed);
+            }
         } else {
             for p in &self.track_peak_bits {
                 p.store(0.0f32.to_bits(), Ordering::Relaxed);
+            }
+            for p in &self.track_clip_playhead {
+                p.store(0, Ordering::Relaxed);
             }
         }
 
@@ -4188,5 +4263,39 @@ mod tests {
             "solape debe sumar voces: {} vs {}",
             raw[0], expect
         );
+    }
+
+    #[test]
+    fn track_clip_playhead_tracks_playing_looping_and_stopped_clip() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        let sr = engine.sample_rate as usize;
+        // 120 BPM => 0.5s por beat. Clip de 1.0s (2 beats).
+        engine.transport.set_bpm(120.0);
+        engine.add_clip(1, 0, 2, vec![0.25f32; sr * 2], 0.0, 1.0, 0.0, 2, true);
+        // Loop en el segundo beat [0.5s .. 1.0s]
+        engine.set_clip_loop(0, 2, 0.5, 1.0, true);
+
+        assert_eq!(unpack_clip_playhead(engine.track_clip_playhead[0].load(Ordering::Relaxed)), None);
+
+        engine.trigger_clip(0, 2);
+        engine.play();
+        run_frames(&mut engine, 1000);
+        assert_eq!(
+            unpack_clip_playhead(engine.track_clip_playhead[0].load(Ordering::Relaxed)),
+            Some((2, 1000))
+        );
+
+        // Avanzar exactamente 1.0s (sr frames): elapsed = 1000 + sr -> envuelve en [sr/2 .. sr)
+        let beat_frames = (sr / 2) as u64;
+        run_frames(&mut engine, sr as u64);
+        assert_eq!(
+            unpack_clip_playhead(engine.track_clip_playhead[0].load(Ordering::Relaxed)),
+            Some((2, beat_frames + 1000))
+        );
+
+        engine.stop();
+        run_frames(&mut engine, 512);
+        assert_eq!(unpack_clip_playhead(engine.track_clip_playhead[0].load(Ordering::Relaxed)), None);
     }
 }

@@ -594,6 +594,30 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     tri(lx0, 1.0, start_col);
     tri(lx1, -1.0, if hovered_handle == LoopHandle::End { Color32::WHITE } else { Color32::from_rgb(0x6A, 0x6A, 0x6A) });
 
+    // Playhead interno del clip (cuando este clip está reproduciéndose)
+    if app.is_playing() {
+        if let Some(frame) = app.clip_playhead_frame(slot.0, slot.1) {
+            let engine_sr = app.transport.sample_rate.get().max(1.0) as f64;
+            let playhead_beats = (frame as f64 / engine_sr) / spb;
+            let px = b2x(playhead_beats);
+            if px >= main.min.x && px <= main.max.x {
+                mp.line_segment(
+                    [pos2(px, ruler.min.y), pos2(px, wave_r.max.y)],
+                    Stroke::new(1.5_f32, theme::PLAYHEAD_COLOR),
+                );
+                mp.add(Shape::convex_polygon(
+                    vec![
+                        pos2(px - 4.5, ruler.min.y),
+                        pos2(px + 4.5, ruler.min.y),
+                        pos2(px, ruler.min.y + 8.0),
+                    ],
+                    theme::PLAYHEAD_COLOR,
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+
     // Scrollbar + resolución de grilla
     mp.rect_filled(scroll_r, 0.0, Color32::from_rgb(0x22, 0x22, 0x22));
     let total_b = (start_beats + clip_beats + 16.0) - (-8.0);

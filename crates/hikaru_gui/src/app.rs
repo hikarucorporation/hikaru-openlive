@@ -438,6 +438,7 @@ pub struct AppState {
     pub param_probing: HashSet<String>,
 
     pub track_peak_bits: Vec<Arc<AtomicU32>>,
+    pub track_clip_playhead: Vec<Arc<AtomicU64>>,
     pub smoothed_track_peaks: [f32; 16],
     pub smoothed_master_peak: f32,
 
@@ -512,19 +513,25 @@ impl AppState {
         }
         let fx_tracks = vec![mixer::Track::new_fx(0, "FX 1".to_string())];
 
-        let track_peak_bits: Vec<Arc<AtomicU32>> = if let Some(ref handle) = engine_handle {
-            if let Ok(engine) = handle.try_lock() {
-                engine.track_peak_bits.iter().map(|a| Arc::clone(a)).collect()
+        let (track_peak_bits, track_clip_playhead): (Vec<Arc<AtomicU32>>, Vec<Arc<AtomicU64>>) =
+            if let Some(ref handle) = engine_handle {
+                if let Ok(engine) = handle.try_lock() {
+                    (
+                        engine.track_peak_bits.iter().map(|a| Arc::clone(a)).collect(),
+                        engine.track_clip_playhead.iter().map(|a| Arc::clone(a)).collect(),
+                    )
+                } else {
+                    (
+                        (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
+                        (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
+                    )
+                }
             } else {
-                (0..16)
-                    .map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits())))
-                    .collect()
-            }
-        } else {
-            (0..16)
-                .map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits())))
-                .collect()
-        };
+                (
+                    (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
+                    (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
+                )
+            };
 
         let (param_probe_tx, param_probe_rx) = std::sync::mpsc::channel();
         let initial_bpm = transport.bpm;
@@ -586,6 +593,7 @@ impl AppState {
             param_probe_rx,
             param_probing: HashSet::new(),
             track_peak_bits,
+            track_clip_playhead,
             smoothed_track_peaks: [0.0; 16],
             smoothed_master_peak: 0.0,
             openlive_view: OpenLiveView::SessionMatrix,
@@ -1116,6 +1124,14 @@ impl AppState {
 
     pub fn is_playing(&self) -> bool {
         self.transport.playback_state == TransportPlaybackState::Playing
+    }
+
+    /// Devuelve el frame actual del playhead interno del clip si `(track_idx, scene_idx)`
+    /// está reproduciéndose activamente en el motor de audio.
+    pub fn clip_playhead_frame(&self, track_idx: usize, scene_idx: usize) -> Option<u64> {
+        let packed = self.track_clip_playhead.get(track_idx)?.load(Ordering::Relaxed);
+        let (active_scene, frame) = hikaru_audio_engine::unpack_clip_playhead(packed)?;
+        (active_scene == scene_idx).then_some(frame)
     }
 
     pub fn play(&mut self) {
