@@ -33,6 +33,22 @@ const HEADER_BG: Color32 = Color32::from_rgb(0xA9, 0xAC, 0xAE);
 const OUTSIDE_BG: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x3A);
 const ONSET_BLUE: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xE0);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoopHandle {
+    None,
+    Start,
+    End,
+    Body,
+}
+
+#[derive(Clone, Copy)]
+struct LoopDrag {
+    handle: LoopHandle,
+    orig_x: f32,
+    orig_ls: f64,
+    orig_le: f64,
+}
+
 #[derive(Clone, Copy)]
 struct ViewState {
     ppb: f32,
@@ -260,6 +276,162 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     let b2x = |b: f64| main.min.x + ((b - v.scroll_beats) * v.ppb as f64) as f32;
     let x2b = |x: f32| v.scroll_beats + ((x - main.min.x) / v.ppb) as f64;
 
+    let mut loop_en = loop_en;
+    let clip_start = start_beats.max(0.0);
+    let clip_end = (start_beats + clip_beats).max(clip_start);
+    let (mut ls, mut le) = if loop_e > loop_s {
+        ((loop_s / spb).clamp(clip_start, clip_end), (loop_e / spb).clamp(clip_start, clip_end))
+    } else {
+        (clip_start, clip_end)
+    };
+    if le <= ls {
+        ls = clip_start;
+        le = clip_end;
+    }
+
+    // ── Interacción con los corchetes y barra de loopeo ──
+    let drag_id = vid.with("loop_drag");
+    let mut active_drag = ui.ctx().data(|d| d.get_temp::<LoopDrag>(drag_id));
+    let (shift_held, primary_down, hover_pos, press_origin, interact_pos) = ui.input(|i| (
+        i.modifiers.shift,
+        i.pointer.primary_down(),
+        i.pointer.hover_pos(),
+        i.pointer.press_origin(),
+        i.pointer.interact_pos(),
+    ));
+    if !primary_down {
+        active_drag = None;
+        ui.ctx().data_mut(|d| d.remove::<LoopDrag>(drag_id));
+    }
+
+    let hit_loop_handle = |pos: egui::Pos2, lx0: f32, lx1: f32| -> LoopHandle {
+        if !loopr.contains(pos) {
+            return LoopHandle::None;
+        }
+        let tri_y = loopr.min.y + 22.0;
+        let start_bar = Rect::from_min_max(pos2(lx0 - 8.0, loopr.min.y), pos2(lx0 + 8.0, loopr.min.y + 21.0));
+        let start_tri = Rect::from_min_max(pos2(lx0 - 4.0, tri_y - 2.0), pos2(lx0 + 14.0, tri_y + 16.0));
+        let end_bar = Rect::from_min_max(pos2(lx1 - 8.0, loopr.min.y), pos2(lx1 + 8.0, loopr.min.y + 21.0));
+        let end_tri = Rect::from_min_max(pos2(lx1 - 14.0, tri_y - 2.0), pos2(lx1 + 4.0, tri_y + 16.0));
+        let hit_start = start_bar.contains(pos) || start_tri.contains(pos);
+        let hit_end = end_bar.contains(pos) || end_tri.contains(pos);
+        if hit_start && hit_end {
+            if (pos.x - lx0).abs() <= (pos.x - lx1).abs() {
+                LoopHandle::Start
+            } else {
+                LoopHandle::End
+            }
+        } else if hit_end {
+            LoopHandle::End
+        } else if hit_start {
+            LoopHandle::Start
+        } else if (lx1 - lx0) > 16.0 {
+            let body_hit = Rect::from_min_max(pos2(lx0 + 8.0, loopr.min.y + 2.0), pos2(lx1 - 8.0, loopr.min.y + 20.0));
+            if body_hit.contains(pos) { LoopHandle::Body } else { LoopHandle::None }
+        } else {
+            LoopHandle::None
+        }
+    };
+
+    let lx0_cur = b2x(ls);
+    let lx1_cur = b2x(le);
+
+    let mut loop_changed = false;
+    if resp.double_clicked_by(egui::PointerButton::Primary) {
+        if let Some(pos) = hover_pos {
+            let bar_hit = Rect::from_min_max(pos2(lx0_cur - 6.0, loopr.min.y), pos2(lx1_cur + 6.0, loopr.min.y + 21.0));
+            if bar_hit.contains(pos) {
+                loop_en = !loop_en;
+                loop_changed = true;
+            }
+        }
+    }
+
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        if let Some(orig) = press_origin {
+            let handle = hit_loop_handle(orig, lx0_cur, lx1_cur);
+            if handle != LoopHandle::None {
+                let d = LoopDrag { handle, orig_x: orig.x, orig_ls: ls, orig_le: le };
+                active_drag = Some(d);
+                ui.ctx().data_mut(|data| data.insert_temp(drag_id, d));
+            }
+        }
+    }
+
+    if let (Some(d), Some(cur)) = (active_drag, interact_pos) {
+        if resp.dragged_by(egui::PointerButton::Primary) && clip_end > clip_start {
+            let snap_beats = 0.25_f64;
+            let snap = |b: f64| if shift_held { b } else { (b / snap_beats).round() * snap_beats };
+            let min_len = 0.25_f64.min((clip_end - clip_start) * 0.5).max(0.01);
+            let delta_b = (cur.x - d.orig_x) as f64 / v.ppb as f64;
+            match d.handle {
+                LoopHandle::Start => {
+                    let max_ls = (d.orig_le - min_len).max(clip_start);
+                    ls = snap(d.orig_ls + delta_b).clamp(clip_start, max_ls);
+                    le = d.orig_le;
+                    loop_en = true;
+                    loop_changed = true;
+                }
+                LoopHandle::End => {
+                    let min_le = (d.orig_ls + min_len).min(clip_end);
+                    ls = d.orig_ls;
+                    le = snap(d.orig_le + delta_b).clamp(min_le, clip_end);
+                    loop_en = true;
+                    loop_changed = true;
+                }
+                LoopHandle::Body => {
+                    let len = (d.orig_le - d.orig_ls).max(min_len);
+                    let max_ls = (clip_end - len).max(clip_start);
+                    ls = snap(d.orig_ls + delta_b).clamp(clip_start, max_ls);
+                    le = (ls + len).min(clip_end);
+                    loop_changed = true;
+                }
+                LoopHandle::None => {}
+            }
+        }
+    }
+
+    if loop_changed {
+        let start_secs = (ls * spb).max(0.0);
+        let end_secs = (le * spb).max(start_secs);
+        let start_frames = (start_secs * sr).round() as u64;
+        let end_frames = ((end_secs * sr).round() as u64).max(start_frames + 1);
+        if let Some(clip) = app.matrix_state.slot_mut(slot.0, slot.1).and_then(|s| s.clip.as_mut()) {
+            clip.loop_start = start_frames;
+            clip.loop_end = end_frames;
+            clip.loop_enabled = loop_en;
+        }
+        app.audio_proxy.set_clip_loop(slot.0, slot.1, start_secs as f32, end_secs as f32, loop_en);
+    }
+
+    let hovered_handle = active_drag
+        .map(|d| d.handle)
+        .unwrap_or_else(|| hover_pos.map(|p| hit_loop_handle(p, lx0_cur, lx1_cur)).unwrap_or(LoopHandle::None));
+
+    match hovered_handle {
+        LoopHandle::Start => {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            crate::app::set_footer_cues(app, None, &[("DRAG", "Adjust loop start"), ("SHIFT", "Disable snapping")]);
+        }
+        LoopHandle::End => {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            crate::app::set_footer_cues(app, None, &[("DRAG", "Adjust loop end"), ("SHIFT", "Disable snapping")]);
+        }
+        LoopHandle::Body => {
+            ui.ctx().set_cursor_icon(if active_drag.is_some() {
+                egui::CursorIcon::Grabbing
+            } else {
+                egui::CursorIcon::Grab
+            });
+            crate::app::set_footer_cues(
+                app,
+                None,
+                &[("DRAG", "Move loop region"), ("SHIFT", "Disable snapping"), ("DOUBLE-CLICK", "Toggle Loop")],
+            );
+        }
+        LoopHandle::None => {}
+    }
+
     let mp = ui.painter_at(main);
     // Fondos
     mp.rect_filled(ruler, 0.0, Color32::from_rgb(0x2A, 0x2A, 0x2A));
@@ -355,18 +527,62 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
             }
         }
         // Bordes del clip
-        mp.line_segment([pos2(cx0, hdr.min.y), pos2(cx0, body.max.y)], Stroke::new(1.0, Color32::from_black_alpha(120)));
-        mp.line_segment([pos2(cx1, hdr.min.y), pos2(cx1, body.max.y)], Stroke::new(1.0, Color32::from_black_alpha(120)));
+        mp.line_segment([pos2(cx0, hdr.min.y), pos2(cx0, body.max.y)], Stroke::new(1.0_f32, Color32::from_black_alpha(120)));
+        mp.line_segment([pos2(cx1, hdr.min.y), pos2(cx1, body.max.y)], Stroke::new(1.0_f32, Color32::from_black_alpha(120)));
+
+        // Atenuar regiones fuera del rango de loopeo cuando el loop está activo
+        if loop_en {
+            let lx0_vis = b2x(ls);
+            let lx1_vis = b2x(le);
+            if lx0_vis > cx0 + 1.0 {
+                let dim_l = Rect::from_min_max(pos2(cx0, body.min.y), pos2(lx0_vis.min(cx1), body.max.y));
+                mp.rect_filled(dim_l.intersect(main), 0.0, Color32::from_black_alpha(55));
+            }
+            if lx1_vis < cx1 - 1.0 {
+                let dim_r = Rect::from_min_max(pos2(lx1_vis.max(cx0), body.min.y), pos2(cx1, body.max.y));
+                mp.rect_filled(dim_r.intersect(main), 0.0, Color32::from_black_alpha(55));
+            }
+        }
     }
     let _ = env.frames;
 
-    // Tira de loop: barra de rango + marcadores naranja
-    let (ls, le) = if loop_en && loop_e > loop_s { (loop_s / spb, loop_e / spb) } else { (start_beats, start_beats + clip_beats) };
+    // Tira de loop: barra de rango + corchetes [ ] + marcadores
     let lx0 = b2x(ls);
     let lx1 = b2x(le);
     let bar = Rect::from_min_max(pos2(lx0, loopr.min.y + 4.0), pos2(lx1, loopr.min.y + 18.0));
-    mp.rect_filled(bar, 0.0, Color32::from_rgb(0x4A, 0x4A, 0x4A));
-    mp.rect_stroke(bar, 0.0, Stroke::new(1.0, accent), StrokeKind::Inside);
+    let bar_fill = if loop_en {
+        Color32::from_rgba_unmultiplied(0xFF, 0x7A, 0x00, 38)
+    } else {
+        Color32::from_rgba_unmultiplied(0x50, 0x50, 0x50, 32)
+    };
+    let bar_col = if loop_en { accent } else { Color32::from_rgb(0x68, 0x68, 0x68) };
+    mp.rect_filled(bar, 0.0, bar_fill);
+    mp.rect_stroke(bar, 0.0, Stroke::new(1.0_f32, bar_col), StrokeKind::Inside);
+
+    // Corchetes izquierdo [ y derecho ] estilo Bitwig
+    let start_col = if hovered_handle == LoopHandle::Start {
+        Color32::WHITE
+    } else if loop_en {
+        accent
+    } else {
+        Color32::from_rgb(0x88, 0x88, 0x88)
+    };
+    let end_col = if hovered_handle == LoopHandle::End {
+        Color32::WHITE
+    } else if loop_en {
+        accent
+    } else {
+        Color32::from_rgb(0x88, 0x88, 0x88)
+    };
+    let serif = 5.0_f32.min((lx1 - lx0) * 0.35).max(0.0);
+    mp.line_segment([pos2(lx0 + 1.0, bar.min.y), pos2(lx0 + 1.0, bar.max.y)], Stroke::new(2.5_f32, start_col));
+    mp.line_segment([pos2(lx0, bar.min.y + 1.0), pos2(lx0 + serif, bar.min.y + 1.0)], Stroke::new(2.0_f32, start_col));
+    mp.line_segment([pos2(lx0, bar.max.y - 1.0), pos2(lx0 + serif, bar.max.y - 1.0)], Stroke::new(2.0_f32, start_col));
+
+    mp.line_segment([pos2(lx1 - 1.0, bar.min.y), pos2(lx1 - 1.0, bar.max.y)], Stroke::new(2.5_f32, end_col));
+    mp.line_segment([pos2(lx1 - serif, bar.min.y + 1.0), pos2(lx1, bar.min.y + 1.0)], Stroke::new(2.0_f32, end_col));
+    mp.line_segment([pos2(lx1 - serif, bar.max.y - 1.0), pos2(lx1, bar.max.y - 1.0)], Stroke::new(2.0_f32, end_col));
+
     let tri = |x: f32, dir: f32, col: Color32| {
         let y = loopr.min.y + 22.0;
         mp.add(Shape::convex_polygon(
@@ -375,8 +591,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
             Stroke::NONE,
         ));
     };
-    tri(lx0, 1.0, accent);
-    tri(lx1, -1.0, Color32::from_rgb(0x6A, 0x6A, 0x6A));
+    tri(lx0, 1.0, start_col);
+    tri(lx1, -1.0, if hovered_handle == LoopHandle::End { Color32::WHITE } else { Color32::from_rgb(0x6A, 0x6A, 0x6A) });
 
     // Scrollbar + resolución de grilla
     mp.rect_filled(scroll_r, 0.0, Color32::from_rgb(0x22, 0x22, 0x22));
