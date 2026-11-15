@@ -23,8 +23,8 @@ const RULER_H: f32 = 20.0;
 const LOOP_H: f32 = 49.0;
 const HEADER_H: f32 = 24.0;
 const SCROLL_H: f32 = 18.0;
-const MIN_PPB: f32 = 8.0;
-const MAX_PPB: f32 = 1200.0;
+const MIN_PPB: f32 = 16.0;
+const MAX_PPB: f32 = 2400.0;
 const DEFAULT_PPB: f32 = 76.0;
 
 const WAVE_BG: Color32 = Color32::from_rgb(0xC9, 0xC9, 0xC9);
@@ -249,25 +249,55 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
             v.scroll_beats -= (d / v.ppb) as f64;
         }
     }
-    // Zoom estilo Bitwig: click de la rueda + drag horizontal.
-    // Derecha = acercar, izquierda = alejar, anclado al punto donde se hizo click.
+    // Zoom & pan estilo Bitwig (Video 2):
+    // - MIDDLE-DRAG en el editor (o DRAG izquierdo en la regla):
+    //   vertical (abajo = acercar, arriba = alejar) + horizontal (paneo),
+    //   manteniendo el punto clickeado pegado al cursor.
+    #[derive(Clone, Copy)]
+    struct ZoomPanDrag {
+        oy: f32,
+        anchor_beat: f64,
+        ppb0: f32,
+        by_ruler: bool,
+    }
     let zoom_id = vid.with("mmb_zoom");
-    if resp.drag_started_by(egui::PointerButton::Middle) {
+    let mid_start = resp.drag_started_by(egui::PointerButton::Middle);
+    let ruler_start = resp.drag_started_by(egui::PointerButton::Primary)
+        && ui.input(|i| i.pointer.press_origin().is_some_and(|o| ruler.contains(o)));
+    if mid_start || ruler_start {
         if let Some(o) = ui.input(|i| i.pointer.press_origin()) {
             let anchor_beat = v.scroll_beats + ((o.x - main.min.x) / v.ppb) as f64;
-            ui.ctx().data_mut(|d| d.insert_temp(zoom_id, (o.x, anchor_beat, v.ppb)));
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    zoom_id,
+                    ZoomPanDrag {
+                        oy: o.y,
+                        anchor_beat,
+                        ppb0: v.ppb,
+                        by_ruler: ruler_start && !mid_start,
+                    },
+                )
+            });
         }
     }
-    if resp.dragged_by(egui::PointerButton::Middle) {
-        if let (Some((ox, abeat, ppb0)), Some(cur)) = (
-            ui.ctx().data(|d| d.get_temp::<(f32, f64, f32)>(zoom_id)),
-            ui.input(|i| i.pointer.interact_pos()),
-        ) {
-            let dx = cur.x - ox;
-            v.ppb = (ppb0 * (dx * 0.006).exp()).clamp(MIN_PPB, MAX_PPB);
-            v.scroll_beats = abeat - ((ox - main.min.x) / v.ppb) as f64;
+    let mut zoom_pan_active = false;
+    if let Some(zd) = ui.ctx().data(|d| d.get_temp::<ZoomPanDrag>(zoom_id)) {
+        let still_dragging = if zd.by_ruler {
+            resp.dragged_by(egui::PointerButton::Primary)
+        } else {
+            resp.dragged_by(egui::PointerButton::Middle)
+        };
+        if still_dragging {
+            zoom_pan_active = true;
+            if let Some(cur) = ui.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos())) {
+                let dy = cur.y - zd.oy;
+                v.ppb = (zd.ppb0 * (dy * 0.01).exp()).clamp(MIN_PPB, MAX_PPB);
+                v.scroll_beats = zd.anchor_beat - ((cur.x - main.min.x) / v.ppb) as f64;
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::AllScroll);
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<ZoomPanDrag>(zoom_id));
         }
-        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     let clip_beats = ev_len / spb;
     let start_beats = ev_start / spb;
@@ -429,7 +459,21 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 &[("DRAG", "Move loop region"), ("SHIFT", "Disable snapping"), ("DOUBLE-CLICK", "Toggle Loop")],
             );
         }
-        LoopHandle::None => {}
+        LoopHandle::None => {
+            if zoom_pan_active {
+                crate::app::set_footer_cues(app, None, &[("DRAG", "Zoom & pan")]);
+            } else if let Some(pos) = hover_pos {
+                if ruler.contains(pos) {
+                    crate::app::set_footer_cues(app, None, &[("DRAG", "Zoom & pan")]);
+                } else if main.contains(pos) {
+                    crate::app::set_footer_cues(
+                        app,
+                        None,
+                        &[("DRAG", "Select time"), ("ALT+DRAG", "Slide Content"), ("MIDDLE-DRAG", "Zoom & pan")],
+                    );
+                }
+            }
+        }
     }
 
     let mp = ui.painter_at(main);
