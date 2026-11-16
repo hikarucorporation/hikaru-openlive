@@ -1290,6 +1290,42 @@ fn render_channel_strip(
                                 fonts::semibold(9.5),
                                 Color32::from_rgb(0x10, 0x11, 0x13),
                             );
+                            if is_playing && !clip.muted {
+                                if let Some(frame) = state.clip_playhead_frame(matrix_idx, scene_idx) {
+                                    let engine_sr = state.transport.sample_rate.get().max(1.0) as f64;
+                                    let norm_pos = match &clip.content {
+                                        matrix::ClipData::Audio { preview_sr, .. } => {
+                                            let playhead_secs = frame as f64 / engine_sr;
+                                            let total_secs = if clip.loop_end > 0 && *preview_sr > 0 {
+                                                clip.loop_end as f64 / (*preview_sr as f64)
+                                            } else {
+                                                clip.duration_secs
+                                            };
+                                            if total_secs > 0.0 {
+                                                Some((playhead_secs / total_secs).clamp(0.0, 1.0))
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        matrix::ClipData::Midi { .. } => {
+                                            let bpm = state.transport.bpm.max(20.0) as f64;
+                                            let spb = 60.0 / bpm;
+                                            let playhead_ticks = ((frame as f64 / engine_sr) / spb) * 960.0;
+                                            let max_t = clip.loop_end.max(3840) as f64;
+                                            Some((playhead_ticks / max_t).clamp(0.0, 1.0))
+                                        }
+                                    };
+                                    if let Some(t) = norm_pos {
+                                        let x0 = cell.min.x + 2.0;
+                                        let x1 = cell.max.x - 2.0;
+                                        let px = x0 + (x1 - x0) * t as f32;
+                                        ui.painter().line_segment(
+                                            [pos2(px, cell.min.y + 1.5), pos2(px, cell.max.y - 1.5)],
+                                            Stroke::new(1.5, Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 220)),
+                                        );
+                                    }
+                                }
+                            }
                         } else {
                             // Gris neutro de Bitwig para los pads vacíos
                             // (#2E2E2E), sin el tinte azulado anterior.
