@@ -150,7 +150,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 // ACCIONES DE PROYECTO (FILE)
 // =========================================================================
 
-fn new_project(state: &mut AppState) {
+pub(crate) fn new_project(state: &mut AppState) {
     if state.project_dirty && !confirm_discard() {
         return;
     }
@@ -161,7 +161,7 @@ fn new_project(state: &mut AppState) {
     println!("[PROJECT] proyecto nuevo en memoria (sin archivo)");
 }
 
-fn open_project(state: &mut AppState) {
+pub(crate) fn open_project(state: &mut AppState) {
     let current_path = state.project_path.clone();
     let Some(path) = project::ask_open_path(current_path.as_deref()) else {
         return;
@@ -172,11 +172,12 @@ fn open_project(state: &mut AppState) {
     } else {
         state.project_path = Some(path.clone());
         state.project_dirty = false;
+        state.control_panel_state.record_recent(&path);
         println!("[PROJECT] proyecto cargado: {}", path.display());
     }
 }
 
-fn save_project(state: &mut AppState, force_dialog: bool) {
+pub(crate) fn save_project(state: &mut AppState, force_dialog: bool) {
     let current = state.project_path.clone();
     let mode = state.mode;
 
@@ -192,6 +193,7 @@ fn save_project(state: &mut AppState, force_dialog: bool) {
         Ok(saved) => {
             state.project_path = Some(saved.clone());
             state.project_dirty = false;
+            state.control_panel_state.record_recent(&saved);
             println!("[PROJECT] proyecto guardado: {}", saved.display());
         }
         Err(err) => eprintln!("[PROJECT] no se pudo guardar: {}", err),
