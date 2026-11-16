@@ -2359,6 +2359,46 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         }
                     }
 
+                    // Internal clip playhead line when actively playing
+                    if is_playing {
+                        if let Some(frame) = state.clip_playhead_frame(track_idx, scene_idx) {
+                            let engine_sr = state.transport.sample_rate.get().max(1.0) as f64;
+                            let norm_pos = match &clip.content {
+                                ClipData::Audio { preview_sr, .. } => {
+                                    let playhead_secs = frame as f64 / engine_sr;
+                                    let total_secs = if clip.loop_end > 0 && *preview_sr > 0 {
+                                        clip.loop_end as f64 / (*preview_sr as f64)
+                                    } else {
+                                        clip.duration_secs
+                                    };
+                                    if total_secs > 0.0 {
+                                        Some((playhead_secs / total_secs).clamp(0.0, 1.0))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                ClipData::Midi { .. } => {
+                                    let bpm = state.transport.bpm.max(20.0) as f64;
+                                    let spb = 60.0 / bpm;
+                                    let playhead_ticks = ((frame as f64 / engine_sr) / spb) * 960.0;
+                                    let max_t = clip.loop_end.max(3840) as f64;
+                                    Some((playhead_ticks / max_t).clamp(0.0, 1.0))
+                                }
+                            };
+                            if let Some(t) = norm_pos {
+                                let x0 = cell_rect.min.x + 2.0;
+                                let x1 = cell_rect.max.x - 2.0;
+                                let px = x0 + (x1 - x0) * t as f32;
+                                let py0 = cell_rect.min.y + 16.5;
+                                let py1 = cell_rect.max.y - 1.5;
+                                lg_painter.line_segment(
+                                    [pos2(px, py0), pos2(px, py1)],
+                                    Stroke::new(1.5_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 230)),
+                                );
+                            }
+                        }
+                    }
+
                     let border_col = if is_matrix_drag_target {
                         ACCENT_ORANGE
                     } else if is_drag_source {
