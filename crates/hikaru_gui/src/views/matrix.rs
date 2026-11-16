@@ -918,7 +918,7 @@ pub fn load_clip_into_slot(
             ev.source_path = Some(path.clone());
             events.push(ev);
         }
-        let dur_calc = if let Ok(reader) = hound::WavReader::open(path_str.as_str()) {
+        let dur_calc = if let Ok(reader) = crate::wav_io::open(path_str.as_str()) {
             let spec = reader.spec();
             let samples = reader.duration();
             let dur = if spec.sample_rate > 0 {
@@ -1038,29 +1038,12 @@ pub fn create_empty_midi_clip(
 }
 
 pub fn decode_audio_file(path: &std::path::Path) -> Option<(Vec<f32>, usize, u32)> {
-    let reader = hound::WavReader::open(path).ok()?;
-    let spec = reader.spec();
-    let channels = spec.channels as usize;
-    let bits = spec.bits_per_sample;
-    let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),
-        hound::SampleFormat::Int => {
-            let max_val = if bits <= 16 {
-                i16::MAX as f32
-            } else {
-                (1 << (bits - 1)) as f32
-            };
-            reader
-                .into_samples::<i32>()
-                .filter_map(Result::ok)
-                .map(|s| s as f32 / max_val)
-                .collect()
+    match crate::wav_io::read_file(path) {
+        Ok((samples, channels, sample_rate)) if !samples.is_empty() => {
+            Some((samples, channels, sample_rate))
         }
-    };
-    if samples.is_empty() {
-        return None;
+        _ => None,
     }
-    Some((samples, channels, spec.sample_rate))
 }
 
 pub fn append_sample_as_event(

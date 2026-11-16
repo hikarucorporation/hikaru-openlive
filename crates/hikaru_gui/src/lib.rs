@@ -23,5 +23,6 @@ pub use app::HikaruApp;
 
 pub mod audio_proxy;
 pub mod render;
+pub mod wav_io;
 
 pub use render::HikaruRenderer;

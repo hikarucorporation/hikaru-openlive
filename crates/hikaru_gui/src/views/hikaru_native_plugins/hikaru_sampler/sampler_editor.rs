@@ -294,7 +294,7 @@ impl HikaruSampler {
     }
 
     pub fn load_wav(&mut self, path: &Path) -> Result<(), String> {
-        let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+        let mut reader = crate::wav_io::open(path).map_err(|e| e.to_string())?;
         let spec = reader.spec();
         let ch = (spec.channels as usize).max(1);
         let sr = spec.sample_rate as f32;
@@ -302,7 +302,7 @@ impl HikaruSampler {
         let raw: Vec<f32> = match spec.sample_format {
             hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
             hound::SampleFormat::Int => {
-                let scale = (1i64 << (spec.bits_per_sample.saturating_sub(1))) as f32;
+                let scale = crate::wav_io::int_scale(spec.bits_per_sample);
                 reader
                     .samples::<i32>()
                     .filter_map(Result::ok)

@@ -391,7 +391,7 @@ pub fn load_wavetable(path: &Path, max_frames: usize) -> Result<Wavetable, Wavet
         .map(|stem| stem.to_string_lossy().to_string())
         .unwrap_or_else(|| "Wavetable".to_string());
 
-    let reader = hound::WavReader::open(path).map_err(|error| WavetableError::Open {
+    let reader = crate::wav_io::open(path).map_err(|error| WavetableError::Open {
         path: path.to_path_buf(),
         source: error.to_string(),
     })?;
@@ -430,7 +430,7 @@ fn decode_reader<R: std::io::Read + std::io::Seek>(
 
     match spec.sample_format {
         hound::SampleFormat::Int => {
-            let full_scale = (1i32 << (spec.bits_per_sample.saturating_sub(1)).min(30)) as f32;
+            let full_scale = crate::wav_io::int_scale(spec.bits_per_sample);
             for sample in reader.samples::<i32>().take(kept_frames * channels) {
                 if let Ok(value) = sample {
                     mono.push(value as f32 / full_scale);

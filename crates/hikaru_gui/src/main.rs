@@ -114,7 +114,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                 GuiCommand::LoadClip { clip_id, path, position_secs, duration_secs, offset_secs, track_index, scene_index, speed_ratio } => {
                     println!("[Hikaru Engine] Cargando clip de Matrix/Playlist: {} en Track {}", path, track_index);
 
-                    if let Ok(mut reader) = hound::WavReader::open(&path) {
+                    if let Ok(mut reader) = hikaru_gui::wav_io::open(&path) {
                         let spec = reader.spec();
                         let file_sr = spec.sample_rate as f32;
                         let channels = spec.channels as usize;
@@ -122,7 +122,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         let raw_samples: Vec<f32> = match spec.sample_format {
                             hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
                             hound::SampleFormat::Int => {
-                                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                                let max_val = hikaru_gui::wav_io::int_scale(spec.bits_per_sample);
                                 reader.samples::<i32>()
                                     .filter_map(Result::ok)
                                     .map(|s| s as f32 / max_val)
@@ -221,7 +221,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
 
                     let mut decoded_clips: Vec<(usize, usize, usize, Vec<f32>, f32, f32, f32, usize, Option<f32>)> = Vec::with_capacity(clips.len());
                     for clip_data in clips.into_iter() {
-                        if let Ok(mut reader) = hound::WavReader::open(&clip_data.path) {
+                        if let Ok(mut reader) = hikaru_gui::wav_io::open(&clip_data.path) {
                             let spec = reader.spec();
                             let file_sr = spec.sample_rate as f32;
                             let channels = spec.channels as usize;
@@ -229,7 +229,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                             let raw_samples: Vec<f32> = match spec.sample_format {
                                 hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
                                 hound::SampleFormat::Int => {
-                                    let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                                    let max_val = hikaru_gui::wav_io::int_scale(spec.bits_per_sample);
                                     reader.samples::<i32>()
                                         .filter_map(Result::ok)
                                         .map(|s| s as f32 / max_val)
@@ -424,7 +424,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                 }
 
                 GuiCommand::LoadDmsSample { pad_idx, path } => {
-                    if let Ok(mut reader) = hound::WavReader::open(&path) {
+                    if let Ok(mut reader) = hikaru_gui::wav_io::open(&path) {
                         let spec = reader.spec();
                         let file_sr = spec.sample_rate as f32;
                         let channels = spec.channels as usize;
@@ -432,7 +432,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         let raw_samples: Vec<f32> = match spec.sample_format {
                             hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
                             hound::SampleFormat::Int => {
-                                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                                let max_val = hikaru_gui::wav_io::int_scale(spec.bits_per_sample);
                                 reader.samples::<i32>()
                                     .filter_map(Result::ok)
                                     .map(|s| s as f32 / max_val)
@@ -715,7 +715,7 @@ struct WavData {
 }
 
 fn decode_wav(path: &str) -> Result<WavData, Box<dyn std::error::Error>> {
-    let mut reader = hound::WavReader::open(path)?;
+    let mut reader = hikaru_gui::wav_io::open(path)?;
     let spec = reader.spec();
     let file_sr = spec.sample_rate as f32;
     let channels = spec.channels as usize;
@@ -723,7 +723,7 @@ fn decode_wav(path: &str) -> Result<WavData, Box<dyn std::error::Error>> {
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
         hound::SampleFormat::Int => {
-            let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+            let max_val = hikaru_gui::wav_io::int_scale(spec.bits_per_sample);
             reader
                 .samples::<i32>()
                 .filter_map(Result::ok)

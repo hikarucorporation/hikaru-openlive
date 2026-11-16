@@ -269,7 +269,7 @@ impl FileExplorerState {
 
         let mut peaks = vec![0.0_f32; target_bins];
 
-        if let Ok(mut reader) = hound::WavReader::open(path) {
+        if let Ok(mut reader) = crate::wav_io::open(path) {
             let spec = reader.spec();
             let total_samples = reader.len() as usize;
 
@@ -284,7 +284,7 @@ impl FileExplorerState {
 
                 match spec.sample_format {
                     hound::SampleFormat::Int => {
-                        let max_val = (1 << (spec.bits_per_sample.saturating_sub(1))) as f32;
+                        let max_val = crate::wav_io::int_scale(spec.bits_per_sample);
                         for bin in 0..target_bins {
                             let seek_idx = (bin * samples_per_bin) as u32;
                             if reader.seek(seek_idx).is_err() {

@@ -688,30 +688,28 @@ pub fn ticks_to_secs_precise(ticks: u64, ppqn: u64, bpm: f64) -> f32 {
 pub fn load_sample_info(path: &PathBuf, ppqn: u64, bpm: f64) -> (u64, Vec<f32>) {
     let mut peaks = Vec::new();
     let mut total_samples = 44100;
-    let sample_rate = 44100;
+    let mut sample_rate = 44100u32;
 
-    if let Ok(mut reader) = hound::WavReader::open(path) {
-        let _spec = reader.spec();
-        let samples_count = reader.duration() as usize;
+    if let Ok((samples, channels, file_sr)) = crate::wav_io::read_file(path) {
+        let samples_count = samples.len() / channels.max(1);
         total_samples = samples_count;
+        sample_rate = file_sr;
         let num_peaks = 256;
         let step = (samples_count / num_peaks).max(1);
 
         let mut current_max: f32 = 0.0;
         let mut count = 0;
 
-        for sample in reader.samples::<i32>() {
-            if let Ok(s) = sample {
-                let norm = (s as f32 / i32::MAX as f32).abs();
-                if norm > current_max {
-                    current_max = norm;
-                }
-                count += 1;
-                if count >= step {
-                    peaks.push(current_max);
-                    current_max = 0.0;
-                    count = 0;
-                }
+        for s in samples {
+            let norm = s.abs();
+            if norm > current_max {
+                current_max = norm;
+            }
+            count += 1;
+            if count >= step {
+                peaks.push(current_max);
+                current_max = 0.0;
+                count = 0;
             }
         }
         if peaks.is_empty() {

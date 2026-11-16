@@ -362,7 +362,7 @@ pub fn resolve_clip(s: &AppState, bpm: f32) -> Option<ClipEditorClip> {
                 .unwrap_or(2);
             let real_dur = if clip.duration_secs > 0.001 {
                 clip.duration_secs
-            } else if let Ok(reader) = hound::WavReader::open(&clip.path) {
+            } else if let Ok(reader) = crate::wav_io::open(&clip.path) {
                 let spec = reader.spec();
                 let samples = reader.duration();
                 if spec.sample_rate > 0 {

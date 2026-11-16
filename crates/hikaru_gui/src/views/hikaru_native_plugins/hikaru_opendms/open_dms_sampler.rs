@@ -76,7 +76,7 @@ pub fn render_sampler_ui(
 
 pub fn load_peaks_from_wav(path: &str, target_bins: usize) -> Vec<f32> {
     let mut peaks = vec![0.0f32; target_bins];
-    if let Ok(mut reader) = hound::WavReader::open(path) {
+    if let Ok(mut reader) = crate::wav_io::open(path) {
         let spec = reader.spec();
         let total_samples = reader.len() as usize;
         if total_samples == 0 {
@@ -85,7 +85,7 @@ pub fn load_peaks_from_wav(path: &str, target_bins: usize) -> Vec<f32> {
         let samples_per_bin = (total_samples / target_bins).max(1);
         match spec.sample_format {
             hound::SampleFormat::Int => {
-                let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+                let max_val = crate::wav_io::int_scale(spec.bits_per_sample);
                 let mut iter = reader.samples::<i32>().filter_map(Result::ok);
                 for bin in 0..target_bins {
                     let mut max_peak = 0.0f32;
