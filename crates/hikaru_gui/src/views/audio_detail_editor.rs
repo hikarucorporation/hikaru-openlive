@@ -32,6 +32,8 @@ const WAVE_FG: Color32 = Color32::from_rgb(0x2E, 0x2E, 0x2E);
 const HEADER_BG: Color32 = Color32::from_rgb(0xA9, 0xAC, 0xAE);
 const OUTSIDE_BG: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x3A);
 const ONSET_BLUE: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xE0);
+const ONSET_HOT: Color32 = Color32::from_rgb(0x74, 0xB3, 0xFF);
+const DEFAULT_ONSET_SENS: f32 = 0.65;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LoopHandle {
@@ -61,6 +63,7 @@ struct ViewState {
     formant: bool,
     stretch: bool,
     onsets: bool,
+    snap_beats: f64,
 }
 
 #[derive(Clone)]
@@ -68,6 +71,7 @@ struct StretchClipData {
     orig_beats: f64,
     stretch_beats: f64,
     markers: Vec<(f64, f64)>,
+    dirty_engine: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -80,10 +84,33 @@ struct StretchDrag {
 }
 
 #[derive(Clone)]
+struct OnsetClipData {
+    sensitivity: f32,
+    onsets: Vec<f32>,
+    selected: Option<usize>,
+    frames_key: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OnsetDragMode {
+    MoveOnset,
+    WarpTransient,
+}
+
+#[derive(Clone, Copy)]
+struct OnsetDrag {
+    onset_idx: usize,
+    mode: OnsetDragMode,
+    orig_x: f32,
+    marker_idx: Option<usize>,
+    orig_beat: f64,
+}
+
+#[derive(Clone)]
 struct Env {
     frames: usize,
     ch: Vec<Vec<f32>>,
-    onsets: Vec<f32>,
+    energy: Vec<f32>,
 }
 
 /// `Some((track, slot))` si el slot seleccionado contiene un clip de audio.
@@ -93,9 +120,142 @@ pub fn selected_audio_slot(app: &AppState) -> Option<(usize, usize)> {
     matches!(clip.content, ClipData::Audio { .. }).then_some((t, s))
 }
 
+fn detect_onsets(energy: &[f32], sensitivity: f32) -> Vec<f32> {
+    let bins = energy.len();
+    if bins < 8 {
+        return Vec::new();
+    }
+    let s = sensitivity.clamp(0.0, 1.0);
+    let ratio_thresh = 2.8 - s * 1.65;
+    let abs_floor = 0.14 * (1.0 - s * 0.88) + 0.008;
+    let w = (bins / 256).max(3);
+    let look = (w / 2).max(1);
+    let min_gap = (bins / 96).max(6);
+
+    let mut onsets = Vec::new();
+    let mut last = 0usize;
+    let mut i = w;
+    while i < bins {
+        let prev: f32 = energy[i - w..i].iter().sum::<f32>() / w as f32;
+        if energy[i] > prev * ratio_thresh + abs_floor
+            && energy[i] >= energy[i - 1]
+            && i.saturating_sub(last) >= min_gap
+        {
+            // Alinear con el pico local del ataque del transiente
+            let mut peak_i = i;
+            let mut peak_v = energy[i];
+            let end = (i + look).min(bins - 1);
+            for j in (i + 1)..=end {
+                if energy[j] > peak_v {
+                    peak_v = energy[j];
+                    peak_i = j;
+                }
+            }
+            let norm = (peak_i as f32 / bins as f32).clamp(0.002, 0.998);
+            onsets.push(norm);
+            last = peak_i;
+            i = peak_i + min_gap;
+            continue;
+        }
+        i += 1;
+    }
+    onsets
+}
+
+fn map_beat_to_norm(markers: &[(f64, f64)], beat_off: f64, clip_beats: f64) -> f64 {
+    if markers.len() >= 2 {
+        for w in markers.windows(2) {
+            if beat_off >= w[0].0 && beat_off <= w[1].0 && (w[1].0 - w[0].0) > 1e-9 {
+                let t = (beat_off - w[0].0) / (w[1].0 - w[0].0);
+                return (w[0].1 + t * (w[1].1 - w[0].1)).clamp(0.0, 1.0);
+            }
+        }
+        if beat_off <= markers[0].0 {
+            return markers[0].1;
+        }
+        if let Some(last) = markers.last() {
+            if beat_off >= last.0 {
+                return last.1;
+            }
+        }
+    }
+    (beat_off / clip_beats.max(1e-6)).clamp(0.0, 1.0)
+}
+
+fn map_norm_to_beat(markers: &[(f64, f64)], norm: f64, clip_beats: f64) -> f64 {
+    let n = norm.clamp(0.0, 1.0);
+    if markers.len() >= 2 {
+        for w in markers.windows(2) {
+            if n >= w[0].1 && n <= w[1].1 && (w[1].1 - w[0].1) > 1e-9 {
+                let t = (n - w[0].1) / (w[1].1 - w[0].1);
+                return w[0].0 + t * (w[1].0 - w[0].0);
+            }
+        }
+    }
+    n * clip_beats
+}
+
+fn insert_or_find_stretch_marker(
+    markers: &mut Vec<(f64, f64)>,
+    norm: f64,
+    clip_beats: f64,
+) -> Option<usize> {
+    let norm = norm.clamp(0.005, 0.995);
+    for (idx, &(_, mn)) in markers.iter().enumerate() {
+        if (mn - norm).abs() < 0.006 {
+            return if idx > 0 && idx + 1 < markers.len() { Some(idx) } else { None };
+        }
+    }
+    let mut b_off = map_norm_to_beat(markers, norm, clip_beats);
+    let mut ins = markers.len().saturating_sub(1);
+    for i in 1..markers.len() {
+        if markers[i].1 > norm {
+            ins = i;
+            break;
+        }
+    }
+    if ins == 0 || ins >= markers.len() {
+        return None;
+    }
+    let min_b = markers[ins - 1].0 + 0.015;
+    let max_b = markers[ins].0 - 0.015;
+    if max_b <= min_b {
+        return None;
+    }
+    b_off = b_off.clamp(min_b, max_b);
+    markers.insert(ins, (b_off, norm));
+    Some(ins)
+}
+
+fn quantize_onsets_to_markers(
+    onsets: &[f32],
+    stretch_beats: f64,
+    grid_beats: f64,
+) -> Vec<(f64, f64)> {
+    let grid = grid_beats.max(0.0625);
+    let mut out = vec![(0.0, 0.0)];
+    let mut prev_b = 0.0;
+    let mut prev_n = 0.0;
+    for &n32 in onsets {
+        let n = n32 as f64;
+        if n <= 0.015 || n >= 0.985 {
+            continue;
+        }
+        let target_b = ((n * stretch_beats) / grid).round() * grid;
+        let clamped_b = target_b.clamp(0.0625, (stretch_beats - 0.0625).max(0.0625));
+        if clamped_b > prev_b + 0.04 && n > prev_n + 0.008 && clamped_b < stretch_beats - 0.04 {
+            out.push((clamped_b, n));
+            prev_b = clamped_b;
+            prev_n = n;
+        }
+    }
+    out.push((stretch_beats, 1.0));
+    out
+}
+
 fn build_env(clip: &MatrixClip) -> Env {
     let Some(ev) = clip.audio_events().first() else {
-        return Env { frames: 0, ch: vec![], onsets: vec![] };
+        return Env { frames: 0, ch: vec![], energy: vec![] };
     };
     let chn = ev.channels.max(1);
     let win = ev.window_samples();
@@ -114,19 +274,8 @@ fn build_env(clip: &MatrixClip) -> Env {
             v.push(m);
         }
     }
-    // Detección simple de onsets sobre la envolvente combinada.
-    let env: Vec<f32> = (0..bins).map(|i| ch.iter().map(|c| c[i]).fold(0.0, f32::max)).collect();
-    let mut onsets = Vec::new();
-    let mut last = 0usize;
-    let w = (bins / 256).max(2);
-    for i in w..bins {
-        let prev: f32 = env[i - w..i].iter().sum::<f32>() / w as f32;
-        if env[i] > prev * 1.9 + 0.04 && i - last > w * 3 {
-            onsets.push(i as f32 / bins as f32);
-            last = i;
-        }
-    }
-    Env { frames, ch, onsets }
+    let energy: Vec<f32> = (0..bins).map(|i| ch.iter().map(|c| c[i]).fold(0.0, f32::max)).collect();
+    Env { frames, ch, energy }
 }
 
 pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
@@ -171,7 +320,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 .slot(slot.0, slot.1)
                 .and_then(|s| s.clip.as_ref())
                 .map(build_env)
-                .unwrap_or(Env { frames: 0, ch: vec![], onsets: vec![] });
+                .unwrap_or(Env { frames: 0, ch: vec![], energy: vec![] });
             ui.ctx().data_mut(|d| d.insert_temp(env_id, std::sync::Arc::new(e.clone())));
             e
         }
@@ -189,6 +338,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         formant: false,
         stretch: true,
         onsets: true,
+        snap_beats: 0.25,
     });
     if v.key != slot {
         v.key = slot;
@@ -218,6 +368,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         orig_beats,
         stretch_beats: orig_beats,
         markers: vec![(0.0, 0.0), (orig_beats, 1.0)],
+        dirty_engine: false,
     });
     if (stretch_data.orig_beats - orig_beats).abs() > 1e-3 && stretch_data.markers.len() <= 2 {
         stretch_data.orig_beats = orig_beats;
@@ -225,7 +376,21 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         stretch_data.markers = vec![(0.0, 0.0), (orig_beats, 1.0)];
     }
 
+    let onset_id = egui::Id::new("ade_onsets").with(clip_id);
+    let mut onset_data: OnsetClipData = ui.ctx().data(|d| d.get_temp(onset_id)).unwrap_or_else(|| OnsetClipData {
+        sensitivity: DEFAULT_ONSET_SENS,
+        onsets: detect_onsets(&env.energy, DEFAULT_ONSET_SENS),
+        selected: None,
+        frames_key: env.frames,
+    });
+    if onset_data.frames_key != env.frames {
+        onset_data.onsets = detect_onsets(&env.energy, onset_data.sensitivity);
+        onset_data.selected = None;
+        onset_data.frames_key = env.frames;
+    }
+
     let mut stretch_changed = false;
+    let mut engine_sync_now = false;
     let rescale_stretch_total = |sd: &mut StretchClipData, new_total: f64| {
         let clamped = new_total.clamp(0.25, 256.0);
         let old_total = sd.stretch_beats.max(1e-6);
@@ -249,10 +414,12 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     // ── Panel de herramientas ──
     p.rect_filled(tools, 0.0, Color32::from_rgb(0x25, 0x25, 0x25));
     {
-        let mut tui = ui.new_child(egui::UiBuilder::new().max_rect(tools.shrink(4.0)));
-        tui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        let tools_body = Rect::from_min_max(tools.min + vec2(4.0, 4.0), pos2(tools.max.x - 4.0, tools.max.y - 32.0));
+        let mut tui = ui.new_child(egui::UiBuilder::new().max_rect(tools_body));
+        tui.set_clip_rect(tools_body);
+        tui.spacing_mut().item_spacing = vec2(4.0, 3.0);
         let w = tui.available_width();
-        tui.add_space(34.0);
+        tui.add_space(32.0);
         let _ = tool_btn(&mut tui, "Audio Events", true, w, 22.0, 11.0);
         let _ = tool_btn(&mut tui, "Comping", false, w, 22.0, 11.0);
         tui.horizontal(|ui| {
@@ -268,7 +435,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
             if tool_btn(ui, "Formant", v.formant, bw + 8.0, 20.0, 10.0).clicked() { v.formant = !v.formant; }
         });
         if v.stretch && ev_len > 1e-4 {
-            tui.add_space(4.0);
+            tui.add_space(2.0);
             let mut cur_clip_bpm = ((stretch_data.stretch_beats * 60.0) / ev_len).clamp(20.0, 400.0);
             tui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Tempo").size(10.0).color(theme::TEXT_SECONDARY));
@@ -283,6 +450,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                     let new_total = (cur_clip_bpm * ev_len) / 60.0;
                     rescale_stretch_total(&mut stretch_data, new_total);
                     stretch_changed = true;
+                    engine_sync_now = true;
                 }
             });
             tui.horizontal(|ui| {
@@ -291,15 +459,64 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                     let new_total = stretch_data.stretch_beats * 0.5;
                     rescale_stretch_total(&mut stretch_data, new_total);
                     stretch_changed = true;
+                    engine_sync_now = true;
                 }
                 if tool_btn(ui, "×2", false, bw, 18.0, 10.0).clicked() {
                     let new_total = stretch_data.stretch_beats * 2.0;
                     rescale_stretch_total(&mut stretch_data, new_total);
                     stretch_changed = true;
+                    engine_sync_now = true;
                 }
                 if tool_btn(ui, "Reset", false, bw, 18.0, 10.0).clicked() {
                     rescale_stretch_total(&mut stretch_data, orig_beats);
                     stretch_changed = true;
+                    engine_sync_now = true;
+                }
+            });
+        }
+        if v.onsets {
+            tui.add_space(2.0);
+            let mut sens_pct = (onset_data.sensitivity * 100.0).clamp(0.0, 100.0);
+            tui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Onsets").size(10.0).color(theme::TEXT_SECONDARY));
+                let dv = ui.add(
+                    egui::DragValue::new(&mut sens_pct)
+                        .speed(0.5)
+                        .range(0.0..=100.0)
+                        .suffix("%")
+                        .fixed_decimals(0),
+                );
+                if dv.changed() {
+                    onset_data.sensitivity = (sens_pct / 100.0).clamp(0.0, 1.0);
+                    onset_data.onsets = detect_onsets(&env.energy, onset_data.sensitivity);
+                    onset_data.selected = None;
+                }
+            });
+            tui.horizontal(|ui| {
+                let q_resp = tool_btn(ui, "Quantize", false, 56.0, 18.0, 9.5)
+                    .on_hover_text("Cuantizar transientes (onsets) a la grilla actual");
+                if q_resp.clicked() {
+                    stretch_data.markers = quantize_onsets_to_markers(
+                        &onset_data.onsets,
+                        stretch_data.stretch_beats,
+                        v.snap_beats,
+                    );
+                    v.stretch = true;
+                    stretch_changed = true;
+                    engine_sync_now = true;
+                }
+                let d_resp = tool_btn(ui, "Detect", false, (w - 64.0) * 0.54, 18.0, 9.5)
+                    .on_hover_text("Re-detectar onsets según la sensibilidad");
+                if d_resp.clicked() {
+                    onset_data.onsets = detect_onsets(&env.energy, onset_data.sensitivity);
+                    onset_data.selected = None;
+                }
+                let c_resp = tool_btn(ui, "Clear", false, (w - 64.0) * 0.46, 18.0, 9.5)
+                    .on_hover_text("Quitar marcadores de warp intermedios");
+                if c_resp.clicked() {
+                    stretch_data.markers = vec![(0.0, 0.0), (stretch_data.stretch_beats, 1.0)];
+                    stretch_changed = true;
+                    engine_sync_now = true;
                 }
             });
         }
@@ -392,20 +609,27 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     let b2x = |b: f64| main.min.x + ((b - v.scroll_beats) * v.ppb as f64) as f32;
     let x2b = |x: f32| v.scroll_beats + ((x - main.min.x) / v.ppb) as f64;
 
-    // ── Interacción con Beat / Stretch Markers (estilo Bitwig) ──
+    // ── Interacción con Beat / Stretch Markers y Onsets (estilo Bitwig) ──
     let sdrag_id = vid.with("stretch_drag");
+    let odrag_id = vid.with("onset_drag");
     let mut active_sdrag: Option<StretchDrag> = ui.ctx().data(|d| d.get_temp(sdrag_id));
-    let (alt_held, shift_held_s, primary_down_s, hover_pos_s, press_origin_s, interact_pos_s) = ui.input(|i| (
+    let mut active_odrag: Option<OnsetDrag> = ui.ctx().data(|d| d.get_temp(odrag_id));
+    let (alt_held, shift_held_s, primary_down_s, hover_pos_s, press_origin_s, interact_pos_s, del_pressed) = ui.input(|i| (
         i.modifiers.alt,
         i.modifiers.shift,
         i.pointer.primary_down(),
         i.pointer.hover_pos(),
         i.pointer.press_origin(),
         i.pointer.interact_pos(),
+        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
     ));
     if !primary_down_s {
         active_sdrag = None;
-        ui.ctx().data_mut(|d| d.remove::<StretchDrag>(sdrag_id));
+        active_odrag = None;
+        ui.ctx().data_mut(|d| {
+            d.remove::<StretchDrag>(sdrag_id);
+            d.remove::<OnsetDrag>(odrag_id);
+        });
     }
 
     let clip_vert_zone = |pos: egui::Pos2| pos.y >= hdr_top && pos.y <= wave_r.max.y && main.x_range().contains(pos.x);
@@ -413,12 +637,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         if !v.stretch || !clip_vert_zone(pos) {
             return None;
         }
-        // Prioridad: markers > 0 (el marker 0 es el ancla inicial)
         let mut best: Option<(usize, f32)> = None;
         for (idx, &(mb, _)) in markers.iter().enumerate().skip(1) {
             let mx = b2x(start_beats + mb);
             let dist = (pos.x - mx).abs();
-            if dist <= 10.0 {
+            if dist <= 8.0 {
                 if best.map_or(true, |(_, bd)| dist < bd) {
                     best = Some((idx, dist));
                 }
@@ -427,34 +650,95 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         best.map(|(i, _)| i)
     };
 
-    if v.stretch && resp.double_clicked_by(egui::PointerButton::Primary) {
+    let hit_onset_handle = |pos: egui::Pos2, onsets: &[f32], markers: &[(f64, f64)], cb: f64, allow_body: bool| -> Option<usize> {
+        if !v.onsets || !wave_r.contains(pos) {
+            return None;
+        }
+        let in_top_band = pos.y >= wave_r.min.y && pos.y <= wave_r.min.y + 20.0;
+        if !allow_body && !in_top_band {
+            return None;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, &o) in onsets.iter().enumerate() {
+            let ox = b2x(start_beats + map_norm_to_beat(markers, o as f64, cb));
+            let dx = pos.x - ox;
+            let hit = if in_top_band { dx >= -6.0 && dx <= 11.0 } else { dx.abs() <= 7.0 };
+            if hit {
+                let dist = dx.abs();
+                if best.map_or(true, |(_, bd)| dist < bd) {
+                    best = Some((idx, dist));
+                }
+            }
+        }
+        best.map(|(i, _)| i)
+    };
+
+    if v.onsets && del_pressed {
+        if let Some(sel_idx) = onset_data.selected {
+            if sel_idx < onset_data.onsets.len() && hover_pos_s.is_some_and(|p| main.contains(p)) {
+                onset_data.onsets.remove(sel_idx);
+                onset_data.selected = None;
+            }
+        }
+    }
+
+    if v.onsets && resp.secondary_clicked() {
+        if let Some(pos) = hover_pos_s {
+            if let Some(oidx) = hit_onset_handle(pos, &onset_data.onsets, &stretch_data.markers, clip_beats, !v.stretch || alt_held) {
+                onset_data.onsets.remove(oidx);
+                onset_data.selected = None;
+            }
+        }
+    }
+
+    if resp.double_clicked_by(egui::PointerButton::Primary) {
         if let Some(pos) = hover_pos_s {
             if wave_r.contains(pos) {
-                if let Some(idx) = hit_stretch_marker(pos, &stretch_data.markers) {
-                    if idx > 0 && idx + 1 < stretch_data.markers.len() {
-                        stretch_data.markers.remove(idx);
-                        stretch_changed = true;
-                    }
-                } else {
-                    let b_off = (x2b(pos.x) - start_beats).clamp(0.05, clip_beats - 0.05);
-                    // Interpolar norm_src en b_off
-                    let mut norm = (b_off / clip_beats).clamp(0.0, 1.0);
-                    for w in stretch_data.markers.windows(2) {
-                        if b_off >= w[0].0 && b_off <= w[1].0 && (w[1].0 - w[0].0) > 1e-6 {
-                            let t = (b_off - w[0].0) / (w[1].0 - w[0].0);
-                            norm = w[0].1 + t * (w[1].1 - w[0].1);
-                            break;
+                if v.stretch {
+                    if let Some(idx) = hit_stretch_marker(pos, &stretch_data.markers) {
+                        if idx > 0 && idx + 1 < stretch_data.markers.len() {
+                            stretch_data.markers.remove(idx);
+                            stretch_changed = true;
+                            engine_sync_now = true;
+                        }
+                    } else if let Some(oidx) = hit_onset_handle(pos, &onset_data.onsets, &stretch_data.markers, clip_beats, alt_held) {
+                        if alt_held {
+                            onset_data.onsets.remove(oidx);
+                            onset_data.selected = None;
+                        } else {
+                            let norm = onset_data.onsets[oidx] as f64;
+                            if insert_or_find_stretch_marker(&mut stretch_data.markers, norm, clip_beats).is_some() {
+                                stretch_changed = true;
+                                engine_sync_now = true;
+                            }
+                        }
+                    } else {
+                        let b_off = (x2b(pos.x) - start_beats).clamp(0.05, clip_beats - 0.05);
+                        let norm = map_beat_to_norm(&stretch_data.markers, b_off, clip_beats);
+                        if insert_or_find_stretch_marker(&mut stretch_data.markers, norm, clip_beats).is_some() {
+                            stretch_changed = true;
+                            engine_sync_now = true;
                         }
                     }
-                    stretch_data.markers.push((b_off, norm));
-                    stretch_data.markers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    stretch_changed = true;
+                } else if v.onsets {
+                    if let Some(oidx) = hit_onset_handle(pos, &onset_data.onsets, &stretch_data.markers, clip_beats, true) {
+                        onset_data.onsets.remove(oidx);
+                        onset_data.selected = None;
+                    } else {
+                        let b_off = (x2b(pos.x) - start_beats).clamp(0.0, clip_beats);
+                        let new_norm = (map_beat_to_norm(&stretch_data.markers, b_off, clip_beats) as f32).clamp(0.002, 0.998);
+                        if onset_data.onsets.iter().all(|&o| (o - new_norm).abs() > 0.002) {
+                            onset_data.onsets.push(new_norm);
+                            onset_data.onsets.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                            onset_data.selected = onset_data.onsets.iter().position(|&o| (o - new_norm).abs() < 1e-6);
+                        }
+                    }
                 }
             }
         }
     }
 
-    if v.stretch && resp.drag_started_by(egui::PointerButton::Primary) {
+    if resp.drag_started_by(egui::PointerButton::Primary) {
         if let Some(orig) = press_origin_s {
             if let Some(m_idx) = hit_stretch_marker(orig, &stretch_data.markers) {
                 let sd = StretchDrag {
@@ -466,7 +750,32 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 };
                 active_sdrag = Some(sd);
                 ui.ctx().data_mut(|d| d.insert_temp(sdrag_id, sd));
-            } else if alt_held && wave_r.contains(orig) {
+            } else if let Some(o_idx) = hit_onset_handle(orig, &onset_data.onsets, &stretch_data.markers, clip_beats, !v.stretch || alt_held) {
+                onset_data.selected = Some(o_idx);
+                let orig_norm = onset_data.onsets[o_idx];
+                if !v.stretch || alt_held {
+                    let od = OnsetDrag {
+                        onset_idx: o_idx,
+                        mode: OnsetDragMode::MoveOnset,
+                        orig_x: orig.x,
+                        marker_idx: None,
+                        orig_beat: 0.0,
+                    };
+                    active_odrag = Some(od);
+                    ui.ctx().data_mut(|d| d.insert_temp(odrag_id, od));
+                } else if let Some(m_idx) = insert_or_find_stretch_marker(&mut stretch_data.markers, orig_norm as f64, clip_beats) {
+                    let od = OnsetDrag {
+                        onset_idx: o_idx,
+                        mode: OnsetDragMode::WarpTransient,
+                        orig_x: orig.x,
+                        marker_idx: Some(m_idx),
+                        orig_beat: stretch_data.markers[m_idx].0,
+                    };
+                    active_odrag = Some(od);
+                    ui.ctx().data_mut(|d| d.insert_temp(odrag_id, od));
+                    stretch_changed = true;
+                }
+            } else if v.stretch && alt_held && wave_r.contains(orig) {
                 let sd = StretchDrag {
                     marker_idx: stretch_data.markers.len().saturating_sub(1),
                     orig_x: orig.x,
@@ -482,13 +791,12 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
 
     if let (Some(sd), Some(cur)) = (active_sdrag, interact_pos_s) {
         if resp.dragged_by(egui::PointerButton::Primary) {
-            let snap_b = 0.25_f64;
+            let snap_b = v.snap_beats;
             let snap = |b: f64| if shift_held_s { b } else { (b / snap_b).round() * snap_b };
             let delta_b = (cur.x - sd.orig_x) as f64 / v.ppb as f64;
             let last_idx = stretch_data.markers.len().saturating_sub(1);
             if sd.alt_clip_stretch || sd.marker_idx == last_idx {
                 let new_total = snap(sd.orig_total_beats + delta_b).clamp(orig_beats * 0.25, orig_beats * 4.0).max(0.25);
-                let ratio = new_total / sd.orig_total_beats.max(1e-6);
                 let old_total = stretch_data.stretch_beats.max(1e-6);
                 let rel_scale = new_total / old_total;
                 for m in stretch_data.markers.iter_mut().skip(1) {
@@ -497,13 +805,12 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 if let Some(last) = stretch_data.markers.last_mut() {
                     last.0 = new_total;
                 }
-                let _ = ratio;
                 stretch_data.stretch_beats = new_total;
                 clip_beats = new_total;
                 stretch_changed = true;
             } else if sd.marker_idx > 0 && sd.marker_idx < last_idx {
-                let min_b = stretch_data.markers[sd.marker_idx - 1].0 + 0.0625;
-                let max_b = stretch_data.markers[sd.marker_idx + 1].0 - 0.0625;
+                let min_b = stretch_data.markers[sd.marker_idx - 1].0 + 0.04;
+                let max_b = stretch_data.markers[sd.marker_idx + 1].0 - 0.04;
                 let new_b = snap(sd.orig_beat + delta_b).clamp(min_b, max_b);
                 stretch_data.markers[sd.marker_idx].0 = new_b;
                 stretch_changed = true;
@@ -511,12 +818,43 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         }
     }
 
+    if let (Some(od), Some(cur)) = (active_odrag, interact_pos_s) {
+        if resp.dragged_by(egui::PointerButton::Primary) {
+            match od.mode {
+                OnsetDragMode::MoveOnset => {
+                    if od.onset_idx < onset_data.onsets.len() {
+                        let b_off = (x2b(cur.x) - start_beats).clamp(0.0, clip_beats);
+                        let raw_norm = map_beat_to_norm(&stretch_data.markers, b_off, clip_beats) as f32;
+                        let lo = if od.onset_idx > 0 { onset_data.onsets[od.onset_idx - 1] + 0.002 } else { 0.002 };
+                        let hi = if od.onset_idx + 1 < onset_data.onsets.len() {
+                            onset_data.onsets[od.onset_idx + 1] - 0.002
+                        } else {
+                            0.998
+                        };
+                        onset_data.onsets[od.onset_idx] = raw_norm.clamp(lo, hi.max(lo));
+                    }
+                }
+                OnsetDragMode::WarpTransient => {
+                    if let Some(m_idx) = od.marker_idx {
+                        let last_idx = stretch_data.markers.len().saturating_sub(1);
+                        if m_idx > 0 && m_idx < last_idx {
+                            let snap_b = v.snap_beats;
+                            let snap = |b: f64| if shift_held_s { b } else { (b / snap_b).round() * snap_b };
+                            let delta_b = (cur.x - od.orig_x) as f64 / v.ppb as f64;
+                            let min_b = stretch_data.markers[m_idx - 1].0 + 0.03;
+                            let max_b = stretch_data.markers[m_idx + 1].0 - 0.03;
+                            let new_b = snap(od.orig_beat + delta_b).clamp(min_b, max_b);
+                            stretch_data.markers[m_idx].0 = new_b;
+                            stretch_changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if stretch_changed {
-        let effective_source_bpm = if ev_len > 1e-6 {
-            (stretch_data.stretch_beats * 60.0) / ev_len
-        } else {
-            bpm
-        };
+        stretch_data.dirty_engine = true;
         let stretched_dur_secs = stretch_data.stretch_beats * spb;
         let was_full_loop = (loop_e - loop_s - ev_len).abs() < 0.05 || loop_e <= loop_s;
         if let Some(clip) = app.matrix_state.slot_mut(slot.0, slot.1).and_then(|s| s.clip.as_mut()) {
@@ -526,13 +864,32 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 clip.loop_end = (stretched_dur_secs * sr).round().max(1.0) as u64;
             }
         }
-        app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetClipStretchBpm {
-            clip_id,
-            source_bpm: Some(effective_source_bpm as f32),
-        });
     }
 
-    ui.ctx().data_mut(|d| d.insert_temp(stretch_id, stretch_data.clone()));
+    if stretch_data.dirty_engine && (engine_sync_now || !primary_down_s) {
+        let effective_source_bpm = if ev_len > 1e-6 {
+            (stretch_data.stretch_beats * 60.0) / ev_len
+        } else {
+            bpm
+        };
+        let total_b = stretch_data.stretch_beats.max(1e-6);
+        let norm_markers: Vec<(f64, f64)> = stretch_data
+            .markers
+            .iter()
+            .map(|&(b, n)| ((b / total_b).clamp(0.0, 1.0), n.clamp(0.0, 1.0)))
+            .collect();
+        app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetClipWarpMarkers {
+            clip_id,
+            source_bpm: Some(effective_source_bpm as f32),
+            warp_markers: norm_markers,
+        });
+        stretch_data.dirty_engine = false;
+    }
+
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(stretch_id, stretch_data.clone());
+        d.insert_temp(onset_id, onset_data.clone());
+    });
 
     let mut loop_en = loop_en;
     let clip_start = start_beats.max(0.0);
@@ -618,7 +975,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
 
     if let (Some(d), Some(cur)) = (active_drag, interact_pos) {
         if resp.dragged_by(egui::PointerButton::Primary) && clip_end > clip_start {
-            let snap_beats = 0.25_f64;
+            let snap_beats = v.snap_beats;
             let snap = |b: f64| if shift_held { b } else { (b / snap_beats).round() * snap_beats };
             let min_len = 0.25_f64.min((clip_end - clip_start) * 0.5).max(0.01);
             let delta_b = (cur.x - d.orig_x) as f64 / v.ppb as f64;
@@ -662,6 +1019,16 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         app.audio_proxy.set_clip_loop(slot.0, slot.1, start_secs as f32, end_secs as f32, loop_en);
     }
 
+    let hovered_onset = active_odrag
+        .map(|od| od.onset_idx)
+        .or_else(|| {
+            if active_sdrag.is_some() {
+                None
+            } else {
+                hover_pos.and_then(|p| hit_onset_handle(p, &onset_data.onsets, &stretch_data.markers, clip_beats, !v.stretch || alt_held))
+            }
+        });
+
     let hovered_handle = active_drag
         .map(|d| d.handle)
         .unwrap_or_else(|| hover_pos.map(|p| hit_loop_handle(p, lx0_cur, lx1_cur)).unwrap_or(LoopHandle::None));
@@ -690,9 +1057,30 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         LoopHandle::None => {
             if zoom_pan_active {
                 crate::app::set_footer_cues(app, None, &[("DRAG", "Zoom & pan")]);
+            } else if hovered_onset.is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                if !v.stretch || alt_held {
+                    crate::app::set_footer_cues(
+                        app,
+                        None,
+                        &[("DRAG", "Move onset"), ("DOUBLE-CLICK", "Delete onset"), ("RIGHT-CLICK", "Delete onset")],
+                    );
+                } else {
+                    crate::app::set_footer_cues(
+                        app,
+                        None,
+                        &[("DRAG", "Warp transient"), ("ALT+DRAG", "Move onset"), ("DOUBLE-CLICK", "Pin marker"), ("SHIFT", "Disable snapping")],
+                    );
+                }
             } else if let Some(pos) = hover_pos {
                 if ruler.contains(pos) {
                     crate::app::set_footer_cues(app, None, &[("DRAG", "Zoom & pan")]);
+                } else if v.onsets && !v.stretch && wave_r.contains(pos) {
+                    crate::app::set_footer_cues(
+                        app,
+                        None,
+                        &[("DOUBLE-CLICK", "Add onset"), ("MIDDLE-DRAG", "Zoom & pan")],
+                    );
                 } else if main.contains(pos) {
                     crate::app::set_footer_cues(
                         app,
@@ -765,21 +1153,10 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         let lane_h = body.height() / nch as f32;
         let bins = env.ch.first().map(|c| c.len()).unwrap_or(0);
         if bins > 0 && body.width() > 1.0 {
-            let map_beat_to_norm = |beat_off: f64| -> f32 {
-                if stretch_data.markers.len() >= 2 {
-                    for w in stretch_data.markers.windows(2) {
-                        if beat_off >= w[0].0 && beat_off <= w[1].0 && (w[1].0 - w[0].0) > 1e-9 {
-                            let t = (beat_off - w[0].0) / (w[1].0 - w[0].0);
-                            return (w[0].1 + t * (w[1].1 - w[0].1)).clamp(0.0, 1.0) as f32;
-                        }
-                    }
-                }
-                ((beat_off / clip_beats.max(1e-6)) as f32).clamp(0.0, 1.0)
-            };
             let mut x = vis.min.x.floor();
             while x < vis.max.x {
-                let fa = map_beat_to_norm(x2b(x) - start_beats);
-                let fb = map_beat_to_norm(x2b(x + 1.0) - start_beats);
+                let fa = map_beat_to_norm(&stretch_data.markers, x2b(x) - start_beats, clip_beats) as f32;
+                let fb = map_beat_to_norm(&stretch_data.markers, x2b(x + 1.0) - start_beats, clip_beats) as f32;
                 let (fa, fb) = if fa <= fb { (fa, fb) } else { (fb, fa) };
                 let i0 = ((fa * bins as f32) as usize).min(bins - 1);
                 let i1 = ((fb * bins as f32).ceil() as usize).clamp(i0 + 1, bins);
@@ -834,30 +1211,35 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 }
             }
         }
-        // Onsets
+        // Onsets (transientes interactivos estilo Bitwig)
         if v.onsets {
-            let map_norm_to_x = |norm: f32| -> f32 {
-                let n64 = (norm as f64).clamp(0.0, 1.0);
-                if stretch_data.markers.len() >= 2 {
-                    for w in stretch_data.markers.windows(2) {
-                        if n64 >= w[0].1 && n64 <= w[1].1 && (w[1].1 - w[0].1) > 1e-9 {
-                            let t = (n64 - w[0].1) / (w[1].1 - w[0].1);
-                            let b = w[0].0 + t * (w[1].0 - w[0].0);
-                            return b2x(start_beats + b);
-                        }
-                    }
-                }
-                cx0 + norm * body.width()
-            };
-            for &o in &env.onsets {
-                let x = map_norm_to_x(o);
-                if x >= vis.min.x - 4.0 && x <= vis.max.x + 4.0 {
+            for (idx, &o) in onset_data.onsets.iter().enumerate() {
+                let x = b2x(start_beats + map_norm_to_beat(&stretch_data.markers, o as f64, clip_beats));
+                if x >= vis.min.x - 8.0 && x <= vis.max.x + 8.0 {
+                    let is_hot = hovered_onset == Some(idx);
+                    let is_sel = onset_data.selected == Some(idx);
+                    let flag_col = if is_hot {
+                        Color32::WHITE
+                    } else if is_sel {
+                        ONSET_HOT
+                    } else {
+                        ONSET_BLUE
+                    };
+                    let line_col = if is_hot || is_sel {
+                        Color32::from_rgba_unmultiplied(0x2F, 0x6F, 0xE0, 150)
+                    } else {
+                        Color32::from_black_alpha(40)
+                    };
+                    wp.line_segment(
+                        [pos2(x, body.min.y), pos2(x, body.max.y)],
+                        Stroke::new(if is_hot || is_sel { 1.4_f32 } else { 1.0_f32 }, line_col),
+                    );
+                    let sz = if is_hot || is_sel { 8.0 } else { 7.0 };
                     wp.add(Shape::convex_polygon(
-                        vec![pos2(x, body.min.y), pos2(x + 6.0, body.min.y), pos2(x, body.min.y + 6.0)],
-                        ONSET_BLUE,
-                        Stroke::NONE,
+                        vec![pos2(x, body.min.y), pos2(x + sz, body.min.y), pos2(x, body.min.y + sz)],
+                        flag_col,
+                        if is_hot { Stroke::new(1.0_f32, ONSET_BLUE) } else { Stroke::NONE },
                     ));
-                    wp.line_segment([pos2(x, body.min.y), pos2(x, body.max.y)], Stroke::new(1.0, Color32::from_black_alpha(35)));
                 }
             }
         }
@@ -953,7 +1335,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         }
     }
 
-    // Scrollbar + resolución de grilla
+    // Scrollbar + resolución de grilla interactiva
     mp.rect_filled(scroll_r, 0.0, Color32::from_rgb(0x22, 0x22, 0x22));
     let total_b = (start_beats + clip_beats + 16.0) - (-8.0);
     let vis_b = (main.width() / v.ppb) as f64;
@@ -961,7 +1343,33 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     let th = ((vis_b / total_b) as f32 * tw).clamp(24.0, tw);
     let tx = scroll_r.min.x + 14.0 + (((v.scroll_beats + 8.0) / total_b) as f32 * tw).clamp(0.0, tw - th);
     mp.rect_filled(Rect::from_min_size(pos2(tx, scroll_r.min.y + 4.0), vec2(th, 10.0)), 5.0, Color32::from_rgb(0x5A, 0x5A, 0x5A));
-    mp.text(pos2(scroll_r.max.x - 52.0, scroll_r.center().y), Align2::LEFT_CENTER, "1/16 ▴", FontId::proportional(11.0), theme::TEXT_PRIMARY);
+    let snap_r = Rect::from_min_max(pos2(scroll_r.max.x - 56.0, scroll_r.min.y + 1.0), pos2(scroll_r.max.x - 4.0, scroll_r.max.y - 1.0));
+    let snap_hot = hover_pos.is_some_and(|p| snap_r.contains(p));
+    if snap_hot {
+        mp.rect_filled(snap_r, 3.0, Color32::from_rgb(0x36, 0x36, 0x36));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if resp.clicked() {
+            v.snap_beats = if (v.snap_beats - 1.0).abs() < 1e-3 {
+                0.5
+            } else if (v.snap_beats - 0.5).abs() < 1e-3 {
+                0.25
+            } else if (v.snap_beats - 0.25).abs() < 1e-3 {
+                0.125
+            } else {
+                1.0
+            };
+        }
+    }
+    let snap_label = if (v.snap_beats - 1.0).abs() < 1e-3 {
+        "1/4 ▴"
+    } else if (v.snap_beats - 0.5).abs() < 1e-3 {
+        "1/8 ▴"
+    } else if (v.snap_beats - 0.25).abs() < 1e-3 {
+        "1/16 ▴"
+    } else {
+        "1/32 ▴"
+    };
+    mp.text(pos2(snap_r.min.x + 4.0, scroll_r.center().y), Align2::LEFT_CENTER, snap_label, FontId::proportional(11.0), theme::TEXT_PRIMARY);
 
     ui.ctx().data_mut(|d| d.insert_temp(vid, v));
 }
@@ -984,4 +1392,44 @@ fn tool_btn(ui: &mut egui::Ui, label: &str, active: bool, w: f32, h: f32, size: 
         if active { Color32::BLACK } else { theme::TEXT_PRIMARY },
     );
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_onsets_finds_transient_peaks_and_respects_sensitivity() {
+        let mut energy = vec![0.01f32; 512];
+        // Tres transientes bien espaciados
+        for &p in &[64usize, 192, 350] {
+            energy[p] = 0.9;
+            energy[p + 1] = 0.5;
+        }
+        // Un transiente suave adicional
+        energy[440] = 0.14;
+
+        let low_sens = detect_onsets(&energy, 0.1);
+        let high_sens = detect_onsets(&energy, 0.95);
+        assert!(low_sens.len() >= 3);
+        assert!(high_sens.len() > low_sens.len());
+        assert!((low_sens[0] - (64.0 / 512.0)).abs() < 0.02);
+    }
+
+    #[test]
+    fn quantize_and_insert_markers_stay_monotonic() {
+        let onsets = vec![0.23_f32, 0.48, 0.77];
+        let mut markers = quantize_onsets_to_markers(&onsets, 4.0, 0.25);
+        assert!(markers.len() >= 5);
+        for w in markers.windows(2) {
+            assert!(w[1].0 > w[0].0, "beats must strictly increase: {:?}", markers);
+            assert!(w[1].1 > w[0].1, "norms must strictly increase: {:?}", markers);
+        }
+        let inserted = insert_or_find_stretch_marker(&mut markers, 0.62, 4.0);
+        assert!(inserted.is_some());
+        for w in markers.windows(2) {
+            assert!(w[1].0 > w[0].0);
+            assert!(w[1].1 > w[0].1);
+        }
+    }
 }

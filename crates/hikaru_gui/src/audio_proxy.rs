@@ -165,6 +165,11 @@ pub enum GuiCommand {
         clip_id: usize,
         source_bpm: Option<f32>,
     },
+    SetClipWarpMarkers {
+        clip_id: usize,
+        source_bpm: Option<f32>,
+        warp_markers: Vec<(f64, f64)>,
+    },
     TriggerScene { 
         scene_idx: usize 
     },

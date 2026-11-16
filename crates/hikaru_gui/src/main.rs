@@ -345,10 +345,16 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     if !jobs.is_empty() {
                         let engine_clone = engine_for_commands.clone();
                         std::thread::spawn(move || {
-                            for (clip_id, samples, channels, rate) in jobs {
-                                let stretched = hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate);
+                            for (clip_id, samples, channels, rate, warp_markers) in jobs {
+                                let in_frames = samples.len() / channels.max(1);
+                                let total_out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
+                                let stretched = if warp_markers.len() > 2 {
+                                    hikaru_audio_engine::time_stretch_wsola_warped(&samples, channels, total_out_frames, &warp_markers)
+                                } else {
+                                    hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate)
+                                };
                                 if let Ok(mut engine) = engine_clone.lock() {
-                                    engine.apply_stretched_samples(clip_id, stretched, rate);
+                                    engine.apply_stretched_samples(clip_id, stretched, rate, warp_markers);
                                 }
                             }
                         });
@@ -364,10 +370,41 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     if !jobs.is_empty() {
                         let engine_clone = engine_for_commands.clone();
                         std::thread::spawn(move || {
-                            for (cid, samples, channels, rate) in jobs {
-                                let stretched = hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate);
+                            for (cid, samples, channels, rate, warp_markers) in jobs {
+                                let in_frames = samples.len() / channels.max(1);
+                                let total_out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
+                                let stretched = if warp_markers.len() > 2 {
+                                    hikaru_audio_engine::time_stretch_wsola_warped(&samples, channels, total_out_frames, &warp_markers)
+                                } else {
+                                    hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate)
+                                };
                                 if let Ok(mut engine) = engine_clone.lock() {
-                                    engine.apply_stretched_samples(cid, stretched, rate);
+                                    engine.apply_stretched_samples(cid, stretched, rate, warp_markers);
+                                }
+                            }
+                        });
+                    }
+                }
+                GuiCommand::SetClipWarpMarkers { clip_id, source_bpm, warp_markers } => {
+                    let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_clip_warp_markers_deferred(clip_id, source_bpm, warp_markers);
+                        engine.pending_stretch_jobs()
+                    } else {
+                        Vec::new()
+                    };
+                    if !jobs.is_empty() {
+                        let engine_clone = engine_for_commands.clone();
+                        std::thread::spawn(move || {
+                            for (cid, samples, channels, rate, markers) in jobs {
+                                let in_frames = samples.len() / channels.max(1);
+                                let total_out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
+                                let stretched = if markers.len() > 2 {
+                                    hikaru_audio_engine::time_stretch_wsola_warped(&samples, channels, total_out_frames, &markers)
+                                } else {
+                                    hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate)
+                                };
+                                if let Ok(mut engine) = engine_clone.lock() {
+                                    engine.apply_stretched_samples(cid, stretched, rate, markers);
                                 }
                             }
                         });

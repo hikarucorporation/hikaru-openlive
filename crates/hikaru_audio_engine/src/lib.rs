@@ -362,6 +362,221 @@ pub fn time_stretch_wsola(samples: &[f32], channels: usize, rate: f64) -> Vec<f3
     out
 }
 
+fn sanitize_warp_markers(warp_markers: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut pts: Vec<(f64, f64)> = warp_markers
+        .iter()
+        .copied()
+        .filter(|(o, s)| o.is_finite() && s.is_finite())
+        .map(|(o, s)| (o.clamp(0.0, 1.0), s.clamp(0.0, 1.0)))
+        .collect();
+    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if pts.is_empty() || pts[0].0 > 1e-6 || pts[0].1 > 1e-6 {
+        pts.insert(0, (0.0, 0.0));
+    } else {
+        pts[0] = (0.0, 0.0);
+    }
+    if pts.last().map_or(true, |&(o, s)| o < 1.0 - 1e-6 || s < 1.0 - 1e-6) {
+        pts.push((1.0, 1.0));
+    } else if let Some(last) = pts.last_mut() {
+        *last = (1.0, 1.0);
+    }
+    // Garantizar monotonicidad estricta en `out_norm` y no decreciente en `src_norm`.
+    let mut clean: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for (o, s) in pts {
+        if let Some(prev) = clean.last().copied() {
+            if o <= prev.0 + 1e-6 {
+                continue;
+            }
+            clean.push((o, s.max(prev.1)));
+        } else {
+            clean.push((o, s));
+        }
+    }
+    if let Some(last) = clean.last_mut() {
+        *last = (1.0, 1.0);
+    }
+    clean
+}
+
+#[inline]
+fn warp_out_to_src_norm(markers: &[(f64, f64)], out_norm: f64) -> f64 {
+    let u = out_norm.clamp(0.0, 1.0);
+    for w in markers.windows(2) {
+        if u <= w[1].0 {
+            let span = (w[1].0 - w[0].0).max(1e-9);
+            let t = ((u - w[0].0) / span).clamp(0.0, 1.0);
+            return (w[0].1 + t * (w[1].1 - w[0].1)).clamp(0.0, 1.0);
+        }
+    }
+    u
+}
+
+/// Time-stretching WSOLA con marcadores de warp por tramos `(out_norm, src_norm)` en `[0.0..1.0]`.
+/// Mantiene un único bucle OLA continuo de Hann para evitar clics o discontinuidades entre segmentos.
+pub fn time_stretch_wsola_warped(
+    samples: &[f32],
+    channels: usize,
+    total_out_frames: usize,
+    warp_markers: &[(f64, f64)],
+) -> Vec<f32> {
+    let ch = channels.max(1);
+    let in_frames = samples.len() / ch;
+    if in_frames == 0 || total_out_frames == 0 {
+        return Vec::new();
+    }
+    let clean = sanitize_warp_markers(warp_markers);
+    if clean.len() <= 2 {
+        let rate = (in_frames as f64 / total_out_frames as f64).clamp(0.25, 4.0);
+        return time_stretch_wsola(samples, ch, rate);
+    }
+
+    const GRAIN: usize = 2048;
+    const HOP: usize = 1024;
+    const SEARCH: isize = 512;
+
+    if in_frames <= GRAIN + SEARCH as usize {
+        // Clips muy cortos (one-shots): interpolación lineal por tramo.
+        let mut out = vec![0.0f32; total_out_frames * ch];
+        for f in 0..total_out_frames {
+            let u = f as f64 / total_out_frames.max(1) as f64;
+            let src_pos = warp_out_to_src_norm(&clean, u) * (in_frames.saturating_sub(1)) as f64;
+            let i0 = (src_pos.floor() as usize).min(in_frames - 1);
+            let i1 = (i0 + 1).min(in_frames - 1);
+            let frac = (src_pos - i0 as f64) as f32;
+            for c in 0..ch {
+                let a = samples[i0 * ch + c];
+                let b = samples[i1 * ch + c];
+                out[f * ch + c] = a + (b - a) * frac;
+            }
+        }
+        return out;
+    }
+
+    let mut out = vec![0.0f32; total_out_frames * ch];
+    let mut win_sum = vec![0.0f32; total_out_frames];
+
+    let mut win = Vec::with_capacity(GRAIN);
+    for i in 0..GRAIN {
+        win.push((0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / GRAIN as f64).cos())) as f32);
+    }
+
+    let mut mono = Vec::with_capacity(in_frames);
+    if ch == 1 {
+        mono.extend_from_slice(samples);
+    } else {
+        for f in 0..in_frames {
+            let mut sum = 0.0f32;
+            for c in 0..ch {
+                sum += samples[f * ch + c];
+            }
+            mono.push(sum / ch as f32);
+        }
+    }
+
+    let max_src_start = (in_frames - GRAIN) as isize;
+    let mut prev_src_start: usize = 0;
+
+    {
+        let copy_len = GRAIN.min(total_out_frames);
+        for i in 0..copy_len {
+            let w = win[i];
+            win_sum[i] += w;
+            for c in 0..ch {
+                out[i * ch + c] += samples[i * ch + c] * w;
+            }
+        }
+    }
+
+    let mut out_start = HOP;
+    while out_start < total_out_frames {
+        let natural_next = prev_src_start + HOP;
+        let u = out_start as f64 / total_out_frames as f64;
+        let nom_src_start = (warp_out_to_src_norm(&clean, u) * in_frames as f64).round() as isize;
+        let cmp_len = HOP.min(in_frames.saturating_sub(natural_next)).min(GRAIN);
+
+        let best_src_start = if cmp_len >= 64 {
+            let mut e_ref = 0.0f64;
+            let mut i = 0;
+            while i < cmp_len {
+                let r = mono[natural_next + i] as f64;
+                e_ref += r * r;
+                i += 4;
+            }
+
+            let min_cand = (nom_src_start - SEARCH).max(0);
+            let max_cand = (nom_src_start + SEARCH).min(max_src_start);
+
+            let score_cand = |cand: usize, step: usize| -> f64 {
+                let mut dot = 0.0f64;
+                let mut e_cand = 0.0f64;
+                let mut idx = 0;
+                while idx < cmp_len {
+                    let r = mono[natural_next + idx] as f64;
+                    let s = mono[cand + idx] as f64;
+                    dot += r * s;
+                    e_cand += s * s;
+                    idx += step;
+                }
+                let denom = (e_ref * e_cand).sqrt();
+                if denom > 1e-12 { dot / denom } else { -1.0 }
+            };
+
+            let mut best_cand = nom_src_start.clamp(0, max_src_start) as usize;
+            let mut best_score = f64::NEG_INFINITY;
+            let mut cand = min_cand;
+            while cand <= max_cand {
+                let sc = score_cand(cand as usize, 4);
+                if sc > best_score {
+                    best_score = sc;
+                    best_cand = cand as usize;
+                }
+                cand += 4;
+            }
+
+            let fine_lo = (best_cand as isize - 4).max(min_cand);
+            let fine_hi = (best_cand as isize + 4).min(max_cand);
+            let mut fine_best = best_cand;
+            let mut fine_score = f64::NEG_INFINITY;
+            for c_pos in fine_lo..=fine_hi {
+                let sc = score_cand(c_pos as usize, 2);
+                if sc > fine_score {
+                    fine_score = sc;
+                    fine_best = c_pos as usize;
+                }
+            }
+            fine_best
+        } else {
+            nom_src_start.clamp(0, max_src_start) as usize
+        };
+
+        let copy_len = GRAIN.min(total_out_frames - out_start);
+        for i in 0..copy_len {
+            let w = win[i];
+            win_sum[out_start + i] += w;
+            let src_idx = (best_src_start + i) * ch;
+            let dst_idx = (out_start + i) * ch;
+            for c in 0..ch {
+                out[dst_idx + c] += samples[src_idx + c] * w;
+            }
+        }
+
+        prev_src_start = best_src_start;
+        out_start += HOP;
+    }
+
+    for f in 0..total_out_frames {
+        let ws = win_sum[f];
+        if ws > 1e-6 {
+            let inv = 1.0 / ws;
+            for c in 0..ch {
+                out[f * ch + c] *= inv;
+            }
+        }
+    }
+
+    out
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioClipInstance {
     pub id: usize,
@@ -389,6 +604,9 @@ pub struct AudioClipInstance {
     /// Cache del audio estirado con WSOLA para evitar artefactos de comb filter.
     pub stretched_samples: Vec<f32>,
     pub stretched_rate: f64,
+    /// Marcadores de warp por tramos `(out_norm, src_norm)` en `[0.0..1.0]`.
+    pub warp_markers: Vec<(f64, f64)>,
+    pub stretched_warp_markers: Vec<(f64, f64)>,
 }
 
 impl AudioClipInstance {
@@ -447,11 +665,27 @@ impl AudioClipInstance {
         }
     }
 
+    pub fn has_active_warp(&self) -> bool {
+        if self.warp_markers.len() > 2 {
+            return true;
+        }
+        if self.warp_markers.len() == 2 {
+            let a = self.warp_markers[0];
+            let b = self.warp_markers[1];
+            return (a.0 - 0.0).abs() > 1e-4
+                || (a.1 - 0.0).abs() > 1e-4
+                || (b.0 - 1.0).abs() > 1e-4
+                || (b.1 - 1.0).abs() > 1e-4;
+        }
+        false
+    }
+
     /// Lee un frame estéreo en `out_frame` usando el buffer pre-estirado con WSOLA si coincide
     /// con `rate`, o fallback OLA cuando `rate != 1.0`.
     pub fn sample_stereo_stretched(&self, out_frame: u64, rate: f64) -> (f32, f32) {
         let ch = self.channels.max(1);
-        if (rate - 1.0).abs() < 1e-4 {
+        let active_warp = self.has_active_warp();
+        if (rate - 1.0).abs() < 1e-4 && !active_warp {
             let total_frames = self.samples.len() / ch;
             if total_frames == 0 {
                 return (0.0, 0.0);
@@ -463,7 +697,7 @@ impl AudioClipInstance {
             return (l, r);
         }
 
-        if !self.stretched_samples.is_empty() && (self.stretched_rate - rate).abs() < 0.05 {
+        if !self.stretched_samples.is_empty() && (active_warp || (self.stretched_rate - rate).abs() < 0.05) {
             let total_stretched = self.stretched_samples.len() / ch;
             if total_stretched > 0 {
                 let f = (out_frame as usize).min(total_stretched - 1);
@@ -1843,31 +2077,57 @@ impl<'a> AudioEngine<'a> {
     pub fn set_clip_source_bpm_deferred(&mut self, clip_id: usize, source_bpm: Option<f32>) {
         if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
             c.source_bpm = source_bpm;
-            if source_bpm.is_none() {
+            if source_bpm.is_none() && !c.has_active_warp() {
                 c.stretched_samples.clear();
                 c.stretched_rate = 1.0;
+                c.stretched_warp_markers.clear();
             }
         }
     }
 
-    /// Devuelve `(clip_id, samples, channels, rate)` para clips cuyo `source_bpm` requiere recalcular WSOLA.
-    pub fn pending_stretch_jobs(&self) -> Vec<(usize, Vec<f32>, usize, f64)> {
+    pub fn set_clip_warp_markers_deferred(
+        &mut self,
+        clip_id: usize,
+        source_bpm: Option<f32>,
+        warp_markers: Vec<(f64, f64)>,
+    ) {
+        let bpm = self.transport.bpm;
+        if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+            c.source_bpm = source_bpm;
+            c.warp_markers = sanitize_warp_markers(&warp_markers);
+            let rate = match source_bpm {
+                Some(sbpm) if sbpm > 0.0 && bpm > 0.0 => (bpm / sbpm as f64).clamp(0.25, 4.0),
+                _ => 1.0,
+            };
+            if (rate - 1.0).abs() < 1e-4 && !c.has_active_warp() {
+                c.stretched_samples.clear();
+                c.stretched_rate = 1.0;
+                c.stretched_warp_markers.clear();
+            }
+        }
+    }
+
+    /// Devuelve `(clip_id, samples, channels, rate, warp_markers)` para clips cuyo `source_bpm`
+    /// o `warp_markers` requiere recalcular WSOLA.
+    pub fn pending_stretch_jobs(&self) -> Vec<(usize, Vec<f32>, usize, f64, Vec<(f64, f64)>)> {
         let mut jobs = Vec::new();
         for c in &self.clips {
-            if let Some(sbpm) = c.source_bpm {
-                if sbpm > 0.0 && self.transport.bpm > 0.0 {
-                    let rate = (self.transport.bpm / sbpm as f64).clamp(0.25, 4.0);
-                    if (rate - 1.0).abs() >= 1e-4 && (rate - c.stretched_rate).abs() > 0.002 {
-                        let (src, ch) = if !c.samples.is_empty() {
-                            (c.samples.clone(), c.channels)
-                        } else if let Some(ev) = c.events.first() {
-                            (ev.samples.clone(), ev.channels)
-                        } else {
-                            continue;
-                        };
-                        if !src.is_empty() {
-                            jobs.push((c.id, src, ch, rate));
-                        }
+            let rate = c.tempo_rate(&self.transport);
+            let active_warp = c.has_active_warp();
+            if (rate - 1.0).abs() >= 1e-4 || active_warp {
+                let dirty = (rate - c.stretched_rate).abs() > 0.002
+                    || c.warp_markers != c.stretched_warp_markers
+                    || c.stretched_samples.is_empty();
+                if dirty {
+                    let (src, ch) = if !c.samples.is_empty() {
+                        (c.samples.clone(), c.channels)
+                    } else if let Some(ev) = c.events.first() {
+                        (ev.samples.clone(), ev.channels)
+                    } else {
+                        continue;
+                    };
+                    if !src.is_empty() {
+                        jobs.push((c.id, src, ch, rate, c.warp_markers.clone()));
                     }
                 }
             }
@@ -1875,10 +2135,17 @@ impl<'a> AudioEngine<'a> {
         jobs
     }
 
-    pub fn apply_stretched_samples(&mut self, clip_id: usize, samples: Vec<f32>, rate: f64) {
+    pub fn apply_stretched_samples(
+        &mut self,
+        clip_id: usize,
+        samples: Vec<f32>,
+        rate: f64,
+        warp_markers: Vec<(f64, f64)>,
+    ) {
         if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
             c.stretched_samples = samples;
             c.stretched_rate = rate;
+            c.stretched_warp_markers = warp_markers;
         }
     }
 
@@ -2023,6 +2290,8 @@ impl<'a> AudioEngine<'a> {
             source_bpm: None,
             stretched_samples: Vec::new(),
             stretched_rate: 1.0,
+            warp_markers: Vec::new(),
+            stretched_warp_markers: Vec::new(),
         };
 
         let is_studio = self.mode == EngineMode::OpenStudio;
@@ -3459,7 +3728,9 @@ impl<'a> AudioEngine<'a> {
                     // ── Modo multi-evento: el pad mezcla sus regiones ──
                     if !clip.events.is_empty() {
                         let rate = clip.tempo_rate(&transport);
-                        if (rate - 1.0).abs() >= 1e-4 && !clip.stretched_samples.is_empty() {
+                        if ((rate - 1.0).abs() >= 1e-4 || clip.has_active_warp())
+                            && !clip.stretched_samples.is_empty()
+                        {
                             let emission_out = ((emission as f64) / rate).round() as u64;
                             let loop_start_out = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
                             let loop_len = if has_loop { clip.quantized_loop_len(&transport) } else { 0 };
@@ -3541,7 +3812,7 @@ impl<'a> AudioEngine<'a> {
                             elapsed as usize
                         };
 
-                        if (rate - 1.0).abs() >= 1e-4 {
+                        if (rate - 1.0).abs() >= 1e-4 || clip.has_active_warp() {
                             let (l, r) = clip.sample_stereo_stretched(relative_frame as u64, rate);
                             track_buf[f * 2] += l * gl;
                             track_buf[f * 2 + 1] += r * gr;
@@ -4665,6 +4936,40 @@ mod tests {
             "Frecuencia alterada (pitch shift): esperada {:.1} Hz, medida {:.1} Hz",
             freq,
             est_freq
+        );
+    }
+
+    #[test]
+    fn wsola_warped_shifts_transient_to_target_position() {
+        let in_frames = 44100;
+        let mut input = vec![0.0f32; in_frames * 2];
+        // Colocar un transiente (pulso tonal fuerte) alrededor del 60% del clip (frame 26460)
+        let transient_src = (in_frames as f64 * 0.60) as usize;
+        for i in 0..1024 {
+            let env = 1.0 - (i as f32 / 1024.0);
+            let s = (i as f32 * 0.25).sin() * env;
+            let idx = (transient_src + i) * 2;
+            input[idx] = s;
+            input[idx + 1] = s;
+        }
+
+        // Mover el transiente del 60% al 30% mediante marcadores de warp
+        let warp = vec![(0.0, 0.0), (0.30, 0.60), (1.0, 1.0)];
+        let out = time_stretch_wsola_warped(&input, 2, in_frames, &warp);
+        assert_eq!(out.len(), in_frames * 2);
+
+        let peak_frame = out
+            .chunks_exact(2)
+            .enumerate()
+            .max_by(|a, b| a.1[0].abs().partial_cmp(&b.1[0].abs()).unwrap())
+            .map(|(idx, _)| idx)
+            .unwrap();
+        let expected = (in_frames as f64 * 0.30) as isize;
+        assert!(
+            (peak_frame as isize - expected).abs() < 2048,
+            "El transiente warpeado cayó en {} en lugar de ~{}",
+            peak_frame,
+            expected
         );
     }
 }
