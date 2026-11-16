@@ -76,6 +76,7 @@ pub enum LoopDragHandle {
     Left,
     Right,
     Body,
+    Create,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,7 +114,11 @@ pub struct PlaylistState {
     pub loop_preview_active: bool,
     pub loop_drag_handle: LoopDragHandle,
     pub loop_drag_completed_this_frame: bool,
+    pub loop_drag_origin_tick: u64,
+    pub loop_drag_offset_ticks: u64,
+    pub loop_drag_moved: bool,
     pub clip_drag: Option<PlaylistClipDrag>,
+    pub clip_drag_peers: Vec<(usize, u64, usize)>,
     pub clip_click_suppress: bool,
     pub marquee: Option<MarqueeState>,
     pub trim_drag: Option<TrimDrag>,
@@ -147,7 +152,11 @@ impl Default for PlaylistState {
             loop_preview_active: false,
             loop_drag_handle: LoopDragHandle::None,
             loop_drag_completed_this_frame: false,
+            loop_drag_origin_tick: 0,
+            loop_drag_offset_ticks: 0,
+            loop_drag_moved: false,
             clip_drag: None,
+            clip_drag_peers: Vec::new(),
             clip_click_suppress: false,
             marquee: None,
             trim_drag: None,
@@ -335,7 +344,9 @@ pub fn clamped_row_h(h: f32) -> f32 {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaylistPanState {
+    pub start: (f32, f32),
     pub last: (f32, f32),
+    pub moved: bool,
     pub geometry: PlaylistNavGeometry,
 }
 
@@ -792,4 +803,177 @@ pub fn handle_edit_shortcut(key: &str, _shift: bool, app: &mut AppState) -> bool
 /// Render the Playlist / Arranger view in immediate mode using the unified Bitwig 5.1.7 Arrange Workspace.
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     crate::views::matrix::render(ui, app);
+}
+
+/// Bitwig-style adaptive grid resolution based on current horizontal zoom.
+/// Returns `(step_ticks, label, denominator)`.
+pub fn adaptive_grid_step(ppqn: u64, beats_per_bar: u32, zoom_x: f32) -> (u64, &'static str, u32) {
+    let beat = ppqn.max(1);
+    let bar = ticks_per_bar(beat, beats_per_bar.max(1));
+    let candidates: [(u64, &'static str, u32); 8] = [
+        ((beat / 16).max(1), "1/64", 64),
+        ((beat / 8).max(1), "1/32", 32),
+        ((beat / 4).max(1), "1/16", 16),
+        ((beat / 2).max(1), "1/8", 8),
+        (beat, "1/4", 4),
+        (bar, "1/1", 1),
+        (bar * 2, "2 Bars", 1),
+        (bar * 4, "4 Bars", 1),
+    ];
+    for &(step, label, den) in &candidates {
+        if ticks_to_px(step, zoom_x) >= 14.0 {
+            return (step, label, den);
+        }
+    }
+    (bar * 4, "4 Bars", 1)
+}
+
+/// Adaptive bar numbering step for the Bitwig timeline ruler so bar labels never overlap.
+pub fn ruler_bar_step(bar_px_w: f32) -> u64 {
+    if bar_px_w >= 26.0 {
+        1
+    } else if bar_px_w >= 13.0 {
+        2
+    } else if bar_px_w >= 6.5 {
+        4
+    } else if bar_px_w >= 3.2 {
+        8
+    } else {
+        16
+    }
+}
+
+/// Split all selected clips that span across `split_tick` into left and right halves.
+pub fn split_selected_clips_at(s: &mut PlaylistState, split_tick: u64) -> usize {
+    let min_ticks = min_clip_ticks(s.ppqn);
+    let selected = s.selected_clips.clone();
+    let mut new_clips: Vec<(usize, PlaylistClip)> = Vec::new();
+    let mut new_selected: Vec<usize> = Vec::new();
+    let mut split_count = 0usize;
+
+    for (track_id, clip) in &mut s.clips {
+        if !selected.contains(&clip.id) {
+            continue;
+        }
+        let end_tick = clip.start_tick.saturating_add(clip.duration_ticks);
+        if split_tick <= clip.start_tick.saturating_add(min_ticks)
+            || split_tick >= end_tick.saturating_sub(min_ticks)
+        {
+            continue;
+        }
+        let left_dur = split_tick - clip.start_tick;
+        let right_dur = end_tick - split_tick;
+        let mut right_clip = clip.clone();
+        let new_id = s.next_clip_id;
+        s.next_clip_id += 1;
+        right_clip.id = new_id;
+        right_clip.start_tick = split_tick;
+        right_clip.duration_ticks = right_dur;
+        if let ClipType::Audio {
+            ref mut sample_offset_ticks,
+            ..
+        } = right_clip.clip_type
+        {
+            *sample_offset_ticks = sample_offset_ticks.saturating_add(left_dur);
+        }
+        clip.duration_ticks = left_dur;
+        new_selected.push(new_id);
+        new_clips.push((*track_id, right_clip));
+        split_count += 1;
+    }
+
+    if split_count > 0 {
+        s.clips.extend(new_clips);
+        s.selected_clips.extend(new_selected);
+        s.needs_full_sync = true;
+    }
+    split_count
+}
+
+pub fn select_all_clips(s: &mut PlaylistState) {
+    s.selected_clips = s.clips.iter().map(|(_, c)| c.id).collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_grid_scales_with_zoom() {
+        let ppqn = DEFAULT_PPQN; // 960
+        let (s_out, lbl_out, _) = adaptive_grid_step(ppqn, 4, 0.005);
+        assert_eq!(lbl_out, "1/1");
+        assert_eq!(s_out, ppqn * 4);
+
+        let (s_mid, lbl_mid, _) = adaptive_grid_step(ppqn, 4, 0.06);
+        assert_eq!(lbl_mid, "1/16");
+        assert_eq!(s_mid, ppqn / 4);
+
+        let (s_in, lbl_in, _) = adaptive_grid_step(ppqn, 4, 0.5);
+        assert_eq!(lbl_in, "1/64");
+        assert_eq!(s_in, ppqn / 16);
+    }
+
+    #[test]
+    fn ruler_bar_step_prevents_overlap() {
+        assert_eq!(ruler_bar_step(40.0), 1);
+        assert_eq!(ruler_bar_step(16.0), 2);
+        assert_eq!(ruler_bar_step(8.0), 4);
+        assert_eq!(ruler_bar_step(4.0), 8);
+        assert_eq!(ruler_bar_step(2.0), 16);
+    }
+
+    #[test]
+    fn split_selected_clips_preserves_audio_offset() {
+        let mut s = PlaylistState::default();
+        s.clips.push((
+            1,
+            PlaylistClip {
+                id: 1,
+                name: "Bass".into(),
+                start_tick: 960,
+                duration_ticks: 3840,
+                clip_type: ClipType::Audio {
+                    sample_path: "bass.wav".into(),
+                    peaks: vec![0.5],
+                    sample_offset_ticks: 480,
+                    total_sample_ticks: 7680,
+                },
+                color: Color32::WHITE,
+            },
+        ));
+        s.selected_clips = vec![1];
+        s.next_clip_id = 2;
+
+        let count = split_selected_clips_at(&mut s, 2880);
+        assert_eq!(count, 1);
+        assert_eq!(s.clips.len(), 2);
+        assert_eq!(s.clips[0].1.duration_ticks, 1920);
+        assert_eq!(s.clips[1].1.start_tick, 2880);
+        assert_eq!(s.clips[1].1.duration_ticks, 1920);
+        if let ClipType::Audio { sample_offset_ticks, .. } = s.clips[1].1.clip_type {
+            assert_eq!(sample_offset_ticks, 480 + 1920);
+        } else {
+            panic!("expected audio clip");
+        }
+    }
+
+    #[test]
+    fn trim_apply_clamps_audio_bounds() {
+        let (st, dur, off) = trim_apply(960, 1920, 0, 3840, TrimEdge::Right, 5000, 240, 60);
+        assert_eq!(st, 960);
+        assert_eq!(dur, 3840);
+        assert_eq!(off, 0);
+
+        let (st2, dur2, off2) = trim_apply(960, 1920, 0, 3840, TrimEdge::Left, 1440, 240, 60);
+        assert_eq!(st2, 1440);
+        assert_eq!(dur2, 1440);
+        assert_eq!(off2, 480);
+    }
+
+    #[test]
+    fn mmb_drag_up_zooms_in() {
+        assert!(mmb_drag_notches(-120.0) > 0.0);
+        assert!(mmb_drag_notches(120.0) < 0.0);
+    }
 }

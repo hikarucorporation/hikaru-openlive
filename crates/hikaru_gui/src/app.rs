@@ -1419,17 +1419,45 @@ impl eframe::App for HikaruApp {
             if i.key_pressed(egui::Key::F11) {
                 self.state.show_explorer = !self.state.show_explorer;
             }
-            if i.key_pressed(egui::Key::Delete) {
+            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
                 if self.state.show_dsp_rack {
                     dsp_rack::handle_delete_key(&mut self.state);
                 } else if !self.state.playlist_state.selected_clips.is_empty() {
                     let selected = self.state.playlist_state.selected_clips.clone();
                     self.state.playlist_state.clips.retain(|(_, c)| !selected.contains(&c.id));
                     self.state.playlist_state.selected_clips.clear();
+                    self.state.playlist_state.needs_full_sync = true;
                 } else if let Some(fx_idx) = self.state.selected_fx_index {
                     self.state.delete_fx_track(fx_idx);
                 } else if self.state.selected_track_index > 0 {
                     self.state.delete_track(self.state.selected_track_index);
+                }
+            }
+            let cmd = i.modifiers.ctrl || i.modifiers.command;
+            if cmd && !ctx.wants_keyboard_input() && self.state.panel_layout.show_arranger {
+                if i.key_pressed(egui::Key::C) && !self.state.playlist_state.selected_clips.is_empty() {
+                    playlist::copy_selected_clips(&mut self.state.playlist_state);
+                } else if i.key_pressed(egui::Key::X) && !self.state.playlist_state.selected_clips.is_empty() {
+                    playlist::cut_selected_clips(&mut self.state.playlist_state);
+                } else if i.key_pressed(egui::Key::V) && !self.state.playlist_state.clipboard.is_empty() {
+                    let target_tick = self.state.playlist_state.paste_tick();
+                    playlist::paste_clips(
+                        &mut self.state.playlist_state,
+                        target_tick,
+                        self.state.selected_track_index.max(1),
+                    );
+                } else if i.key_pressed(egui::Key::D) && !self.state.playlist_state.selected_clips.is_empty() {
+                    let (step, _, _) = playlist::adaptive_grid_step(
+                        self.state.playlist_state.ppqn,
+                        self.state.transport.beats_per_bar,
+                        self.state.playlist_state.zoom_x,
+                    );
+                    playlist::duplicate_selected_clips(&mut self.state.playlist_state, step);
+                } else if i.key_pressed(egui::Key::A) {
+                    playlist::select_all_clips(&mut self.state.playlist_state);
+                } else if i.key_pressed(egui::Key::E) && !self.state.playlist_state.selected_clips.is_empty() {
+                    let split_tick = self.state.playlist_state.playhead_tick;
+                    playlist::split_selected_clips_at(&mut self.state.playlist_state, split_tick);
                 }
             }
         });
