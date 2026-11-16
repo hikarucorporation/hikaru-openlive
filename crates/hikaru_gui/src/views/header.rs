@@ -197,6 +197,10 @@ fn trigger_play_or_pause(state: &mut AppState) {
                                 as f32
                                 / sr,
                             track_index: *track_id,
+                            speed_ratio: crate::audio_proxy::compute_tempo_sync_ratio(
+                                std::path::Path::new(sample_path),
+                                state.transport.bpm,
+                            ),
                         })
                     } else {
                         None

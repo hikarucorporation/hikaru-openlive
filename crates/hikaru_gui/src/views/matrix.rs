@@ -535,6 +535,7 @@ impl SessionMatrixState {
                         offset_secs: 0.0,
                         track_index: track_idx,
                         scene_index: scene_idx,
+                        speed_ratio: 1.0,
                     });
                 }
             }
@@ -572,6 +573,7 @@ impl SessionMatrixState {
                         offset_secs: 0.0,
                         track_index: track_idx,
                         scene_index: target_scene,
+                        speed_ratio: 1.0,
                     });
                 }
             }
@@ -699,6 +701,7 @@ impl SessionMatrixState {
                         offset_secs: 0.0,
                         track_index: dst_track,
                         scene_index: dst_scene,
+                        speed_ratio: 1.0,
                     });
                 }
                 audio_proxy.set_clip_loop(
@@ -879,6 +882,12 @@ pub fn load_clip_into_slot(
     let path_str = path.to_string_lossy().to_string();
     let is_midi = crate::views::explorer::is_midi_file(&path);
 
+    let speed_ratio = if is_midi {
+        1.0
+    } else {
+        crate::audio_proxy::compute_tempo_sync_ratio(&path, bpm)
+    };
+
     let (content, real_dur, total_frames) = if is_midi {
         let parsed_notes: Vec<(u64, u8, u8, u32)> = if let Ok(bytes) = std::fs::read(&path) {
             hikaru_midi::parse_midi_file_to_notes(&bytes)
@@ -913,11 +922,12 @@ pub fn load_clip_into_slot(
             let spec = reader.spec();
             let samples = reader.duration();
             let dur = if spec.sample_rate > 0 {
-                samples as f64 / (spec.sample_rate as f64 * spec.channels.max(1) as f64)
+                (samples as f64 / spec.sample_rate as f64) / speed_ratio as f64
             } else {
                 0.0
             };
-            (dur, samples as u64)
+            let adjusted_frames = (samples as f64 / speed_ratio as f64).round() as u64;
+            (dur, adjusted_frames)
         } else {
             (0.0, 0)
         };
@@ -980,6 +990,7 @@ pub fn load_clip_into_slot(
             offset_secs: 0.0,
             track_index: track_idx,
             scene_index: scene_idx,
+            speed_ratio,
         });
     }
 }
@@ -1088,6 +1099,7 @@ pub fn append_sample_as_event(
             offset_secs: 0.0,
             track_index: track_idx,
             scene_index: scene_idx,
+            speed_ratio: 1.0,
         });
     }
 }
@@ -3221,6 +3233,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         // Immediately sync to audio engine
         let position_secs = ticks_to_secs_precise(start_tick, ppqn, bpm);
         let duration_secs = ticks_to_secs_precise(duration_ticks, ppqn, bpm);
+        let speed_ratio = crate::audio_proxy::compute_tempo_sync_ratio(&path, bpm);
         state.audio_proxy.send(GuiCommand::LoadClip {
             clip_id: new_id,
             path: path.to_string_lossy().to_string(),
@@ -3229,6 +3242,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             offset_secs: 0.0,
             track_index: track_id,
             scene_index: 0,
+            speed_ratio,
         });
 
         let sr = state.transport.sample_rate.get().max(1.0);
@@ -3251,6 +3265,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         duration_secs: len_frames as f32 / sr,
                         offset_secs: state.transport.ticks_to_samples(*sample_offset_ticks) as f32 / sr,
                         track_index: *t_id,
+                        speed_ratio: crate::audio_proxy::compute_tempo_sync_ratio(
+                            std::path::Path::new(sample_path),
+                            state.transport.bpm,
+                        ),
                     })
                 } else {
                     None

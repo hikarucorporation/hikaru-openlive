@@ -218,6 +218,150 @@ impl EngineAudioEvent {
     }
 }
 
+/// Time-stretching WSOLA (Waveform Similarity Overlap-Add) preservando el pitch original.
+/// `rate = target_bpm / source_bpm` (> 1.0 acorta/acelera el clip, < 1.0 lo alarga/desacelera).
+pub fn time_stretch_wsola(samples: &[f32], channels: usize, rate: f64) -> Vec<f32> {
+    let ch = channels.max(1);
+    let in_frames = samples.len() / ch;
+    let rate = rate.clamp(0.25, 4.0);
+    const GRAIN: usize = 2048;
+    const HOP: usize = 1024;
+    const SEARCH: isize = 512;
+
+    if (rate - 1.0).abs() < 1e-4 || in_frames <= GRAIN + SEARCH as usize {
+        return samples.to_vec();
+    }
+
+    let out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
+    let mut out = vec![0.0f32; out_frames * ch];
+    let mut win_sum = vec![0.0f32; out_frames];
+
+    // Ventana Hann de tamaño GRAIN
+    let mut win = Vec::with_capacity(GRAIN);
+    for i in 0..GRAIN {
+        win.push((0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / GRAIN as f64).cos())) as f32);
+    }
+
+    // Señal mono auxiliar para correlación cruzada rápida y coherente entre canales
+    let mut mono = Vec::with_capacity(in_frames);
+    if ch == 1 {
+        mono.extend_from_slice(samples);
+    } else {
+        for f in 0..in_frames {
+            let mut sum = 0.0f32;
+            for c in 0..ch {
+                sum += samples[f * ch + c];
+            }
+            mono.push(sum / ch as f32);
+        }
+    }
+
+    let max_src_start = (in_frames - GRAIN) as isize;
+    let mut prev_src_start: usize = 0;
+
+    // Grano 0: empieza en 0
+    {
+        let copy_len = GRAIN.min(out_frames);
+        for i in 0..copy_len {
+            let w = win[i];
+            win_sum[i] += w;
+            for c in 0..ch {
+                out[i * ch + c] += samples[i * ch + c] * w;
+            }
+        }
+    }
+
+    let mut out_start = HOP;
+    while out_start < out_frames {
+        let natural_next = prev_src_start + HOP;
+        let nom_src_start = (out_start as f64 * rate).round() as isize;
+        let cmp_len = HOP.min(in_frames.saturating_sub(natural_next)).min(GRAIN);
+
+        let best_src_start = if cmp_len >= 64 {
+            let mut e_ref = 0.0f64;
+            let mut i = 0;
+            while i < cmp_len {
+                let r = mono[natural_next + i] as f64;
+                e_ref += r * r;
+                i += 4;
+            }
+
+            let min_cand = (nom_src_start - SEARCH).max(0);
+            let max_cand = (nom_src_start + SEARCH).min(max_src_start);
+
+            let score_cand = |cand: usize, step: usize| -> f64 {
+                let mut dot = 0.0f64;
+                let mut e_cand = 0.0f64;
+                let mut idx = 0;
+                while idx < cmp_len {
+                    let r = mono[natural_next + idx] as f64;
+                    let s = mono[cand + idx] as f64;
+                    dot += r * s;
+                    e_cand += s * s;
+                    idx += step;
+                }
+                let denom = (e_ref * e_cand).sqrt();
+                if denom > 1e-12 { dot / denom } else { -1.0 }
+            };
+
+            // Búsqueda gruesa paso 4
+            let mut best_cand = nom_src_start.clamp(0, max_src_start) as usize;
+            let mut best_score = f64::NEG_INFINITY;
+            let mut cand = min_cand;
+            while cand <= max_cand {
+                let sc = score_cand(cand as usize, 4);
+                if sc > best_score {
+                    best_score = sc;
+                    best_cand = cand as usize;
+                }
+                cand += 4;
+            }
+
+            // Refinamiento fino paso 1 alrededor del mejor candidato
+            let fine_lo = (best_cand as isize - 4).max(min_cand);
+            let fine_hi = (best_cand as isize + 4).min(max_cand);
+            let mut fine_best = best_cand;
+            let mut fine_score = f64::NEG_INFINITY;
+            for c_pos in fine_lo..=fine_hi {
+                let sc = score_cand(c_pos as usize, 2);
+                if sc > fine_score {
+                    fine_score = sc;
+                    fine_best = c_pos as usize;
+                }
+            }
+            fine_best
+        } else {
+            nom_src_start.clamp(0, max_src_start) as usize
+        };
+
+        let copy_len = GRAIN.min(out_frames - out_start);
+        for i in 0..copy_len {
+            let w = win[i];
+            win_sum[out_start + i] += w;
+            let src_idx = (best_src_start + i) * ch;
+            let dst_idx = (out_start + i) * ch;
+            for c in 0..ch {
+                out[dst_idx + c] += samples[src_idx + c] * w;
+            }
+        }
+
+        prev_src_start = best_src_start;
+        out_start += HOP;
+    }
+
+    for f in 0..out_frames {
+        let ws = win_sum[f];
+        if ws > 1e-6 {
+            let inv = 1.0 / ws;
+            for c in 0..ch {
+                out[f * ch + c] *= inv;
+            }
+        }
+    }
+
+    out
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioClipInstance {
     pub id: usize,
@@ -240,6 +384,11 @@ pub struct AudioClipInstance {
     /// Eventos editables del pad. Vacío = modo legacy (un solo `samples`).
     /// No vacío = el pad mezcla estos eventos (cortar/pegar/multi-sample).
     pub events: Vec<EngineAudioEvent>,
+    /// BPM original del sample (si se conoce), para sincronización en tiempo real con el transporte.
+    pub source_bpm: Option<f32>,
+    /// Cache del audio estirado con WSOLA para evitar artefactos de comb filter.
+    pub stretched_samples: Vec<f32>,
+    pub stretched_rate: f64,
 }
 
 impl AudioClipInstance {
@@ -289,8 +438,56 @@ impl AudioClipInstance {
     ///
     /// Un loop más corto que un beat NO se toca: los loops sub-beat (stutters,
     /// flams) son intencionales y cuantizarlos los destruiría.
+    pub fn tempo_rate(&self, transport: &TransportPosition) -> f64 {
+        match self.source_bpm {
+            Some(sbpm) if sbpm > 0.0 && transport.bpm > 0.0 => {
+                (transport.bpm / sbpm as f64).clamp(0.25, 4.0)
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// Lee un frame estéreo en `out_frame` usando el buffer pre-estirado con WSOLA si coincide
+    /// con `rate`, o fallback OLA cuando `rate != 1.0`.
+    pub fn sample_stereo_stretched(&self, out_frame: u64, rate: f64) -> (f32, f32) {
+        let ch = self.channels.max(1);
+        if (rate - 1.0).abs() < 1e-4 {
+            let total_frames = self.samples.len() / ch;
+            if total_frames == 0 {
+                return (0.0, 0.0);
+            }
+            let f = (out_frame as usize).min(total_frames - 1);
+            let idx = f * ch;
+            let l = self.samples[idx];
+            let r = if ch > 1 { self.samples[idx + 1] } else { l };
+            return (l, r);
+        }
+
+        if !self.stretched_samples.is_empty() && (self.stretched_rate - rate).abs() < 0.05 {
+            let total_stretched = self.stretched_samples.len() / ch;
+            if total_stretched > 0 {
+                let f = (out_frame as usize).min(total_stretched - 1);
+                let idx = f * ch;
+                let l = self.stretched_samples[idx];
+                let r = if ch > 1 { self.stretched_samples[idx + 1] } else { l };
+                return (l, r);
+            }
+        }
+
+        let total_frames = self.samples.len() / ch;
+        if total_frames == 0 {
+            return (0.0, 0.0);
+        }
+        let f = ((out_frame as f64 * rate).round() as usize).min(total_frames - 1);
+        let idx = f * ch;
+        let l = self.samples[idx];
+        let r = if ch > 1 { self.samples[idx + 1] } else { l };
+        (l, r)
+    }
+
     pub fn quantized_loop_len(&self, transport: &TransportPosition) -> u64 {
-        let raw_len = self.raw_loop_len();
+        let rate = self.tempo_rate(transport);
+        let raw_len = ((self.raw_loop_len() as f64) / rate).round().max(1.0) as u64;
         let spb = transport.samples_per_beat();
         if !(spb > 1.0) {
             // Sin BPM o SR utilizable no hay grilla: se usa la longitud cruda.
@@ -326,27 +523,32 @@ impl AudioClipInstance {
             return None;
         }
         let elapsed = global_pos - self.start_frame;
+        let rate = self.tempo_rate(transport);
 
         if self.has_valid_clip_loop() {
             let natural = self.natural_frames();
-            let loop_start = self.clip_loop_start.min(natural);
-            let loop_end = loop_start + self.quantized_loop_len(transport);
-            let loop_len = loop_end - loop_start;
-            if elapsed < loop_end {
-                return Some(elapsed as usize);
-            }
-            if transport.has_valid_loop() {
+            let loop_start_src = self.clip_loop_start.min(natural);
+            let loop_start_out = ((loop_start_src as f64) / rate).round() as u64;
+            let loop_len = self.quantized_loop_len(transport);
+            let loop_end_out = loop_start_out + loop_len;
+            let out_frame = if elapsed < loop_end_out {
+                elapsed
+            } else if transport.has_valid_loop() {
                 let since_global = global_pos.saturating_sub(transport.loop_start_samples);
-                return Some((loop_start + (since_global % loop_len)) as usize);
-            }
-            return Some((loop_start + ((elapsed - loop_start) % loop_len)) as usize);
+                loop_start_out + (since_global % loop_len)
+            } else {
+                loop_start_out + ((elapsed - loop_start_out) % loop_len)
+            };
+            let src_frame = ((out_frame as f64) * rate).round() as usize;
+            return Some(src_frame.min(natural.saturating_sub(1) as usize));
         }
 
-        let emission_len = self.emission_len_frames();
-        if elapsed >= emission_len {
+        let emission_len_out = ((self.emission_len_frames() as f64) / rate).round() as u64;
+        if elapsed >= emission_len_out {
             return None;
         }
-        Some(elapsed as usize)
+        let src_frame = ((elapsed as f64) * rate).round() as usize;
+        Some(src_frame.min(natural.saturating_sub(1) as usize))
     }
 
     pub fn voice_frame_linear(
@@ -362,20 +564,23 @@ impl AudioClipInstance {
             return None;
         }
         let elapsed = abs_pos - self.start_absolute;
+        let rate = self.tempo_rate(transport);
 
         if self.has_valid_clip_loop() {
-            let loop_start = self.clip_loop_start.min(natural);
-            let loop_end = loop_start + self.quantized_loop_len(transport);
-            let loop_len = loop_end - loop_start;
-            
-            return Some((loop_start + (elapsed % loop_len)) as usize);
+            let loop_start_src = self.clip_loop_start.min(natural);
+            let loop_start_out = ((loop_start_src as f64) / rate).round() as u64;
+            let loop_len = self.quantized_loop_len(transport);
+            let out_frame = loop_start_out + (elapsed % loop_len);
+            let src_frame = ((out_frame as f64) * rate).round() as usize;
+            return Some(src_frame.min(natural.saturating_sub(1) as usize));
         }
 
-        let emission_len = self.emission_len_frames();
-        if elapsed >= emission_len {
+        let emission_len_out = ((self.emission_len_frames() as f64) / rate).round() as u64;
+        if elapsed >= emission_len_out {
             return None;
         }
-        Some(elapsed as usize)
+        let src_frame = ((elapsed as f64) * rate).round() as usize;
+        Some(src_frame.min(natural.saturating_sub(1) as usize))
     }
 
     pub fn voice_state_linear(
@@ -1604,6 +1809,79 @@ impl<'a> AudioEngine<'a> {
         self.master_gain.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
+    pub fn set_clip_source_bpm(&mut self, clip_id: usize, source_bpm: Option<f32>) {
+        let bpm = self.transport.bpm;
+        if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+            c.source_bpm = source_bpm;
+            if let Some(sbpm) = source_bpm {
+                if sbpm > 0.0 && bpm > 0.0 {
+                    let rate = (bpm / sbpm as f64).clamp(0.25, 4.0);
+                    if (rate - 1.0).abs() >= 1e-4 {
+                        let (src, ch) = if !c.samples.is_empty() {
+                            (&c.samples[..], c.channels)
+                        } else if let Some(ev) = c.events.first() {
+                            (&ev.samples[..], ev.channels)
+                        } else {
+                            (&[][..], c.channels)
+                        };
+                        if !src.is_empty() {
+                            c.stretched_samples = time_stretch_wsola(src, ch, rate);
+                            c.stretched_rate = rate;
+                        }
+                    } else {
+                        c.stretched_samples.clear();
+                        c.stretched_rate = 1.0;
+                    }
+                }
+            } else {
+                c.stretched_samples.clear();
+                c.stretched_rate = 1.0;
+            }
+        }
+    }
+
+    pub fn set_clip_source_bpm_deferred(&mut self, clip_id: usize, source_bpm: Option<f32>) {
+        if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+            c.source_bpm = source_bpm;
+            if source_bpm.is_none() {
+                c.stretched_samples.clear();
+                c.stretched_rate = 1.0;
+            }
+        }
+    }
+
+    /// Devuelve `(clip_id, samples, channels, rate)` para clips cuyo `source_bpm` requiere recalcular WSOLA.
+    pub fn pending_stretch_jobs(&self) -> Vec<(usize, Vec<f32>, usize, f64)> {
+        let mut jobs = Vec::new();
+        for c in &self.clips {
+            if let Some(sbpm) = c.source_bpm {
+                if sbpm > 0.0 && self.transport.bpm > 0.0 {
+                    let rate = (self.transport.bpm / sbpm as f64).clamp(0.25, 4.0);
+                    if (rate - 1.0).abs() >= 1e-4 && (rate - c.stretched_rate).abs() > 0.002 {
+                        let (src, ch) = if !c.samples.is_empty() {
+                            (c.samples.clone(), c.channels)
+                        } else if let Some(ev) = c.events.first() {
+                            (ev.samples.clone(), ev.channels)
+                        } else {
+                            continue;
+                        };
+                        if !src.is_empty() {
+                            jobs.push((c.id, src, ch, rate));
+                        }
+                    }
+                }
+            }
+        }
+        jobs
+    }
+
+    pub fn apply_stretched_samples(&mut self, clip_id: usize, samples: Vec<f32>, rate: f64) {
+        if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+            c.stretched_samples = samples;
+            c.stretched_rate = rate;
+        }
+    }
+
     pub fn sync_clips(&mut self, new_clips: Vec<AudioClipInstance>) {
         self.clips = new_clips;
     }
@@ -1742,6 +2020,9 @@ impl<'a> AudioEngine<'a> {
             xfade_remaining: 0,
             xfade_len: 0,
             events: Vec::new(),
+            source_bpm: None,
+            stretched_samples: Vec::new(),
+            stretched_rate: 1.0,
         };
 
         let is_studio = self.mode == EngineMode::OpenStudio;
@@ -3177,6 +3458,37 @@ impl<'a> AudioEngine<'a> {
 
                     // ── Modo multi-evento: el pad mezcla sus regiones ──
                     if !clip.events.is_empty() {
+                        let rate = clip.tempo_rate(&transport);
+                        if (rate - 1.0).abs() >= 1e-4 && !clip.stretched_samples.is_empty() {
+                            let emission_out = ((emission as f64) / rate).round() as u64;
+                            let loop_start_out = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
+                            let loop_len = if has_loop { clip.quantized_loop_len(&transport) } else { 0 };
+                            let mut clip_finished = false;
+                            for f in 0..buffer_frames as usize {
+                                let elapsed = elapsed_start + f as u64;
+                                if !has_loop && elapsed >= emission_out {
+                                    clip_finished = true;
+                                    break;
+                                }
+                                let out_frame = if has_loop && loop_len > 0 {
+                                    let loop_end = loop_start_out + loop_len;
+                                    if elapsed < loop_end {
+                                        elapsed
+                                    } else {
+                                        loop_start_out + ((elapsed - loop_start_out) % loop_len)
+                                    }
+                                } else {
+                                    elapsed
+                                };
+                                let (l, r) = clip.sample_stereo_stretched(out_frame, rate);
+                                track_buf[f * 2] += l * gl;
+                                track_buf[f * 2 + 1] += r * gr;
+                            }
+                            if clip_finished {
+                                clip.is_playing = false;
+                            }
+                            continue;
+                        }
                         let mut clip_finished = false;
                         for f in 0..buffer_frames as usize {
                             let elapsed = elapsed_start + f as u64;
@@ -3194,8 +3506,10 @@ impl<'a> AudioEngine<'a> {
                         continue;
                     }
 
+                    let rate = clip.tempo_rate(&transport);
+                    let emission_out = ((emission as f64) / rate).round() as u64;
                     let (loop_start, loop_len) = if has_loop {
-                        let ls = clip.clip_loop_start.min(natural);
+                        let ls = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
                         // Longitud CUANTIZADA a beats: sin esto el wrap cae
                         // fuera de la grilla en cada vuelta y el clip se
                         // desfasage del pulso (ver `quantized_loop_len`).
@@ -3211,7 +3525,7 @@ impl<'a> AudioEngine<'a> {
                     for f in 0..buffer_frames as usize {
                         let elapsed = elapsed_start + f as u64;
 
-                        if !has_loop && elapsed >= emission {
+                        if !has_loop && elapsed >= emission_out {
                             clip_finished = true;
                             break;
                         }
@@ -3221,11 +3535,18 @@ impl<'a> AudioEngine<'a> {
                             if elapsed < loop_end {
                                 elapsed as usize
                             } else {
-                                (loop_start + ((elapsed - loop_end) % loop_len)) as usize
+                                (loop_start + ((elapsed - loop_start) % loop_len)) as usize
                             }
                         } else {
                             elapsed as usize
                         };
+
+                        if (rate - 1.0).abs() >= 1e-4 {
+                            let (l, r) = clip.sample_stereo_stretched(relative_frame as u64, rate);
+                            track_buf[f * 2] += l * gl;
+                            track_buf[f * 2 + 1] += r * gr;
+                            continue;
+                        }
 
                         let idx = relative_frame * ch;
 
@@ -4297,5 +4618,53 @@ mod tests {
         engine.stop();
         run_frames(&mut engine, 512);
         assert_eq!(unpack_clip_playhead(engine.track_clip_playhead[0].load(Ordering::Relaxed)), None);
+    }
+
+    #[test]
+    fn wsola_time_stretch_preserves_pitch_and_energy() {
+        let sr = 44100.0;
+        let freq = 220.0;
+        let in_frames = 44100; // 1 segundo
+        let mut input = Vec::with_capacity(in_frames * 2);
+        for i in 0..in_frames {
+            let s = (std::f64::consts::TAU * freq * (i as f64) / sr).sin() as f32 * 0.5;
+            input.push(s);
+            input.push(s);
+        }
+        // Estirar de 150 BPM a 128 BPM (rate = 128 / 150 < 1.0 => más largo)
+        let rate = 128.0 / 150.0;
+        let out = time_stretch_wsola(&input, 2, rate);
+        let out_frames = out.len() / 2;
+        let expected_frames = (in_frames as f64 / rate).round() as usize;
+        assert!((out_frames as isize - expected_frames as isize).abs() <= 2);
+
+        // Verificar que la energía RMS se mantiene sin cancelación tipo comb filter
+        let rms_in = (input.iter().map(|&x| (x * x) as f64).sum::<f64>() / input.len() as f64).sqrt();
+        let rms_out = (out.iter().map(|&x| (x * x) as f64).sum::<f64>() / out.len() as f64).sqrt();
+        assert!(
+            (rms_out - rms_in).abs() < 0.05,
+            "RMS drop indica comb cancellation: in={:.4}, out={:.4}",
+            rms_in,
+            rms_out
+        );
+
+        // Verificar por cruce por cero que la frecuencia fundamental sigue siendo ~220 Hz (sin pitch shift)
+        let mut zero_crossings = 0usize;
+        let start = 4096;
+        let end = out_frames - 4096;
+        for f in start..end {
+            let a = out[(f - 1) * 2];
+            let b = out[f * 2];
+            if a <= 0.0 && b > 0.0 {
+                zero_crossings += 1;
+            }
+        }
+        let est_freq = zero_crossings as f64 * sr / ((end - start) as f64);
+        assert!(
+            (est_freq - freq).abs() < 5.0,
+            "Frecuencia alterada (pitch shift): esperada {:.1} Hz, medida {:.1} Hz",
+            freq,
+            est_freq
+        );
     }
 }

@@ -886,6 +886,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             .clicked()
             {
                 state.explorer_state.is_synced = !state.explorer_state.is_synced;
+                if state.explorer_state.is_playing_preview {
+                    if let Some(path) = state.explorer_state.selected_file.clone() {
+                        state.audio_proxy.send(GuiCommand::PreviewSample {
+                            path: path.to_string_lossy().to_string(),
+                            volume: state.explorer_state.preview_volume,
+                            speed: state.explorer_state.current_speed(project_bpm),
+                        });
+                    }
+                }
             }
         });
 

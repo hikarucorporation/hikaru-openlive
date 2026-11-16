@@ -30,6 +30,20 @@ pub struct AudioClipData {
     pub duration_secs: f32,
     pub offset_secs: f32,
     pub track_index: usize,
+    pub speed_ratio: f32,
+}
+
+pub fn compute_tempo_sync_ratio(path: &std::path::Path, project_bpm: f64) -> f32 {
+    if project_bpm <= 0.0 {
+        return 1.0;
+    }
+    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+    if let Some(source_bpm) = crate::views::explorer::parse_bpm_from_filename(&filename) {
+        if source_bpm > 0.0 {
+            return (project_bpm as f32 / source_bpm).clamp(0.25, 4.0);
+        }
+    }
+    1.0
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +127,7 @@ pub enum GuiCommand {
         offset_secs: f32,
         track_index: usize,
         scene_index: usize,
+        speed_ratio: f32,
     },
     UpdateClipBounds { 
         clip_id: usize, 
@@ -146,6 +161,10 @@ pub enum GuiCommand {
     },
     ToggleRecord,
     SetBpm(f32),
+    SetClipStretchBpm {
+        clip_id: usize,
+        source_bpm: Option<f32>,
+    },
     TriggerScene { 
         scene_idx: usize 
     },

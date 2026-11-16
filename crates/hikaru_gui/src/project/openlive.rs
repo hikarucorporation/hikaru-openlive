@@ -433,6 +433,10 @@ fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
                         offset_secs: 0.0,
                         track_index: track_idx,
                         scene_index: scene_idx,
+                        speed_ratio: crate::audio_proxy::compute_tempo_sync_ratio(
+                            &clip.path,
+                            state.transport.bpm,
+                        ),
                     });
                     // Multi-sample: los eventos editables del pad (trim, gain,
                     // fades) van aparte, ya que `LoadClip` sólo carga el sample

@@ -263,6 +263,7 @@ impl PlaylistState {
                     offset_secs,
                     track_index: *track_id,
                     scene_index: 0,
+                    speed_ratio: 1.0,
                 });
             }
         }
@@ -733,7 +734,12 @@ pub fn build_audio_clip(
     ppqn: u64,
     bpm: f64,
 ) -> PlaylistClip {
-    let (total_ticks, peaks) = load_sample_info(&path, ppqn, bpm);
+    let effective_bpm = path
+        .file_name()
+        .and_then(|n| crate::views::explorer::parse_bpm_from_filename(&n.to_string_lossy()))
+        .map(|sbpm| sbpm as f64)
+        .unwrap_or(bpm);
+    let (total_ticks, peaks) = load_sample_info(&path, ppqn, effective_bpm);
     PlaylistClip {
         id,
         name,

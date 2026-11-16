@@ -64,6 +64,22 @@ struct ViewState {
 }
 
 #[derive(Clone)]
+struct StretchClipData {
+    orig_beats: f64,
+    stretch_beats: f64,
+    markers: Vec<(f64, f64)>,
+}
+
+#[derive(Clone, Copy)]
+struct StretchDrag {
+    marker_idx: usize,
+    orig_x: f32,
+    orig_beat: f64,
+    orig_total_beats: f64,
+    alt_clip_stretch: bool,
+}
+
+#[derive(Clone)]
 struct Env {
     frames: usize,
     ch: Vec<Vec<f32>>,
@@ -125,12 +141,14 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     p.rect_stroke(full.shrink(1.0), 2.0, Stroke::new(2.0, accent), StrokeKind::Inside);
     let inner = full.shrink(3.0);
 
-    let (name, ev_start, ev_len, sr, loop_en, loop_s, loop_e, track_color, env_key) = {
+    let (clip_id, name, path, ev_start, ev_len, sr, loop_en, loop_s, loop_e, track_color, env_key) = {
         let Some(clip) = app.matrix_state.slot(slot.0, slot.1).and_then(|s| s.clip.as_ref()) else { return };
         let ev = clip.audio_events().first();
         let sr = ev.map(|e| e.sample_rate).unwrap_or(44100).max(1) as f64;
         (
+            clip.id,
             clip.name.clone(),
+            clip.path.clone(),
             ev.map(|e| e.start_secs).unwrap_or(0.0),
             ev.map(|e| e.duration_secs()).unwrap_or(clip.duration_secs),
             sr,
@@ -169,7 +187,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         pan: false,
         pitch: false,
         formant: false,
-        stretch: false,
+        stretch: true,
         onsets: true,
     });
     if v.key != slot {
@@ -188,6 +206,38 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     let hdr_top = loopr.max.y + 2.0;
     let wave_top = hdr_top + HEADER_H;
     let wave_r = Rect::from_min_max(pos2(main.min.x, wave_top), pos2(main.max.x, scroll_r.min.y - 2.0));
+
+    let file_source_bpm = crate::views::explorer::parse_bpm_from_filename(&name)
+        .or_else(|| path.file_name().and_then(|n| crate::views::explorer::parse_bpm_from_filename(&n.to_string_lossy())));
+    let orig_beats = match file_source_bpm {
+        Some(sbpm) if sbpm > 0.0 => (ev_len * (sbpm as f64 / 60.0)).max(0.25),
+        _ => (ev_len / spb).max(0.25),
+    };
+    let stretch_id = egui::Id::new("ade_stretch").with(clip_id);
+    let mut stretch_data: StretchClipData = ui.ctx().data(|d| d.get_temp(stretch_id)).unwrap_or_else(|| StretchClipData {
+        orig_beats,
+        stretch_beats: orig_beats,
+        markers: vec![(0.0, 0.0), (orig_beats, 1.0)],
+    });
+    if (stretch_data.orig_beats - orig_beats).abs() > 1e-3 && stretch_data.markers.len() <= 2 {
+        stretch_data.orig_beats = orig_beats;
+        stretch_data.stretch_beats = orig_beats;
+        stretch_data.markers = vec![(0.0, 0.0), (orig_beats, 1.0)];
+    }
+
+    let mut stretch_changed = false;
+    let rescale_stretch_total = |sd: &mut StretchClipData, new_total: f64| {
+        let clamped = new_total.clamp(0.25, 256.0);
+        let old_total = sd.stretch_beats.max(1e-6);
+        let rel_scale = clamped / old_total;
+        for m in sd.markers.iter_mut().skip(1) {
+            m.0 *= rel_scale;
+        }
+        if let Some(last) = sd.markers.last_mut() {
+            last.0 = clamped;
+        }
+        sd.stretch_beats = clamped;
+    };
 
     // ── Strip vertical con nombre rotado ──
     p.rect_filled(strip, 0.0, Color32::from_rgb(0x2B, 0x2B, 0x2B));
@@ -217,6 +267,42 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
             if tool_btn(ui, "Pitch", v.pitch, bw, 20.0, 10.0).clicked() { v.pitch = !v.pitch; }
             if tool_btn(ui, "Formant", v.formant, bw + 8.0, 20.0, 10.0).clicked() { v.formant = !v.formant; }
         });
+        if v.stretch && ev_len > 1e-4 {
+            tui.add_space(4.0);
+            let mut cur_clip_bpm = ((stretch_data.stretch_beats * 60.0) / ev_len).clamp(20.0, 400.0);
+            tui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Tempo").size(10.0).color(theme::TEXT_SECONDARY));
+                let dv = ui.add(
+                    egui::DragValue::new(&mut cur_clip_bpm)
+                        .speed(0.25)
+                        .range(20.0..=400.0)
+                        .suffix(" BPM")
+                        .fixed_decimals(1),
+                );
+                if dv.changed() {
+                    let new_total = (cur_clip_bpm * ev_len) / 60.0;
+                    rescale_stretch_total(&mut stretch_data, new_total);
+                    stretch_changed = true;
+                }
+            });
+            tui.horizontal(|ui| {
+                let bw = (w - 8.0) / 3.0;
+                if tool_btn(ui, "÷2", false, bw, 18.0, 10.0).clicked() {
+                    let new_total = stretch_data.stretch_beats * 0.5;
+                    rescale_stretch_total(&mut stretch_data, new_total);
+                    stretch_changed = true;
+                }
+                if tool_btn(ui, "×2", false, bw, 18.0, 10.0).clicked() {
+                    let new_total = stretch_data.stretch_beats * 2.0;
+                    rescale_stretch_total(&mut stretch_data, new_total);
+                    stretch_changed = true;
+                }
+                if tool_btn(ui, "Reset", false, bw, 18.0, 10.0).clicked() {
+                    rescale_stretch_total(&mut stretch_data, orig_beats);
+                    stretch_changed = true;
+                }
+            });
+        }
     }
     // Selector de herramienta (flecha)
     let tool_icon = Rect::from_min_size(tools.min + vec2(0.0, 0.0), vec2(40.0, 30.0));
@@ -299,12 +385,154 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
             ui.ctx().data_mut(|d| d.remove::<ZoomPanDrag>(zoom_id));
         }
     }
-    let clip_beats = ev_len / spb;
+    let mut clip_beats = stretch_data.stretch_beats.max(0.25);
     let start_beats = ev_start / spb;
     v.scroll_beats = v.scroll_beats.clamp(-8.0, start_beats + clip_beats + 8.0);
 
     let b2x = |b: f64| main.min.x + ((b - v.scroll_beats) * v.ppb as f64) as f32;
     let x2b = |x: f32| v.scroll_beats + ((x - main.min.x) / v.ppb) as f64;
+
+    // ── Interacción con Beat / Stretch Markers (estilo Bitwig) ──
+    let sdrag_id = vid.with("stretch_drag");
+    let mut active_sdrag: Option<StretchDrag> = ui.ctx().data(|d| d.get_temp(sdrag_id));
+    let (alt_held, shift_held_s, primary_down_s, hover_pos_s, press_origin_s, interact_pos_s) = ui.input(|i| (
+        i.modifiers.alt,
+        i.modifiers.shift,
+        i.pointer.primary_down(),
+        i.pointer.hover_pos(),
+        i.pointer.press_origin(),
+        i.pointer.interact_pos(),
+    ));
+    if !primary_down_s {
+        active_sdrag = None;
+        ui.ctx().data_mut(|d| d.remove::<StretchDrag>(sdrag_id));
+    }
+
+    let clip_vert_zone = |pos: egui::Pos2| pos.y >= hdr_top && pos.y <= wave_r.max.y && main.x_range().contains(pos.x);
+    let hit_stretch_marker = |pos: egui::Pos2, markers: &[(f64, f64)]| -> Option<usize> {
+        if !v.stretch || !clip_vert_zone(pos) {
+            return None;
+        }
+        // Prioridad: markers > 0 (el marker 0 es el ancla inicial)
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, &(mb, _)) in markers.iter().enumerate().skip(1) {
+            let mx = b2x(start_beats + mb);
+            let dist = (pos.x - mx).abs();
+            if dist <= 10.0 {
+                if best.map_or(true, |(_, bd)| dist < bd) {
+                    best = Some((idx, dist));
+                }
+            }
+        }
+        best.map(|(i, _)| i)
+    };
+
+    if v.stretch && resp.double_clicked_by(egui::PointerButton::Primary) {
+        if let Some(pos) = hover_pos_s {
+            if wave_r.contains(pos) {
+                if let Some(idx) = hit_stretch_marker(pos, &stretch_data.markers) {
+                    if idx > 0 && idx + 1 < stretch_data.markers.len() {
+                        stretch_data.markers.remove(idx);
+                        stretch_changed = true;
+                    }
+                } else {
+                    let b_off = (x2b(pos.x) - start_beats).clamp(0.05, clip_beats - 0.05);
+                    // Interpolar norm_src en b_off
+                    let mut norm = (b_off / clip_beats).clamp(0.0, 1.0);
+                    for w in stretch_data.markers.windows(2) {
+                        if b_off >= w[0].0 && b_off <= w[1].0 && (w[1].0 - w[0].0) > 1e-6 {
+                            let t = (b_off - w[0].0) / (w[1].0 - w[0].0);
+                            norm = w[0].1 + t * (w[1].1 - w[0].1);
+                            break;
+                        }
+                    }
+                    stretch_data.markers.push((b_off, norm));
+                    stretch_data.markers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    stretch_changed = true;
+                }
+            }
+        }
+    }
+
+    if v.stretch && resp.drag_started_by(egui::PointerButton::Primary) {
+        if let Some(orig) = press_origin_s {
+            if let Some(m_idx) = hit_stretch_marker(orig, &stretch_data.markers) {
+                let sd = StretchDrag {
+                    marker_idx: m_idx,
+                    orig_x: orig.x,
+                    orig_beat: stretch_data.markers[m_idx].0,
+                    orig_total_beats: stretch_data.stretch_beats,
+                    alt_clip_stretch: false,
+                };
+                active_sdrag = Some(sd);
+                ui.ctx().data_mut(|d| d.insert_temp(sdrag_id, sd));
+            } else if alt_held && wave_r.contains(orig) {
+                let sd = StretchDrag {
+                    marker_idx: stretch_data.markers.len().saturating_sub(1),
+                    orig_x: orig.x,
+                    orig_beat: stretch_data.stretch_beats,
+                    orig_total_beats: stretch_data.stretch_beats,
+                    alt_clip_stretch: true,
+                };
+                active_sdrag = Some(sd);
+                ui.ctx().data_mut(|d| d.insert_temp(sdrag_id, sd));
+            }
+        }
+    }
+
+    if let (Some(sd), Some(cur)) = (active_sdrag, interact_pos_s) {
+        if resp.dragged_by(egui::PointerButton::Primary) {
+            let snap_b = 0.25_f64;
+            let snap = |b: f64| if shift_held_s { b } else { (b / snap_b).round() * snap_b };
+            let delta_b = (cur.x - sd.orig_x) as f64 / v.ppb as f64;
+            let last_idx = stretch_data.markers.len().saturating_sub(1);
+            if sd.alt_clip_stretch || sd.marker_idx == last_idx {
+                let new_total = snap(sd.orig_total_beats + delta_b).clamp(orig_beats * 0.25, orig_beats * 4.0).max(0.25);
+                let ratio = new_total / sd.orig_total_beats.max(1e-6);
+                let old_total = stretch_data.stretch_beats.max(1e-6);
+                let rel_scale = new_total / old_total;
+                for m in stretch_data.markers.iter_mut().skip(1) {
+                    m.0 *= rel_scale;
+                }
+                if let Some(last) = stretch_data.markers.last_mut() {
+                    last.0 = new_total;
+                }
+                let _ = ratio;
+                stretch_data.stretch_beats = new_total;
+                clip_beats = new_total;
+                stretch_changed = true;
+            } else if sd.marker_idx > 0 && sd.marker_idx < last_idx {
+                let min_b = stretch_data.markers[sd.marker_idx - 1].0 + 0.0625;
+                let max_b = stretch_data.markers[sd.marker_idx + 1].0 - 0.0625;
+                let new_b = snap(sd.orig_beat + delta_b).clamp(min_b, max_b);
+                stretch_data.markers[sd.marker_idx].0 = new_b;
+                stretch_changed = true;
+            }
+        }
+    }
+
+    if stretch_changed {
+        let effective_source_bpm = if ev_len > 1e-6 {
+            (stretch_data.stretch_beats * 60.0) / ev_len
+        } else {
+            bpm
+        };
+        let stretched_dur_secs = stretch_data.stretch_beats * spb;
+        let was_full_loop = (loop_e - loop_s - ev_len).abs() < 0.05 || loop_e <= loop_s;
+        if let Some(clip) = app.matrix_state.slot_mut(slot.0, slot.1).and_then(|s| s.clip.as_mut()) {
+            clip.duration_secs = stretched_dur_secs;
+            if was_full_loop {
+                clip.loop_start = 0;
+                clip.loop_end = (stretched_dur_secs * sr).round().max(1.0) as u64;
+            }
+        }
+        app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetClipStretchBpm {
+            clip_id,
+            source_bpm: Some(effective_source_bpm as f32),
+        });
+    }
+
+    ui.ctx().data_mut(|d| d.insert_temp(stretch_id, stretch_data.clone()));
 
     let mut loop_en = loop_en;
     let clip_start = start_beats.max(0.0);
@@ -537,10 +765,22 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         let lane_h = body.height() / nch as f32;
         let bins = env.ch.first().map(|c| c.len()).unwrap_or(0);
         if bins > 0 && body.width() > 1.0 {
+            let map_beat_to_norm = |beat_off: f64| -> f32 {
+                if stretch_data.markers.len() >= 2 {
+                    for w in stretch_data.markers.windows(2) {
+                        if beat_off >= w[0].0 && beat_off <= w[1].0 && (w[1].0 - w[0].0) > 1e-9 {
+                            let t = (beat_off - w[0].0) / (w[1].0 - w[0].0);
+                            return (w[0].1 + t * (w[1].1 - w[0].1)).clamp(0.0, 1.0) as f32;
+                        }
+                    }
+                }
+                ((beat_off / clip_beats.max(1e-6)) as f32).clamp(0.0, 1.0)
+            };
             let mut x = vis.min.x.floor();
             while x < vis.max.x {
-                let fa = ((x - body.min.x) / body.width()).clamp(0.0, 1.0);
-                let fb = ((x + 1.0 - body.min.x) / body.width()).clamp(0.0, 1.0);
+                let fa = map_beat_to_norm(x2b(x) - start_beats);
+                let fb = map_beat_to_norm(x2b(x + 1.0) - start_beats);
+                let (fa, fb) = if fa <= fb { (fa, fb) } else { (fb, fa) };
                 let i0 = ((fa * bins as f32) as usize).min(bins - 1);
                 let i1 = ((fb * bins as f32).ceil() as usize).clamp(i0 + 1, bins);
                 for (c, chv) in env.ch.iter().enumerate() {
@@ -556,10 +796,61 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
                 wp.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], Stroke::new(1.0, Color32::from_black_alpha(40)));
             }
         }
+        // Stretch / Beat Markers (estilo Bitwig)
+        if v.stretch {
+            let hovered_m = active_sdrag
+                .map(|sd| sd.marker_idx)
+                .or_else(|| hover_pos_s.and_then(|p| hit_stretch_marker(p, &stretch_data.markers)));
+            if let Some(m_idx) = hovered_m {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                if m_idx + 1 == stretch_data.markers.len() {
+                    crate::app::set_footer_cues(app, None, &[("DRAG", "Stretch audio clip"), ("SHIFT", "Disable snapping")]);
+                } else {
+                    crate::app::set_footer_cues(app, None, &[("DRAG", "Move beat marker"), ("SHIFT", "Disable snapping"), ("DOUBLE-CLICK", "Remove marker")]);
+                }
+            }
+            let marker_blue = Color32::from_rgb(0x3B, 0x99, 0xFC);
+            for (idx, &(mb, _)) in stretch_data.markers.iter().enumerate() {
+                let mx = b2x(start_beats + mb);
+                if mx >= vis.min.x - 8.0 && mx <= vis.max.x + 8.0 {
+                    let is_hot = hovered_m == Some(idx);
+                    let col = if is_hot { Color32::WHITE } else { marker_blue };
+                    wp.line_segment(
+                        [pos2(mx, body.min.y), pos2(mx, body.max.y)],
+                        Stroke::new(if is_hot { 2.0_f32 } else { 1.2_f32 }, col),
+                    );
+                    if idx > 0 {
+                        wp.add(Shape::convex_polygon(
+                            vec![pos2(mx - 5.0, body.max.y), pos2(mx + 5.0, body.max.y), pos2(mx, body.max.y - 8.0)],
+                            col,
+                            Stroke::NONE,
+                        ));
+                        wp.add(Shape::convex_polygon(
+                            vec![pos2(mx - 5.0, body.min.y), pos2(mx + 5.0, body.min.y), pos2(mx, body.min.y + 8.0)],
+                            col,
+                            Stroke::NONE,
+                        ));
+                    }
+                }
+            }
+        }
         // Onsets
         if v.onsets {
+            let map_norm_to_x = |norm: f32| -> f32 {
+                let n64 = (norm as f64).clamp(0.0, 1.0);
+                if stretch_data.markers.len() >= 2 {
+                    for w in stretch_data.markers.windows(2) {
+                        if n64 >= w[0].1 && n64 <= w[1].1 && (w[1].1 - w[0].1) > 1e-9 {
+                            let t = (n64 - w[0].1) / (w[1].1 - w[0].1);
+                            let b = w[0].0 + t * (w[1].0 - w[0].0);
+                            return b2x(start_beats + b);
+                        }
+                    }
+                }
+                cx0 + norm * body.width()
+            };
             for &o in &env.onsets {
-                let x = cx0 + o * body.width();
+                let x = map_norm_to_x(o);
                 if x >= vis.min.x - 4.0 && x <= vis.max.x + 4.0 {
                     wp.add(Shape::convex_polygon(
                         vec![pos2(x, body.min.y), pos2(x + 6.0, body.min.y), pos2(x, body.min.y + 6.0)],

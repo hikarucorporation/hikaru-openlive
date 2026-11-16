@@ -111,7 +111,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.update_clip_bounds(clip_id, track_index, scene_index, position_secs, duration_secs, offset_secs);
                     }
                 }
-                GuiCommand::LoadClip { clip_id, path, position_secs, duration_secs, offset_secs, track_index, scene_index } => {
+                GuiCommand::LoadClip { clip_id, path, position_secs, duration_secs, offset_secs, track_index, scene_index, speed_ratio } => {
                     println!("[Hikaru Engine] Cargando clip de Matrix/Playlist: {} en Track {}", path, track_index);
 
                     if let Ok(mut reader) = hound::WavReader::open(&path) {
@@ -150,12 +150,16 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                                 channels,
                                 true,
                             );
+                            let source_bpm = std::path::Path::new(&path)
+                                .file_name()
+                                .and_then(|n| hikaru_gui::views::explorer::parse_bpm_from_filename(&n.to_string_lossy()));
+                            engine.set_clip_source_bpm(clip_id, source_bpm);
                         }
                     } else {
                         eprintln!("[Hikaru Engine Error] No se pudo abrir el WAV: {}", path);
                     }
                 }
-                GuiCommand::PreviewSample { path, volume, speed: _ } => {
+                GuiCommand::PreviewSample { path, volume, speed } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.preview_player.stop();
                         engine.preview_player.set_volume(volume);
@@ -177,10 +181,17 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                             .map(|e| e.sample_rate)
                             .unwrap_or(44100.0);
 
-                        let final_samples = if (decoded.file_sr - target_sr).abs() > 1.0 {
+                        let resampled = if (decoded.file_sr - target_sr).abs() > 1.0 {
                             resample_linear(&decoded.samples, decoded.channels, decoded.file_sr, target_sr)
                         } else {
                             decoded.samples
+                        };
+
+                        let rate = speed.clamp(0.25, 4.0) as f64;
+                        let final_samples = if (rate - 1.0).abs() >= 1e-4 {
+                            hikaru_audio_engine::time_stretch_wsola(&resampled, channels, rate)
+                        } else {
+                            resampled
                         };
 
                         if let Ok(mut engine) = engine_clone.lock() {
@@ -208,7 +219,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         44100.0
                     };
 
-                    let mut decoded_clips: Vec<(usize, usize, usize, Vec<f32>, f32, f32, f32, usize)> = Vec::with_capacity(clips.len());
+                    let mut decoded_clips: Vec<(usize, usize, usize, Vec<f32>, f32, f32, f32, usize, Option<f32>)> = Vec::with_capacity(clips.len());
                     for clip_data in clips.into_iter() {
                         if let Ok(mut reader) = hound::WavReader::open(&clip_data.path) {
                             let spec = reader.spec();
@@ -232,6 +243,9 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                                 raw_samples
                             };
 
+                            let source_bpm = std::path::Path::new(&clip_data.path)
+                                .file_name()
+                                .and_then(|n| hikaru_gui::views::explorer::parse_bpm_from_filename(&n.to_string_lossy()));
                             decoded_clips.push((
                                 clip_data.clip_id,
                                 clip_data.track_index,
@@ -241,6 +255,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                                 clip_data.duration_secs,
                                 clip_data.offset_secs,
                                 channels,
+                                source_bpm,
                             ));
                         } else {
                             eprintln!("[Hikaru Engine Error] No se pudo abrir: {}", clip_data.path);
@@ -249,8 +264,9 @@ fn run_gui(options: GuiOptions) -> ExitCode {
 
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.clips.retain(|c| c.is_matrix_clip);
-                        for (clip_id, track_index, scene_index, samples, start, duration, offset, channels) in decoded_clips {
+                        for (clip_id, track_index, scene_index, samples, start, duration, offset, channels, source_bpm) in decoded_clips {
                             engine.add_clip(clip_id, track_index, scene_index, samples, start, duration, offset, channels, false);
+                            engine.set_clip_source_bpm(clip_id, source_bpm);
                         }
                     }
                 }
@@ -320,8 +336,41 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     }
                 }
                 GuiCommand::SetBpm(bpm) => {
-                    if let Ok(mut engine) = engine_for_commands.lock() {
+                    let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.transport.set_bpm(bpm as f64);
+                        engine.pending_stretch_jobs()
+                    } else {
+                        Vec::new()
+                    };
+                    if !jobs.is_empty() {
+                        let engine_clone = engine_for_commands.clone();
+                        std::thread::spawn(move || {
+                            for (clip_id, samples, channels, rate) in jobs {
+                                let stretched = hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate);
+                                if let Ok(mut engine) = engine_clone.lock() {
+                                    engine.apply_stretched_samples(clip_id, stretched, rate);
+                                }
+                            }
+                        });
+                    }
+                }
+                GuiCommand::SetClipStretchBpm { clip_id, source_bpm } => {
+                    let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_clip_source_bpm_deferred(clip_id, source_bpm);
+                        engine.pending_stretch_jobs()
+                    } else {
+                        Vec::new()
+                    };
+                    if !jobs.is_empty() {
+                        let engine_clone = engine_for_commands.clone();
+                        std::thread::spawn(move || {
+                            for (cid, samples, channels, rate) in jobs {
+                                let stretched = hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate);
+                                if let Ok(mut engine) = engine_clone.lock() {
+                                    engine.apply_stretched_samples(cid, stretched, rate);
+                                }
+                            }
+                        });
                     }
                 }
                 GuiCommand::SetTrackVolume { track_idx, volume_db } => {
