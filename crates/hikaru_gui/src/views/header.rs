@@ -1300,9 +1300,19 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 if let Some(t) = state.current_tracks_mut().get_mut(track_idx) {
                                     let mut s = DspSlot::default();
                                     s.name = plugin.name.to_string();
+                                    let new_slot_idx = t.effects.len();
                                     t.effects.push(s);
-                                    state.selected_slot_index = t.effects.len() - 1;
+                                    state.selected_slot_index = new_slot_idx;
                                     state.show_dsp_rack = true;
+                                    if plugin.name == "Hikaru Ultracomb" {
+                                        if let Some(et_idx) = track_idx.checked_sub(1) {
+                                            state.audio_proxy.send(crate::audio_proxy::GuiCommand::LoadNativeEffect {
+                                                track_idx: et_idx,
+                                                slot_idx: new_slot_idx,
+                                                name: plugin.name.to_string(),
+                                            });
+                                        }
+                                    }
                                 }
                                 ui.close_menu();
                             }

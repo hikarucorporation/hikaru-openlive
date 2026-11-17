@@ -29,7 +29,7 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 6] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 7] = [
     PluginEntry {
         category: "Audio FX",
         name: "OpenEQ3",
@@ -39,6 +39,11 @@ pub const PLUGIN_CATALOG: [PluginEntry; 6] = [
         category: "Audio FX",
         name: "OpenSpectral Phaser",
         label: "OpenSpectral Phaser",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Hikaru Ultracomb",
+        label: "Hikaru Ultracomb Filter",
     },
     PluginEntry {
         category: "Polysynth",
@@ -619,6 +624,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
                             "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
+                            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH,
                             "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => MODULATION_CARD_WIDTH,
                             _ => CARD_WIDTH,
                         };
@@ -845,6 +851,14 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 }
                                 "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
                                     openspectral_phaser::render_module(
+                                        &mut body_ui,
+                                        app,
+                                        track_idx,
+                                        slot_idx,
+                                    );
+                                }
+                                "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
+                                    crate::views::hikaru_native_plugins::hikaru_ultracomb::render_module(
                                         &mut body_ui,
                                         app,
                                         track_idx,
@@ -1112,8 +1126,18 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
                                             let mut new_slot = DspSlot::default();
                                             new_slot.name = plugin.name.to_string();
+                                            let new_slot_idx = track.effects.len();
                                             track.effects.push(new_slot);
-                                            app.selected_slot_index = track.effects.len() - 1;
+                                            app.selected_slot_index = new_slot_idx;
+                                            if plugin.name == "Hikaru Ultracomb" {
+                                                if let Some(et_idx) = track_idx.checked_sub(1) {
+                                                    app.audio_proxy.send(crate::audio_proxy::GuiCommand::LoadNativeEffect {
+                                                        track_idx: et_idx,
+                                                        slot_idx: new_slot_idx,
+                                                        name: plugin.name.to_string(),
+                                                    });
+                                                }
+                                            }
                                         }
                                         ui.close_menu();
                                     }

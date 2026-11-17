@@ -1893,6 +1893,44 @@ impl<'a> AudioEngine<'a> {
         Ok(())
     }
 
+    pub fn load_native_effect(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        name: &str,
+    ) -> Result<(), String> {
+        if track_idx >= 16 {
+            return Err(format!("Índice de pista fuera de rango: {track_idx}"));
+        }
+        hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
+
+        let chain = &mut self.track_effects[track_idx];
+        if slot_idx < chain.len() {
+            chain.remove(slot_idx);
+        } else if chain.iter().any(|n| n.name == name) {
+            return Ok(());
+        }
+
+        let instance: Box<dyn PluginInstance> = match name {
+            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
+                Box::new(hikaru_dsp::effects::UltracombFilter::new(self.sample_rate))
+            }
+            _ => return Err(format!("Efecto nativo desconocido: {name}")),
+        };
+
+        let node = hikaru_dsp::DspPluginNode::new(
+            name.to_string(),
+            hikaru_dsp::PluginCategory::Vst3Fx,
+            instance,
+        );
+        chain.insert(slot_idx.min(chain.len()), node);
+        println!(
+            "[AudioEngine] Efecto nativo '{}' cargado en pista {} slot {}",
+            name, track_idx, slot_idx
+        );
+        Ok(())
+    }
+
     /// Quita un plugin externo de un slot.
     pub fn remove_external_plugin(&mut self, track_idx: usize, slot_idx: usize) {
         hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
@@ -1965,9 +2003,16 @@ impl<'a> AudioEngine<'a> {
         param_id: u32,
         value: f32,
     ) {
-        if track_idx < 16 && slot_idx < self.track_effects[track_idx].len() {
-            let node = &mut self.track_effects[track_idx][slot_idx];
-            node.set_param_normalized(param_id, value);
+        if track_idx < 16 {
+            if slot_idx < self.track_effects[track_idx].len() {
+                let node = &mut self.track_effects[track_idx][slot_idx];
+                node.set_param_normalized(param_id, value);
+            } else if let Some(node) = self.track_effects[track_idx]
+                .iter_mut()
+                .find(|n| n.name == "Hikaru Ultracomb")
+            {
+                node.set_param_normalized(param_id, value);
+            }
         }
     }
 

@@ -321,4 +321,10 @@ pub enum GuiCommand {
         slot_idx: usize,
         params: Vec<(u32, f32)>,
     },
+    /// Carga un efecto nativo (ej. Hikaru Ultracomb) en un slot del rack.
+    LoadNativeEffect {
+        track_idx: usize,
+        slot_idx: usize,
+        name: String,
+    },
 }

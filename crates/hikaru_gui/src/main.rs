@@ -554,6 +554,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.set_external_plugin_param(track_idx, slot_idx, param_id, value);
                     }
                 }
+                GuiCommand::LoadNativeEffect { track_idx, slot_idx, name } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        let _ = engine.load_native_effect(track_idx, slot_idx, &name);
+                    }
+                }
                 GuiCommand::SyncExternalPluginParams { track_idx, slot_idx, params } => {
                     // Lock de verdad y no `try_lock`: el hilo de audio tiene
                     // tomado el motor durante `process()` y un `try_lock`

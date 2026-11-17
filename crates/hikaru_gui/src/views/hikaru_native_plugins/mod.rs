@@ -64,6 +64,7 @@ pub mod hikaru_openmodulation;
 pub mod hikaru_openspectral_phaser;
 pub mod hikaru_openwavetable;
 pub mod hikaru_sampler;
+pub mod hikaru_ultracomb;
 
 // Reexports de superficie. Los que el resto de la app usa por nombre;
 // dejarlos acá evita repetir la cadena completa
@@ -75,3 +76,4 @@ pub use hikaru_openmodulation::lfo_mod::{LfoModState, ModulationTarget};
 pub use hikaru_openwavetable::open_wavetable::WavetableEditor;
 pub use hikaru_openwavetable::wavetable_io::Wavetable;
 pub use hikaru_sampler::{HikaruSampler, SAMPLER_CARD_WIDTH};
+pub use hikaru_ultracomb::ULTRACOMB_CARD_WIDTH;

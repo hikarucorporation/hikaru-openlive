@@ -14,7 +14,7 @@ pub mod phaselock {
 }
 
 pub use filter::StateVariableFilter;
-pub use ultracomb::CombFilter;
+pub use ultracomb::{CombFilter, UltracombFilter, UltracombParams};
 pub use phaser::Phaser;
 pub use flanger::Flanger;
 pub use lfo::{evaluate_waveform, LfoOscillator, LfoSyncMode, LfoWaveform, SyncRate};
