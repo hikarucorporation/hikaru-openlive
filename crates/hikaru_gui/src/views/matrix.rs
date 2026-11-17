@@ -2052,8 +2052,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // Compact Bitwig `+` Add Track button inside the `#0A0A0C` black void below last track
     let add_track_y0 = tracks_y0 + scroll_y + visible_tracks.len() as f32 * row_h;
     if add_track_y0 + 26.0 < tracks_y1 {
-        let add_tr_rect =
-            Rect::from_min_size(pos2(header_x1 - 22.0, add_track_y0 + 4.0), vec2(20.0, 20.0));
+        let add_tr_rect = Rect::from_min_size(
+            pos2((header_x0 + header_x1 - 20.0) * 0.5, add_track_y0 + 4.0),
+            vec2(20.0, 20.0),
+        );
         let add_hov =
             pointer_pos.is_some_and(|p| tracks_col_rect.contains(p) && add_tr_rect.contains(p));
         tracks_painter.rect_filled(
