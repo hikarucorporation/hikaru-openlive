@@ -1495,7 +1495,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     }
                     pan.last = (pos.x, pos.y);
                     state.playlist_pan = Some(pan);
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
                     crate::app::set_footer_cues(state, None, &[("MIDDLE-DRAG", "Zoom & pan")]);
                 }
             } else {
@@ -3386,6 +3386,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             crate::app::set_footer_cues(state, None, &[("DRAG", "Move clip"), ("ALT+DRAG", "Duplicate")]);
         } else if state.playlist_state.marquee.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             crate::app::set_footer_cues(state, None, &[("DRAG", "Rectangular selection")]);
         } else if let Some((_, edge)) = hovered_trim_edge {
             ui.ctx().set_cursor_icon(edge.cursor());
@@ -3397,7 +3398,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 &[("DRAG", "Move clip"), ("DOUBLE-CLICK", "Open editor")],
             );
         } else if let Some(pos) = pointer_pos {
-            if tl_grid_rect.contains(pos) && state.playlist_pan.is_none() && !is_dragging_sample {
+            if workspace_resp.hovered()
+                && tl_grid_rect.contains(pos)
+                && state.playlist_pan.is_none()
+                && !is_dragging_sample
+            {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 crate::app::set_footer_cues(
                     state,
                     None,
