@@ -1,0 +1,2323 @@
+{
+  "schema_version": 1,
+  "product": "Hikaru OpenLive",
+  "reference": {
+    "name": "Bitwig Studio",
+    "version": "5.1.7",
+    "revision": 143754,
+    "revision_id": "559a1bad96cc2565f28fbcefaeddec30e6fe4b53",
+    "install_path": "/opt/bitwig-studio"
+  },
+  "audit": {
+    "date": "2026-11-17",
+    "bitwig_catalog": {
+      "devices": 118,
+      "modulators": 43,
+      "grid_modules": 218,
+      "controller_scripts": 46,
+      "controller_vendor_families": 17,
+      "themes": 1
+    },
+    "hikaru_workspace_version": "2.24.0",
+    "method": "Static audit of the local Bitwig 5.1.7 install and of every crate in the Hikaru OpenLive workspace."
+  },
+  "bugs_source": {
+    "repository": "https://github.com/hikarucorporation/hikaru-openlive",
+    "queried_at": "2026-11-17",
+    "open_issues": 1,
+    "issues": [
+      {
+        "number": 1,
+        "title": "compiling error on Zorin os 18",
+        "area": "build-platform",
+        "url": "https://github.com/hikarucorporation/hikaru-openlive/issues/1"
+      }
+    ]
+  },
+  "summary": {
+    "areas": 12,
+    "features": 398,
+    "done": 148,
+    "in_progress": 23,
+    "planned": 227,
+    "bugs": 1,
+    "parity_percent": 37
+  },
+  "areas": [
+    {
+      "id": "clip-launcher",
+      "name": "Clip Launcher",
+      "bitwig_reference": "Clip Launcher, scenes, clip slots and launch quantization (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "cl-01",
+          "name": "Session matrix grid (tracks x scenes)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "cl-02",
+          "name": "Click-to-launch clip",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "cl-03",
+          "name": "Quantized clip launch",
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/quantizer.rs"
+        },
+        {
+          "id": "cl-04",
+          "name": "Scene trigger from scene header",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/scenes_headers.rs"
+        },
+        {
+          "id": "cl-05",
+          "name": "Stop clip / stop all",
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs"
+        },
+        {
+          "id": "cl-06",
+          "name": "Clip loop playback",
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs"
+        },
+        {
+          "id": "cl-07",
+          "name": "Clip state machine (Stopped/Queued/Playing/Stopping)",
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs"
+        },
+        {
+          "id": "cl-08",
+          "name": "Drag-and-drop clip between slots",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/tests/clip_launcher_drag_tests.rs"
+        },
+        {
+          "id": "cl-09",
+          "name": "Slot copy/cut/paste/duplicate/delete",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/clip_context_menu.rs"
+        },
+        {
+          "id": "cl-10",
+          "name": "Scene launch strip",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/scenes_headers.rs"
+        },
+        {
+          "id": "cl-11",
+          "name": "MIDI note preview inside clip slots",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "cl-12",
+          "name": "Group-track scene trigger",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "cl-13",
+          "name": "Launcher / Session view toggle",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "cl-14",
+          "name": "Clip color inherited from track",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "cl-15",
+          "name": "Legato clip launch",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs",
+          "note": "Launch mode enum and menu action exist; transport takeover semantics are incomplete."
+        },
+        {
+          "id": "cl-16",
+          "name": "Add / remove scenes",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs",
+          "note": "Adding scenes works; delete/reorder are not exposed."
+        },
+        {
+          "id": "cl-17",
+          "name": "Clip loop start/end editor",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/tests/clip_context_menu_tests.rs",
+          "note": "Loop bounds are modeled and persisted; the dedicated launcher editor is partial."
+        },
+        {
+          "id": "cl-18",
+          "name": "Global launch-quantization override per scene",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_sequencer/src/quantizer.rs",
+          "note": "Global quantization exists; per-scene overrides are not wired."
+        },
+        {
+          "id": "cl-19",
+          "name": "Clip recording into slots",
+          "status": "planned"
+        },
+        {
+          "id": "cl-20",
+          "name": "Follow actions",
+          "status": "planned"
+        },
+        {
+          "id": "cl-21",
+          "name": "Launch modes (Trigger / Gate / Toggle)",
+          "status": "planned"
+        },
+        {
+          "id": "cl-22",
+          "name": "Clip gain handle",
+          "status": "planned"
+        },
+        {
+          "id": "cl-23",
+          "name": "Clip automation envelopes",
+          "status": "planned"
+        },
+        {
+          "id": "cl-24",
+          "name": "Scene rename / reorder / color",
+          "status": "planned"
+        },
+        {
+          "id": "cl-25",
+          "name": "Capture scene performance to Arranger",
+          "status": "planned"
+        },
+        {
+          "id": "cl-26",
+          "name": "Take-over mode and per-clip launch settings",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "arranger",
+      "name": "Arranger",
+      "bitwig_reference": "Arranger timeline, clip editing, loop region and arrangement tools (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "ar-01",
+          "name": "Bar/beat ruler",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-02",
+          "name": "Audio clips on the timeline",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-03",
+          "name": "MIDI clips on the timeline",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-04",
+          "name": "Playhead rendering",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-05",
+          "name": "Horizontal zoom",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-06",
+          "name": "Pan and scroll navigation",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-07",
+          "name": "Grid snap selector",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-08",
+          "name": "Clip body drag",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-09",
+          "name": "Clip edge trim",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-10",
+          "name": "Marquee clip selection",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-11",
+          "name": "Copy / cut / paste / duplicate clips",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-12",
+          "name": "Loop region editing",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ar-13",
+          "name": "Clip context menu",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/clip_context_menu.rs"
+        },
+        {
+          "id": "ar-14",
+          "name": "Waveform preview in clips",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/waveform.rs"
+        },
+        {
+          "id": "ar-15",
+          "name": "Automation lane display/editing",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/app.rs",
+          "note": "A show_automation flag and automation persistence exist; there is no full editing lane yet."
+        },
+        {
+          "id": "ar-16",
+          "name": "Arrangement markers",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs",
+          "note": "Loop markers are functional; the general marker lane is missing."
+        },
+        {
+          "id": "ar-17",
+          "name": "Clip fades",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs",
+          "note": "Fade handles are not exposed in the arranger."
+        },
+        {
+          "id": "ar-18",
+          "name": "Tempo / time-signature lane",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs",
+          "note": "Global tempo and signature exist; arrangement automation is not implemented."
+        },
+        {
+          "id": "ar-19",
+          "name": "Comping / take lanes",
+          "status": "planned"
+        },
+        {
+          "id": "ar-20",
+          "name": "Ripple editing",
+          "status": "planned"
+        },
+        {
+          "id": "ar-21",
+          "name": "Clip gain envelope",
+          "status": "planned"
+        },
+        {
+          "id": "ar-22",
+          "name": "Arranger recording",
+          "status": "planned"
+        },
+        {
+          "id": "ar-23",
+          "name": "Scene-to-arranger capture",
+          "status": "planned"
+        },
+        {
+          "id": "ar-24",
+          "name": "Clip stretch handles on the timeline",
+          "status": "planned"
+        },
+        {
+          "id": "ar-25",
+          "name": "Song sections",
+          "status": "planned"
+        },
+        {
+          "id": "ar-26",
+          "name": "Multi-clip time selection",
+          "status": "planned"
+        },
+        {
+          "id": "ar-27",
+          "name": "Clip slicing",
+          "status": "planned"
+        },
+        {
+          "id": "ar-28",
+          "name": "Follow-playhead / auto-scroll",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "transport-sync",
+      "name": "Transport & Sync",
+      "bitwig_reference": "Transport, tempo, musical time and synchronization (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "ts-01",
+          "name": "Play / pause",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/header.rs"
+        },
+        {
+          "id": "ts-02",
+          "name": "Stop",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/header.rs"
+        },
+        {
+          "id": "ts-03",
+          "name": "Record toggle",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/header.rs"
+        },
+        {
+          "id": "ts-04",
+          "name": "BPM editing",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/header.rs"
+        },
+        {
+          "id": "ts-05",
+          "name": "Time signature display and persistence",
+          "status": "done",
+          "evidence": "crates/hikaru_transport/src/transport_state.rs"
+        },
+        {
+          "id": "ts-06",
+          "name": "960 PPQN musical clock",
+          "status": "done",
+          "evidence": "crates/hikaru_transport/src/lib.rs"
+        },
+        {
+          "id": "ts-07",
+          "name": "Sample-accurate transport position",
+          "status": "done",
+          "evidence": "crates/hikaru_transport/src/lib.rs"
+        },
+        {
+          "id": "ts-08",
+          "name": "Loop / cycle region",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ts-09",
+          "name": "Metronome toggle",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/header.rs"
+        },
+        {
+          "id": "ts-10",
+          "name": "Bars/beats and timecode readout",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/header.rs"
+        },
+        {
+          "id": "ts-11",
+          "name": "Master clock shared with the audio engine",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "ts-12",
+          "name": "Tap tempo",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_openlive_file/src/lib.rs",
+          "note": "The persisted flag exists; the tap interaction is not implemented."
+        },
+        {
+          "id": "ts-13",
+          "name": "Punch in/out",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/app.rs",
+          "note": "Flags are present, recording behaviour is not."
+        },
+        {
+          "id": "ts-14",
+          "name": "External MIDI clock sync",
+          "status": "planned"
+        },
+        {
+          "id": "ts-15",
+          "name": "Ableton Link",
+          "status": "planned"
+        },
+        {
+          "id": "ts-16",
+          "name": "CV clock sync",
+          "status": "planned"
+        },
+        {
+          "id": "ts-17",
+          "name": "Count-in",
+          "status": "planned"
+        },
+        {
+          "id": "ts-18",
+          "name": "Tempo automation",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "group-tracks-routing",
+      "name": "Group Tracks & Routing",
+      "bitwig_reference": "Recursive group tracks, track types, monitoring and signal routing (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "gr-01",
+          "name": "Group track type",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "gr-02",
+          "name": "Create empty group",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "gr-03",
+          "name": "Group selected tracks",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "gr-04",
+          "name": "Recursive nested groups",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "gr-05",
+          "name": "Enter / exit group",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "gr-06",
+          "name": "Expand / collapse group",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "gr-07",
+          "name": "Group color",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "gr-08",
+          "name": "Group scene trigger",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "gr-09",
+          "name": "Parent color rail and nesting indent",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs"
+        },
+        {
+          "id": "gr-10",
+          "name": "Ungroup",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/track_context_menu.rs"
+        },
+        {
+          "id": "gr-11",
+          "name": "Instrument / audio / hybrid track conversion",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/track_context_menu.rs"
+        },
+        {
+          "id": "gr-12",
+          "name": "Routing destination model",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "gr-13",
+          "name": "Track monitoring modes",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/track_context_menu.rs"
+        },
+        {
+          "id": "gr-14",
+          "name": "FX tracks",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "gr-15",
+          "name": "Group bus audio summing",
+          "status": "planned"
+        },
+        {
+          "id": "gr-16",
+          "name": "Send buses UI",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs",
+          "note": "The Track model carries sends; routing UI is partial."
+        },
+        {
+          "id": "gr-17",
+          "name": "Routing matrix UI",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs",
+          "note": "Destinations are modeled, the full matrix is not exposed."
+        },
+        {
+          "id": "gr-18",
+          "name": "Sidechain routing",
+          "status": "planned"
+        },
+        {
+          "id": "gr-19",
+          "name": "Group VCA",
+          "status": "planned"
+        },
+        {
+          "id": "gr-20",
+          "name": "Latency compensation for nested groups",
+          "status": "planned"
+        },
+        {
+          "id": "gr-21",
+          "name": "Multi-output routing",
+          "status": "planned"
+        },
+        {
+          "id": "gr-22",
+          "name": "Cue / monitor buses",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "audio-warping",
+      "name": "Time-stretching & Audio",
+      "bitwig_reference": "Audio playback, warping and time-stretching (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "au-01",
+          "name": "WSOLA time-stretching",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "au-02",
+          "name": "Pitch-preserving stretch",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "au-03",
+          "name": "Warp markers",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "au-04",
+          "name": "Tempo-synced audio clips",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "au-05",
+          "name": "Stereo sample playback",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "au-06",
+          "name": "Waveform peak rendering",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/waveform.rs"
+        },
+        {
+          "id": "au-07",
+          "name": "Transient / onset detection",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_detail_editor.rs"
+        },
+        {
+          "id": "au-08",
+          "name": "Stretch markers quantized to onsets",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_detail_editor.rs"
+        },
+        {
+          "id": "au-09",
+          "name": "Audio detail editor (Stretch + Onsets)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_detail_editor.rs"
+        },
+        {
+          "id": "au-10",
+          "name": "Audio clip looping",
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs"
+        },
+        {
+          "id": "au-11",
+          "name": "WAV decoding",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/wav_io.rs"
+        },
+        {
+          "id": "au-12",
+          "name": "BPM inference from sample filename",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "au-13",
+          "name": "Clip stretch length in beats",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_detail_editor.rs"
+        },
+        {
+          "id": "au-14",
+          "name": "Audio preview playback",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/preview_player.rs"
+        },
+        {
+          "id": "au-15",
+          "name": "Real-time streaming stretch",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs",
+          "note": "Stretch is precomputed into a buffer; the streaming path is partial."
+        },
+        {
+          "id": "au-16",
+          "name": "Automatic warp to project tempo",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs",
+          "note": "Warp markers exist; automatic beat-grid warping is partial."
+        },
+        {
+          "id": "au-17",
+          "name": "Formant preservation",
+          "status": "planned"
+        },
+        {
+          "id": "au-18",
+          "name": "Granular stretch engine",
+          "status": "planned"
+        },
+        {
+          "id": "au-19",
+          "name": "Spectral stretch / phase vocoder",
+          "status": "planned"
+        },
+        {
+          "id": "au-20",
+          "name": "Quality modes (Beats / Tones / Texture)",
+          "status": "planned"
+        },
+        {
+          "id": "au-21",
+          "name": "Reverse playback",
+          "status": "planned"
+        },
+        {
+          "id": "au-22",
+          "name": "Clip warp modes",
+          "status": "planned"
+        },
+        {
+          "id": "au-23",
+          "name": "Groove-aware multi-marker warping",
+          "status": "planned"
+        },
+        {
+          "id": "au-24",
+          "name": "Time-stretched audio recording",
+          "status": "planned"
+        },
+        {
+          "id": "au-25",
+          "name": "Offline render / bounce",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "builtin-devices-fx",
+      "name": "Built-in Devices & FX",
+      "bitwig_reference": "All 118 native .bwdevice plug-ins shipped with Bitwig Studio 5.1.7 (instruments, audio FX, note FX, Grid and utilities).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "dv-001",
+          "name": "Amp",
+          "status": "planned"
+        },
+        {
+          "id": "dv-002",
+          "name": "Arpeggiator",
+          "status": "planned"
+        },
+        {
+          "id": "dv-003",
+          "name": "Audio MOD",
+          "status": "planned"
+        },
+        {
+          "id": "dv-004",
+          "name": "Audio Receiver",
+          "status": "planned"
+        },
+        {
+          "id": "dv-005",
+          "name": "Bend",
+          "status": "planned"
+        },
+        {
+          "id": "dv-006",
+          "name": "Bit-8",
+          "status": "planned"
+        },
+        {
+          "id": "dv-007",
+          "name": "Blur",
+          "status": "planned"
+        },
+        {
+          "id": "dv-008",
+          "name": "Chain",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/dsp_rack.rs"
+        },
+        {
+          "id": "dv-009",
+          "name": "Channel Filter",
+          "status": "planned"
+        },
+        {
+          "id": "dv-010",
+          "name": "Channel Map",
+          "status": "planned"
+        },
+        {
+          "id": "dv-011",
+          "name": "Chorus",
+          "status": "planned"
+        },
+        {
+          "id": "dv-012",
+          "name": "Chorus+",
+          "status": "planned"
+        },
+        {
+          "id": "dv-013",
+          "name": "Comb",
+          "status": "planned"
+        },
+        {
+          "id": "dv-014",
+          "name": "Compressor",
+          "status": "planned"
+        },
+        {
+          "id": "dv-015",
+          "name": "Convolution",
+          "status": "planned"
+        },
+        {
+          "id": "dv-016",
+          "name": "DC Offset",
+          "status": "planned"
+        },
+        {
+          "id": "dv-017",
+          "name": "De-Esser",
+          "status": "planned"
+        },
+        {
+          "id": "dv-018",
+          "name": "Delay+",
+          "status": "planned"
+        },
+        {
+          "id": "dv-019",
+          "name": "Delay-1",
+          "status": "planned"
+        },
+        {
+          "id": "dv-020",
+          "name": "Delay-2",
+          "status": "planned"
+        },
+        {
+          "id": "dv-021",
+          "name": "Delay-4",
+          "status": "planned"
+        },
+        {
+          "id": "dv-022",
+          "name": "Distortion",
+          "status": "planned"
+        },
+        {
+          "id": "dv-023",
+          "name": "Dribble",
+          "status": "planned"
+        },
+        {
+          "id": "dv-024",
+          "name": "Drum Machine",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/mod.rs"
+        },
+        {
+          "id": "dv-025",
+          "name": "Dual Pan",
+          "status": "planned"
+        },
+        {
+          "id": "dv-026",
+          "name": "Dynamics",
+          "status": "planned"
+        },
+        {
+          "id": "dv-027",
+          "name": "E-Clap",
+          "status": "planned"
+        },
+        {
+          "id": "dv-028",
+          "name": "E-Cowbell",
+          "status": "planned"
+        },
+        {
+          "id": "dv-029",
+          "name": "E-Hat",
+          "status": "planned"
+        },
+        {
+          "id": "dv-030",
+          "name": "E-Kick",
+          "status": "planned"
+        },
+        {
+          "id": "dv-031",
+          "name": "E-Snare",
+          "status": "planned"
+        },
+        {
+          "id": "dv-032",
+          "name": "E-Tom",
+          "status": "planned"
+        },
+        {
+          "id": "dv-033",
+          "name": "EQ+",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openeq3/mod.rs"
+        },
+        {
+          "id": "dv-034",
+          "name": "EQ-2",
+          "status": "planned"
+        },
+        {
+          "id": "dv-035",
+          "name": "EQ-5",
+          "status": "planned"
+        },
+        {
+          "id": "dv-036",
+          "name": "EQ-DJ",
+          "status": "planned"
+        },
+        {
+          "id": "dv-037",
+          "name": "Echo",
+          "status": "planned"
+        },
+        {
+          "id": "dv-038",
+          "name": "FM-4",
+          "status": "planned"
+        },
+        {
+          "id": "dv-039",
+          "name": "FX Grid",
+          "status": "planned"
+        },
+        {
+          "id": "dv-040",
+          "name": "FX Layer",
+          "status": "planned"
+        },
+        {
+          "id": "dv-041",
+          "name": "FX Selector",
+          "status": "planned"
+        },
+        {
+          "id": "dv-042",
+          "name": "Filter",
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/filter.rs"
+        },
+        {
+          "id": "dv-043",
+          "name": "Filter+",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_dsp/src/effects/filter.rs",
+          "note": "Hikaru exposes the base device; the extended Bitwig variant is partial."
+        },
+        {
+          "id": "dv-044",
+          "name": "Flanger",
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/flanger.rs"
+        },
+        {
+          "id": "dv-045",
+          "name": "Flanger+",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_dsp/src/effects/flanger.rs",
+          "note": "Hikaru exposes the base device; the extended Bitwig variant is partial."
+        },
+        {
+          "id": "dv-046",
+          "name": "Freq Shifter",
+          "status": "planned"
+        },
+        {
+          "id": "dv-047",
+          "name": "Freq Split",
+          "status": "planned"
+        },
+        {
+          "id": "dv-048",
+          "name": "Gate",
+          "status": "planned"
+        },
+        {
+          "id": "dv-049",
+          "name": "HW CV Instrument",
+          "status": "planned"
+        },
+        {
+          "id": "dv-050",
+          "name": "HW CV Out",
+          "status": "planned"
+        },
+        {
+          "id": "dv-051",
+          "name": "HW Clock Out",
+          "status": "planned"
+        },
+        {
+          "id": "dv-052",
+          "name": "HW FX",
+          "status": "planned"
+        },
+        {
+          "id": "dv-053",
+          "name": "HW Instrument",
+          "status": "planned"
+        },
+        {
+          "id": "dv-054",
+          "name": "Harmonic Split",
+          "status": "planned"
+        },
+        {
+          "id": "dv-055",
+          "name": "Harmonize",
+          "status": "planned"
+        },
+        {
+          "id": "dv-056",
+          "name": "Humanize",
+          "status": "planned"
+        },
+        {
+          "id": "dv-057",
+          "name": "Instrument Layer",
+          "status": "planned"
+        },
+        {
+          "id": "dv-058",
+          "name": "Instrument Selector",
+          "status": "planned"
+        },
+        {
+          "id": "dv-059",
+          "name": "Key Filter",
+          "status": "planned"
+        },
+        {
+          "id": "dv-060",
+          "name": "LFO MOD",
+          "status": "planned"
+        },
+        {
+          "id": "dv-061",
+          "name": "Ladder",
+          "status": "planned"
+        },
+        {
+          "id": "dv-062",
+          "name": "Latch",
+          "status": "planned"
+        },
+        {
+          "id": "dv-063",
+          "name": "Loud Split",
+          "status": "planned"
+        },
+        {
+          "id": "dv-064",
+          "name": "MIDI CC",
+          "status": "planned"
+        },
+        {
+          "id": "dv-065",
+          "name": "MIDI Program Change",
+          "status": "planned"
+        },
+        {
+          "id": "dv-066",
+          "name": "MIDI Song Select",
+          "status": "planned"
+        },
+        {
+          "id": "dv-067",
+          "name": "Micro-pitch",
+          "status": "planned"
+        },
+        {
+          "id": "dv-068",
+          "name": "Mid-Side Split",
+          "status": "planned"
+        },
+        {
+          "id": "dv-069",
+          "name": "Multi-note",
+          "status": "planned"
+        },
+        {
+          "id": "dv-070",
+          "name": "Multiband FX-2",
+          "status": "planned"
+        },
+        {
+          "id": "dv-071",
+          "name": "Multiband FX-3",
+          "status": "planned"
+        },
+        {
+          "id": "dv-072",
+          "name": "Note Delay",
+          "status": "planned"
+        },
+        {
+          "id": "dv-073",
+          "name": "Note FX Layer",
+          "status": "planned"
+        },
+        {
+          "id": "dv-074",
+          "name": "Note FX Selector",
+          "status": "planned"
+        },
+        {
+          "id": "dv-075",
+          "name": "Note Filter",
+          "status": "planned"
+        },
+        {
+          "id": "dv-076",
+          "name": "Note Grid",
+          "status": "planned"
+        },
+        {
+          "id": "dv-077",
+          "name": "Note Length",
+          "status": "planned"
+        },
+        {
+          "id": "dv-078",
+          "name": "Note MOD",
+          "status": "planned"
+        },
+        {
+          "id": "dv-079",
+          "name": "Note Receiver",
+          "status": "planned"
+        },
+        {
+          "id": "dv-080",
+          "name": "Note Repeats",
+          "status": "planned"
+        },
+        {
+          "id": "dv-081",
+          "name": "Note Transpose",
+          "status": "planned"
+        },
+        {
+          "id": "dv-082",
+          "name": "Organ",
+          "status": "planned"
+        },
+        {
+          "id": "dv-083",
+          "name": "Oscilloscope",
+          "status": "planned"
+        },
+        {
+          "id": "dv-084",
+          "name": "Peak Limiter",
+          "status": "planned"
+        },
+        {
+          "id": "dv-085",
+          "name": "Phase-4",
+          "status": "planned"
+        },
+        {
+          "id": "dv-086",
+          "name": "Phaser",
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/phaser.rs"
+        },
+        {
+          "id": "dv-087",
+          "name": "Phaser+",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_dsp/src/effects/phaser.rs",
+          "note": "Hikaru exposes the base device; the extended Bitwig variant is partial."
+        },
+        {
+          "id": "dv-088",
+          "name": "Pitch Shifter",
+          "status": "planned"
+        },
+        {
+          "id": "dv-089",
+          "name": "Poly Grid",
+          "status": "planned"
+        },
+        {
+          "id": "dv-090",
+          "name": "Polymer",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openwavetable/open_wavetable.rs"
+        },
+        {
+          "id": "dv-091",
+          "name": "Polysynth",
+          "status": "planned"
+        },
+        {
+          "id": "dv-092",
+          "name": "Quantize",
+          "status": "planned"
+        },
+        {
+          "id": "dv-093",
+          "name": "Randomize",
+          "status": "planned"
+        },
+        {
+          "id": "dv-094",
+          "name": "Replacer",
+          "status": "planned"
+        },
+        {
+          "id": "dv-095",
+          "name": "Resonator Bank",
+          "status": "planned"
+        },
+        {
+          "id": "dv-096",
+          "name": "Reverb",
+          "status": "planned"
+        },
+        {
+          "id": "dv-097",
+          "name": "Ricochet",
+          "status": "planned"
+        },
+        {
+          "id": "dv-098",
+          "name": "Ring-Mod",
+          "status": "planned"
+        },
+        {
+          "id": "dv-099",
+          "name": "Rotary",
+          "status": "planned"
+        },
+        {
+          "id": "dv-100",
+          "name": "Sampler",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_sampler/sampler_editor.rs"
+        },
+        {
+          "id": "dv-101",
+          "name": "Saturator",
+          "status": "planned"
+        },
+        {
+          "id": "dv-102",
+          "name": "Spectrum",
+          "status": "planned"
+        },
+        {
+          "id": "dv-103",
+          "name": "Step MOD",
+          "status": "planned"
+        },
+        {
+          "id": "dv-104",
+          "name": "Stereo Split",
+          "status": "planned"
+        },
+        {
+          "id": "dv-105",
+          "name": "Strum",
+          "status": "planned"
+        },
+        {
+          "id": "dv-106",
+          "name": "Sweep",
+          "status": "planned"
+        },
+        {
+          "id": "dv-107",
+          "name": "Test Tone",
+          "status": "planned"
+        },
+        {
+          "id": "dv-108",
+          "name": "Time Shift",
+          "status": "planned"
+        },
+        {
+          "id": "dv-109",
+          "name": "Tool",
+          "status": "planned"
+        },
+        {
+          "id": "dv-110",
+          "name": "Transient Control",
+          "status": "planned"
+        },
+        {
+          "id": "dv-111",
+          "name": "Transient Split",
+          "status": "planned"
+        },
+        {
+          "id": "dv-112",
+          "name": "Transpose Map",
+          "status": "planned"
+        },
+        {
+          "id": "dv-113",
+          "name": "Treemonster",
+          "status": "planned"
+        },
+        {
+          "id": "dv-114",
+          "name": "Tremolo",
+          "status": "planned"
+        },
+        {
+          "id": "dv-115",
+          "name": "Velocity Curve",
+          "status": "planned"
+        },
+        {
+          "id": "dv-116",
+          "name": "Vocoder",
+          "status": "planned"
+        },
+        {
+          "id": "dv-117",
+          "name": "XY FX",
+          "status": "planned"
+        },
+        {
+          "id": "dv-118",
+          "name": "XY Instrument",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "modulators",
+      "name": "Modulators",
+      "bitwig_reference": "All 43 native .bwmodulator modules shipped with Bitwig Studio 5.1.7.",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "md-001",
+          "name": "4-Stage",
+          "status": "planned"
+        },
+        {
+          "id": "md-002",
+          "name": "ADSR",
+          "status": "planned"
+        },
+        {
+          "id": "md-003",
+          "name": "AHD on Release",
+          "status": "planned"
+        },
+        {
+          "id": "md-004",
+          "name": "AHDSR",
+          "status": "planned"
+        },
+        {
+          "id": "md-005",
+          "name": "Audio Rate",
+          "status": "planned"
+        },
+        {
+          "id": "md-006",
+          "name": "Audio Sidechain",
+          "status": "planned"
+        },
+        {
+          "id": "md-007",
+          "name": "Beat LFO",
+          "status": "planned"
+        },
+        {
+          "id": "md-008",
+          "name": "Button",
+          "status": "planned"
+        },
+        {
+          "id": "md-009",
+          "name": "Buttons",
+          "status": "planned"
+        },
+        {
+          "id": "md-010",
+          "name": "Channel-16",
+          "status": "planned"
+        },
+        {
+          "id": "md-011",
+          "name": "Classic LFO",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs",
+          "note": "OpenModulation covers a basic LFO; Bitwig's shape/polarity set is partial."
+        },
+        {
+          "id": "md-012",
+          "name": "Curves",
+          "status": "planned"
+        },
+        {
+          "id": "md-013",
+          "name": "Envelope Follower",
+          "status": "planned"
+        },
+        {
+          "id": "md-014",
+          "name": "Expressions",
+          "status": "planned"
+        },
+        {
+          "id": "md-015",
+          "name": "Globals",
+          "status": "planned"
+        },
+        {
+          "id": "md-016",
+          "name": "HW CV In",
+          "status": "planned"
+        },
+        {
+          "id": "md-017",
+          "name": "Keytrack+",
+          "status": "planned"
+        },
+        {
+          "id": "md-018",
+          "name": "LFO",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs"
+        },
+        {
+          "id": "md-019",
+          "name": "MIDI",
+          "status": "planned"
+        },
+        {
+          "id": "md-020",
+          "name": "Macro",
+          "status": "planned"
+        },
+        {
+          "id": "md-021",
+          "name": "Macro-4",
+          "status": "planned"
+        },
+        {
+          "id": "md-022",
+          "name": "Math",
+          "status": "planned"
+        },
+        {
+          "id": "md-023",
+          "name": "Mix",
+          "status": "planned"
+        },
+        {
+          "id": "md-024",
+          "name": "Note Counter",
+          "status": "planned"
+        },
+        {
+          "id": "md-025",
+          "name": "Note Sidechain",
+          "status": "planned"
+        },
+        {
+          "id": "md-026",
+          "name": "ParSeq-8",
+          "status": "planned"
+        },
+        {
+          "id": "md-027",
+          "name": "Pitch-12",
+          "status": "planned"
+        },
+        {
+          "id": "md-028",
+          "name": "Polynom",
+          "status": "planned"
+        },
+        {
+          "id": "md-029",
+          "name": "Quantize",
+          "status": "planned"
+        },
+        {
+          "id": "md-030",
+          "name": "Ramp",
+          "status": "planned"
+        },
+        {
+          "id": "md-031",
+          "name": "Random",
+          "status": "planned"
+        },
+        {
+          "id": "md-032",
+          "name": "Relative Keytrack",
+          "status": "planned"
+        },
+        {
+          "id": "md-033",
+          "name": "Sample and Hold",
+          "status": "planned"
+        },
+        {
+          "id": "md-034",
+          "name": "Segments",
+          "status": "planned"
+        },
+        {
+          "id": "md-035",
+          "name": "Select-4",
+          "status": "planned"
+        },
+        {
+          "id": "md-036",
+          "name": "Stack Spread",
+          "status": "planned"
+        },
+        {
+          "id": "md-037",
+          "name": "Steps",
+          "status": "planned"
+        },
+        {
+          "id": "md-038",
+          "name": "Vector-4",
+          "status": "planned"
+        },
+        {
+          "id": "md-039",
+          "name": "Vector-8",
+          "status": "planned"
+        },
+        {
+          "id": "md-040",
+          "name": "Vibrato",
+          "status": "planned"
+        },
+        {
+          "id": "md-041",
+          "name": "Voice Control",
+          "status": "planned"
+        },
+        {
+          "id": "md-042",
+          "name": "Wavetable LFO",
+          "status": "planned"
+        },
+        {
+          "id": "md-043",
+          "name": "XY",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "mixer-io",
+      "name": "Mixer & I/O",
+      "bitwig_reference": "Mixer channel strips, master section, routing and audio device I/O (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "mx-01",
+          "name": "Mixer channel strips",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-02",
+          "name": "Volume faders",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-03",
+          "name": "Pan",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-04",
+          "name": "Mute",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/audio_proxy.rs"
+        },
+        {
+          "id": "mx-05",
+          "name": "Solo",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "mx-06",
+          "name": "Record arm",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-07",
+          "name": "Level meters",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/meters.rs"
+        },
+        {
+          "id": "mx-08",
+          "name": "Master strip",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-09",
+          "name": "Per-track DSP chains",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/dsp_rack.rs"
+        },
+        {
+          "id": "mx-10",
+          "name": "Audio device selection",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_settings.rs"
+        },
+        {
+          "id": "mx-11",
+          "name": "Sample rate selection",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_settings.rs"
+        },
+        {
+          "id": "mx-12",
+          "name": "Buffer size selection",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_settings.rs"
+        },
+        {
+          "id": "mx-13",
+          "name": "ALSA backend",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_drivers/src/lib.rs"
+        },
+        {
+          "id": "mx-14",
+          "name": "Low-latency CPAL engine",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "mx-15",
+          "name": "Master gain",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "mx-16",
+          "name": "Track route destination",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-17",
+          "name": "Mixer panel toggle",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "mx-18",
+          "name": "16-track mix bus",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "mx-19",
+          "name": "Send buses UI",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "mx-20",
+          "name": "Group bus summing",
+          "status": "planned"
+        },
+        {
+          "id": "mx-21",
+          "name": "Plugin latency compensation",
+          "status": "planned"
+        },
+        {
+          "id": "mx-22",
+          "name": "Sidechain routing",
+          "status": "planned"
+        },
+        {
+          "id": "mx-23",
+          "name": "Surround output",
+          "status": "planned"
+        },
+        {
+          "id": "mx-24",
+          "name": "Cue mix",
+          "status": "planned"
+        },
+        {
+          "id": "mx-25",
+          "name": "Talkback",
+          "status": "planned"
+        },
+        {
+          "id": "mx-26",
+          "name": "Monitor calibration",
+          "status": "planned"
+        },
+        {
+          "id": "mx-27",
+          "name": "Channel EQ / dynamics strip",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "browser-files",
+      "name": "Browser & Files",
+      "bitwig_reference": "Pop-up browser, content filters, file explorer, presets and project files (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bf-01",
+          "name": "Bitwig-style pop-up browser",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-02",
+          "name": "Browser rail tabs (Everything/Instruments/Audio FX/Note & Mod/Plugins)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-03",
+          "name": "Search query",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-04",
+          "name": "Metadata filters (category/creator/device/tags)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-05",
+          "name": "Favorites",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-06",
+          "name": "Quick instrument filters",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-07",
+          "name": "Native device listing",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-08",
+          "name": "VST3 / CLAP plugin listing",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/registry.rs"
+        },
+        {
+          "id": "bf-09",
+          "name": "File explorer tree",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "bf-10",
+          "name": "Navigation history (back/forward/up/home)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "bf-11",
+          "name": "Drag audio file to timeline",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "bf-12",
+          "name": "Waveform preview",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "bf-13",
+          "name": "File kind detection (audio/MIDI/preset)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "bf-14",
+          "name": "BPM inference from sample filename",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/explorer.rs"
+        },
+        {
+          "id": "bf-15",
+          "name": "Recent projects",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/control_panel.rs"
+        },
+        {
+          "id": "bf-16",
+          "name": "Content-pack / library indexing",
+          "status": "planned"
+        },
+        {
+          "id": "bf-17",
+          "name": "Preset browser integration",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-18",
+          "name": "Collections persistence",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
+        },
+        {
+          "id": "bf-19",
+          "name": "Smart collections",
+          "status": "planned"
+        },
+        {
+          "id": "bf-20",
+          "name": "Tag editing",
+          "status": "planned"
+        },
+        {
+          "id": "bf-21",
+          "name": "File preview audition",
+          "status": "planned"
+        },
+        {
+          "id": "bf-22",
+          "name": "Plugin preset management",
+          "status": "planned"
+        },
+        {
+          "id": "bf-23",
+          "name": "Device preset thumbnails",
+          "status": "planned"
+        },
+        {
+          "id": "bf-24",
+          "name": "Drag device presets onto tracks",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "midi-controllers",
+      "name": "MIDI & Controllers",
+      "bitwig_reference": "MIDI editing, hardware controllers, MIDI learn, MPE and sync (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "mi-01",
+          "name": "MIDI note model",
+          "status": "done",
+          "evidence": "crates/hikaru_core/src/midi_note.rs"
+        },
+        {
+          "id": "mi-02",
+          "name": "MIDI clip scheduling in the audio engine",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_engine/src/lib.rs"
+        },
+        {
+          "id": "mi-03",
+          "name": "MIDI file parsing",
+          "status": "done",
+          "evidence": "crates/hikaru_midi/src/file.rs"
+        },
+        {
+          "id": "mi-04",
+          "name": "Piano keyboard audition",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/piano_roll.rs"
+        },
+        {
+          "id": "mi-05",
+          "name": "Launchpad grid input",
+          "status": "done",
+          "evidence": "crates/hikaru_midi/src/controllers/launchpad.rs"
+        },
+        {
+          "id": "mi-06",
+          "name": "Generic hardware-controller trait",
+          "status": "done",
+          "evidence": "crates/hikaru_midi/src/controllers/controller.rs"
+        },
+        {
+          "id": "mi-07",
+          "name": "Drum-pad mode in the piano roll",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/piano_roll.rs"
+        },
+        {
+          "id": "mi-08",
+          "name": "MIDI clip looping",
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs"
+        },
+        {
+          "id": "mi-09",
+          "name": "MIDI CC event model",
+          "status": "done",
+          "evidence": "crates/hikaru_midi/src/events.rs"
+        },
+        {
+          "id": "mi-10",
+          "name": "MIDI learn",
+          "status": "planned"
+        },
+        {
+          "id": "mi-11",
+          "name": "Controller mapping presets",
+          "status": "planned"
+        },
+        {
+          "id": "mi-12",
+          "name": "MPE / per-note expression",
+          "status": "planned"
+        },
+        {
+          "id": "mi-13",
+          "name": "MIDI clock input/output",
+          "status": "planned"
+        },
+        {
+          "id": "mi-14",
+          "name": "Ableton Link",
+          "status": "planned"
+        },
+        {
+          "id": "mi-15",
+          "name": "CV / gate I/O",
+          "status": "planned"
+        },
+        {
+          "id": "mi-16",
+          "name": "Mackie / HUI support",
+          "status": "planned"
+        },
+        {
+          "id": "mi-17",
+          "name": "Controller script API",
+          "status": "planned"
+        },
+        {
+          "id": "mi-18",
+          "name": "MIDI monitor",
+          "status": "planned"
+        },
+        {
+          "id": "mi-19",
+          "name": "Note chase",
+          "status": "planned"
+        },
+        {
+          "id": "mi-20",
+          "name": "MIDI recording",
+          "status": "planned"
+        },
+        {
+          "id": "mi-21",
+          "name": "MPE expression editing lanes",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "ui-workflow",
+      "name": "UI & Workflow",
+      "bitwig_reference": "Look, layout, panels, menus and workflow of Bitwig Studio 5.1.7.",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "ui-01",
+          "name": "Bitwig-style dark theme",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/theme.rs"
+        },
+        {
+          "id": "ui-02",
+          "name": "Header / arranger / detail / footer layout",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "ui-03",
+          "name": "Session / Arranger toggle",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "ui-04",
+          "name": "Clip launcher toggle",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "ui-05",
+          "name": "Mixer view",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "ui-06",
+          "name": "Device panel / DSP rack",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/dsp_rack.rs"
+        },
+        {
+          "id": "ui-07",
+          "name": "Piano roll",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/piano_roll.rs"
+        },
+        {
+          "id": "ui-08",
+          "name": "Velocity lane",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/piano_roll.rs"
+        },
+        {
+          "id": "ui-09",
+          "name": "Context menus",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/track_context_menu.rs"
+        },
+        {
+          "id": "ui-10",
+          "name": "Global keyboard shortcuts",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "ui-11",
+          "name": "Copy / cut / paste / duplicate shortcuts",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/app.rs"
+        },
+        {
+          "id": "ui-12",
+          "name": "Track colors",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+        },
+        {
+          "id": "ui-13",
+          "name": "Configurable track width",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/arranger_view.rs"
+        },
+        {
+          "id": "ui-14",
+          "name": "Zoom and pan",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs"
+        },
+        {
+          "id": "ui-15",
+          "name": "About dialog",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/about.rs"
+        },
+        {
+          "id": "ui-16",
+          "name": "Settings / audio settings",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_settings.rs"
+        },
+        {
+          "id": "ui-17",
+          "name": "Project save / open dialogs",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/menu_bar.rs"
+        },
+        {
+          "id": "ui-18",
+          "name": "Recent projects",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/control_panel.rs"
+        },
+        {
+          "id": "ui-19",
+          "name": "Branding and banner assets",
+          "status": "done",
+          "evidence": "assets/hikaru-openlive-banner-1.png"
+        },
+        {
+          "id": "ui-20",
+          "name": "Tooltips",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/icons.rs"
+        },
+        {
+          "id": "ui-21",
+          "name": "Undo / redo",
+          "status": "planned"
+        },
+        {
+          "id": "ui-22",
+          "name": "Customizable shortcuts",
+          "status": "planned"
+        },
+        {
+          "id": "ui-23",
+          "name": "Localization",
+          "status": "planned"
+        },
+        {
+          "id": "ui-24",
+          "name": "Theme editor",
+          "status": "planned"
+        },
+        {
+          "id": "ui-25",
+          "name": "Workspaces / multi-window",
+          "status": "planned"
+        },
+        {
+          "id": "ui-26",
+          "name": "Accessibility",
+          "status": "planned"
+        },
+        {
+          "id": "ui-27",
+          "name": "Touch and gesture support",
+          "status": "planned"
+        },
+        {
+          "id": "ui-28",
+          "name": "High-DPI scaling",
+          "status": "planned"
+        },
+        {
+          "id": "ui-29",
+          "name": "Notification center",
+          "status": "planned"
+        },
+        {
+          "id": "ui-30",
+          "name": "Onboarding / first-run tour",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "build-platform",
+      "name": "Build & Platform",
+      "bitwig_reference": "Platform support, packaging and release engineering expected from a Bitwig Studio 5.1.7 replacement.",
+      "bugs": 1,
+      "features": [
+        {
+          "id": "bp-01",
+          "name": "Linux x86_64 build",
+          "status": "done",
+          "evidence": "README.md"
+        },
+        {
+          "id": "bp-02",
+          "name": "ALSA audio backend",
+          "status": "done",
+          "evidence": "crates/hikaru_audio_drivers/src/lib.rs"
+        },
+        {
+          "id": "bp-03",
+          "name": "CLI",
+          "status": "done",
+          "evidence": "crates/hikaru_cli/src/cli.rs"
+        },
+        {
+          "id": "bp-04",
+          "name": "Man pages",
+          "status": "done",
+          "evidence": "docs/man/hikaru_openlive.1"
+        },
+        {
+          "id": "bp-05",
+          "name": "MCP server / port",
+          "status": "done",
+          "evidence": "crates/hikaru_mcp/src/server.rs"
+        },
+        {
+          "id": "bp-06",
+          "name": ".oplf and .opsf project formats",
+          "status": "done",
+          "evidence": "crates/hikaru_project_file/src/lib.rs"
+        },
+        {
+          "id": "bp-07",
+          "name": "VST3 host",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/vst3"
+        },
+        {
+          "id": "bp-08",
+          "name": "CLAP host",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/clap"
+        },
+        {
+          "id": "bp-09",
+          "name": "Windows cross-compile documentation",
+          "status": "done",
+          "evidence": "README.md"
+        },
+        {
+          "id": "bp-10",
+          "name": "README, docs and contributor guide",
+          "status": "done",
+          "evidence": "README.md"
+        },
+        {
+          "id": "bp-11",
+          "name": "FreeBSD support",
+          "status": "in_progress",
+          "evidence": "README.md"
+        },
+        {
+          "id": "bp-12",
+          "name": "Packaging (AppImage / Flatpak / deb)",
+          "status": "in_progress",
+          "evidence": "Makefile"
+        },
+        {
+          "id": "bp-13",
+          "name": "macOS support",
+          "status": "planned"
+        },
+        {
+          "id": "bp-14",
+          "name": "CI build matrix",
+          "status": "planned"
+        },
+        {
+          "id": "bp-15",
+          "name": "Code signing and release artifacts",
+          "status": "planned"
+        },
+        {
+          "id": "bp-16",
+          "name": "Sandboxed plugin hosting",
+          "status": "planned"
+        }
+      ]
+    }
+  ]
+}
