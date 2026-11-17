@@ -13,7 +13,6 @@ use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATIO
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
 use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::hikaru_native_plugins::hikaru_sampler::{sampler_editor, SAMPLER_CARD_WIDTH};
-use crate::views::mixer::DspSlot;
 
 pub const RACK_HEIGHT: f32 = 241.0;
 pub const CARD_WIDTH: f32 = 340.0;
@@ -1109,50 +1108,34 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                     // Botón circular `+` estilo ranura de inserción Bitwig
                     ui.vertical(|ui| {
                         ui.add_space(56.0);
-                        ui.menu_button(
+                        let plus_btn = ui.button(
                             RichText::new("+")
                                 .font(fonts::semibold(15.0))
                                 .color(theme::TEXT_PRIMARY),
-                            |ui| {
-                                ui.label(
-                                    RichText::new(format!("Insert Device on {track_name}"))
-                                        .font(fonts::semibold(11.0))
-                                        .color(theme::ACCENT_ORANGE),
-                                );
-                                ui.separator();
-                                for plugin in &PLUGIN_CATALOG {
-                                    let row_txt = format!("{}  [{}]", plugin.label, plugin.category);
-                                    if ui.button(row_txt).clicked() {
-                                        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
-                                            let mut new_slot = DspSlot::default();
-                                            new_slot.name = plugin.name.to_string();
-                                            let new_slot_idx = track.effects.len();
-                                            track.effects.push(new_slot);
-                                            app.selected_slot_index = new_slot_idx;
-                                            if plugin.name == "Hikaru Ultracomb" {
-                                                if let Some(et_idx) = track_idx.checked_sub(1) {
-                                                    app.audio_proxy.send(crate::audio_proxy::GuiCommand::LoadNativeEffect {
-                                                        track_idx: et_idx,
-                                                        slot_idx: new_slot_idx,
-                                                        name: plugin.name.to_string(),
-                                                    });
-                                                }
-                                            }
-                                        }
-                                        ui.close_menu();
-                                    }
-                                }
-                                ui.separator();
-                                if ui.button("📂 Cargar Preset / Cadena (*.hdp)...").clicked() {
-                                    load_device_chain_dialog(app, track_idx);
-                                    ui.close_menu();
-                                }
-                                if ui.button("💾 Guardar Cadena de Pista (*.hdp)...").clicked() {
-                                    save_device_chain_dialog(app, track_idx);
-                                    ui.close_menu();
-                                }
-                            },
                         );
+                        if plus_btn
+                            .clone()
+                            .on_hover_text(format!("Insert Device on {track_name} (Right-click for .hdp Presets)"))
+                            .clicked()
+                        {
+                            app.popup_browser.open_insert_device(track_idx);
+                        }
+                        plus_btn.context_menu(|ui| {
+                            ui.label(
+                                RichText::new(format!("Presets on {track_name}"))
+                                    .font(fonts::semibold(11.0))
+                                    .color(theme::ACCENT_ORANGE),
+                            );
+                            ui.separator();
+                            if ui.button("📂 Cargar Preset / Cadena (*.hdp)...").clicked() {
+                                load_device_chain_dialog(app, track_idx);
+                                ui.close_menu();
+                            }
+                            if ui.button("💾 Guardar Cadena de Pista (*.hdp)...").clicked() {
+                                save_device_chain_dialog(app, track_idx);
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
             });

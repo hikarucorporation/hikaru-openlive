@@ -2015,6 +2015,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 Some(ctxm::MenuAction::Delete) => {
                     delete_track_action = Some(mixer_idx);
                 }
+                Some(ctxm::MenuAction::AddInstrumentTrack) => {
+                    add_track_action = true;
+                }
                 Some(ctxm::MenuAction::AddFxTrack) => {
                     add_fx_action = true;
                 }
@@ -3914,12 +3917,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if add_track_action {
-        state.matrix_state.add_track();
-        let new_idx = state.matrix_state.tracks.len();
-        let mut tr = Track::new(new_idx, format!("Audio {new_idx}"), false);
-        tr.matrix_idx = Some(new_idx - 1);
-        state.live_tracks.push(tr.clone());
-        state.studio_tracks.push(tr);
+        state.popup_browser.open_new_instrument();
     }
 
     if add_scene_action {

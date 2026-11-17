@@ -19,7 +19,7 @@ use crate::theme;
 use crate::views::{
     about, arranger_view, audio_detail_editor, audio_settings, clip_editor, detail_editor_panel, control_panel, dsp_rack, explorer,
     external_plugins_settings, footer,
-    header, matrix, mcp_port_settings, mixer, modal, piano_roll, playlist,
+    header, matrix, mcp_port_settings, mixer, modal, piano_roll, playlist, popup_browser,
 };
 
 pub fn sync_matrix_mixer_bidirectional(
@@ -432,6 +432,7 @@ pub struct AppState {
     pub plugin_browser_query: String,
     pub plugin_browser_filter: dsp_rack::PluginBrowserFilter,
     pub plugin_search_input: String,
+    pub popup_browser: popup_browser::PopupBrowserState,
     pub param_drag: Option<ParamDragState>,
     pub param_probe_tx: Sender<ParamProbeResult>,
     pub param_probe_rx: Receiver<ParamProbeResult>,
@@ -588,6 +589,7 @@ impl AppState {
             plugin_browser_query: String::new(),
             plugin_browser_filter: dsp_rack::PluginBrowserFilter::default(),
             plugin_search_input: String::new(),
+            popup_browser: popup_browser::PopupBrowserState::default(),
             param_drag: None,
             param_probe_tx,
             param_probe_rx,
@@ -1434,6 +1436,9 @@ impl eframe::App for HikaruApp {
                 }
             }
             let cmd = i.modifiers.ctrl || i.modifiers.command;
+            if cmd && !ctx.wants_keyboard_input() && i.key_pressed(egui::Key::T) {
+                self.state.popup_browser.open_new_instrument();
+            }
             if cmd && !ctx.wants_keyboard_input() && self.state.panel_layout.show_arranger {
                 if i.key_pressed(egui::Key::C) && !self.state.playlist_state.selected_clips.is_empty() {
                     playlist::copy_selected_clips(&mut self.state.playlist_state);
@@ -1609,6 +1614,7 @@ impl eframe::App for HikaruApp {
         external_plugins_settings::render(ctx, &mut self.state);
         mcp_port_settings::render(ctx, &mut self.state);
         control_panel::render(ctx, &mut self.state);
+        popup_browser::render(ctx, &mut self.state);
     }
 }
 

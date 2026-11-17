@@ -572,7 +572,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     },
                     1.8,
                 );
-                if plus_resp.on_hover_text("Add Audio Track").clicked() {
+                if plus_resp.on_hover_text("Add Instrument Track").clicked() {
                     add_track_clicked = true;
                 }
                 let rem_h = ui.available_height().max(1.0);
@@ -663,12 +663,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if add_track_clicked {
-        state.matrix_state.add_track();
-        let new_idx = state.matrix_state.tracks.len();
-        let mut tr = Track::new(new_idx, format!("Audio {new_idx}"), false);
-        tr.matrix_idx = Some(new_idx - 1);
-        state.live_tracks.push(tr.clone());
-        state.studio_tracks.push(tr);
+        state.popup_browser.open_new_instrument();
     }
 
     if let Some((t_idx, s_idx, path)) = actions.drop_slot {
@@ -793,17 +788,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         use crate::ui::arranger_context_menu::VoidMenuAction;
         match void_act {
             VoidMenuAction::AddInstrumentTrack => {
-                state.matrix_state.add_track();
-                let new_idx = state.matrix_state.tracks.len();
-                let name = format!("Inst {new_idx}");
-                if let Some(last) = state.matrix_state.tracks.last_mut() {
-                    last.name = name.clone();
-                }
-                let mut tr = Track::new(new_idx, name, false);
-                tr.matrix_idx = Some(new_idx - 1);
-                state.live_tracks.push(tr.clone());
-                state.studio_tracks.push(tr);
-                state.selected_track_index = state.live_tracks.len().saturating_sub(1);
+                state.popup_browser.open_new_instrument();
             }
             VoidMenuAction::AddAudioTrack => {
                 state.matrix_state.add_track();
