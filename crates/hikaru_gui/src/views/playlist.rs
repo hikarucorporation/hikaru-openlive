@@ -282,7 +282,7 @@ impl PlaylistState {
                     position_secs,
                     duration_secs,
                     offset_secs,
-                    track_index: *track_id,
+                    track_index: track_id.saturating_sub(1),
                     scene_index: 0,
                     speed_ratio: 1.0,
                 });

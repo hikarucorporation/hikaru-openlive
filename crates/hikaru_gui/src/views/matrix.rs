@@ -4080,7 +4080,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             position_secs,
             duration_secs,
             offset_secs: 0.0,
-            track_index: track_id,
+            track_index: track_id.saturating_sub(1),
             scene_index: 0,
             speed_ratio,
         });
@@ -4272,7 +4272,7 @@ pub fn sync_playlist_to_engine(state: &mut AppState) {
                     start_secs: state.transport.ticks_to_samples(c.start_tick) as f32 / sr,
                     duration_secs: len_frames as f32 / sr,
                     offset_secs: state.transport.ticks_to_samples(*sample_offset_ticks) as f32 / sr,
-                    track_index: *t_id,
+                    track_index: t_id.saturating_sub(1),
                     speed_ratio: crate::audio_proxy::compute_tempo_sync_ratio(
                         std::path::Path::new(sample_path),
                         state.transport.bpm,
