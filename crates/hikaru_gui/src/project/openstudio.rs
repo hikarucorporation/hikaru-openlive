@@ -313,6 +313,8 @@ fn build_playlist_clip(
         duration_ticks: saved.duration_ticks.max(1),
         clip_type,
         color,
+        muted: false,
+        loop_enabled: true,
     }
 }
 

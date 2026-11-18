@@ -3648,6 +3648,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         duration_ticks: ticks_per_bar_val,
                         clip_type: ClipType::Pattern { pattern_id: new_id },
                         color: track_color_for(target_row),
+                        muted: false,
+                        loop_enabled: true,
                     };
                     state.playlist_state.clips.push((track_id, clip));
                     state.playlist_state.selected_clips = vec![new_id];
@@ -3723,6 +3725,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
         // Right-click Context Menu on Clip or Empty Grid (Bitwig Studio 5.x look)
         let ctx_menu_id = ui.id().with("playlist_tl_ctx_menu");
+        let audio_clip_ctx_menu_id = ui.id().with("playlist_audio_clip_ctx_menu");
         if let Some(cid) = right_clicked_clip_id {
             if !state.playlist_state.selected_clips.contains(&cid) {
                 state.playlist_state.selected_clips = vec![cid];
@@ -3735,15 +3738,40 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 } else {
                     snap_ticks(raw_tick, snap_step)
                 };
-                crate::ui::playlist_context_menu::open(
-                    ui.ctx(),
-                    ctx_menu_id,
-                    crate::ui::playlist_context_menu::PlaylistContextMenuData {
-                        pos,
-                        click_tick,
-                        on_clip: true,
-                    },
-                );
+                let is_audio_clip = state
+                    .playlist_state
+                    .clips
+                    .iter()
+                    .find(|(_, c)| c.id == cid)
+                    .map(|(_, c)| matches!(c.clip_type, ClipType::Audio { .. }))
+                    .unwrap_or(false);
+
+                if is_audio_clip {
+                    crate::ui::playlist_context_menu::close(ui.ctx(), ctx_menu_id);
+                    crate::ui::playlist_audio_clip_context_menu::open(
+                        ui.ctx(),
+                        audio_clip_ctx_menu_id,
+                        crate::ui::playlist_audio_clip_context_menu::PlaylistAudioClipMenuData {
+                            pos,
+                            clip_id: cid,
+                            click_tick,
+                        },
+                    );
+                } else {
+                    crate::ui::playlist_audio_clip_context_menu::close(
+                        ui.ctx(),
+                        audio_clip_ctx_menu_id,
+                    );
+                    crate::ui::playlist_context_menu::open(
+                        ui.ctx(),
+                        ctx_menu_id,
+                        crate::ui::playlist_context_menu::PlaylistContextMenuData {
+                            pos,
+                            click_tick,
+                            on_clip: true,
+                        },
+                    );
+                }
             }
         } else if secondary_clicked {
             if let Some(pos) = pointer_pos {
@@ -3755,6 +3783,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     } else {
                         snap_ticks(raw_tick, snap_step)
                     };
+                    crate::ui::playlist_audio_clip_context_menu::close(
+                        ui.ctx(),
+                        audio_clip_ctx_menu_id,
+                    );
                     crate::ui::playlist_context_menu::open(
                         ui.ctx(),
                         ctx_menu_id,
@@ -3886,6 +3918,207 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     | PlaylistContextMenuAction::Bounce
                     | PlaylistContextMenuAction::SliceToDrumMachine
                     | PlaylistContextMenuAction::SliceToMultisample => {}
+                }
+            }
+        }
+
+        if crate::ui::playlist_audio_clip_context_menu::is_open(ui.ctx(), audio_clip_ctx_menu_id) {
+            let menu_data = crate::ui::playlist_audio_clip_context_menu::get_data(
+                ui.ctx(),
+                audio_clip_ctx_menu_id,
+            );
+            let target_clip_id = menu_data.map(|d| d.clip_id);
+            let (current_color, muted, looping) = target_clip_id
+                .and_then(|cid| state.playlist_state.clips.iter().find(|(_, c)| c.id == cid))
+                .map(|(_, c)| (c.color, c.muted, c.loop_enabled))
+                .unwrap_or((Color32::from_rgb(0xE8, 0x4A, 0x24), false, true));
+
+            let menu_state =
+                crate::ui::playlist_audio_clip_context_menu::PlaylistAudioClipMenuState {
+                    current_color,
+                    muted,
+                    looping,
+                    has_clipboard: !state.playlist_state.clipboard.is_empty(),
+                };
+
+            if let Some(act) = crate::ui::playlist_audio_clip_context_menu::show(
+                ui.ctx(),
+                audio_clip_ctx_menu_id,
+                menu_state,
+            ) {
+                use crate::ui::playlist_audio_clip_context_menu::PlaylistAudioClipMenuAction;
+                let min_ticks = playlist::min_clip_ticks(ppqn);
+                match act {
+                    PlaylistAudioClipMenuAction::Recolor(col) => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                c.color = col;
+                            }
+                        }
+                    }
+                    PlaylistAudioClipMenuAction::ToggleMute => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        let new_muted = !muted;
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                c.muted = new_muted;
+                            }
+                        }
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::ToggleLoop => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        let new_loop = !looping;
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                c.loop_enabled = new_loop;
+                            }
+                        }
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::Cut => {
+                        playlist::cut_selected_clips(&mut state.playlist_state);
+                    }
+                    PlaylistAudioClipMenuAction::Copy => {
+                        playlist::copy_selected_clips(&mut state.playlist_state);
+                    }
+                    PlaylistAudioClipMenuAction::Paste => {
+                        let target_tick = menu_data
+                            .map(|d| d.click_tick)
+                            .unwrap_or_else(|| state.playlist_state.paste_tick());
+                        playlist::paste_clips(
+                            &mut state.playlist_state,
+                            target_tick,
+                            state.selected_track_index,
+                        );
+                    }
+                    PlaylistAudioClipMenuAction::Duplicate => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        let mut max_end: u64 = 0;
+                        let mut min_start: u64 = u64::MAX;
+                        let mut to_dup = Vec::new();
+                        for (tid, c) in &state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                min_start = min_start.min(c.start_tick);
+                                max_end = max_end.max(c.start_tick.saturating_add(c.duration_ticks));
+                                to_dup.push((*tid, c.clone()));
+                            }
+                        }
+                        if !to_dup.is_empty() && max_end > min_start {
+                            let shift = max_end - min_start;
+                            let mut new_sel = Vec::new();
+                            for (tid, mut c) in to_dup {
+                                let new_id = state.playlist_state.next_clip_id;
+                                state.playlist_state.next_clip_id += 1;
+                                c.id = new_id;
+                                c.start_tick = c.start_tick.saturating_add(shift);
+                                new_sel.push(new_id);
+                                state.playlist_state.clips.push((tid, c));
+                            }
+                            state.playlist_state.selected_clips = new_sel;
+                            state.playlist_state.needs_full_sync = true;
+                        }
+                    }
+                    PlaylistAudioClipMenuAction::Delete => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        state
+                            .playlist_state
+                            .clips
+                            .retain(|(_, c)| !sel.contains(&c.id));
+                        state.playlist_state.selected_clips.clear();
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::LoopSelectedRegion => {
+                        let sel = &state.playlist_state.selected_clips;
+                        let mut min_s: Option<u64> = None;
+                        let mut max_e: Option<u64> = None;
+                        for (_, c) in &state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                let end = c.start_tick.saturating_add(c.duration_ticks);
+                                min_s = Some(min_s.map_or(c.start_tick, |m| m.min(c.start_tick)));
+                                max_e = Some(max_e.map_or(end, |m| m.max(end)));
+                            }
+                        }
+                        if let (Some(s), Some(e)) = (min_s, max_e) {
+                            if e > s {
+                                state.playlist_state.loop_start_ticks = s;
+                                state.playlist_state.loop_end_ticks = e;
+                                state.playlist_state.loop_region_active = true;
+                                state.is_looping = true;
+                            }
+                        }
+                    }
+                    PlaylistAudioClipMenuAction::Consolidate => {
+                        playlist::consolidate_selected_clips(&mut state.playlist_state);
+                    }
+                    PlaylistAudioClipMenuAction::DoubleContent
+                    | PlaylistAudioClipMenuAction::ScaleEach200
+                    | PlaylistAudioClipMenuAction::Scale200 => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                c.duration_ticks = c.duration_ticks.saturating_mul(2).max(min_ticks);
+                            }
+                        }
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::ScaleEach50
+                    | PlaylistAudioClipMenuAction::Scale50 => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                c.duration_ticks = (c.duration_ticks / 2).max(min_ticks);
+                            }
+                        }
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::Normalize => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                if let ClipType::Audio { ref mut peaks, .. } = c.clip_type {
+                                    let max_p = peaks
+                                        .iter()
+                                        .copied()
+                                        .fold(0.0_f32, |a, b| a.max(b.abs()));
+                                    if max_p > 1e-4 {
+                                        let gain = 1.0 / max_p;
+                                        for p in peaks.iter_mut() {
+                                            *p = (*p * gain).clamp(-1.0, 1.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::Quantize
+                    | PlaylistAudioClipMenuAction::QuantizeAudio => {
+                        let sel = state.playlist_state.selected_clips.clone();
+                        for (_, c) in &mut state.playlist_state.clips {
+                            if sel.contains(&c.id) {
+                                c.start_tick = snap_ticks(c.start_tick, snap_step);
+                            }
+                        }
+                        state.playlist_state.needs_full_sync = true;
+                    }
+                    PlaylistAudioClipMenuAction::ScaleCustom
+                    | PlaylistAudioClipMenuAction::BounceInPlace
+                    | PlaylistAudioClipMenuAction::Bounce
+                    | PlaylistAudioClipMenuAction::SliceInPlace
+                    | PlaylistAudioClipMenuAction::SliceToDrumMachine
+                    | PlaylistAudioClipMenuAction::SliceToMultisample
+                    | PlaylistAudioClipMenuAction::FoldToTakes
+                    | PlaylistAudioClipMenuAction::ResetFades
+                    | PlaylistAudioClipMenuAction::AutoFade
+                    | PlaylistAudioClipMenuAction::AutoCrossfade
+                    | PlaylistAudioClipMenuAction::TransposeOctaveUp
+                    | PlaylistAudioClipMenuAction::TransposeOctaveDown
+                    | PlaylistAudioClipMenuAction::QuantizeOptions
+                    | PlaylistAudioClipMenuAction::QuantizeAudioOptions
+                    | PlaylistAudioClipMenuAction::MakeLegato
+                    | PlaylistAudioClipMenuAction::SaveArrangerClipToLibrary => {}
                 }
             }
         }

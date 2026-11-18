@@ -68,6 +68,8 @@ pub struct PlaylistClip {
     pub duration_ticks: u64,
     pub clip_type: ClipType,
     pub color: egui::Color32,
+    pub muted: bool,
+    pub loop_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -271,6 +273,9 @@ impl PlaylistState {
 
     pub fn sync_all_clips_to_engine(&mut self, audio_proxy: &crate::audio_proxy::AudioProxy, bpm: f64) {
         for (track_id, clip) in &self.clips {
+            if clip.muted {
+                continue;
+            }
             if let ClipType::Audio { ref sample_path, sample_offset_ticks, .. } = clip.clip_type {
                 let position_secs = ticks_to_secs_precise(clip.start_tick, self.ppqn, bpm);
                 let duration_secs = ticks_to_secs_precise(clip.duration_ticks, self.ppqn, bpm);
@@ -773,6 +778,8 @@ pub fn build_audio_clip(
             total_sample_ticks: total_ticks.max(ppqn),
         },
         color: theme::ACCENT_PRIMARY,
+        muted: false,
+        loop_enabled: true,
     }
 }
 
@@ -953,6 +960,8 @@ pub fn consolidate_selected_clips(s: &mut PlaylistState) -> usize {
             duration_ticks: total_dur,
             clip_type: first.clip_type.clone(),
             color: first.color,
+            muted: first.muted,
+            loop_enabled: first.loop_enabled,
         };
         for c in &group {
             to_remove.push(c.id);
@@ -1221,6 +1230,8 @@ mod tests {
                     total_sample_ticks: 7680,
                 },
                 color: Color32::WHITE,
+                muted: false,
+                loop_enabled: true,
             },
         ));
         s.selected_clips = vec![1];
@@ -1270,6 +1281,8 @@ mod tests {
                 duration_ticks: 960,
                 clip_type: ClipType::Pattern { pattern_id: 1 },
                 color: Color32::WHITE,
+                muted: false,
+                loop_enabled: true,
             },
         ));
         s.clips.push((
@@ -1281,6 +1294,8 @@ mod tests {
                 duration_ticks: 960,
                 clip_type: ClipType::Pattern { pattern_id: 2 },
                 color: Color32::WHITE,
+                muted: false,
+                loop_enabled: true,
             },
         ));
         s.next_clip_id = 3;
