@@ -7,5 +7,6 @@ pub mod bitwig_wgpu;
 pub mod fonts;
 pub mod icons;
 pub mod meters;
+pub mod playlist_context_menu;
 pub mod text_style_scope;
 pub mod track_context_menu;

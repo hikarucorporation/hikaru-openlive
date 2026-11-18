@@ -70,6 +70,16 @@ pub struct PlaylistClip {
     pub color: egui::Color32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PlaylistTool {
+    #[default]
+    Pointer,
+    Time,
+    Pen,
+    Eraser,
+    Knife,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoopDragHandle {
     None,
@@ -124,6 +134,7 @@ pub struct PlaylistState {
     pub trim_drag: Option<TrimDrag>,
     pub trim_hover: Option<(usize, TrimEdge)>,
     pub hover_tick: Option<u64>,
+    pub active_tool: PlaylistTool,
 }
 
 impl Default for PlaylistState {
@@ -162,6 +173,7 @@ impl Default for PlaylistState {
             trim_drag: None,
             trim_hover: None,
             hover_tick: None,
+            active_tool: PlaylistTool::Pointer,
         }
     }
 }
@@ -894,6 +906,275 @@ pub fn select_all_clips(s: &mut PlaylistState) {
     s.selected_clips = s.clips.iter().map(|(_, c)| c.id).collect();
 }
 
+/// Consolidate selected clips per track into a single merged clip spanning `[min_start, max_end)`.
+/// Returns the number of consolidated clips produced.
+pub fn consolidate_selected_clips(s: &mut PlaylistState) -> usize {
+    if s.selected_clips.is_empty() {
+        return 0;
+    }
+    let selected = s.selected_clips.clone();
+    let mut track_ids: Vec<usize> = Vec::new();
+    for (tid, c) in &s.clips {
+        if selected.contains(&c.id) && !track_ids.contains(tid) {
+            track_ids.push(*tid);
+        }
+    }
+
+    let mut consolidated_ids: Vec<usize> = Vec::new();
+    let mut to_remove: Vec<usize> = Vec::new();
+    let mut to_add: Vec<(usize, PlaylistClip)> = Vec::new();
+
+    for tid in track_ids {
+        let mut group: Vec<&PlaylistClip> = s
+            .clips
+            .iter()
+            .filter(|(t, c)| *t == tid && selected.contains(&c.id))
+            .map(|(_, c)| c)
+            .collect();
+        if group.is_empty() {
+            continue;
+        }
+        group.sort_by_key(|c| c.start_tick);
+        let min_start = group.iter().map(|c| c.start_tick).min().unwrap_or(0);
+        let max_end = group
+            .iter()
+            .map(|c| c.start_tick.saturating_add(c.duration_ticks))
+            .max()
+            .unwrap_or(min_start);
+        let total_dur = max_end.saturating_sub(min_start).max(min_clip_ticks(s.ppqn));
+
+        let first = group[0];
+        let new_id = s.next_clip_id;
+        s.next_clip_id += 1;
+        let new_clip = PlaylistClip {
+            id: new_id,
+            name: first.name.clone(),
+            start_tick: min_start,
+            duration_ticks: total_dur,
+            clip_type: first.clip_type.clone(),
+            color: first.color,
+        };
+        for c in &group {
+            to_remove.push(c.id);
+        }
+        consolidated_ids.push(new_id);
+        to_add.push((tid, new_clip));
+    }
+
+    if to_add.is_empty() {
+        return 0;
+    }
+    s.clips.retain(|(_, c)| !to_remove.contains(&c.id));
+    s.clips.extend(to_add);
+    s.selected_clips = consolidated_ids.clone();
+    s.needs_full_sync = true;
+    consolidated_ids.len()
+}
+
+/// Set the start of selected clips that span across `tick` to `tick` (trimming the left edge).
+pub fn set_clip_start_at(s: &mut PlaylistState, tick: u64) -> usize {
+    let min_ticks = min_clip_ticks(s.ppqn);
+    let selected = s.selected_clips.clone();
+    let mut count = 0usize;
+    for (_, clip) in &mut s.clips {
+        if !selected.contains(&clip.id) {
+            continue;
+        }
+        let end_tick = clip.start_tick.saturating_add(clip.duration_ticks);
+        if tick <= clip.start_tick || tick >= end_tick.saturating_sub(min_ticks) {
+            continue;
+        }
+        let delta = tick - clip.start_tick;
+        clip.start_tick = tick;
+        clip.duration_ticks = end_tick - tick;
+        if let ClipType::Audio {
+            ref mut sample_offset_ticks,
+            ..
+        } = clip.clip_type
+        {
+            *sample_offset_ticks = sample_offset_ticks.saturating_add(delta);
+        }
+        count += 1;
+    }
+    if count > 0 {
+        s.needs_full_sync = true;
+    }
+    count
+}
+
+/// Insert `duration_ticks` of silence at `at_tick`, splitting any clip that crosses `at_tick`
+/// and shifting everything at or after `at_tick` to the right.
+pub fn insert_silence_at(s: &mut PlaylistState, at_tick: u64, duration_ticks: u64) {
+    if duration_ticks == 0 {
+        return;
+    }
+    let min_ticks = min_clip_ticks(s.ppqn);
+    let mut right_parts: Vec<(usize, PlaylistClip)> = Vec::new();
+    for (tid, clip) in &mut s.clips {
+        let end_tick = clip.start_tick.saturating_add(clip.duration_ticks);
+        if clip.start_tick >= at_tick {
+            clip.start_tick = clip.start_tick.saturating_add(duration_ticks);
+        } else if end_tick > at_tick.saturating_add(min_ticks)
+            && at_tick > clip.start_tick.saturating_add(min_ticks)
+        {
+            let left_dur = at_tick - clip.start_tick;
+            let right_dur = end_tick - at_tick;
+            let mut right_clip = clip.clone();
+            let new_id = s.next_clip_id;
+            s.next_clip_id += 1;
+            right_clip.id = new_id;
+            right_clip.start_tick = at_tick.saturating_add(duration_ticks);
+            right_clip.duration_ticks = right_dur;
+            if let ClipType::Audio {
+                ref mut sample_offset_ticks,
+                ..
+            } = right_clip.clip_type
+            {
+                *sample_offset_ticks = sample_offset_ticks.saturating_add(left_dur);
+            }
+            clip.duration_ticks = left_dur;
+            right_parts.push((*tid, right_clip));
+        }
+    }
+    s.clips.extend(right_parts);
+    s.needs_full_sync = true;
+}
+
+/// Duplicate the time range `[start_tick, end_tick)` immediately after `end_tick`,
+/// shifting existing clips at or after `end_tick` to the right by `end_tick - start_tick`.
+pub fn duplicate_time_range(s: &mut PlaylistState, start_tick: u64, end_tick: u64) {
+    if end_tick <= start_tick {
+        return;
+    }
+    let len = end_tick - start_tick;
+    let min_ticks = min_clip_ticks(s.ppqn);
+    let mut duplicated: Vec<(usize, PlaylistClip)> = Vec::new();
+
+    for (tid, clip) in &mut s.clips {
+        let clip_end = clip.start_tick.saturating_add(clip.duration_ticks);
+        if clip.start_tick >= end_tick {
+            clip.start_tick = clip.start_tick.saturating_add(len);
+        } else if clip_end > start_tick && clip.start_tick < end_tick {
+            let ov_start = clip.start_tick.max(start_tick);
+            let ov_end = clip_end.min(end_tick);
+            let ov_dur = ov_end.saturating_sub(ov_start);
+            if ov_dur >= min_ticks {
+                let mut copy = clip.clone();
+                let new_id = s.next_clip_id;
+                s.next_clip_id += 1;
+                copy.id = new_id;
+                copy.start_tick = end_tick.saturating_add(ov_start - start_tick);
+                copy.duration_ticks = ov_dur;
+                if let ClipType::Audio {
+                    ref mut sample_offset_ticks,
+                    ..
+                } = copy.clip_type
+                {
+                    *sample_offset_ticks =
+                        sample_offset_ticks.saturating_add(ov_start - clip.start_tick);
+                }
+                duplicated.push((*tid, copy));
+            }
+            // If clip extended past end_tick, shift its tail right
+            if clip_end > end_tick {
+                let tail_dur = clip_end - end_tick;
+                let mut tail = clip.clone();
+                let tail_id = s.next_clip_id;
+                s.next_clip_id += 1;
+                tail.id = tail_id;
+                tail.start_tick = end_tick.saturating_add(len);
+                tail.duration_ticks = tail_dur;
+                if let ClipType::Audio {
+                    ref mut sample_offset_ticks,
+                    ..
+                } = tail.clip_type
+                {
+                    *sample_offset_ticks =
+                        sample_offset_ticks.saturating_add(end_tick - clip.start_tick);
+                }
+                clip.duration_ticks = end_tick - clip.start_tick;
+                duplicated.push((*tid, tail));
+            }
+        }
+    }
+    s.clips.extend(duplicated);
+    s.needs_full_sync = true;
+}
+
+/// Remove the time range `[start_tick, end_tick)` and shift all subsequent clips left by `end_tick - start_tick`.
+pub fn remove_time_range(s: &mut PlaylistState, start_tick: u64, end_tick: u64) {
+    if end_tick <= start_tick {
+        return;
+    }
+    let len = end_tick - start_tick;
+    let min_ticks = min_clip_ticks(s.ppqn);
+    let mut updated: Vec<(usize, PlaylistClip)> = Vec::with_capacity(s.clips.len());
+
+    for (tid, mut clip) in s.clips.drain(..) {
+        let clip_end = clip.start_tick.saturating_add(clip.duration_ticks);
+        if clip_end <= start_tick {
+            updated.push((tid, clip));
+        } else if clip.start_tick >= end_tick {
+            clip.start_tick = clip.start_tick.saturating_sub(len);
+            updated.push((tid, clip));
+        } else if clip.start_tick < start_tick && clip_end > end_tick {
+            // Spans across the whole removed range: keep left + right
+            let left_dur = start_tick - clip.start_tick;
+            let right_dur = clip_end - end_tick;
+            if right_dur >= min_ticks {
+                let mut right = clip.clone();
+                let new_id = s.next_clip_id;
+                s.next_clip_id += 1;
+                right.id = new_id;
+                right.start_tick = start_tick;
+                right.duration_ticks = right_dur;
+                if let ClipType::Audio {
+                    ref mut sample_offset_ticks,
+                    ..
+                } = right.clip_type
+                {
+                    *sample_offset_ticks =
+                        sample_offset_ticks.saturating_add(end_tick - clip.start_tick);
+                }
+                updated.push((tid, right));
+            }
+            if left_dur >= min_ticks {
+                clip.duration_ticks = left_dur;
+                updated.push((tid, clip));
+            }
+        } else if clip.start_tick < start_tick {
+            // Overlaps left boundary
+            let left_dur = start_tick - clip.start_tick;
+            if left_dur >= min_ticks {
+                clip.duration_ticks = left_dur;
+                updated.push((tid, clip));
+            }
+        } else if clip_end > end_tick {
+            // Overlaps right boundary
+            let delta = end_tick - clip.start_tick;
+            let right_dur = clip_end - end_tick;
+            if right_dur >= min_ticks {
+                clip.start_tick = start_tick;
+                clip.duration_ticks = right_dur;
+                if let ClipType::Audio {
+                    ref mut sample_offset_ticks,
+                    ..
+                } = clip.clip_type
+                {
+                    *sample_offset_ticks = sample_offset_ticks.saturating_add(delta);
+                }
+                updated.push((tid, clip));
+            }
+        }
+        // Else: completely inside [start_tick, end_tick), removed.
+    }
+
+    s.clips = updated;
+    let alive_ids: Vec<usize> = s.clips.iter().map(|(_, c)| c.id).collect();
+    s.selected_clips.retain(|id| alive_ids.contains(id));
+    s.needs_full_sync = true;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -975,5 +1256,49 @@ mod tests {
     fn mmb_drag_up_zooms_in() {
         assert!(mmb_drag_notches(-120.0) > 0.0);
         assert!(mmb_drag_notches(120.0) < 0.0);
+    }
+
+    #[test]
+    fn consolidate_and_time_ops_work() {
+        let mut s = PlaylistState::default();
+        s.clips.push((
+            1,
+            PlaylistClip {
+                id: 1,
+                name: "A".into(),
+                start_tick: 0,
+                duration_ticks: 960,
+                clip_type: ClipType::Pattern { pattern_id: 1 },
+                color: Color32::WHITE,
+            },
+        ));
+        s.clips.push((
+            1,
+            PlaylistClip {
+                id: 2,
+                name: "B".into(),
+                start_tick: 1920,
+                duration_ticks: 960,
+                clip_type: ClipType::Pattern { pattern_id: 2 },
+                color: Color32::WHITE,
+            },
+        ));
+        s.next_clip_id = 3;
+        s.selected_clips = vec![1, 2];
+
+        assert_eq!(consolidate_selected_clips(&mut s), 1);
+        assert_eq!(s.clips.len(), 1);
+        assert_eq!(s.clips[0].1.start_tick, 0);
+        assert_eq!(s.clips[0].1.duration_ticks, 2880);
+
+        insert_silence_at(&mut s, 960, 960);
+        assert_eq!(s.clips.len(), 2);
+        assert_eq!(s.clips[0].1.duration_ticks, 960);
+        assert_eq!(s.clips[1].1.start_tick, 1920);
+        assert_eq!(s.clips[1].1.duration_ticks, 1920);
+
+        remove_time_range(&mut s, 960, 1920);
+        assert_eq!(s.clips.len(), 2);
+        assert_eq!(s.clips[1].1.start_tick, 960);
     }
 }

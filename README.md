@@ -222,7 +222,7 @@ Creators:
 * 🔵 [Hikaru Corporation](https://github.com/hikarucorporation)
 * 🔴 [DTG](https://github.com/doujintechnologicsgroup)
 * 🤖 [OpenCode](https://github.com/opencode-agent)
-* 🤖 [Google Antigravity](antigravity.google) (Gemini 3.8 Flash & Gemini 4 Argon)
+* 🤖 [Google Antigravity](antigravity.google) (Gemini 3.8 Flash & Gemini 4 Argon/Hydrogen)
 
 ### 🤝 Code Contributors Wanted
 

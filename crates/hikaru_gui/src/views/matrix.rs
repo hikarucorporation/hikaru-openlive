@@ -1557,13 +1557,33 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let rem_toolbar_w = (toolbar_ui.available_width() - 44.0).max(0.0);
     toolbar_ui.add_space(rem_toolbar_w);
 
-    // Pointer cursor tool indicator (Bitwig sub-bar right icon)
-    let (ptr_rect, _) = toolbar_ui.allocate_exact_size(vec2(18.0, 20.0), Sense::hover());
+    // Active Playlist Tool indicator (Bitwig sub-bar right icon)
+    let tool_label = match state.playlist_state.active_tool {
+        playlist::PlaylistTool::Pointer => "Pointer Tool (1)",
+        playlist::PlaylistTool::Time => "Time Selection Tool (2)",
+        playlist::PlaylistTool::Pen => "Pen Tool (3)",
+        playlist::PlaylistTool::Eraser => "Eraser Tool (4)",
+        playlist::PlaylistTool::Knife => "Knife Tool (5)",
+    };
+    let (ptr_rect, ptr_resp) = toolbar_ui.allocate_exact_size(vec2(18.0, 20.0), Sense::click());
     icons::paint_pointer_cursor(
         toolbar_ui.painter(),
         ptr_rect,
-        Color32::from_rgb(0xEE, 0xF0, 0xF4),
+        if state.playlist_state.active_tool == playlist::PlaylistTool::Pointer {
+            Color32::from_rgb(0xEE, 0xF0, 0xF4)
+        } else {
+            ACCENT_ORANGE
+        },
     );
+    if ptr_resp.on_hover_text(tool_label).clicked() {
+        state.playlist_state.active_tool = match state.playlist_state.active_tool {
+            playlist::PlaylistTool::Pointer => playlist::PlaylistTool::Time,
+            playlist::PlaylistTool::Time => playlist::PlaylistTool::Pen,
+            playlist::PlaylistTool::Pen => playlist::PlaylistTool::Eraser,
+            playlist::PlaylistTool::Eraser => playlist::PlaylistTool::Knife,
+            playlist::PlaylistTool::Knife => playlist::PlaylistTool::Pointer,
+        };
+    }
 
     // Stop All Clips vector button (zero Unicode!)
     if bitwig_kit::capsule_icon_button(
@@ -3340,7 +3360,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     if secondary_clicked {
                         right_clicked_clip_id = Some(clip.id);
                     }
-                    if workspace_resp.drag_started_by(egui::PointerButton::Primary) {
+                    if workspace_resp.drag_started_by(egui::PointerButton::Primary)
+                        && matches!(
+                            state.playlist_state.active_tool,
+                            playlist::PlaylistTool::Pointer | playlist::PlaylistTool::Pen
+                        )
+                    {
                         if let Some(e) = edge {
                             let (orig_offset, orig_total) = match clip.clip_type {
                                 ClipType::Audio {
@@ -3472,17 +3497,43 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 Some(crate::views::detail_editor_panel::ClipEditorTarget::Playlist { clip_id: cid });
             state.clip_editor.show_editor = true;
         } else if let Some(cid) = clicked_clip_id {
-            if shift_held {
-                if let Some(pos_idx) = state.playlist_state.selected_clips.iter().position(|&id| id == cid) {
-                    state.playlist_state.selected_clips.remove(pos_idx);
-                } else {
-                    state.playlist_state.selected_clips.push(cid);
+            match state.playlist_state.active_tool {
+                playlist::PlaylistTool::Eraser => {
+                    state.playlist_state.clips.retain(|(_, c)| c.id != cid);
+                    state.playlist_state.selected_clips.retain(|&id| id != cid);
+                    state.playlist_state.needs_full_sync = true;
                 }
-            } else {
-                state.playlist_state.selected_clips = vec![cid];
+                playlist::PlaylistTool::Knife => {
+                    state.playlist_state.selected_clips = vec![cid];
+                    if let Some(pos) = pointer_pos {
+                        let rel_x = (pos.x - timeline_x0 - scroll_x).max(0.0);
+                        let raw_tick = px_to_ticks(rel_x, zoom_x);
+                        let cut_tick = if shift_held {
+                            raw_tick
+                        } else {
+                            snap_ticks(raw_tick, snap_step)
+                        };
+                        playlist::split_selected_clips_at(&mut state.playlist_state, cut_tick);
+                    }
+                }
+                _ => {
+                    if shift_held {
+                        if let Some(pos_idx) =
+                            state.playlist_state.selected_clips.iter().position(|&id| id == cid)
+                        {
+                            state.playlist_state.selected_clips.remove(pos_idx);
+                        } else {
+                            state.playlist_state.selected_clips.push(cid);
+                        }
+                    } else {
+                        state.playlist_state.selected_clips = vec![cid];
+                    }
+                    state.clip_editor.active_target =
+                        Some(crate::views::detail_editor_panel::ClipEditorTarget::Playlist {
+                            clip_id: cid,
+                        });
+                }
             }
-            state.clip_editor.active_target =
-                Some(crate::views::detail_editor_panel::ClipEditorTarget::Playlist { clip_id: cid });
         }
 
         if let Some((mut cid, mut orig_tick, mut orig_track, gx, gy)) = start_drag_clip {
@@ -3578,7 +3629,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 && state.playlist_pan.is_none()
                 && !is_dragging_sample
             {
-                if double_clicked && tracks_count > 0 {
+                if (double_clicked || (primary_clicked && state.playlist_state.active_tool == playlist::PlaylistTool::Pen))
+                    && tracks_count > 0
+                {
                     let target_row = ((pos.y - tracks_y0 - scroll_y) / row_h)
                         .floor()
                         .clamp(0.0, tracks_count.saturating_sub(1) as f32) as usize;
@@ -3603,6 +3656,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         });
                     state.clip_editor.show_editor = true;
                     state.playlist_state.needs_full_sync = true;
+                } else if primary_clicked
+                    && state.playlist_state.active_tool == playlist::PlaylistTool::Time
+                {
+                    let rel_x = (pos.x - timeline_x0 - scroll_x).max(0.0);
+                    let tick = snap_ticks(px_to_ticks(rel_x, zoom_x), snap_step);
+                    state.playlist_state.playhead_tick = tick;
+                    state.playlist_state.selected_clips.clear();
                 } else if primary_clicked && !shift_held && state.playlist_state.marquee.is_none() {
                     state.playlist_state.selected_clips.clear();
                 } else if workspace_resp.drag_started_by(egui::PointerButton::Primary) {
@@ -3659,118 +3719,172 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             }
         }
 
-        // Right-click Context Menu on Clip or Empty Grid
+        // Right-click Context Menu on Clip or Empty Grid (Bitwig Studio 5.x look)
         let ctx_menu_id = ui.id().with("playlist_tl_ctx_menu");
         if let Some(cid) = right_clicked_clip_id {
             if !state.playlist_state.selected_clips.contains(&cid) {
                 state.playlist_state.selected_clips = vec![cid];
             }
             if let Some(pos) = pointer_pos {
-                ui.memory_mut(|m| m.data.insert_temp(ctx_menu_id, (pos, true)));
+                let rel_x = (pos.x - timeline_x0 - scroll_x).max(0.0);
+                let raw_tick = px_to_ticks(rel_x, zoom_x);
+                let click_tick = if shift_held {
+                    raw_tick
+                } else {
+                    snap_ticks(raw_tick, snap_step)
+                };
+                crate::ui::playlist_context_menu::open(
+                    ui.ctx(),
+                    ctx_menu_id,
+                    crate::ui::playlist_context_menu::PlaylistContextMenuData {
+                        pos,
+                        click_tick,
+                        on_clip: true,
+                    },
+                );
             }
         } else if secondary_clicked {
             if let Some(pos) = pointer_pos {
                 if tl_grid_rect.contains(pos) {
-                    ui.memory_mut(|m| m.data.insert_temp(ctx_menu_id, (pos, false)));
+                    let rel_x = (pos.x - timeline_x0 - scroll_x).max(0.0);
+                    let raw_tick = px_to_ticks(rel_x, zoom_x);
+                    let click_tick = if shift_held {
+                        raw_tick
+                    } else {
+                        snap_ticks(raw_tick, snap_step)
+                    };
+                    crate::ui::playlist_context_menu::open(
+                        ui.ctx(),
+                        ctx_menu_id,
+                        crate::ui::playlist_context_menu::PlaylistContextMenuData {
+                            pos,
+                            click_tick,
+                            on_clip: false,
+                        },
+                    );
                 }
             }
         }
-        let ctx_menu_data: Option<(egui::Pos2, bool)> = ui.memory(|m| m.data.get_temp(ctx_menu_id));
-        if let Some((menu_pos, on_clip)) = ctx_menu_data {
-            let mut close_menu = false;
-            egui::Area::new(ui.id().with("playlist_tl_ctx_area"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(menu_pos)
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style())
-                        .fill(Color32::from_rgb(0x28, 0x2A, 0x2F))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x46, 0x48, 0x50)))
-                        .show(ui, |ui| {
-                            ui.set_min_width(165.0);
-                            if on_clip {
-                                if ui.button("Split at Playhead (Ctrl+E)").clicked() {
-                                    let split_tick = state.playlist_state.playhead_tick;
-                                    playlist::split_selected_clips_at(
-                                        &mut state.playlist_state,
-                                        split_tick,
-                                    );
-                                    close_menu = true;
-                                }
-                                if ui.button("Duplicate (Ctrl+D)").clicked() {
-                                    playlist::duplicate_selected_clips(
-                                        &mut state.playlist_state,
-                                        adaptive_step,
-                                    );
-                                    close_menu = true;
-                                }
-                                if ui.button("Copy (Ctrl+C)").clicked() {
-                                    playlist::copy_selected_clips(&mut state.playlist_state);
-                                    close_menu = true;
-                                }
-                                if ui.button("Cut (Ctrl+X)").clicked() {
-                                    playlist::cut_selected_clips(&mut state.playlist_state);
-                                    close_menu = true;
-                                }
-                                ui.separator();
-                                if ui.button("Delete (Del)").clicked() {
-                                    let sel = state.playlist_state.selected_clips.clone();
-                                    state.playlist_state.clips.retain(|(_, c)| !sel.contains(&c.id));
-                                    state.playlist_state.selected_clips.clear();
-                                    state.playlist_state.needs_full_sync = true;
-                                    close_menu = true;
-                                }
-                            } else {
-                                if !state.playlist_state.clipboard.is_empty()
-                                    && ui.button("Paste (Ctrl+V)").clicked()
-                                {
-                                    let rel_x = (menu_pos.x - timeline_x0 - scroll_x).max(0.0);
-                                    let tick = snap_ticks(px_to_ticks(rel_x, zoom_x), snap_step);
-                                    let row = ((menu_pos.y - tracks_y0 - scroll_y) / row_h)
-                                        .floor()
-                                        .clamp(0.0, tracks_count.saturating_sub(1) as f32)
-                                        as usize;
-                                    playlist::paste_clips(&mut state.playlist_state, tick, row + 1);
-                                    close_menu = true;
-                                }
-                                if tracks_count > 0 && ui.button("Insert MIDI Clip").clicked() {
-                                    let rel_x = (menu_pos.x - timeline_x0 - scroll_x).max(0.0);
-                                    let start_tick = snap_ticks(px_to_ticks(rel_x, zoom_x), snap_step);
-                                    let row = ((menu_pos.y - tracks_y0 - scroll_y) / row_h)
-                                        .floor()
-                                        .clamp(0.0, tracks_count.saturating_sub(1) as f32)
-                                        as usize;
-                                    let new_id = state.playlist_state.next_clip_id;
-                                    state.playlist_state.next_clip_id += 1;
-                                    state.playlist_state.clips.push((
-                                        row + 1,
-                                        playlist::PlaylistClip {
-                                            id: new_id,
-                                            name: format!("Clip {}", new_id),
-                                            start_tick,
-                                            duration_ticks: ticks_per_bar_val,
-                                            clip_type: ClipType::Pattern { pattern_id: new_id },
-                                            color: track_color_for(row),
-                                        },
-                                    ));
-                                    state.playlist_state.selected_clips = vec![new_id];
-                                    state.playlist_state.needs_full_sync = true;
-                                    close_menu = true;
-                                }
-                                if ui.button("Select All (Ctrl+A)").clicked() {
-                                    playlist::select_all_clips(&mut state.playlist_state);
-                                    close_menu = true;
-                                }
-                            }
+
+        if let Some(menu_data) = crate::ui::playlist_context_menu::get_data(ui.ctx(), ctx_menu_id) {
+            let min_ticks = playlist::min_clip_ticks(ppqn);
+            let sel_ids = &state.playlist_state.selected_clips;
+            let playhead = state.playlist_state.playhead_tick;
+            let can_split = state.playlist_state.clips.iter().any(|(_, c)| {
+                if !sel_ids.contains(&c.id) {
+                    return false;
+                }
+                let end = c.start_tick.saturating_add(c.duration_ticks);
+                let click_inside = menu_data.click_tick > c.start_tick.saturating_add(min_ticks)
+                    && menu_data.click_tick < end.saturating_sub(min_ticks);
+                let playhead_inside = playhead > c.start_tick.saturating_add(min_ticks)
+                    && playhead < end.saturating_sub(min_ticks);
+                click_inside || playhead_inside
+            });
+            let can_set_clip_start = state.playlist_state.clips.iter().any(|(_, c)| {
+                if !sel_ids.contains(&c.id) {
+                    return false;
+                }
+                let end = c.start_tick.saturating_add(c.duration_ticks);
+                menu_data.click_tick > c.start_tick
+                    && menu_data.click_tick < end.saturating_sub(min_ticks)
+            });
+            let has_time_range =
+                state.playlist_state.is_loop_region_valid() || !sel_ids.is_empty();
+
+            let caps = crate::ui::playlist_context_menu::PlaylistContextMenuCapabilities {
+                active_tool: state.playlist_state.active_tool,
+                can_consolidate: !sel_ids.is_empty(),
+                can_split,
+                can_set_clip_start,
+                can_bounce: false,
+                can_slice: false,
+                can_insert_silence: true,
+                can_duplicate_time: has_time_range,
+                can_remove_time: has_time_range,
+            };
+
+            if let Some(act) = crate::ui::playlist_context_menu::show(ui.ctx(), ctx_menu_id, caps) {
+                use crate::ui::playlist_context_menu::PlaylistContextMenuAction;
+                let selected_bounds = || -> Option<(u64, u64)> {
+                    if state.playlist_state.is_loop_region_valid() {
+                        return Some((
+                            state.playlist_state.loop_start_ticks,
+                            state.playlist_state.loop_end_ticks,
+                        ));
+                    }
+                    let sel = &state.playlist_state.selected_clips;
+                    let mut min_s: Option<u64> = None;
+                    let mut max_e: Option<u64> = None;
+                    for (_, c) in &state.playlist_state.clips {
+                        if sel.contains(&c.id) {
+                            let end = c.start_tick.saturating_add(c.duration_ticks);
+                            min_s = Some(min_s.map_or(c.start_tick, |m| m.min(c.start_tick)));
+                            max_e = Some(max_e.map_or(end, |m| m.max(end)));
+                        }
+                    }
+                    match (min_s, max_e) {
+                        (Some(s), Some(e)) if e > s => Some((s, e)),
+                        _ => None,
+                    }
+                };
+
+                match act {
+                    PlaylistContextMenuAction::SelectTool(tool) => {
+                        state.playlist_state.active_tool = tool;
+                    }
+                    PlaylistContextMenuAction::Consolidate => {
+                        playlist::consolidate_selected_clips(&mut state.playlist_state);
+                    }
+                    PlaylistContextMenuAction::Split => {
+                        let split_at_click = state.playlist_state.clips.iter().any(|(_, c)| {
+                            state.playlist_state.selected_clips.contains(&c.id)
+                                && menu_data.click_tick > c.start_tick.saturating_add(min_ticks)
+                                && menu_data.click_tick
+                                    < c.start_tick
+                                        .saturating_add(c.duration_ticks)
+                                        .saturating_sub(min_ticks)
                         });
-                });
-            if close_menu
-                || (primary_clicked
-                    && pointer_pos
-                        .map(|p| p.distance(menu_pos) > 8.0)
-                        .unwrap_or(true))
-                || ui.input(|i| i.key_pressed(egui::Key::Escape))
-            {
-                ui.memory_mut(|m| m.data.remove::<(egui::Pos2, bool)>(ctx_menu_id));
+                        let split_tick = if split_at_click {
+                            menu_data.click_tick
+                        } else {
+                            state.playlist_state.playhead_tick
+                        };
+                        playlist::split_selected_clips_at(&mut state.playlist_state, split_tick);
+                    }
+                    PlaylistContextMenuAction::SetClipStart => {
+                        playlist::set_clip_start_at(
+                            &mut state.playlist_state,
+                            menu_data.click_tick,
+                        );
+                    }
+                    PlaylistContextMenuAction::InsertSilence => {
+                        let dur = if state.playlist_state.is_loop_region_valid() {
+                            state.playlist_state.loop_length_ticks()
+                        } else {
+                            ticks_per_bar_val
+                        };
+                        playlist::insert_silence_at(
+                            &mut state.playlist_state,
+                            menu_data.click_tick,
+                            dur,
+                        );
+                    }
+                    PlaylistContextMenuAction::DuplicateTime => {
+                        if let Some((rs, re)) = selected_bounds() {
+                            playlist::duplicate_time_range(&mut state.playlist_state, rs, re);
+                        }
+                    }
+                    PlaylistContextMenuAction::RemoveTime => {
+                        if let Some((rs, re)) = selected_bounds() {
+                            playlist::remove_time_range(&mut state.playlist_state, rs, re);
+                        }
+                    }
+                    PlaylistContextMenuAction::BounceInPlace
+                    | PlaylistContextMenuAction::Bounce
+                    | PlaylistContextMenuAction::SliceToDrumMachine
+                    | PlaylistContextMenuAction::SliceToMultisample => {}
+                }
             }
         }
 
