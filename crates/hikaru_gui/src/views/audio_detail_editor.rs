@@ -445,8 +445,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         pan: false,
         pitch: false,
         formant: false,
-        stretch: true,
-        onsets: true,
+        stretch: false,
+        onsets: false,
         snap_beats: 0.25,
     });
     if v.key != Some(target) {
