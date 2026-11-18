@@ -1536,10 +1536,8 @@ impl eframe::App for HikaruApp {
                         dsp_rack::render(ui, &mut self.state);
                     } else if self.state.panel_layout.show_mixer {
                         mixer::render_bottom_panel(ui, &mut self.state);
-                    } else if self.state.show_piano_roll {
+                    } else if self.state.show_piano_roll || self.state.clip_editor.show_editor {
                         render_edit_or_audio(ui, &mut self.state);
-                    } else if self.state.clip_editor.show_editor {
-                        detail_editor_panel::render(ui, &mut self.state);
                     }
                 });
         }
@@ -1621,8 +1619,8 @@ impl eframe::App for HikaruApp {
 /// Editor de la pestaña ARRANGE/EDIT: Detail Editor de audio si el clip seleccionado
 /// es audio; Piano Roll en cualquier otro caso.
 fn render_edit_or_audio(ui: &mut egui::Ui, state: &mut AppState) {
-    if let Some(slot) = audio_detail_editor::selected_audio_slot(state) {
-        audio_detail_editor::render(ui, state, slot);
+    if let Some(target) = audio_detail_editor::selected_audio_target(state) {
+        audio_detail_editor::render(ui, state, target);
     } else {
         piano_roll::render(ui, state);
     }

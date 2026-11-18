@@ -15,7 +15,9 @@ use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke, Stro
 
 use crate::app::AppState;
 use crate::theme;
+use crate::views::detail_editor_panel::ClipEditorTarget;
 use crate::views::matrix::{ClipData, MatrixClip};
+use crate::views::playlist;
 
 const STRIP_W: f32 = 30.0;
 const TOOLS_W: f32 = 148.0;
@@ -51,11 +53,17 @@ struct LoopDrag {
     orig_le: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AudioEditorTarget {
+    Matrix { track: usize, slot: usize },
+    Playlist { clip_id: usize },
+}
+
 #[derive(Clone, Copy)]
 struct ViewState {
     ppb: f32,
     scroll_beats: f64,
-    key: (usize, usize),
+    key: Option<AudioEditorTarget>,
     auto_fades: bool,
     gain: bool,
     pan: bool,
@@ -118,6 +126,40 @@ pub fn selected_audio_slot(app: &AppState) -> Option<(usize, usize)> {
     let (t, s) = app.matrix_state.selected_slot?;
     let clip = app.matrix_state.slot(t, s)?.clip.as_ref()?;
     matches!(clip.content, ClipData::Audio { .. }).then_some((t, s))
+}
+
+/// Resuelve el clip de audio activo (del Arranger/Playlist o de la Session Matrix).
+pub fn selected_audio_target(app: &AppState) -> Option<AudioEditorTarget> {
+    if let Some(target) = app.clip_editor.active_target.or(app.clip_editor.target) {
+        match target {
+            ClipEditorTarget::Playlist { clip_id } => {
+                if let Some((_, clip)) = app.playlist_state.clips.iter().find(|(_, c)| c.id == clip_id) {
+                    if matches!(clip.clip_type, playlist::ClipType::Audio { .. }) {
+                        return Some(AudioEditorTarget::Playlist { clip_id });
+                    }
+                    return None;
+                }
+            }
+            ClipEditorTarget::Matrix { track_idx, slot_idx } => {
+                if let Some(clip) = app.matrix_state.slot(track_idx, slot_idx).and_then(|s| s.clip.as_ref()) {
+                    if matches!(clip.content, ClipData::Audio { .. }) {
+                        return Some(AudioEditorTarget::Matrix { track: track_idx, slot: slot_idx });
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+
+    if let Some(&clip_id) = app.playlist_state.selected_clips.last() {
+        if let Some((_, clip)) = app.playlist_state.clips.iter().find(|(_, c)| c.id == clip_id) {
+            if matches!(clip.clip_type, playlist::ClipType::Audio { .. }) {
+                return Some(AudioEditorTarget::Playlist { clip_id });
+            }
+        }
+    }
+
+    selected_audio_slot(app).map(|(track, slot)| AudioEditorTarget::Matrix { track, slot })
 }
 
 fn detect_onsets(energy: &[f32], sensitivity: f32) -> Vec<f32> {
@@ -253,13 +295,12 @@ fn quantize_onsets_to_markers(
     out
 }
 
-fn build_env(clip: &MatrixClip) -> Env {
-    let Some(ev) = clip.audio_events().first() else {
+fn build_env_from_samples(samples: &[f32], chn: usize) -> Env {
+    let chn = chn.max(1);
+    let frames = samples.len() / chn;
+    if frames == 0 {
         return Env { frames: 0, ch: vec![], energy: vec![] };
-    };
-    let chn = ev.channels.max(1);
-    let win = ev.window_samples();
-    let frames = win.len() / chn;
+    }
     let bins = 4096usize.min(frames.max(1));
     let nch = chn.min(2);
     let mut ch = vec![Vec::with_capacity(bins); nch];
@@ -269,7 +310,7 @@ fn build_env(clip: &MatrixClip) -> Env {
         for (c, v) in ch.iter_mut().enumerate() {
             let mut m = 0.0f32;
             for f in f0..f1 {
-                m = m.max(win[f * chn + c.min(chn - 1)].abs());
+                m = m.max(samples[f * chn + c.min(chn - 1)].abs());
             }
             v.push(m);
         }
@@ -278,9 +319,38 @@ fn build_env(clip: &MatrixClip) -> Env {
     Env { frames, ch, energy }
 }
 
-pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
+fn build_env(clip: &MatrixClip) -> Env {
+    let Some(ev) = clip.audio_events().first() else {
+        return Env { frames: 0, ch: vec![], energy: vec![] };
+    };
+    build_env_from_samples(ev.window_samples(), ev.channels)
+}
+
+fn build_env_from_playlist(path: &std::path::Path, peaks: &[f32]) -> Env {
+    if !path.as_os_str().is_empty() {
+        if let Ok((samples, chn, _sr)) = crate::wav_io::read_file(path) {
+            let env = build_env_from_samples(&samples, chn);
+            if env.frames > 0 {
+                return env;
+            }
+        }
+    }
+    if !peaks.is_empty() {
+        let energy: Vec<f32> = peaks.iter().map(|p| p.abs()).collect();
+        return Env {
+            frames: peaks.len(),
+            ch: vec![energy.clone()],
+            energy,
+        };
+    }
+    Env { frames: 0, ch: vec![], energy: vec![] }
+}
+
+pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) {
     let bpm = if app.transport.bpm > 0.0 { app.transport.bpm as f64 } else { 120.0 };
     let spb = 60.0 / bpm;
+    let ppqn = app.playlist_state.ppqn.max(1) as f64;
+    let secs_per_tick = spb / ppqn;
     let accent = theme::ACCENT_ORANGE;
 
     let full = ui.available_rect_before_wrap();
@@ -290,37 +360,76 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     p.rect_stroke(full.shrink(1.0), 2.0, Stroke::new(2.0, accent), StrokeKind::Inside);
     let inner = full.shrink(3.0);
 
-    let (clip_id, name, path, ev_start, ev_len, sr, loop_en, loop_s, loop_e, track_color, env_key) = {
-        let Some(clip) = app.matrix_state.slot(slot.0, slot.1).and_then(|s| s.clip.as_ref()) else { return };
-        let ev = clip.audio_events().first();
-        let sr = ev.map(|e| e.sample_rate).unwrap_or(44100).max(1) as f64;
-        (
-            clip.id,
-            clip.name.clone(),
-            clip.path.clone(),
-            ev.map(|e| e.start_secs).unwrap_or(0.0),
-            ev.map(|e| e.duration_secs()).unwrap_or(clip.duration_secs),
-            sr,
-            clip.loop_enabled,
-            clip.loop_start as f64 / sr,
-            clip.loop_end as f64 / sr,
-            clip.color,
-            (clip.id, ev.map(|e| e.frames()).unwrap_or(0)),
-        )
+    let (clip_id, name, path, ev_start, ev_len, sr, loop_en, loop_s, loop_e, track_color, env_key, playlist_start_tick) = match target {
+        AudioEditorTarget::Matrix { track, slot } => {
+            let Some(clip) = app.matrix_state.slot(track, slot).and_then(|s| s.clip.as_ref()) else { return };
+            let ev = clip.audio_events().first();
+            let sr = ev.map(|e| e.sample_rate).unwrap_or(44100).max(1) as f64;
+            (
+                clip.id,
+                clip.name.clone(),
+                clip.path.clone(),
+                ev.map(|e| e.start_secs).unwrap_or(0.0),
+                ev.map(|e| e.duration_secs()).unwrap_or(clip.duration_secs),
+                sr,
+                clip.loop_enabled,
+                clip.loop_start as f64 / sr,
+                clip.loop_end as f64 / sr,
+                clip.color,
+                (clip.id, ev.map(|e| e.frames()).unwrap_or(0)),
+                None,
+            )
+        }
+        AudioEditorTarget::Playlist { clip_id } => {
+            let Some((_, clip)) = app.playlist_state.clips.iter().find(|(_, c)| c.id == clip_id) else { return };
+            let (sample_path, _peaks_len) = match &clip.clip_type {
+                playlist::ClipType::Audio { sample_path, peaks, .. } => (std::path::PathBuf::from(sample_path), peaks.len()),
+                _ => return,
+            };
+            let dur_secs = (clip.duration_ticks as f64 * secs_per_tick).max(0.05);
+            let sr = 44100.0;
+            (
+                clip.id,
+                clip.name.clone(),
+                sample_path,
+                0.0,
+                dur_secs,
+                sr,
+                false,
+                0.0,
+                dur_secs,
+                Some(clip.color),
+                (clip.id, clip.duration_ticks),
+                Some(clip.start_tick),
+            )
+        }
     };
     let _ = track_color;
 
     // Caché de envolvente
-    let env_id = egui::Id::new("ade_env").with(slot).with(env_key);
+    let env_id = egui::Id::new("ade_env").with(target).with(env_key);
     let env: Env = match ui.ctx().data(|d| d.get_temp::<std::sync::Arc<Env>>(env_id)) {
         Some(e) => (*e).clone(),
         None => {
-            let e = app
-                .matrix_state
-                .slot(slot.0, slot.1)
-                .and_then(|s| s.clip.as_ref())
-                .map(build_env)
-                .unwrap_or(Env { frames: 0, ch: vec![], energy: vec![] });
+            let e = match target {
+                AudioEditorTarget::Matrix { track, slot } => app
+                    .matrix_state
+                    .slot(track, slot)
+                    .and_then(|s| s.clip.as_ref())
+                    .map(build_env)
+                    .unwrap_or(Env { frames: 0, ch: vec![], energy: vec![] }),
+                AudioEditorTarget::Playlist { clip_id } => {
+                    if let Some((_, clip)) = app.playlist_state.clips.iter().find(|(_, c)| c.id == clip_id) {
+                        if let playlist::ClipType::Audio { peaks, .. } = &clip.clip_type {
+                            build_env_from_playlist(&path, peaks)
+                        } else {
+                            Env { frames: 0, ch: vec![], energy: vec![] }
+                        }
+                    } else {
+                        Env { frames: 0, ch: vec![], energy: vec![] }
+                    }
+                }
+            };
             ui.ctx().data_mut(|d| d.insert_temp(env_id, std::sync::Arc::new(e.clone())));
             e
         }
@@ -330,7 +439,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
     let mut v: ViewState = ui.ctx().data(|d| d.get_temp(vid)).unwrap_or(ViewState {
         ppb: DEFAULT_PPB,
         scroll_beats: -2.4,
-        key: (usize::MAX, 0),
+        key: None,
         auto_fades: true,
         gain: false,
         pan: false,
@@ -340,8 +449,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         onsets: true,
         snap_beats: 0.25,
     });
-    if v.key != slot {
-        v.key = slot;
+    if v.key != Some(target) {
+        v.key = Some(target);
         v.ppb = DEFAULT_PPB;
         v.scroll_beats = -2.4;
     }
@@ -857,11 +966,21 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         stretch_data.dirty_engine = true;
         let stretched_dur_secs = stretch_data.stretch_beats * spb;
         let was_full_loop = (loop_e - loop_s - ev_len).abs() < 0.05 || loop_e <= loop_s;
-        if let Some(clip) = app.matrix_state.slot_mut(slot.0, slot.1).and_then(|s| s.clip.as_mut()) {
-            clip.duration_secs = stretched_dur_secs;
-            if was_full_loop {
-                clip.loop_start = 0;
-                clip.loop_end = (stretched_dur_secs * sr).round().max(1.0) as u64;
+        match target {
+            AudioEditorTarget::Matrix { track, slot } => {
+                if let Some(clip) = app.matrix_state.slot_mut(track, slot).and_then(|s| s.clip.as_mut()) {
+                    clip.duration_secs = stretched_dur_secs;
+                    if was_full_loop {
+                        clip.loop_start = 0;
+                        clip.loop_end = (stretched_dur_secs * sr).round().max(1.0) as u64;
+                    }
+                }
+            }
+            AudioEditorTarget::Playlist { clip_id: pid } => {
+                if let Some((_, clip)) = app.playlist_state.clips.iter_mut().find(|(_, c)| c.id == pid) {
+                    clip.duration_ticks = ((stretched_dur_secs / secs_per_tick).round() as u64).max(1);
+                    app.playlist_state.needs_full_sync = true;
+                }
             }
         }
     }
@@ -1011,12 +1130,14 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
         let end_secs = (le * spb).max(start_secs);
         let start_frames = (start_secs * sr).round() as u64;
         let end_frames = ((end_secs * sr).round() as u64).max(start_frames + 1);
-        if let Some(clip) = app.matrix_state.slot_mut(slot.0, slot.1).and_then(|s| s.clip.as_mut()) {
-            clip.loop_start = start_frames;
-            clip.loop_end = end_frames;
-            clip.loop_enabled = loop_en;
+        if let AudioEditorTarget::Matrix { track, slot } = target {
+            if let Some(clip) = app.matrix_state.slot_mut(track, slot).and_then(|s| s.clip.as_mut()) {
+                clip.loop_start = start_frames;
+                clip.loop_end = end_frames;
+                clip.loop_enabled = loop_en;
+            }
+            app.audio_proxy.set_clip_loop(track, slot, start_secs as f32, end_secs as f32, loop_en);
         }
-        app.audio_proxy.set_clip_loop(slot.0, slot.1, start_secs as f32, end_secs as f32, loop_en);
     }
 
     let hovered_onset = active_odrag
@@ -1313,9 +1434,21 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, slot: (usize, usize)) {
 
     // Playhead interno del clip (cuando este clip está reproduciéndose)
     if app.is_playing() {
-        if let Some(frame) = app.clip_playhead_frame(slot.0, slot.1) {
-            let engine_sr = app.transport.sample_rate.get().max(1.0) as f64;
-            let playhead_beats = (frame as f64 / engine_sr) / spb;
+        let playhead_beats_opt = match target {
+            AudioEditorTarget::Matrix { track, slot } => app.clip_playhead_frame(track, slot).map(|frame| {
+                let engine_sr = app.transport.sample_rate.get().max(1.0) as f64;
+                (frame as f64 / engine_sr) / spb
+            }),
+            AudioEditorTarget::Playlist { .. } => playlist_start_tick.and_then(|start_tick| {
+                let cur_tick = app.playlist_state.playhead_tick;
+                if cur_tick >= start_tick {
+                    Some((cur_tick - start_tick) as f64 / ppqn)
+                } else {
+                    None
+                }
+            }),
+        };
+        if let Some(playhead_beats) = playhead_beats_opt {
             let px = b2x(playhead_beats);
             if px >= main.min.x && px <= main.max.x {
                 mp.line_segment(

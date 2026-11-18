@@ -3495,7 +3495,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             state.playlist_state.selected_clips = vec![cid];
             state.clip_editor.active_target =
                 Some(crate::views::detail_editor_panel::ClipEditorTarget::Playlist { clip_id: cid });
-            state.clip_editor.show_editor = true;
+            state.show_piano_roll = true;
+            state.clip_editor.show_editor = false;
         } else if let Some(cid) = clicked_clip_id {
             match state.playlist_state.active_tool {
                 playlist::PlaylistTool::Eraser => {
@@ -3654,7 +3655,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         Some(crate::views::detail_editor_panel::ClipEditorTarget::Playlist {
                             clip_id: new_id,
                         });
-                    state.clip_editor.show_editor = true;
+                    state.show_piano_roll = true;
+                    state.clip_editor.show_editor = false;
                     state.playlist_state.needs_full_sync = true;
                 } else if primary_clicked
                     && state.playlist_state.active_tool == playlist::PlaylistTool::Time

@@ -194,7 +194,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         inactive_fg,
                         |p, r, fg| icons::paint_note_editor(p, r, fg),
                     )
-                    .on_hover_text("Toggle Note Editor Panel")
+                    .on_hover_text("Show Detail Editor Panel")
                     .clicked()
                     {
                         state.show_piano_roll = !state.show_piano_roll;
