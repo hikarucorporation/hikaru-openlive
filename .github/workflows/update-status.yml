@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate status.svg
+      - name: Generate status figures
         run: python3 docs/bitwig-parity/generate_status.py
 
       - name: Validate generated files
@@ -32,12 +32,12 @@ jobs:
 
       - name: Commit changes
         run: |
-          if git diff --quiet -- docs/bitwig-parity/status.svg docs/bitwig-parity/features_bitwig.json; then
-            echo "status.svg is already up to date"
+          if git diff --quiet -- docs/bitwig-parity/status.svg docs/bitwig-parity/parity-detail.svg docs/bitwig-parity/features_bitwig.json; then
+            echo "status figures are already up to date"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/bitwig-parity/status.svg docs/bitwig-parity/features_bitwig.json
-          git commit -m "chore(status): regenerate Bitwig 5.1.7 parity treemap"
+          git add docs/bitwig-parity/status.svg docs/bitwig-parity/parity-detail.svg docs/bitwig-parity/features_bitwig.json
+          git commit -m "chore(status): regenerate Bitwig 5.1.7 parity figures"
           git push

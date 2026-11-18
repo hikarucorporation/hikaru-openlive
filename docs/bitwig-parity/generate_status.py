@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Generate the Hikaru OpenLive vs Bitwig Studio 5.1.7 status treemap.
+"""Generate the Hikaru OpenLive vs Bitwig Studio 5.1.7 status figures.
 
-The figure is a squarified treemap: one tile per area, its area proportional to
-the number of tracked features, filled from the left by the share already done.
-A six-pixel status bar at the bottom of every tile carries Done (green) and
-In progress (orange); the red badge counts the area's open bugs.
+Two figures are produced from the same database:
+
+* ``status.svg`` — squarified treemap: one tile per area, its area proportional
+  to the number of tracked features, filled from the left by the share already
+  done. A six-pixel status bar at the bottom of every tile carries Done (green)
+  and In progress (orange); the red badge counts the area's open bugs.
+* ``parity-detail.svg`` — a tall poster that names every tracked feature,
+  grouped by area and ordered In progress, Done, Planned, so the list itself
+  answers "what do I already have and what is missing".
 
 Only the Python standard library is used, so it runs unchanged in GitHub
 Actions.
 
 Usage:
     python3 docs/bitwig-parity/generate_status.py
-    python3 docs/bitwig-parity/generate_status.py [features.json] [status.svg]
+    python3 docs/bitwig-parity/generate_status.py [features.json] [status.svg] [parity-detail.svg]
     python3 docs/bitwig-parity/generate_status.py --check
 
 When the file is generated, the ``summary`` object in the JSON is refreshed so
@@ -416,6 +421,447 @@ def render(document: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+# --------------------------------------------------------------------------- #
+# Detailed poster: every tracked feature by area, with its status.
+# --------------------------------------------------------------------------- #
+DETAIL_WIDTH = 1400
+DETAIL_MARGIN = 32
+DETAIL_TOP = 250.0
+CHIP_HEIGHT = 22.0
+CHIP_ROW_GAP = 4.0
+CHIP_COL_GAP = 14.0
+GROUP_GAP = 16.0
+CHIP_FONT = 12.5
+AREA_HEADER_H = 56.0
+AREA_BOTTOM_PAD = 22.0
+
+STATUS_ORDER = {"in_progress": 0, "done": 1, "planned": 2}
+STATUS_COLOR = {"done": DONE, "in_progress": IN_PROGRESS, "planned": PLANNED}
+
+
+def truncate_to_width(text: str, max_width: float, size: float) -> str:
+    """Cut ``text`` to fit ``max_width`` and append an ellipsis when needed."""
+    if text_width(text, size) <= max_width:
+        return text
+    ellipsis = "…"
+    available = max_width - text_width(ellipsis, size)
+    cut = len(text)
+    while cut > 0 and text_width(text[:cut], size) > available:
+        cut -= 1
+    return text[:cut].rstrip() + ellipsis
+
+
+def detail_columns(area_id: str) -> int:
+    """Pick a column count that keeps the longest names of the area readable."""
+    if area_id in ("builtin-devices-fx", "modulators"):
+        return 6
+    if area_id in ("browser-files", "ui-workflow", "clip-launcher", "arranger"):
+        return 4
+    return 5
+
+
+def ordered_features(features: list[dict]) -> list[dict]:
+    """Order by status (in progress, done, planned) keeping document order."""
+    return sorted(
+        features,
+        key=lambda feature: STATUS_ORDER.get(feature.get("status"), 99),
+    )
+
+
+def layout_area(
+    area: dict, top: float
+) -> tuple[list[tuple[float, float, dict]], list[tuple[str, float]], float]:
+    """Place one area's chips and return (chips, group starts, bottom y).
+
+    Each chip is ``(x, y, feature)`` in absolute poster coordinates. Rows are
+    fixed height and long names are truncated, so the layout is deterministic.
+    A status change always starts a new row, leaving the previous row as-is.
+    """
+    features = ordered_features(area.get("features", []))
+    columns = detail_columns(area.get("id", ""))
+    content_w = DETAIL_WIDTH - 2 * DETAIL_MARGIN
+    column_w = (content_w - (columns - 1) * CHIP_COL_GAP) / columns
+
+    chips: list[tuple[float, float, dict]] = []
+    groups: list[tuple[str, float]] = []
+    column = 0
+    row_top = top + AREA_HEADER_H
+    if features:
+        groups.append((features[0].get("status"), row_top))
+    previous_status = None
+    for feature in features:
+        status = feature.get("status")
+        if previous_status is not None and status != previous_status:
+            row_top += CHIP_HEIGHT + CHIP_ROW_GAP + GROUP_GAP
+            groups.append((status, row_top))
+            column = 0
+        elif column == columns:
+            row_top += CHIP_HEIGHT + CHIP_ROW_GAP
+            column = 0
+        x = DETAIL_MARGIN + column * (column_w + CHIP_COL_GAP)
+        chips.append((x, row_top, feature))
+        column += 1
+        previous_status = status
+
+    bottom = row_top + CHIP_HEIGHT + AREA_BOTTOM_PAD
+    return chips, groups, bottom
+
+
+def render_detail(document: dict) -> str:
+    """Render the tall poster that lists every tracked feature."""
+    summary = summary_of(document)
+    total = summary["features"]
+    done = summary["done"]
+    in_progress = summary["in_progress"]
+    planned = summary["planned"]
+    parity = summary["parity_percent"]
+    bugs = summary["bugs"]
+    reference = document.get("reference", {})
+    ref_name = reference.get("name", "Bitwig Studio")
+    ref_version = reference.get("version", "")
+    ref_revision = reference.get("revision", "")
+    ref = f"{ref_name} {ref_version}".strip()
+    product = document.get("product", "Hikaru OpenLive")
+    audit = document.get("audit", {})
+    audit_date = audit.get("date", "")
+    workspace_version = audit.get("hikaru_workspace_version", "")
+    catalog = audit.get("bitwig_catalog", {})
+    devices = int(catalog.get("devices", 0))
+    modulators = int(catalog.get("modulators", 0))
+    catalog_total = devices + modulators
+
+    areas = document.get("areas", [])
+    content_w = DETAIL_WIDTH - 2 * DETAIL_MARGIN
+    body: list[str] = []
+    add = body.append
+
+    add(f'<rect width="{DETAIL_WIDTH}" height="__HEIGHT__" fill="{BG}"/>')
+
+    # ---------------------------------------------------------------- header
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="48" font-size="25" font-weight="700" '
+        f'fill="{TEXT}">{escape(product)} vs {escape(ref)}</text>'
+    )
+    subtitle = f"Paridad funcional sobre un catálogo de {total} features"
+    if ref_revision:
+        subtitle += f" · revisión {ref_revision}"
+    if audit_date:
+        subtitle += f" · auditoría {audit_date}"
+    if workspace_version:
+        subtitle += f" · workspace {workspace_version}"
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="72" font-size="12.5" fill="{MUTED}">'
+        f"{escape(subtitle)}</text>"
+    )
+
+    # Legend, top right.
+    legend_x = DETAIL_WIDTH - DETAIL_MARGIN
+    for label, color in (
+        ("Pendiente", PLANNED),
+        ("En progreso", IN_PROGRESS),
+        ("Hecho", DONE),
+    ):
+        width = text_width(label, 12.0)
+        legend_x -= width
+        add(
+            f'<rect x="{round1(legend_x - 16)}" y="38" width="9" height="9" '
+            f'rx="2" fill="{color}"/>'
+        )
+        add(
+            f'<text x="{round1(legend_x)}" y="47" font-size="12" fill="{MUTED}">'
+            f"{escape(label)}</text>"
+        )
+        legend_x -= 34
+
+    # Headline number and the three status counters.
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="138" font-size="52" font-weight="700" '
+        f'fill="{TEXT}">{parity} %</text>'
+    )
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="160" font-size="12" fill="{MUTED}">'
+        f"{done} de {total} features implementadas</text>"
+    )
+
+    stat_x = DETAIL_MARGIN + 210.0
+    for offset, (value, label, color) in enumerate(
+        (
+            (done, "Hecho", DONE),
+            (in_progress, "En progreso", IN_PROGRESS),
+            (planned, "Pendiente", PLANNED),
+        )
+    ):
+        x = stat_x + offset * 150.0
+        add(
+            f'<text x="{round1(x)}" y="118" font-size="28" font-weight="700" '
+            f'fill="{color}">{value}</text>'
+        )
+        add(
+            f'<text x="{round1(x)}" y="138" font-size="11.5" fill="{MUTED}">'
+            f"{escape(label)}</text>"
+        )
+
+    if bugs:
+        x = stat_x + 3 * 150.0
+        add(
+            f'<text x="{round1(x)}" y="118" font-size="28" font-weight="700" '
+            f'fill="{BUG}">{bugs}</text>'
+        )
+        add(
+            f'<text x="{round1(x)}" y="138" font-size="11.5" fill="{MUTED}">'
+            f"bug{'s' if bugs != 1 else ''} abierto{'s' if bugs != 1 else ''}</text>"
+        )
+
+    # Stacked progress bar.
+    bar_y = 180.0
+    bar_h = 12.0
+    add(
+        f'<rect x="{DETAIL_MARGIN}" y="{bar_y}" width="{content_w}" '
+        f'height="{bar_h}" rx="6" fill="{TILE_BG}"/>'
+    )
+    cursor = float(DETAIL_MARGIN)
+    for value, color in ((done, DONE), (in_progress, IN_PROGRESS)):
+        width = content_w * value / total if total else 0.0
+        if width > 0:
+            add(
+                f'<rect x="{round1(cursor)}" y="{bar_y}" width="{round1(width)}" '
+                f'height="{bar_h}" fill="{color}"/>'
+            )
+            cursor += width
+
+    # Caption.
+    catalog_done = sum(
+        1
+        for area in areas
+        if area.get("id") in ("builtin-devices-fx", "modulators")
+        for feature in area.get("features", [])
+        if feature.get("status") == "done"
+    )
+    catalog_left = catalog_total - catalog_done
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="{bar_y + 30}" font-size="12" fill="{MUTED}">'
+        f"{catalog_left} de {catalog_total} features del catálogo de Bitwig "
+        f"({devices} devices + {modulators} modulators) siguen pendientes.</text>"
+    )
+    add(
+        f'<text x="{DETAIL_WIDTH - DETAIL_MARGIN}" y="{bar_y + 30}" font-size="12" '
+        f'text-anchor="end" fill="{MUTED}">Verde = implementado · Naranja = en '
+        f"progreso · Gris = pendiente</text>"
+    )
+
+    # --------------------------------------------------------- area summary
+    y = DETAIL_TOP
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="{round1(y)}" font-size="11" '
+        f'letter-spacing="1.4" fill="{MUTED}">RESUMEN POR ÁREA</text>'
+    )
+    y += 14.0
+    row_h = 24.0
+    rows = (len(areas) + 1) // 2
+    column_w = (content_w - 28.0) / 2
+    for index, area in enumerate(areas):
+        col = index // rows
+        row = index % rows
+        x = DETAIL_MARGIN + col * (column_w + 28.0)
+        row_y = y + row * row_h
+        features = area.get("features", [])
+        area_total = len(features)
+        area_done = sum(1 for f in features if f.get("status") == "done")
+        pct = round(area_done * 100.0 / area_total) if area_total else 0
+        name = area.get("name", area.get("id", ""))
+        add(
+            f'<text x="{round1(x)}" y="{round1(row_y + 11)}" font-size="12" '
+            f'fill="{TEXT}">{escape(name)}</text>'
+        )
+        bar_x = x + column_w * 0.52
+        bar_w = column_w * 0.30
+        add(
+            f'<rect x="{round1(bar_x)}" y="{round1(row_y + 5)}" '
+            f'width="{round1(bar_w)}" height="5" rx="2.5" fill="{TILE_BG}"/>'
+        )
+        if area_total and area_done:
+            add(
+                f'<rect x="{round1(bar_x)}" y="{round1(row_y + 5)}" '
+                f'width="{round1(bar_w * area_done / area_total)}" height="5" '
+                f'rx="2.5" fill="{DONE}"/>'
+            )
+        add(
+            f'<text x="{round1(x + column_w)}" y="{round1(row_y + 11)}" '
+            f'font-size="11.5" text-anchor="end" fill="{MUTED}">'
+            f"{area_done}/{area_total} · {pct} %</text>"
+        )
+    y += rows * row_h + 22.0
+
+    # ------------------------------------------------------- feature blocks
+    catalog_heading = f"CATÁLOGO DE BITWIG · {catalog_total} FEATURES"
+    catalog_shown = False
+
+    for area in areas:
+        area_id = area.get("id", "")
+        features = area.get("features", [])
+        if not features:
+            continue
+
+        if area_id in ("builtin-devices-fx", "modulators") and not catalog_shown:
+            add(
+                f'<line x1="{DETAIL_MARGIN}" y1="{round1(y + 10)}" '
+                f'x2="{DETAIL_WIDTH - DETAIL_MARGIN}" y2="{round1(y + 10)}" '
+                f'stroke="{PLANNED}" stroke-opacity="0.35" stroke-width="1"/>'
+            )
+            add(
+                f'<text x="{DETAIL_MARGIN}" y="{round1(y + 2)}" font-size="11" '
+                f'letter-spacing="1.4" fill="{MUTED}">{catalog_heading}</text>'
+            )
+            y += 24.0
+            catalog_shown = True
+
+        area_done = sum(1 for f in features if f.get("status") == "done")
+        area_ip = sum(1 for f in features if f.get("status") == "in_progress")
+        area_total = len(features)
+        pct = round(area_done * 100.0 / area_total) if area_total else 0
+        name = area.get("name", area_id)
+
+        add(
+            f'<text x="{DETAIL_MARGIN}" y="{round1(y + 16)}" font-size="15" '
+            f'font-weight="600" fill="{TEXT}">{escape(name)}</text>'
+        )
+        count_text = f"{area_done} de {area_total} · {pct} %"
+        count_width = text_width(count_text, 11.5)
+        add(
+            f'<text x="{DETAIL_WIDTH - DETAIL_MARGIN}" y="{round1(y + 16)}" '
+            f'font-size="11.5" text-anchor="end" fill="{MUTED}">'
+            f"{escape(count_text)}</text>"
+        )
+        anchor_right = DETAIL_WIDTH - DETAIL_MARGIN - count_width - 14
+        if area_ip:
+            ip_text = f"{area_ip} en progreso"
+            ip_width = text_width(ip_text, 11.0)
+            add(
+                f'<text x="{round1(anchor_right)}" y="{round1(y + 16)}" '
+                f'font-size="11" text-anchor="end" fill="{MUTED}">'
+                f"{escape(ip_text)}</text>"
+            )
+            anchor_right -= ip_width + 10.0
+        if int(area.get("bugs", 0)):
+            badge_w = 52.0
+            badge_x = anchor_right - badge_w
+            add(
+                f'<rect x="{round1(badge_x)}" y="{round1(y + 2)}" '
+                f'width="{badge_w}" height="16" rx="4" fill="{BUG}"/>'
+            )
+            add(
+                f'<text x="{round1(badge_x + badge_w / 2)}" '
+                f'y="{round1(y + 14)}" font-size="10.5" font-weight="600" '
+                f'text-anchor="middle" fill="#ffffff">'
+                f"{int(area.get('bugs', 0))} bug</text>"
+            )
+
+        add(
+            f'<rect x="{DETAIL_MARGIN}" y="{round1(y + 25)}" width="{content_w}" '
+            f'height="4" rx="2" fill="{TILE_BG}"/>'
+        )
+        cursor = float(DETAIL_MARGIN)
+        for value, color in ((area_done, DONE), (area_ip, IN_PROGRESS)):
+            width = content_w * value / area_total
+            if width > 0:
+                add(
+                    f'<rect x="{round1(cursor)}" y="{round1(y + 25)}" '
+                    f'width="{round1(width)}" height="4" fill="{color}"/>'
+                )
+                cursor += width
+
+        chips, groups, y = layout_area(area, y)
+        columns = detail_columns(area_id)
+        column_w = (content_w - (columns - 1) * CHIP_COL_GAP) / columns
+        text_max = column_w - 20.0
+        status_counts = {
+            status: sum(1 for f in features if f.get("status") == status)
+            for status in STATUSES
+        }
+        group_labels = {
+            "in_progress": "EN PROGRESO",
+            "done": "HECHO",
+            "planned": "PENDIENTE",
+        }
+        for status, group_y in groups:
+            add(
+                f'<text x="{DETAIL_MARGIN}" y="{round1(group_y - 4)}" '
+                f'font-size="9.5" font-weight="600" letter-spacing="1.2" '
+                f'fill="{STATUS_COLOR.get(status, PLANNED)}" fill-opacity="0.9">'
+                f"{group_labels.get(status, '')} · {status_counts.get(status, 0)}"
+                f"</text>"
+            )
+        for x, chip_y, feature in chips:
+            status = feature.get("status")
+            color = STATUS_COLOR.get(status, PLANNED)
+            label = feature.get("name", feature.get("id", ""))
+            short = truncate_to_width(label, text_max, CHIP_FONT)
+            feature_id = feature.get("id", "")
+            evidence = feature.get("evidence", "")
+            tooltip = label
+            if feature_id:
+                tooltip += f" ({feature_id})"
+            if evidence:
+                tooltip += f" — {evidence}"
+            add(
+                f'<g><title>{escape(tooltip)}</title>'
+                f'<rect x="{round1(x)}" y="{round1(chip_y)}" width="9" height="9" '
+                f'rx="2" fill="{color}"'
+                + (' fill-opacity="0.45"' if status == "planned" else "")
+                + "/>"
+                f'<text x="{round1(x + 16)}" y="{round1(chip_y + 9)}" '
+                f'font-size="{CHIP_FONT}" fill="'
+                + (TEXT if status != "planned" else MUTED)
+                + f'">{escape(short)}</text></g>'
+            )
+
+    # ---------------------------------------------------------------- footer
+    y += 6.0
+    add(
+        f'<line x1="{DETAIL_MARGIN}" y1="{round1(y)}" '
+        f'x2="{DETAIL_WIDTH - DETAIL_MARGIN}" y2="{round1(y)}" '
+        f'stroke="{PLANNED}" stroke-opacity="0.35" stroke-width="1"/>'
+    )
+    footer = (
+        "Fuente: docs/bitwig-parity/features_bitwig.json · "
+        "generado por generate_status.py"
+    )
+    if audit_date:
+        footer += f" · auditoría {audit_date}"
+    footer += f" · referencia {ref}"
+    if ref_revision:
+        footer += f" (rev {ref_revision})"
+    add(
+        f'<text x="{DETAIL_MARGIN}" y="{round1(y + 22)}" font-size="11" '
+        f'fill="{MUTED}">{escape(footer)}</text>'
+    )
+    add(
+        f'<text x="{DETAIL_WIDTH - DETAIL_MARGIN}" y="{round1(y + 22)}" '
+        f'font-size="11" text-anchor="end" fill="{MUTED}">'
+        f"{done} hechas · {in_progress} en progreso · {planned} pendientes</text>"
+    )
+    height = y + 44.0
+
+    # ---------------------------------------------------------------- output
+    aria = (
+        f"{product} vs {ref}: every tracked feature by area, "
+        f"{done} of {total} done"
+    )
+    head = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{DETAIL_WIDTH}" '
+        f'height="{round1(height)}" viewBox="0 0 {DETAIL_WIDTH} {round1(height)}" '
+        f'font-family="{FONT_FAMILY}" role="img" aria-label="{escape(aria)}">',
+        f"<title>{escape(aria)}</title>",
+        (
+            f"<desc>Feature-by-feature parity of {escape(product)} against "
+            f"{escape(ref)}: {done} done, {in_progress} in progress, "
+            f"{planned} planned, {bugs} open bug(s).</desc>"
+        ),
+    ]
+    rendered = "\n".join(head + body).replace("__HEIGHT__", f"{round1(height)}")
+    return rendered + "\n</svg>\n"
+
+
 def main(argv: list[str]) -> int:
     # Defaults live next to this script, so the parity directory is portable:
     # it can be executed from the repo root, from CI, or from anywhere else.
@@ -424,6 +870,7 @@ def main(argv: list[str]) -> int:
     check = "--check" in argv
     features_path = args[0] if args else os.path.join(base, "features_bitwig.json")
     svg_path = args[1] if len(args) > 1 else os.path.join(base, "status.svg")
+    detail_path = args[2] if len(args) > 2 else os.path.join(base, "parity-detail.svg")
 
     with open(features_path, "r", encoding="utf-8") as handle:
         document = json.load(handle)
@@ -436,30 +883,38 @@ def main(argv: list[str]) -> int:
             handle.write("\n")
 
     svg = render(document)
+    detail_svg = render_detail(document)
     if check:
         problems = []
         if document.get("summary") != summary:
             problems.append("summary in features JSON is stale")
-        if os.path.exists(svg_path):
-            with open(svg_path, "r", encoding="utf-8") as handle:
-                if handle.read() != svg:
-                    problems.append("status.svg is stale")
-        else:
-            problems.append("status.svg is missing")
+        for path, generated, label in (
+            (svg_path, svg, "status.svg"),
+            (detail_path, detail_svg, "parity-detail.svg"),
+        ):
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as handle:
+                    if handle.read() != generated:
+                        problems.append(f"{label} is stale")
+            else:
+                problems.append(f"{label} is missing")
         if problems:
             for problem in problems:
                 print(f"error: {problem}", file=sys.stderr)
             print("run: python3 docs/bitwig-parity/generate_status.py", file=sys.stderr)
             return 1
-        print("status figure is up to date")
+        print("status figures are up to date")
         return 0
 
     with open(svg_path, "w", encoding="utf-8") as handle:
         handle.write(svg)
+    with open(detail_path, "w", encoding="utf-8") as handle:
+        handle.write(detail_svg)
 
     print(
-        f"wrote {svg_path}: {summary['done']} of {summary['features']} features done "
-        f"({summary['parity_percent']}%), {summary['bugs']} open bug(s)"
+        f"wrote {svg_path} and {detail_path}: {summary['done']} of "
+        f"{summary['features']} features done ({summary['parity_percent']}%), "
+        f"{summary['bugs']} open bug(s)"
     )
     return 0
 

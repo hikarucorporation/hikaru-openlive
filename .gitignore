@@ -18,6 +18,10 @@ hikaru_openlive
 # El caché de Ghidra (proyectos de análisis, pesados).
 /var/tmp/hikaru/
 
+# Caché de Python (scripts de docs, tests, herramientas locales).
+__pycache__/
+*.py[cod]
+
 # Logs y archivos personales de OpenCode.
 # .opencode/
 

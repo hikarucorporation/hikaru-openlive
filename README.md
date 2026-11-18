@@ -5,10 +5,14 @@
 ## 📊 Feature Parity vs Bitwig Studio 5.1.7
 
 <p align="center">
-  <img src="docs/bitwig-parity/status.svg" width="680" alt="Hikaru OpenLive feature parity against Bitwig Studio 5.1.7: squarified treemap of done, in-progress and planned features by area">
+  <a href="docs/bitwig-parity/parity-detail.svg">
+    <img src="docs/bitwig-parity/status.svg" width="680" alt="Hikaru OpenLive feature parity against Bitwig Studio 5.1.7: squarified treemap of done, in-progress and planned features by area">
+  </a>
+  <br>
+  <sub>Click the figure to open <a href="docs/bitwig-parity/parity-detail.svg">parity-detail.svg</a>, the full poster that names every done, in-progress and missing feature.</sub>
 </p>
 
-This squarified treemap measures **functional parity against Bitwig Studio 5.1.7** (revision 143754) using the feature catalog in [`docs/bitwig-parity/features_bitwig.json`](docs/bitwig-parity/features_bitwig.json). Each tile is sized by the number of tracked features in that area and filled by the share already **done**; the bottom bar shows **done / in progress / planned**, and the red badge counts **open bugs**. The SVG is regenerated automatically by [`docs/bitwig-parity/generate_status.py`](docs/bitwig-parity/generate_status.py) on every push to `main`. See the full evidence in [`docs/bitwig-parity/bitwig-5.1.7-parity-audit.md`](docs/bitwig-parity/bitwig-5.1.7-parity-audit.md).
+This squarified treemap measures **functional parity against Bitwig Studio 5.1.7** (revision 143754) using the feature catalog in [`docs/bitwig-parity/features_bitwig.json`](docs/bitwig-parity/features_bitwig.json). Each tile is sized by the number of tracked features in that area and filled by the share already **done**; the bottom bar shows **done / in progress / planned**, and the red badge counts **open bugs**. The companion poster [`docs/bitwig-parity/parity-detail.svg`](docs/bitwig-parity/parity-detail.svg) lists all 398 features by area, ordered **in progress → done → planned**, so you can see exactly what Hikaru already has and what is still missing. Both SVGs are regenerated automatically by [`docs/bitwig-parity/generate_status.py`](docs/bitwig-parity/generate_status.py) on every push to `main`. See the full evidence in [`docs/bitwig-parity/bitwig-5.1.7-parity-audit.md`](docs/bitwig-parity/bitwig-5.1.7-parity-audit.md).
 
 ## Thank you to [PixelSoftwareStudios](https://github.com/PixelSoftwareStudios) for listing Hikaru OpenLive in [remade.wiki](https://remade.wiki/projects/hikaru-openlive/): [![Listed on Remade](https://remade.wiki/badges/listed-on-remade.svg)](https://remade.wiki/projects/hikaru-openlive/)
 
