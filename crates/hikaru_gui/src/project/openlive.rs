@@ -78,9 +78,13 @@ pub fn capture(state: &AppState) -> OpenLiveProject {
         metadata: capture_metadata(&matrix),
         transport: Transport {
             bpm: state.transport.bpm,
-            time_signature: [state.transport.beats_per_bar, 4],
-            launch_quantization: format!("1/{}", state.transport.beat_division),
-            tap_tempo_enabled: false,
+            time_signature: [state.transport.beats_per_bar, state.transport.beat_division],
+            launch_quantization: state
+                .matrix_state
+                .global_launch_quantization
+                .to_notation()
+                .to_string(),
+            tap_tempo_enabled: state.tap_tempo_enabled,
             loop_start_ticks: state.transport.samples_to_ticks(state.transport.loop_start_samples),
             loop_end_ticks: state.transport.samples_to_ticks(state.transport.loop_end_samples),
             loop_enabled: state.transport.loop_enabled,
@@ -162,7 +166,12 @@ fn capture_matrix(state: &matrix::SessionMatrixState) -> Matrix {
         scenes: state
             .scenes
             .iter()
-            .map(|s| SceneMeta { name: s.name.clone() })
+            .map(|s| SceneMeta {
+                name: s.name.clone(),
+                launch_quantization: s
+                    .launch_quantization
+                    .map(|q| q.to_notation().to_string()),
+            })
             .collect(),
         grid: state
             .grid
@@ -222,6 +231,7 @@ fn capture_clip(clip: &matrix::MatrixClip) -> Clip {
         loop_start: clip.loop_start,
         loop_end: clip.loop_end,
         loop_enabled: clip.loop_enabled,
+        launch_legato: Some(clip.launch_legato),
         volume: clip.local_track.volume,
         pan: clip.local_track.pan,
         mute: clip.local_track.mute,
@@ -255,8 +265,17 @@ pub fn apply(state: &mut AppState, project: &OpenLiveProject, base_dir: Option<&
     let bpm = project.transport.bpm.clamp(crate::app::BPM_MIN, crate::app::BPM_MAX);
     state.transport.bpm = bpm;
     state.transport.beats_per_bar = project.transport.time_signature[0].max(1);
-    state.transport.beat_division = project.transport.quantization_denominator();
+    state.transport.beat_division = project.transport.time_signature[1].max(1);
+    state.tap_tempo_enabled = project.transport.tap_tempo_enabled;
+    state.tap_tempo.reset();
+    let global_q = hikaru_sequencer::QuantizationGrid::from_notation(
+        &project.transport.launch_quantization,
+    )
+    .unwrap_or(hikaru_sequencer::QuantizationGrid::Quarter);
     state.audio_proxy.send(GuiCommand::SetBpm(bpm as f32));
+    state
+        .audio_proxy
+        .send(GuiCommand::SetGlobalLaunchQuantization { grid: global_q });
 
     // --- Canales de mezcla ------------------------------------------------
     state.live_tracks = common::tracks_or_default(&project.live_tracks, common::default_live_tracks);
@@ -271,7 +290,7 @@ pub fn apply(state: &mut AppState, project: &OpenLiveProject, base_dir: Option<&
     // La matriz manda sobre el mixer del modo OpenLive (es el que se edita
     // desde los headers de la Session Matrix), así que se re-sincroniza en
     // ambos sentidos con los valores recién cargados.
-    apply_matrix(state, &project.matrix, base_dir);
+    apply_matrix(state, &project.matrix, base_dir, global_q);
 
     // El orden importa y es el inverso al del arranque. Al abrir, el archivo
     // manda: primero se arma el mixer desde `live_tracks`, después la matriz
@@ -322,9 +341,15 @@ fn openlive_view_from_u8(v: u8) -> OpenLiveView {
     }
 }
 
-fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
+fn apply_matrix(
+    state: &mut AppState,
+    saved: &Matrix,
+    base_dir: Option<&Path>,
+    global_q: hikaru_sequencer::QuantizationGrid,
+) {
     let mut next = matrix::SessionMatrixState::default();
     next.next_clip_id = saved.next_clip_id.max(1);
+    next.global_launch_quantization = global_q;
 
     next.tracks = saved
         .tracks
@@ -340,8 +365,20 @@ fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
     next.scenes = saved
         .scenes
         .iter()
-        .map(|s| matrix::SceneMeta { name: s.name.clone() })
+        .map(|s| matrix::SceneMeta {
+            name: s.name.clone(),
+            launch_quantization: s
+                .launch_quantization
+                .as_deref()
+                .and_then(hikaru_sequencer::QuantizationGrid::from_notation),
+        })
         .collect();
+    for (scene_idx, s) in next.scenes.iter().enumerate() {
+        state.audio_proxy.send(GuiCommand::SetSceneLaunchQuantization {
+            scene_idx,
+            grid: s.launch_quantization,
+        });
+    }
 
     // La grilla del archivo manda en las dimensiones. Si viene vacía (proyecto
     // a medio hacer) se deja la grilla por defecto.
@@ -457,15 +494,33 @@ fn apply_matrix(state: &mut AppState, saved: &Matrix, base_dir: Option<&Path>) {
                         scene_idx,
                         notes: notes.clone(),
                     });
+                    state.audio_proxy.send(GuiCommand::SetMidiClipLoop {
+                        track_idx,
+                        scene_idx,
+                        loop_start_ticks: clip.loop_start,
+                        loop_end_ticks: clip.loop_end.max(clip.loop_start + 240),
+                    });
+                    state.audio_proxy.send(GuiCommand::SetMidiClipLoopEnabled {
+                        track_idx,
+                        scene_idx,
+                        enabled: clip.loop_enabled,
+                    });
                 }
             }
 
-            state.audio_proxy.send(GuiCommand::SetClipLoop {
+            if matches!(clip.content, matrix::ClipData::Audio { .. }) {
+                state.audio_proxy.send(GuiCommand::SetClipLoop {
+                    track_idx,
+                    scene_idx,
+                    start_secs: playlist::ticks_to_secs_precise(clip.loop_start, ppqn, bpm),
+                    end_secs: playlist::ticks_to_secs_precise(clip.loop_end, ppqn, bpm),
+                    enabled: clip.loop_enabled,
+                });
+            }
+            state.audio_proxy.send(GuiCommand::SetClipLegato {
                 track_idx,
                 scene_idx,
-                start_secs: playlist::ticks_to_secs_precise(clip.loop_start, ppqn, bpm),
-                end_secs: playlist::ticks_to_secs_precise(clip.loop_end, ppqn, bpm),
-                enabled: clip.loop_enabled,
+                legato: clip.launch_legato,
             });
         }
     }
@@ -506,6 +561,7 @@ fn build_clip(saved: &Clip, base_dir: Option<&Path>) -> matrix::MatrixClip {
         loop_start: saved.loop_start,
         loop_end: saved.loop_end,
         loop_enabled: saved.loop_enabled,
+        launch_legato: saved.launch_legato.unwrap_or(true),
         has_time_selection: true,
         peaks: Vec::new(),
         muted: saved.mute,

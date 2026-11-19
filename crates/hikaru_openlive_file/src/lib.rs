@@ -140,9 +140,9 @@ pub struct Transport {
     /// valor, así que un lector externo puede reconstruir la cuadrícula de
     /// disparo sin conocer nada de la implementación.
     pub launch_quantization: String,
-    /// El transporte todavía no tiene estado de tap tempo. El campo existe por
-    /// la forma que fija la especificación; `#[serde(default)]` para que un
-    /// archivo que lo omita siga siendo válido.
+    /// Indica si el usuario activó/utilizó Tap Tempo en el transporte.
+    /// `#[serde(default)]` garantiza compatibilidad hacia atrás con archivos
+    /// viejos que omitan este campo.
     #[serde(default)]
     pub tap_tempo_enabled: bool,
     /// Región de loop global en TICKS (no en samples: los samples dependen del
@@ -216,6 +216,11 @@ pub struct TrackMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneMeta {
     pub name: String,
+    /// Override opcional de cuantización de lanzamiento para esta escena
+    /// (`"none"`, `"1/16"`, `"1/8"`, `"1/4"`, `"1/2"`, `"1/1"`). `None`
+    /// significa heredar `Transport::launch_quantization`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_quantization: Option<String>,
 }
 
 /// Un clip de un pad de la Session Matrix.
@@ -231,6 +236,10 @@ pub struct Clip {
     pub loop_start: u64,
     pub loop_end: u64,
     pub loop_enabled: bool,
+    /// Modo de lanzamiento Legato del clip: si es `Some(true)`, al dispararse
+    /// hereda la fase del clip saliente; `Some(false)` reinicia en fase 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_legato: Option<bool>,
     /// Volumen/pan/mute del canalito PROPIO del clip, que es distinto del canal
     /// de la pista que lo dispara.
     pub volume: f32,
@@ -308,6 +317,7 @@ pub fn default_matrix() -> Matrix {
     let scenes: Vec<SceneMeta> = (0..DEFAULT_SCENES)
         .map(|i| SceneMeta {
             name: format!("Scene {}", i + 1),
+            launch_quantization: None,
         })
         .collect();
 

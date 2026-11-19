@@ -343,15 +343,16 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 if show_launcher {
                     let mut legend_scene_click = None;
+                    let mut legend_scene_menu: Option<(usize, egui::Pos2)> = None;
                     scene_viewport(ui, LEGEND_COL_W, slots_view_h, scene_scroll, content_h, "mix_scene_legend", |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     for scene_idx in 0..scenes_count {
-                        let s_name = state
+                        let (s_name, q_override) = state
                             .matrix_state
                             .scenes
                             .get(scene_idx)
-                            .map(|s| s.name.clone())
-                            .unwrap_or_else(|| format!("Scene {}", scene_idx + 1));
+                            .map(|s| (s.name.clone(), s.launch_quantization))
+                            .unwrap_or_else(|| (format!("Scene {}", scene_idx + 1), None));
 
                         let (s_rect, s_resp) =
                             ui.allocate_exact_size(vec2(LEGEND_COL_W, CLIP_SLOT_H), Sense::click());
@@ -363,15 +364,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         ui.painter().rect_filled(s_rect, 1.5, s_bg);
                         let play_rect =
                             Rect::from_min_size(pos2(s_rect.min.x + 3.0, s_rect.min.y + 4.0), vec2(13.0, 13.0));
-                        // Triángulo en gris muy claro (blanqueado) para que
-                        // se distinga del texto blanco de la escena.
                         icons::paint_play_triangle(
                             ui.painter(),
                             play_rect,
                             Color32::from_rgb(0xBF, 0xC2, 0xC7),
                         );
-                        // Texto en blanco para que se lea sobre el gris de la
-                        // fila (antes era casi negro y no se distinguía).
                         ui.painter().text(
                             pos2(s_rect.min.x + 18.0, s_rect.center().y),
                             Align2::LEFT_CENTER,
@@ -379,13 +376,31 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             fonts::semibold(10.5),
                             Color32::WHITE,
                         );
+                        if let Some(ov) = q_override {
+                            ui.painter().text(
+                                pos2(s_rect.max.x - 4.0, s_rect.center().y),
+                                Align2::RIGHT_CENTER,
+                                ov.short_label(),
+                                fonts::semibold(8.5),
+                                ACCENT_ORANGE,
+                            );
+                        }
                         if s_resp.clicked() {
                             legend_scene_click = Some(scene_idx);
+                        } else if s_resp.secondary_clicked() {
+                            if let Some(pos) = s_resp.interact_pointer_pos() {
+                                legend_scene_menu = Some((scene_idx, pos));
+                            }
                         }
                     }
                     });
                     if legend_scene_click.is_some() {
                         trigger_scene = legend_scene_click;
+                    }
+                    if let Some((scene_idx, click_pos)) = legend_scene_menu {
+                        state.matrix_state.context_menu = None;
+                        state.matrix_state.scene_context_menu =
+                            Some(matrix::SceneContextMenu { scene_idx, click_pos });
                     }
 
                     // Fila de `+` (Add Scene) + `[■]` (Stop All Clips)
@@ -659,7 +674,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if add_scene_clicked {
-        state.matrix_state.add_scene();
+        state.matrix_state.add_scene_synced(&state.audio_proxy);
     }
 
     if add_track_clicked {
@@ -781,6 +796,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     crate::views::clip_context_menu::render_clip_context_menu(ui, state);
+    matrix::render_scene_context_menu(ui, state);
 
     if let Some(void_act) =
         crate::ui::arranger_context_menu::show(ui.ctx(), egui::Id::new("arranger_void_ctx"))
@@ -818,10 +834,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 state.selected_track_index = state.live_tracks.len().saturating_sub(1);
             }
             VoidMenuAction::AddScene => {
-                state.matrix_state.add_scene();
+                state.matrix_state.add_scene_synced(&state.audio_proxy);
             }
             VoidMenuAction::AddSceneFromPlayingClips => {
-                state.matrix_state.add_scene();
+                state.matrix_state.add_scene_synced(&state.audio_proxy);
                 let new_scene_idx = state.matrix_state.scenes.len().saturating_sub(1);
                 for t_idx in 0..state.matrix_state.grid.len() {
                     let playing_clip = state.matrix_state.grid[t_idx]

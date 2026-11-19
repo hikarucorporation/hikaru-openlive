@@ -1981,6 +1981,7 @@ dependencies = [
  "hikaru_plugin_host",
  "hikaru_project_file",
  "hikaru_render",
+ "hikaru_sequencer",
  "hikaru_transport",
  "hound",
  "image",

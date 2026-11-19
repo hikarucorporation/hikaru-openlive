@@ -155,6 +155,23 @@ pub enum GuiCommand {
         loop_start_ticks: u64,
         loop_end_ticks: u64,
     },
+    SetMidiClipLoopEnabled {
+        track_idx: usize,
+        scene_idx: usize,
+        enabled: bool,
+    },
+    SetClipLegato {
+        track_idx: usize,
+        scene_idx: usize,
+        legato: bool,
+    },
+    SetGlobalLaunchQuantization {
+        grid: hikaru_sequencer::QuantizationGrid,
+    },
+    SetSceneLaunchQuantization {
+        scene_idx: usize,
+        grid: Option<hikaru_sequencer::QuantizationGrid>,
+    },
 
     SyncPlaylistClips { 
         clips: Vec<AudioClipData> 
@@ -211,6 +228,9 @@ pub enum GuiCommand {
     },
     AddTrack,
     AddScene,
+    InsertScene {
+        scene_idx: usize,
+    },
     RemoveScene { 
         scene_idx: usize 
     },

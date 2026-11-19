@@ -535,6 +535,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                                 })
                                 .collect();
                         }
+                        app.piano_roll_state.loop_enabled = clip.loop_enabled;
                         app.piano_roll_state.loop_start_tick = clip.loop_start;
                         let clip_loop_end = if clip.loop_end > clip.loop_start {
                             clip.loop_end
@@ -1036,13 +1037,34 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
 
         let cur_bars_f = prs.loop_end_tick.saturating_sub(prs.loop_start_tick) as f32 / TICKS_PER_BAR as f32;
 
-        let mut cur_x = tb_rect.min.x + 5.0;
+        let mut cur_x = tb_rect.min.x + 4.0;
+        let loop_btn_rect = Rect::from_min_size(pos2(cur_x, tb_rect.min.y + 2.0), vec2(40.0, 16.0));
+        let loop_btn_hov = pointer_pos.map_or(false, |p| loop_btn_rect.contains(p));
+        if loop_btn_hov && primary_clicked {
+            prs.loop_enabled = !prs.loop_enabled;
+            loop_modified = true;
+        }
+        ruler_painter.rect_filled(
+            loop_btn_rect,
+            2.0,
+            if prs.loop_enabled {
+                theme::ACCENT_ORANGE
+            } else if loop_btn_hov {
+                Color32::from_rgb(0x38, 0x3A, 0x42)
+            } else {
+                Color32::from_rgb(0x23, 0x25, 0x2B)
+            },
+        );
         ruler_painter.text(
-            pos2(cur_x, tb_rect.center().y),
-            Align2::LEFT_CENTER,
-            "LENGTH",
+            loop_btn_rect.center(),
+            Align2::CENTER_CENTER,
+            "LOOP",
             fonts::semibold(8.5),
-            theme::TEXT_MUTED,
+            if prs.loop_enabled {
+                Color32::BLACK
+            } else {
+                theme::TEXT_MUTED
+            },
         );
         cur_x += 44.0;
 
@@ -2050,6 +2072,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             let bpm = app.transport.bpm;
             if let Some(slot) = app.matrix_state.slot_mut(t_idx, s_idx) {
                 if let Some(clip) = slot.clip.as_mut() {
+                    clip.loop_enabled = prs.loop_enabled;
                     clip.loop_start = prs.loop_start_tick;
                     clip.loop_end = prs.loop_end_tick;
                     clip.duration_secs = (prs.loop_end_tick as f64 / 960.0) * (60.0 / bpm.max(1.0));

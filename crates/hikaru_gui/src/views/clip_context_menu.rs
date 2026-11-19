@@ -95,6 +95,7 @@ pub enum ContextMenuAction {
     Recolor(Color32),
     ToggleMute,
     ToggleLoop,
+    ToggleLegato,
     Cut,
     Copy,
     Paste,
@@ -163,6 +164,13 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
         .slot(track_idx, scene_idx)
         .and_then(|s| s.clip.as_ref())
         .map(|c| c.loop_enabled)
+        .unwrap_or(true);
+
+    let is_clip_legato = state
+        .matrix_state
+        .slot(track_idx, scene_idx)
+        .and_then(|s| s.clip.as_ref())
+        .map(|c| c.launch_legato)
         .unwrap_or(true);
 
     let has_time_selection = state
@@ -326,6 +334,10 @@ pub fn render_clip_context_menu(ui: &mut Ui, state: &mut AppState) {
                                 }
                                 if toggle_bullet_item(ui, "Looping", is_clip_looping, true).clicked() {
                                     action = Some(ContextMenuAction::ToggleLoop);
+                                    close_menu = true;
+                                }
+                                if toggle_bullet_item(ui, "Legato Launch", is_clip_legato, true).clicked() {
+                                    action = Some(ContextMenuAction::ToggleLegato);
                                     close_menu = true;
                                 }
 
@@ -553,11 +565,23 @@ fn execute_context_menu_action(
             }
         }
         ContextMenuAction::ToggleLoop => {
-            if let Some(slot) = state.matrix_state.slot_mut(track_idx, scene_idx) {
-                if let Some(clip) = &mut slot.clip {
-                    clip.loop_enabled = !clip.loop_enabled;
-                }
-            }
+            crate::views::matrix::toggle_clip_loop(
+                &mut state.matrix_state,
+                &state.audio_proxy,
+                track_idx,
+                scene_idx,
+            );
+        }
+        ContextMenuAction::ToggleLegato => {
+            let next = !state
+                .matrix_state
+                .slot(track_idx, scene_idx)
+                .and_then(|s| s.clip.as_ref())
+                .map(|c| c.launch_legato)
+                .unwrap_or(true);
+            state
+                .matrix_state
+                .set_clip_legato(track_idx, scene_idx, next, &state.audio_proxy);
         }
         ContextMenuAction::Cut => {
             if let Some(slot) = state.matrix_state.slot(track_idx, scene_idx) {
@@ -608,14 +632,36 @@ fn execute_context_menu_action(
             }
         }
         ContextMenuAction::LoopSelectedRegion => {
-            if let Some(slot) = state.matrix_state.slot_mut(track_idx, scene_idx) {
-                if let Some(clip) = &mut slot.clip {
-                    clip.loop_enabled = true;
-                    clip.loop_start = 0;
-                    clip.loop_end = (clip.duration_secs * 960.0).round() as u64;
-                    if clip.loop_end == 0 {
-                        clip.loop_end = 3840; // 1 compás a 960 PPQ
-                    }
+            let clip_info = state
+                .matrix_state
+                .slot(track_idx, scene_idx)
+                .and_then(|s| s.clip.as_ref())
+                .map(|c| (matches!(c.content, ClipData::Midi { .. }), c.duration_secs));
+            if let Some((is_midi, dur_secs)) = clip_info {
+                if is_midi {
+                    let end_ticks = ((dur_secs * (state.transport.bpm.max(1.0) / 60.0) * 960.0)
+                        .round() as u64)
+                        .max(3840);
+                    crate::views::matrix::set_midi_clip_loop_ticks(
+                        &mut state.matrix_state,
+                        &state.audio_proxy,
+                        track_idx,
+                        scene_idx,
+                        0,
+                        end_ticks,
+                        true,
+                        state.transport.bpm,
+                    );
+                } else {
+                    crate::views::matrix::set_audio_clip_loop_secs(
+                        &mut state.matrix_state,
+                        &state.audio_proxy,
+                        track_idx,
+                        scene_idx,
+                        0.0,
+                        dur_secs.max(0.05),
+                        true,
+                    );
                 }
             }
         }
@@ -823,17 +869,10 @@ fn execute_context_menu_action(
             }
         }
         ContextMenuAction::InsertScene => {
-            state.matrix_state.add_scene();
+            state.insert_scene_at(scene_idx + 1);
         }
         ContextMenuAction::DeleteScene => {
-            if state.matrix_state.scenes.len() > 1 && scene_idx < state.matrix_state.scenes.len() {
-                state.matrix_state.scenes.remove(scene_idx);
-                for row in state.matrix_state.grid.iter_mut() {
-                    if scene_idx < row.len() {
-                        row.remove(scene_idx);
-                    }
-                }
-            }
+            state.remove_scene_at(scene_idx);
         }
     }
 }

@@ -37,11 +37,11 @@
   "summary": {
     "areas": 12,
     "features": 398,
-    "done": 148,
-    "in_progress": 23,
+    "done": 153,
+    "in_progress": 18,
     "planned": 227,
     "bugs": 1,
-    "parity_percent": 37
+    "parity_percent": 38
   },
   "areas": [
     {
@@ -137,30 +137,26 @@
         {
           "id": "cl-15",
           "name": "Legato clip launch",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_sequencer/src/clip.rs",
-          "note": "Launch mode enum and menu action exist; transport takeover semantics are incomplete."
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-16",
           "name": "Add / remove scenes",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/src/views/matrix.rs",
-          "note": "Adding scenes works; delete/reorder are not exposed."
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/matrix.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-17",
           "name": "Clip loop start/end editor",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/tests/clip_context_menu_tests.rs",
-          "note": "Loop bounds are modeled and persisted; the dedicated launcher editor is partial."
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/audio_detail_editor.rs, crates/hikaru_gui/src/views/piano_roll.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-18",
           "name": "Global launch-quantization override per scene",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_sequencer/src/quantizer.rs",
-          "note": "Global quantization exists; per-scene overrides are not wired."
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/quantizer.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-19",
@@ -449,9 +445,8 @@
         {
           "id": "ts-12",
           "name": "Tap tempo",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_openlive_file/src/lib.rs",
-          "note": "The persisted flag exists; the tap interaction is not implemented."
+          "status": "done",
+          "evidence": "crates/hikaru_transport/src/tap_tempo.rs, crates/hikaru_gui/src/views/header.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "ts-13",

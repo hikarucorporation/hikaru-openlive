@@ -6,7 +6,7 @@
 pub mod preview_player;
 pub mod audio_drivers;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use hikaru_core::{AudioBuffer, SampleRate};
@@ -14,6 +14,7 @@ use hikaru_dsp::effects::filter::StateVariableFilter;
 use hikaru_dsp::synth::sampler::{SamplerDspParams, SamplerSampleData, SamplerVoicePool};
 use hikaru_dsp::synth::wavetable::WavetableOscillator;
 use hikaru_sequencer::TrackMatrix;
+pub use hikaru_sequencer::{QuantizationEngine, QuantizationGrid};
 use hikaru_transport::{TransportPlaybackState, TransportPosition};
 use hikaru_plugin_host::{PluginDescriptor, PluginFormat, PluginInstance};
 
@@ -36,6 +37,10 @@ pub struct MidiClipInstance {
     pub clip_loop_start_ticks: u64,
     pub clip_loop_end_ticks: u64,
     pub is_matrix_clip: bool,
+    /// Override explícito de lanzamiento Legato (`None` = default del motor:
+    /// legato al cambiar pad, reinicio en 0 al cambiar escena; `Some(true)` =
+    /// siempre legato; `Some(false)` = siempre reinicia en 0).
+    pub legato_launch: Option<bool>,
     pub active_notes: [bool; 128],
 }
 
@@ -54,6 +59,7 @@ impl Default for MidiClipInstance {
             clip_loop_start_ticks: 0,
             clip_loop_end_ticks: 960 * 4,
             is_matrix_clip: true,
+            legato_launch: None,
             active_notes: [false; 128],
         }
     }
@@ -76,6 +82,7 @@ impl MidiClipInstance {
             clip_loop_start_ticks: 0,
             clip_loop_end_ticks: duration_ticks,
             is_matrix_clip: true,
+            legato_launch: None,
             active_notes: [false; 128],
         }
     }
@@ -593,6 +600,9 @@ pub struct AudioClipInstance {
     pub clip_loop_start: u64,
     pub clip_loop_end: u64,
     pub is_matrix_clip: bool,
+    /// Override explícito de lanzamiento Legato (`None` = default del motor,
+    /// `Some(true)` = hereda fase en pad y escena, `Some(false)` = reinicia en 0).
+    pub legato_launch: Option<bool>,
     pub prev_frame: usize,
     pub xfade_remaining: u32,
     pub xfade_len: u32,
@@ -1646,10 +1656,27 @@ pub fn unpack_clip_playhead(packed: u64) -> Option<(usize, u64)> {
     Some((scene_index, frame))
 }
 
+/// Lanzamiento cuantizado de escena pendiente en el motor de audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingSceneLaunch {
+    pub scene_index: usize,
+    pub target_sample: u64,
+    pub grid: QuantizationGrid,
+}
+
 pub struct AudioEngine<'a> {
     pub transport: TransportPosition,
     pub mode: EngineMode,
     pub matrix: TrackMatrix,
+    /// Cuantización global de lanzamiento de escenas (default `None` en el
+    /// motor para disparo inmediato salvo configuración explícita de sesión).
+    pub global_launch_quantization: QuantizationGrid,
+    /// Override opcional de cuantización por índice de escena.
+    pub scene_quantization_overrides: Vec<Option<QuantizationGrid>>,
+    /// Escena en cola esperando su próximo límite de cuantización.
+    pub pending_scene_launch: Option<PendingSceneLaunch>,
+    /// Índice atómico de la escena en cola (`-1` si no hay ninguna) para UI.
+    pub pending_scene_index_atomic: Arc<AtomicI32>,
     pub main_filter: StateVariableFilter,
     pub oscillator: WavetableOscillator<'a>,
     pub sample_rate: f32,
@@ -1721,6 +1748,10 @@ impl<'a> AudioEngine<'a> {
             transport: TransportPosition::new(sr, 128.0),
             mode: EngineMode::OpenStudio,
             matrix: TrackMatrix::new(),
+            global_launch_quantization: QuantizationGrid::None,
+            scene_quantization_overrides: vec![None; hikaru_sequencer::matrix::DEFAULT_SCENE_COUNT],
+            pending_scene_launch: None,
+            pending_scene_index_atomic: Arc::new(AtomicI32::new(-1)),
             main_filter: filter,
             oscillator: WavetableOscillator::new(wavetable, sr),
             sample_rate: sr.get(),
@@ -2328,6 +2359,7 @@ impl<'a> AudioEngine<'a> {
             clip_loop_start: 0,
             clip_loop_end: default_loop_end,
             is_matrix_clip,
+            legato_launch: None,
             prev_frame: usize::MAX,
             xfade_remaining: 0,
             xfade_len: 0,
@@ -2534,6 +2566,8 @@ impl<'a> AudioEngine<'a> {
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
+        self.pending_scene_launch = None;
+        self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
         self.wavetable_voice_pool.kill_all();
         self.sampler_voice_pool.kill_all();
         for clip in self.midi_clips.iter_mut() {
@@ -2545,6 +2579,140 @@ impl<'a> AudioEngine<'a> {
             }
             clip.is_playing = false;
         }
+    }
+
+    /// Configura explícitamente el lanzamiento Legato de un clip (audio o MIDI).
+    pub fn set_clip_legato(&mut self, track_index: usize, scene_index: usize, legato: bool) {
+        for clip in self.clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.legato_launch = Some(legato);
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.legato_launch = Some(legato);
+            }
+        }
+    }
+
+    /// Configura la cuantización global de lanzamiento de escenas.
+    pub fn set_global_launch_quantization(&mut self, grid: QuantizationGrid) {
+        self.global_launch_quantization = grid;
+        self.matrix.set_global_quantization(grid);
+    }
+
+    /// Configura o limpia el override de cuantización de lanzamiento de una escena.
+    pub fn set_scene_launch_quantization(
+        &mut self,
+        scene_idx: usize,
+        grid: Option<QuantizationGrid>,
+    ) {
+        if scene_idx >= self.scene_quantization_overrides.len() {
+            self.scene_quantization_overrides.resize(scene_idx + 1, None);
+        }
+        self.scene_quantization_overrides[scene_idx] = grid;
+        self.matrix.set_scene_quantization(scene_idx, grid);
+    }
+
+    /// Cuantización efectiva de una escena (override si existe, si no global).
+    pub fn effective_scene_quantization(&self, scene_idx: usize) -> QuantizationGrid {
+        let override_grid = self
+            .scene_quantization_overrides
+            .get(scene_idx)
+            .copied()
+            .flatten();
+        QuantizationEngine::resolve_scene_grid(self.global_launch_quantization, override_grid)
+    }
+
+    /// Escena actualmente en cola esperando su borde de cuantización.
+    pub fn pending_scene_launch(&self) -> Option<PendingSceneLaunch> {
+        self.pending_scene_launch
+    }
+
+    /// Agrega una escena nueva al final del motor y la matriz interna.
+    pub fn add_scene(&mut self) {
+        self.scene_quantization_overrides.push(None);
+        let _ = self.matrix.add_scene();
+    }
+
+    /// Inserta una escena vacía en `scene_idx`, desplazando todos los clips
+    /// y overrides de escenas posteriores (`>= scene_idx`) en +1.
+    pub fn insert_scene(&mut self, scene_idx: usize) {
+        for clip in self.clips.iter_mut() {
+            if clip.is_matrix_clip && clip.scene_index >= scene_idx {
+                clip.scene_index += 1;
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.is_matrix_clip && clip.scene_index >= scene_idx {
+                clip.scene_index += 1;
+            }
+        }
+        if let Some(pending) = &mut self.pending_scene_launch {
+            if pending.scene_index >= scene_idx {
+                pending.scene_index += 1;
+                self.pending_scene_index_atomic
+                    .store(pending.scene_index as i32, Ordering::Relaxed);
+            }
+        }
+        let pos = scene_idx.min(self.scene_quantization_overrides.len());
+        self.scene_quantization_overrides.insert(pos, None);
+        let _ = self.matrix.insert_scene(scene_idx);
+    }
+
+    /// Elimina la escena `scene_idx`: detiene y borra sus clips (audio y MIDI),
+    /// y desplaza los índices de escenas posteriores (`> scene_idx`) en -1.
+    pub fn remove_scene(&mut self, scene_idx: usize) {
+        for clip in self.clips.iter_mut() {
+            if clip.is_matrix_clip && clip.scene_index == scene_idx {
+                clip.is_playing = false;
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.is_matrix_clip && clip.scene_index == scene_idx {
+                clip.is_playing = false;
+                for pitch in 0..128 {
+                    if clip.active_notes[pitch] {
+                        self.dms_voice_pool
+                            .kill_pad(dms_pad_key(clip.track_index, pitch));
+                        clip.active_notes[pitch] = false;
+                    }
+                }
+            }
+        }
+        self.clips
+            .retain(|c| !(c.is_matrix_clip && c.scene_index == scene_idx));
+        self.midi_clips
+            .retain(|c| !(c.is_matrix_clip && c.scene_index == scene_idx));
+
+        for clip in self.clips.iter_mut() {
+            if clip.is_matrix_clip && clip.scene_index > scene_idx {
+                clip.scene_index -= 1;
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.is_matrix_clip && clip.scene_index > scene_idx {
+                clip.scene_index -= 1;
+            }
+        }
+
+        if let Some(pending) = &mut self.pending_scene_launch {
+            if pending.scene_index == scene_idx {
+                self.pending_scene_launch = None;
+                self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
+            } else if pending.scene_index > scene_idx {
+                pending.scene_index -= 1;
+                self.pending_scene_index_atomic
+                    .store(pending.scene_index as i32, Ordering::Relaxed);
+            }
+        }
+
+        if scene_idx < self.scene_quantization_overrides.len()
+            && self.scene_quantization_overrides.len() > 1
+        {
+            self.scene_quantization_overrides.remove(scene_idx);
+        }
+        let _ = self.matrix.remove_scene(scene_idx);
     }
 
     pub fn set_global_loop(&mut self, start_samples: u64, end_samples: u64, enabled: bool) {
@@ -2596,9 +2764,15 @@ impl<'a> AudioEngine<'a> {
             if clip.scene_index == scene_index {
                 clip.is_playing = !target_was_playing;
                 if clip.is_playing {
-                    if let Some((ref_frame, ref_abs)) = legato_origin {
-                        clip.start_frame = ref_frame;
-                        clip.start_absolute = ref_abs;
+                    let use_legato = clip.legato_launch.unwrap_or(true);
+                    if use_legato {
+                        if let Some((ref_frame, ref_abs)) = legato_origin {
+                            clip.start_frame = ref_frame;
+                            clip.start_absolute = ref_abs;
+                        } else {
+                            clip.start_frame = now;
+                            clip.start_absolute = now_abs;
+                        }
                     } else {
                         clip.start_frame = now;
                         clip.start_absolute = now_abs;
@@ -2615,9 +2789,15 @@ impl<'a> AudioEngine<'a> {
             if clip.scene_index == scene_index {
                 clip.is_playing = !target_was_playing;
                 if clip.is_playing {
-                    if let Some((ref_frame, ref_abs)) = legato_origin {
-                        clip.start_frame = ref_frame;
-                        clip.start_absolute = ref_abs;
+                    let use_legato = clip.legato_launch.unwrap_or(true);
+                    if use_legato {
+                        if let Some((ref_frame, ref_abs)) = legato_origin {
+                            clip.start_frame = ref_frame;
+                            clip.start_absolute = ref_abs;
+                        } else {
+                            clip.start_frame = now;
+                            clip.start_absolute = now_abs;
+                        }
                     } else {
                         clip.start_frame = now;
                         clip.start_absolute = now_abs;
@@ -2733,21 +2913,47 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
-    /// Disparo de escena con reinicio de fase (Beat/Bar Sync): todos los
-    /// clips de la fila rearrancan desde la muestra 0 (`start_frame` /
-    /// `start_absolute = now`), estén sonando o pausados, para que la escena
-    /// nueva entre perfectamente alineada al compás en vez de heredar la
-    /// fase de lo que venía sonando.
+    /// Disparo de escena con soporte de cuantización global + override por escena
+    /// y modo Legato por clip.
     ///
-    /// - Pistas con clip en la escena: `is_playing = true` + puntero de
-    ///   lectura a 0. Como el playhead (`voice_playhead_frame`) deriva de
-    ///   `start_absolute`, el avance visual también vuelve a 0% de inmediato.
-    /// - Pistas con clip en otras escenas del mismo track: stop (solo el
-    ///   clip de la escena disparada queda sonando en ese track).
-    /// - Pistas sin clip en la escena: se mantienen en su estado actual.
+    /// - Si la cuantización efectiva (`scene_override.unwrap_or(global)`) es
+    ///   `QuantizationGrid::None` o el transporte no está reproduciendo, dispara
+    ///   de inmediato.
+    /// - Si está reproduciendo y falta tiempo hasta el próximo borde de grilla,
+    ///   encola un [`PendingSceneLaunch`] que `process()` ejecutará exactamente
+    ///   en ese sample.
+    /// - Al ejecutarse la escena, los clips con `legato_launch == Some(true)`
+    ///   heredan la fase del clip saliente; el resto reinicia en fase 0.
     pub fn trigger_scene(&mut self, scene_index: usize) {
+        let grid = self.effective_scene_quantization(scene_index);
+        if grid != QuantizationGrid::None
+            && self.transport.playback_state == TransportPlaybackState::Playing
+        {
+            let wait = QuantizationEngine::samples_until_next_sync(
+                &self.transport,
+                grid,
+                self.sample_rate as f64,
+            );
+            if wait > 0 {
+                let target_sample = self.transport.sample_count.saturating_add(wait);
+                self.pending_scene_launch = Some(PendingSceneLaunch {
+                    scene_index,
+                    target_sample,
+                    grid,
+                });
+                self.pending_scene_index_atomic
+                    .store(scene_index as i32, Ordering::Relaxed);
+                return;
+            }
+        }
+        self.pending_scene_launch = None;
+        self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
+        self.execute_scene_launch(scene_index, now, now_abs);
+    }
+
+    fn execute_scene_launch(&mut self, scene_index: usize, now: u64, now_abs: u64) {
         let mut tracks_with_clip = std::collections::HashSet::new();
         for clip in self.clips.iter() {
             if clip.scene_index == scene_index {
@@ -2759,11 +2965,30 @@ impl<'a> AudioEngine<'a> {
                 tracks_with_clip.insert(clip.track_index);
             }
         }
+        let mut track_legato_refs: std::collections::HashMap<usize, Option<(u64, u64)>> =
+            std::collections::HashMap::new();
+        for &ti in &tracks_with_clip {
+            track_legato_refs.insert(ti, self.legato_reference(Some(ti)));
+        }
+
         for clip in self.clips.iter_mut() {
             if clip.scene_index == scene_index {
                 clip.is_playing = true;
-                clip.start_frame = now;
-                clip.start_absolute = now_abs;
+                let use_legato = clip.legato_launch == Some(true);
+                if use_legato {
+                    if let Some(Some((ref_frame, ref_abs))) =
+                        track_legato_refs.get(&clip.track_index)
+                    {
+                        clip.start_frame = *ref_frame;
+                        clip.start_absolute = *ref_abs;
+                    } else {
+                        clip.start_frame = now;
+                        clip.start_absolute = now_abs;
+                    }
+                } else {
+                    clip.start_frame = now;
+                    clip.start_absolute = now_abs;
+                }
                 clip.prev_frame = usize::MAX;
                 clip.xfade_remaining = 0;
                 clip.xfade_len = 0;
@@ -2774,8 +2999,21 @@ impl<'a> AudioEngine<'a> {
         for clip in self.midi_clips.iter_mut() {
             if clip.scene_index == scene_index {
                 clip.is_playing = true;
-                clip.start_frame = now;
-                clip.start_absolute = now_abs;
+                let use_legato = clip.legato_launch == Some(true);
+                if use_legato {
+                    if let Some(Some((ref_frame, ref_abs))) =
+                        track_legato_refs.get(&clip.track_index)
+                    {
+                        clip.start_frame = *ref_frame;
+                        clip.start_absolute = *ref_abs;
+                    } else {
+                        clip.start_frame = now;
+                        clip.start_absolute = now_abs;
+                    }
+                } else {
+                    clip.start_frame = now;
+                    clip.start_absolute = now_abs;
+                }
                 clip.clear_active_notes();
             } else if tracks_with_clip.contains(&clip.track_index) {
                 clip.is_playing = false;
@@ -3164,6 +3402,34 @@ impl<'a> AudioEngine<'a> {
             preview.process(samples);
         }
 
+        // Ejecutar lanzamiento cuantizado de escena si su límite cae dentro de este bloque.
+        if self.transport.playback_state == TransportPlaybackState::Playing {
+            let buffer_frames = (samples.len() / num_channels) as u64;
+            if buffer_frames > 0 {
+                if let Some(pending) = self.pending_scene_launch {
+                    let frame_start = self.transport.sample_count;
+                    let frame_end = frame_start.saturating_add(buffer_frames);
+                    let loop_wraps_before_target = self.transport.has_valid_loop()
+                        && frame_start < self.transport.loop_end_samples
+                        && frame_end >= self.transport.loop_end_samples
+                        && pending.target_sample >= self.transport.loop_end_samples;
+                    if pending.target_sample < frame_end || loop_wraps_before_target {
+                        let fire_sample =
+                            if loop_wraps_before_target && pending.target_sample >= frame_end {
+                                self.transport.loop_end_samples
+                            } else {
+                                pending.target_sample
+                            };
+                        let offset = fire_sample.saturating_sub(frame_start);
+                        self.pending_scene_launch = None;
+                        self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
+                        let fire_abs = self.absolute_frame.saturating_add(offset);
+                        self.execute_scene_launch(pending.scene_index, fire_sample, fire_abs);
+                    }
+                }
+            }
+        }
+
         let sample_rate = self.sample_rate;
         let dms_samples = &self.dms_samples;
         let dms_channels = &self.dms_channels;
@@ -3308,11 +3574,17 @@ impl<'a> AudioEngine<'a> {
                         }
                     } else {
                         // OpenLive mode
-                        if !clip.is_playing || abs_start < clip.start_absolute {
+                        if !clip.is_playing {
                             continue;
                         }
-
-                        let elapsed_start = abs_start - clip.start_absolute;
+                        let (elapsed_start, sched_frames) = if abs_start >= clip.start_absolute {
+                            (abs_start - clip.start_absolute, buffer_frames)
+                        } else if clip.start_absolute < abs_start + buffer_frames {
+                            let offset = clip.start_absolute - abs_start;
+                            (0, buffer_frames - offset)
+                        } else {
+                            continue;
+                        };
                         let has_loop = clip.has_valid_clip_loop();
                         let duration_frames = transport.ticks_to_samples(clip.duration_ticks);
 
@@ -3337,7 +3609,7 @@ impl<'a> AudioEngine<'a> {
                                 continue;
                             }
 
-                            let elapsed_end = elapsed_start + buffer_frames;
+                            let elapsed_end = elapsed_start + sched_frames;
                             for note in &clip.notes {
                                 let n_start = transport.ticks_to_samples(note.start_tick);
                                 let n_end = transport.ticks_to_samples(note.end_tick());
@@ -3430,13 +3702,13 @@ impl<'a> AudioEngine<'a> {
                             // Looping MIDI clip in OpenLive
                             let ls_ticks = clip.clip_loop_start_ticks;
                             let le_ticks = clip.clip_loop_end_ticks;
-                            let loop_len_ticks = le_ticks.saturating_sub(ls_ticks).max(960);
+                            let loop_len_ticks = le_ticks.saturating_sub(ls_ticks).max(240);
                             let loop_start_frames = transport.ticks_to_samples(ls_ticks);
                             let loop_len_frames = transport.ticks_to_samples(loop_len_ticks).max(1);
                             let loop_end_frames = loop_start_frames + loop_len_frames;
 
                             let mut cur_elapsed = elapsed_start;
-                            let mut frames_left = buffer_frames;
+                            let mut frames_left = sched_frames;
 
                             while frames_left > 0 {
                                 let (cycle_sample, dist_to_wrap) = if cur_elapsed < loop_end_frames {
@@ -4091,6 +4363,21 @@ impl<'a> AudioEngine<'a> {
             clip.clip_loop_end_ticks = loop_end_ticks.max(loop_start_ticks + 240);
             let max_tick = clip.notes.iter().map(|n| n.end_tick()).max().unwrap_or(clip.clip_loop_end_ticks);
             clip.duration_ticks = clip.clip_loop_end_ticks.max(max_tick);
+        }
+    }
+
+    pub fn set_midi_clip_loop_enabled(
+        &mut self,
+        track_index: usize,
+        scene_index: usize,
+        enabled: bool,
+    ) {
+        if let Some(clip) = self
+            .midi_clips
+            .iter_mut()
+            .find(|c| c.track_index == track_index && c.scene_index == scene_index)
+        {
+            clip.clip_loop_enabled = enabled;
         }
     }
 }
@@ -5016,5 +5303,136 @@ mod tests {
             peak_frame,
             expected
         );
+    }
+
+    #[test]
+    fn explicit_clip_legato_toggle_controls_pad_and_scene_phase() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        let n = 8192u64;
+        engine.add_clip(1, 0, 0, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(3, 0, 2, ramp_samples(n), 0.0, 0.0, 0.0, 2, true);
+
+        // Clip en escena 1 con legato desactivado explícitamente -> reinicia en 0 al cambiar pad
+        engine.set_clip_legato(0, 1, false);
+        // Clip en escena 2 con legato activado explícitamente -> hereda fase incluso al cambiar escena
+        engine.set_clip_legato(0, 2, true);
+
+        engine.trigger_clip(0, 0);
+        engine.play();
+        run_frames(&mut engine, 1200);
+
+        engine.trigger_clip(0, 1);
+        let c1 = engine.clips.iter().find(|c| c.scene_index == 1).unwrap();
+        assert_eq!(c1.start_absolute, 1200, "legato=false debe reiniciar en 1200");
+
+        run_frames(&mut engine, 800);
+        // Ahora c1 lleva 800 frames desde 1200 (start_absolute=1200, abs=2000).
+        // Disparar escena 2 con legato=true debe heredar start_absolute=1200.
+        engine.trigger_scene(2);
+        let c2 = engine.clips.iter().find(|c| c.scene_index == 2).unwrap();
+        assert!(c2.is_playing);
+        assert_eq!(c2.start_absolute, 1200, "legato=true debe heredar fase en trigger_scene");
+    }
+
+    #[test]
+    fn insert_and_remove_scene_reindex_clips_and_overrides() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, ramp_samples(4096), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, ramp_samples(4096), 0.0, 0.0, 0.0, 2, true);
+        engine.set_scene_launch_quantization(1, Some(QuantizationGrid::Sixteenth));
+
+        // Insertar escena en índice 1: el clip 2 y el override 1/16 pasan a escena 2
+        engine.insert_scene(1);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 1).unwrap().scene_index, 0);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 2).unwrap().scene_index, 2);
+        assert_eq!(engine.scene_quantization_overrides[1], None);
+        assert_eq!(
+            engine.scene_quantization_overrides[2],
+            Some(QuantizationGrid::Sixteenth)
+        );
+
+        // Disparar clip 1 (escena 0) y luego eliminar escena 0: clip 1 se borra y clip 2 pasa a escena 1
+        engine.trigger_clip(0, 0);
+        engine.remove_scene(0);
+        assert!(engine.clips.iter().all(|c| c.id != 1));
+        assert_eq!(engine.clips.iter().find(|c| c.id == 2).unwrap().scene_index, 1);
+        assert_eq!(
+            engine.scene_quantization_overrides[1],
+            Some(QuantizationGrid::Sixteenth)
+        );
+    }
+
+    #[test]
+    fn scene_launch_quantization_and_per_scene_override_in_engine() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(120.0); // 44100 Hz -> 22050 samples/beat, 88200 samples/bar
+        engine.set_global_launch_quantization(QuantizationGrid::Bar);
+        engine.set_scene_launch_quantization(1, Some(QuantizationGrid::None));
+        engine.set_scene_launch_quantization(2, Some(QuantizationGrid::Eighth));
+
+        engine.add_clip(1, 0, 0, ramp_samples(8192), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, ramp_samples(8192), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(3, 0, 2, ramp_samples(8192), 0.0, 0.0, 0.0, 2, true);
+
+        engine.play();
+        run_frames(&mut engine, 1000); // pos = 1000
+
+        // Escena 0 hereda global Bar -> queda en cola para sample 88200
+        engine.trigger_scene(0);
+        let pending = engine.pending_scene_launch().expect("debe quedar en cola");
+        assert_eq!(pending.scene_index, 0);
+        assert_eq!(pending.target_sample, 88200);
+        assert!(!engine.clips.iter().find(|c| c.id == 1).unwrap().is_playing);
+
+        // Escena 1 tiene override None -> dispara inmediatamente y cancela la cola
+        engine.trigger_scene(1);
+        assert!(engine.pending_scene_launch().is_none());
+        assert!(engine.clips.iter().find(|c| c.id == 2).unwrap().is_playing);
+
+        // Escena 2 tiene override Eighth (11025 samples) -> pos=1000 => target=11025
+        engine.trigger_scene(2);
+        let pending2 = engine.pending_scene_launch().expect("escena 2 en cola");
+        assert_eq!(pending2.scene_index, 2);
+        assert_eq!(pending2.target_sample, 11025);
+        assert!(!engine.clips.iter().find(|c| c.id == 3).unwrap().is_playing);
+
+        // Avanzar hasta 10500: todavía no disparó
+        run_frames(&mut engine, 9500);
+        assert!(!engine.clips.iter().find(|c| c.id == 3).unwrap().is_playing);
+
+        // Avanzar 1000 más (cruza 11025): se dispara exactamente en 11025
+        run_frames(&mut engine, 1000);
+        assert!(engine.pending_scene_launch().is_none());
+        let c3 = engine.clips.iter().find(|c| c.id == 3).unwrap();
+        assert!(c3.is_playing);
+        assert_eq!(c3.start_frame, 11025);
+    }
+
+    #[test]
+    fn midi_clip_loop_start_end_and_enabled_toggle_work() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.update_midi_clip(
+            0,
+            0,
+            vec![MidiNoteInstance::new(480, 60, 100, 240)],
+        );
+        engine.set_midi_clip_loop(0, 0, 480, 960);
+        {
+            let mc = engine.midi_clips.iter().find(|c| c.track_index == 0 && c.scene_index == 0).unwrap();
+            assert_eq!(mc.clip_loop_start_ticks, 480);
+            assert_eq!(mc.clip_loop_end_ticks, 960);
+            assert!(mc.clip_loop_enabled);
+        }
+        engine.set_midi_clip_loop_enabled(0, 0, false);
+        {
+            let mc = engine.midi_clips.iter().find(|c| c.track_index == 0 && c.scene_index == 0).unwrap();
+            assert!(!mc.clip_loop_enabled);
+            assert!(!mc.has_valid_clip_loop());
+        }
     }
 }

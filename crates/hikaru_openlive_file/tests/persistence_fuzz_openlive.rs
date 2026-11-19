@@ -85,6 +85,7 @@ fn test_50000_notes_scale_and_roundtrip_openlive() {
         loop_start: 0,
         loop_end: 50_000 * 480,
         loop_enabled: true,
+        launch_legato: None,
         volume: 0.8,
         pan: 0.0,
         mute: false,

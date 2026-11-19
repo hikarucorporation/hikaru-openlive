@@ -193,6 +193,7 @@ fn test_tier3_c05_matrix_clip_trigger_and_piano_roll_focus() {
         loop_start: 0,
         loop_end: 3840,
         loop_enabled: true,
+        launch_legato: true,
         has_time_selection: false,
         peaks: Vec::new(),
         muted: false,

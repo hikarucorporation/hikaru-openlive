@@ -40,7 +40,7 @@ pub enum VoiceState {
 pub type VoiceStatus = VoiceState;
 
 /// Modos de disparo del clip (Trigger Modes)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerMode {
     Trigger, // Se dispara y sigue hasta el final o hasta que se frene
     Toggle,  // Un clic arranca, otro clic frena (respetando cuantización)
@@ -695,6 +695,51 @@ impl Clip {
     pub fn set_state(&self, new_state: ClipState) {
         self.state.store(new_state as u8, Ordering::Release);
     }
+
+    /// Indica si el clip está configurado para disparo Legato.
+    pub fn is_legato(&self) -> bool {
+        self.trigger_mode == TriggerMode::Legato
+    }
+
+    /// Activa o desactiva el modo de disparo Legato del clip.
+    pub fn set_legato(&mut self, enabled: bool) {
+        self.trigger_mode = if enabled {
+            TriggerMode::Legato
+        } else {
+            TriggerMode::Trigger
+        };
+    }
+
+    /// Dispara el clip en `now_sample`. Si el clip está en modo
+    /// [`TriggerMode::Legato`] y se provee el origen `legato_reference_start`
+    /// del clip saliente, hereda su fase en vez de reiniciar en cero.
+    pub fn launch(&mut self, now_sample: u64, legato_reference_start: Option<u64>) {
+        if self.trigger_mode == TriggerMode::Legato {
+            self.start_sample = legato_reference_start.unwrap_or(now_sample);
+        } else {
+            self.start_sample = now_sample;
+        }
+        self.set_state(ClipState::Playing);
+    }
+
+    /// Dispara el clip desplazando su origen para entrar exactamente en
+    /// `phase_offset` frames (módulo duración de loop si el clip está en loop).
+    pub fn launch_with_phase(&mut self, now_sample: u64, phase_offset: u64) {
+        let clamped_phase = if self.has_valid_clip_loop() {
+            let loop_len = self.effective_loop_end().saturating_sub(self.loop_start);
+            if loop_len > 0 {
+                self.loop_start + (phase_offset % loop_len)
+            } else {
+                0
+            }
+        } else if self.total_frames > 0 {
+            phase_offset % self.total_frames
+        } else {
+            phase_offset
+        };
+        self.start_sample = now_sample.saturating_sub(clamped_phase);
+        self.set_state(ClipState::Playing);
+    }
 }
 
 #[cfg(test)]
@@ -880,5 +925,43 @@ mod tests {
         assert!(!clip.is_audio());
         assert_eq!(clip.midi_timeline().unwrap().note_count(), 2);
         assert_eq!(clip.get_state(), ClipState::Stopped);
+    }
+
+    #[test]
+    fn legato_launch_inherits_phase_while_trigger_resets_to_zero() {
+        let mut clip_a = Clip::new(30, 1);
+        clip_a.set_source_length_frames(1_000);
+        clip_a.set_loop_points(0, 1_000);
+        clip_a.set_legato(true);
+        clip_a.launch(100, None);
+        assert_eq!(clip_a.start_sample, 100);
+        assert_eq!(clip_a.resolve_voice_frame(450, None), Some(350));
+
+        // Segundo clip con Legato: hereda start_sample = 100 al lanzarse en t=450
+        let mut clip_b = Clip::new(31, 2);
+        clip_b.set_source_length_frames(1_000);
+        clip_b.set_loop_points(0, 1_000);
+        clip_b.set_legato(true);
+        clip_b.launch(450, Some(clip_a.start_sample));
+        assert_eq!(clip_b.start_sample, 100);
+        assert_eq!(clip_b.resolve_voice_frame(450, None), Some(350));
+
+        // Tercer clip con loop más corto [200, 600) (len 400): wrap limpio con legato
+        let mut clip_c = Clip::new(32, 3);
+        clip_c.set_source_length_frames(1_000);
+        clip_c.set_loop_points(200, 600);
+        clip_c.set_legato(true);
+        clip_c.launch(1_150, Some(clip_a.start_sample));
+        let frame = clip_c.resolve_voice_frame(1_150, None).unwrap();
+        assert!((200..600).contains(&frame));
+
+        // Clip sin Legato (Trigger): reinicia en t=450 -> frame 0
+        let mut clip_d = Clip::new(33, 4);
+        clip_d.set_source_length_frames(1_000);
+        clip_d.set_loop_points(0, 1_000);
+        clip_d.set_legato(false);
+        clip_d.launch(450, Some(clip_a.start_sample));
+        assert_eq!(clip_d.start_sample, 450);
+        assert_eq!(clip_d.resolve_voice_frame(450, None), Some(0));
     }
 }

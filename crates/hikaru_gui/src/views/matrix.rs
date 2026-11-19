@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use egui::{pos2, vec2, Button, Color32, Rect, RichText, Sense, Stroke, Ui};
 use hikaru_audio_engine::AudioEngine;
+use hikaru_sequencer::{QuantizationEngine, QuantizationGrid};
 
 use crate::app::{AppMode, AppState};
 use crate::audio_proxy::{AudioClipData, AudioProxy, GuiCommand};
@@ -188,6 +189,7 @@ pub struct MatrixClip {
     pub loop_start: u64,
     pub loop_end: u64,
     pub loop_enabled: bool,
+    pub launch_legato: bool,
     pub has_time_selection: bool,
     pub peaks: Vec<f32>,
     pub muted: bool,
@@ -339,6 +341,15 @@ impl TrackMeta {
 #[derive(Clone, Debug)]
 pub struct SceneMeta {
     pub name: String,
+    /// Override opcional de cuantización de lanzamiento para esta escena.
+    /// `None` hereda `SessionMatrixState::global_launch_quantization`.
+    pub launch_quantization: Option<QuantizationGrid>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SceneContextMenu {
+    pub scene_idx: usize,
+    pub click_pos: egui::Pos2,
 }
 
 #[derive(Clone, Debug)]
@@ -360,7 +371,9 @@ pub struct SessionMatrixState {
     pub editor_height: f32,
     pub editor_zoom_x: f32,
     pub show_editor: bool,
+    pub global_launch_quantization: QuantizationGrid,
     pub context_menu: Option<crate::views::clip_context_menu::ClipLauncherContextMenu>,
+    pub scene_context_menu: Option<SceneContextMenu>,
     pub clip_drag: Option<MatrixClipDrag>,
 }
 
@@ -383,7 +396,13 @@ impl Default for SessionMatrixState {
         let scenes: Vec<SceneMeta> = default
             .scenes
             .iter()
-            .map(|s| SceneMeta { name: s.name.clone() })
+            .map(|s| SceneMeta {
+                name: s.name.clone(),
+                launch_quantization: s
+                    .launch_quantization
+                    .as_deref()
+                    .and_then(QuantizationGrid::from_notation),
+            })
             .collect();
 
         let grid = vec![vec![MatrixSlot::default(); scenes.len()]; tracks.len()];
@@ -397,7 +416,9 @@ impl Default for SessionMatrixState {
             editor_height: 104.0,
             editor_zoom_x: 0.04,
             show_editor: true,
+            global_launch_quantization: QuantizationGrid::Quarter,
             context_menu: None,
+            scene_context_menu: None,
             clip_drag: None,
         }
     }
@@ -476,6 +497,7 @@ impl SessionMatrixState {
         let scene_num = self.scenes.len() + 1;
         self.scenes.push(SceneMeta {
             name: format!("Scene {}", scene_num),
+            launch_quantization: None,
         });
 
         for track_row in &mut self.grid {
@@ -483,19 +505,128 @@ impl SessionMatrixState {
         }
     }
 
-    pub fn remove_scene(&mut self) {
-        if self.scenes.len() > 1 {
-            self.scenes.pop();
-            for track_row in &mut self.grid {
-                track_row.pop();
-            }
+    pub fn add_scene_synced(&mut self, audio_proxy: &AudioProxy) -> usize {
+        self.add_scene();
+        audio_proxy.send(GuiCommand::AddScene);
+        self.scenes.len().saturating_sub(1)
+    }
 
-            if let Some((_, s)) = self.selected_slot {
-                if s >= self.scenes.len() {
-                    self.selected_slot = None;
-                }
+    pub fn insert_scene_at(&mut self, scene_idx: usize) -> usize {
+        let idx = scene_idx.min(self.scenes.len());
+        let scene_num = self.scenes.len() + 1;
+        self.scenes.insert(
+            idx,
+            SceneMeta {
+                name: format!("Scene {}", scene_num),
+                launch_quantization: None,
+            },
+        );
+        for track_row in &mut self.grid {
+            let col = idx.min(track_row.len());
+            track_row.insert(col, MatrixSlot::default());
+        }
+        if let Some((t, s)) = self.selected_slot {
+            if s >= idx {
+                self.selected_slot = Some((t, s + 1));
             }
         }
+        self.context_menu = None;
+        self.scene_context_menu = None;
+        self.clip_drag = None;
+        idx
+    }
+
+    pub fn insert_scene_synced(&mut self, scene_idx: usize, audio_proxy: &AudioProxy) -> usize {
+        let idx = self.insert_scene_at(scene_idx);
+        audio_proxy.send(GuiCommand::InsertScene { scene_idx: idx });
+        idx
+    }
+
+    pub fn remove_scene(&mut self) {
+        let last = self.scenes.len().saturating_sub(1);
+        let _ = self.remove_scene_at(last);
+    }
+
+    pub fn remove_scene_at(&mut self, scene_idx: usize) -> bool {
+        if self.scenes.len() <= 1 || scene_idx >= self.scenes.len() {
+            return false;
+        }
+        self.scenes.remove(scene_idx);
+        for track_row in &mut self.grid {
+            if scene_idx < track_row.len() {
+                track_row.remove(scene_idx);
+            }
+        }
+        if let Some((t, s)) = self.selected_slot {
+            if s == scene_idx {
+                self.selected_slot = None;
+            } else if s > scene_idx {
+                self.selected_slot = Some((t, s - 1));
+            }
+        }
+        self.context_menu = None;
+        self.scene_context_menu = None;
+        self.clip_drag = None;
+        true
+    }
+
+    pub fn remove_scene_synced(&mut self, scene_idx: usize, audio_proxy: &AudioProxy) -> bool {
+        if self.remove_scene_at(scene_idx) {
+            audio_proxy.send(GuiCommand::RemoveScene { scene_idx });
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_global_launch_quantization(
+        &mut self,
+        grid: QuantizationGrid,
+        audio_proxy: &AudioProxy,
+    ) {
+        self.global_launch_quantization = grid;
+        audio_proxy.send(GuiCommand::SetGlobalLaunchQuantization { grid });
+    }
+
+    pub fn set_scene_launch_quantization(
+        &mut self,
+        scene_idx: usize,
+        grid: Option<QuantizationGrid>,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        let Some(scene) = self.scenes.get_mut(scene_idx) else {
+            return false;
+        };
+        scene.launch_quantization = grid;
+        audio_proxy.send(GuiCommand::SetSceneLaunchQuantization { scene_idx, grid });
+        true
+    }
+
+    pub fn effective_scene_quantization(&self, scene_idx: usize) -> QuantizationGrid {
+        let override_grid = self
+            .scenes
+            .get(scene_idx)
+            .and_then(|s| s.launch_quantization);
+        QuantizationEngine::resolve_scene_grid(self.global_launch_quantization, override_grid)
+    }
+
+    pub fn set_clip_legato(
+        &mut self,
+        track_idx: usize,
+        scene_idx: usize,
+        legato: bool,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        let Some(clip) = self.slot_mut(track_idx, scene_idx).and_then(|s| s.clip.as_mut()) else {
+            return false;
+        };
+        clip.launch_legato = legato;
+        audio_proxy.send(GuiCommand::SetClipLegato {
+            track_idx,
+            scene_idx,
+            legato,
+        });
+        true
     }
 
     pub fn copy_slot(&self, track_idx: usize, scene_idx: usize, clipboard: &mut MatrixClipboard) {
@@ -749,8 +880,141 @@ pub(crate) fn sync_midi_clip(
                 loop_start_ticks: clip.loop_start,
                 loop_end_ticks: clip.loop_end.max(clip.loop_start + 240),
             });
+            audio_proxy.send(GuiCommand::SetMidiClipLoopEnabled {
+                track_idx,
+                scene_idx,
+                enabled: clip.loop_enabled,
+            });
+            audio_proxy.send(GuiCommand::SetClipLegato {
+                track_idx,
+                scene_idx,
+                legato: clip.launch_legato,
+            });
         }
     }
+}
+
+/// Configura los límites de loop (en segundos) de un clip de audio de la
+/// matriz, validando `0 <= start < end <= duration_secs` y sincronizando
+/// inmediatamente con el motor de audio.
+pub fn set_audio_clip_loop_secs(
+    state: &mut SessionMatrixState,
+    audio_proxy: &AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+    start_secs: f64,
+    end_secs: f64,
+    enabled: bool,
+) -> bool {
+    if !start_secs.is_finite() || !end_secs.is_finite() {
+        return false;
+    }
+    let Some(clip) = state.slot_mut(track_idx, scene_idx).and_then(|s| s.clip.as_mut()) else {
+        return false;
+    };
+    let sr = match &clip.content {
+        ClipData::Audio { events, preview_sr, .. } => {
+            events.first().map(|e| e.sample_rate).unwrap_or(*preview_sr).max(1) as f64
+        }
+        ClipData::Midi { .. } => return false,
+    };
+    let max_secs = clip.duration_secs.max(0.01);
+    let min_len = 0.01_f64.min(max_secs * 0.5).max(1.0 / sr);
+    let clamped_start = start_secs.clamp(0.0, (max_secs - min_len).max(0.0));
+    let clamped_end = end_secs.clamp((clamped_start + min_len).min(max_secs), max_secs);
+    let start_frames = (clamped_start * sr).round() as u64;
+    let end_frames = ((clamped_end * sr).round() as u64).max(start_frames + 1);
+
+    clip.loop_start = start_frames;
+    clip.loop_end = end_frames;
+    clip.loop_enabled = enabled;
+    audio_proxy.set_clip_loop(
+        track_idx,
+        scene_idx,
+        clamped_start as f32,
+        clamped_end as f32,
+        enabled,
+    );
+    true
+}
+
+/// Configura los límites de loop (en ticks a 960 PPQN) de un clip MIDI de la
+/// matriz, garantizando una duración mínima de 1/16 (240 ticks) y sincronizando
+/// inmediatamente con el motor de audio.
+pub fn set_midi_clip_loop_ticks(
+    state: &mut SessionMatrixState,
+    audio_proxy: &AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+    start_ticks: u64,
+    end_ticks: u64,
+    enabled: bool,
+    bpm: f64,
+) -> bool {
+    let Some(clip) = state.slot_mut(track_idx, scene_idx).and_then(|s| s.clip.as_mut()) else {
+        return false;
+    };
+    if !matches!(clip.content, ClipData::Midi { .. }) {
+        return false;
+    }
+    let min_ticks = 240u64;
+    let clamped_end = end_ticks.max(start_ticks.saturating_add(min_ticks));
+    clip.loop_start = start_ticks;
+    clip.loop_end = clamped_end;
+    clip.loop_enabled = enabled;
+    clip.duration_secs = (clamped_end as f64 / 960.0) * (60.0 / bpm.max(1.0));
+
+    audio_proxy.send(GuiCommand::SetMidiClipLoop {
+        track_idx,
+        scene_idx,
+        loop_start_ticks: start_ticks,
+        loop_end_ticks: clamped_end,
+    });
+    audio_proxy.send(GuiCommand::SetMidiClipLoopEnabled {
+        track_idx,
+        scene_idx,
+        enabled,
+    });
+    true
+}
+
+/// Alterna el estado `loop_enabled` de cualquier clip (audio o MIDI) y lo
+/// sincroniza inmediatamente al motor de audio.
+pub fn toggle_clip_loop(
+    state: &mut SessionMatrixState,
+    audio_proxy: &AudioProxy,
+    track_idx: usize,
+    scene_idx: usize,
+) -> Option<bool> {
+    let (new_enabled, is_midi, sr, loop_start, loop_end, dur_secs) = {
+        let clip = state.slot_mut(track_idx, scene_idx)?.clip.as_mut()?;
+        clip.loop_enabled = !clip.loop_enabled;
+        match &clip.content {
+            ClipData::Audio { events, preview_sr, .. } => {
+                let sr = events.first().map(|e| e.sample_rate).unwrap_or(*preview_sr).max(1) as f64;
+                (clip.loop_enabled, false, sr, clip.loop_start, clip.loop_end, clip.duration_secs)
+            }
+            ClipData::Midi { .. } => {
+                (clip.loop_enabled, true, 1.0, clip.loop_start, clip.loop_end, clip.duration_secs)
+            }
+        }
+    };
+    if is_midi {
+        audio_proxy.send(GuiCommand::SetMidiClipLoopEnabled {
+            track_idx,
+            scene_idx,
+            enabled: new_enabled,
+        });
+    } else {
+        let start_secs = (loop_start as f64 / sr) as f32;
+        let end_secs = if loop_end > loop_start {
+            (loop_end as f64 / sr) as f32
+        } else {
+            dur_secs as f32
+        };
+        audio_proxy.set_clip_loop(track_idx, scene_idx, start_secs, end_secs, new_enabled);
+    }
+    Some(new_enabled)
 }
 
 pub(crate) fn trigger_pad(state: &mut SessionMatrixState, audio_proxy: &AudioProxy, track_idx: usize, scene_idx: usize) {
@@ -970,6 +1234,7 @@ pub fn load_clip_into_slot(
             loop_start: 0,
             loop_end: total_frames,
             loop_enabled: true,
+            launch_legato: true,
             has_time_selection: true,
             peaks,
             muted: false,
@@ -1027,6 +1292,7 @@ pub fn create_empty_midi_clip(
             loop_start: 0,
             loop_end: total_ticks,
             loop_enabled: true,
+            launch_legato: true,
             has_time_selection: true,
             peaks: Vec::new(),
             muted: false,
@@ -1658,6 +1924,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut add_track_action = false;
     let mut delete_track_action: Option<usize> = None;
     let mut add_scene_action = false;
+    let mut remove_scene_action: Option<usize> = None;
+    let mut open_scene_menu_action: Option<(usize, egui::Pos2)> = None;
     let mut drop_slot_action: Option<(usize, usize, PathBuf)> = None;
     let mut drop_timeline_action: Option<(usize, u64, PathBuf)> = None;
     let mut open_context_menu_action: Option<(usize, usize, egui::Pos2)> = None;
@@ -2207,32 +2475,43 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             );
             let s_hovered =
                 pointer_pos.is_some_and(|p| scene_header_rect.contains(p) && s_rect.contains(p));
+            let is_queued = state.queued_scene_index == Some(scene_idx);
             scene_painter.rect_filled(
                 s_rect,
                 1.5,
-                if s_hovered {
+                if is_queued {
+                    Color32::from_rgb(0x6E, 0x4A, 0x24)
+                } else if s_hovered {
                     Color32::from_rgb(0x5E, 0x60, 0x66)
                 } else {
                     Color32::from_rgb(0x4B, 0x4D, 0x53)
                 },
             );
-            let s_name = state
+            if is_queued {
+                scene_painter.rect_stroke(
+                    s_rect,
+                    1.5,
+                    Stroke::new(1.2_f32, ACCENT_ORANGE),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            let (s_name, q_override) = state
                 .matrix_state
                 .scenes
                 .get(scene_idx)
-                .map(|s| s.name.as_str())
-                .unwrap_or("Scene");
+                .map(|s| (s.name.as_str(), s.launch_quantization))
+                .unwrap_or(("Scene", None));
             let play_r =
                 Rect::from_min_size(pos2(s_rect.min.x + 4.0, s_rect.center().y - 6.0), vec2(12.0, 12.0));
-            // Triángulo en gris muy claro (blanqueado) para que se distinga
-            // del texto blanco de la escena.
             icons::paint_play_triangle(
                 &scene_painter,
                 play_r,
-                Color32::from_rgb(0xBF, 0xC2, 0xC7),
+                if is_queued {
+                    ACCENT_ORANGE
+                } else {
+                    Color32::from_rgb(0xBF, 0xC2, 0xC7)
+                },
             );
-            // Texto en blanco para que se lea sobre el gris de la cabecera
-            // (antes era casi negro y no se distinguía).
             scene_painter.text(
                 pos2(s_rect.min.x + 18.0, s_rect.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -2240,13 +2519,31 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 fonts::semibold(10.5),
                 Color32::WHITE,
             );
+            if let Some(ov) = q_override {
+                let badge_r = Rect::from_min_max(
+                    pos2(s_rect.max.x - 27.0, s_rect.min.y + 3.0),
+                    pos2(s_rect.max.x - 3.0, s_rect.max.y - 3.0),
+                );
+                scene_painter.rect_filled(badge_r, 2.0, Color32::from_rgb(0x23, 0x26, 0x2C));
+                scene_painter.text(
+                    badge_r.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ov.short_label(),
+                    fonts::semibold(8.5),
+                    ACCENT_ORANGE,
+                );
+            }
 
             if primary_clicked && s_hovered {
                 trigger_scene_action = Some(scene_idx);
+            } else if secondary_clicked && s_hovered {
+                if let Some(pos) = pointer_pos {
+                    open_scene_menu_action = Some((scene_idx, pos));
+                }
             }
         }
 
-        // Vector `+` button at end of Scene headers
+        // Vector `+` and `-` buttons at end of Scene headers
         let add_scene_x = launcher_x0 + scenes_count as f32 * BITWIG_SCENE_W + 3.0;
         if add_scene_x + 22.0 <= launcher_x1 {
             let add_s_rect = Rect::from_min_size(
@@ -2272,6 +2569,32 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             );
             if primary_clicked && add_s_hov {
                 add_scene_action = true;
+            }
+
+            let rem_scene_x = add_scene_x + 25.0;
+            if scenes_count > 1 && rem_scene_x + 22.0 <= launcher_x1 {
+                let rem_s_rect = Rect::from_min_size(
+                    pos2(rem_scene_x, toolbar_y0 + 3.0),
+                    vec2(22.0, BITWIG_TOOLBAR_H - 6.0),
+                );
+                let rem_s_hov = pointer_pos.is_some_and(|p| rem_s_rect.contains(p));
+                scene_painter.rect_filled(
+                    rem_s_rect,
+                    2.0,
+                    if rem_s_hov {
+                        Color32::from_rgb(0x52, 0x34, 0x34)
+                    } else {
+                        Color32::from_rgb(0x2E, 0x30, 0x36)
+                    },
+                );
+                let c = rem_s_rect.center();
+                scene_painter.line_segment(
+                    [pos2(c.x - 4.5, c.y), pos2(c.x + 4.5, c.y)],
+                    Stroke::new(1.7_f32, Color32::from_rgb(0xE0, 0xE2, 0xE8)),
+                );
+                if primary_clicked && rem_s_hov {
+                    remove_scene_action = Some(scenes_count - 1);
+                }
             }
         }
 
@@ -4272,7 +4595,19 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if add_scene_action {
-        state.matrix_state.add_scene();
+        state.matrix_state.add_scene_synced(&state.audio_proxy);
+    }
+
+    if let Some(s_idx) = remove_scene_action {
+        state.remove_scene_at(s_idx);
+    }
+
+    if let Some((s_idx, click_pos)) = open_scene_menu_action {
+        state.matrix_state.context_menu = None;
+        state.matrix_state.scene_context_menu = Some(SceneContextMenu {
+            scene_idx: s_idx,
+            click_pos,
+        });
     }
 
     if let Some((t_idx, s_idx, path)) = drop_slot_action {
@@ -4449,6 +4784,131 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     crate::views::clip_context_menu::render_clip_context_menu(ui, state);
+    render_scene_context_menu(ui, state);
+}
+
+/// Menú contextual de cabecera de escena (click derecho): lanzar, insertar,
+/// eliminar escena y configurar override de cuantización de lanzamiento.
+pub fn render_scene_context_menu(ui: &mut Ui, state: &mut AppState) {
+    let Some(menu) = state.matrix_state.scene_context_menu.clone() else {
+        return;
+    };
+    let scene_idx = menu.scene_idx;
+    if scene_idx >= state.matrix_state.scenes.len() {
+        state.matrix_state.scene_context_menu = None;
+        return;
+    }
+
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.matrix_state.scene_context_menu = None;
+        return;
+    }
+
+    let can_delete = state.matrix_state.scenes.len() > 1;
+    let global_q = state.matrix_state.global_launch_quantization;
+    let current_override = state.matrix_state.scenes[scene_idx].launch_quantization;
+    let scene_name = state.matrix_state.scenes[scene_idx].name.clone();
+
+    let screen = ui.ctx().screen_rect();
+    let menu_w = 212.0;
+    let est_h = 265.0;
+    let x = (menu.click_pos.x).min(screen.max.x - menu_w - 8.0).max(6.0);
+    let y = (menu.click_pos.y).min(screen.max.y - est_h - 8.0).max(6.0);
+
+    let mut close_menu = false;
+    let mut trigger_now = false;
+    let mut insert_at: Option<usize> = None;
+    let mut delete_this = false;
+    let mut set_override: Option<Option<QuantizationGrid>> = None;
+
+    egui::Area::new(egui::Id::new("bitwig_scene_context_menu_area"))
+        .fixed_pos(pos2(x, y))
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            let frame = egui::Frame::new()
+                .fill(Color32::from_rgb(0x22, 0x24, 0x28))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x2F, 0x32, 0x38)))
+                .corner_radius(egui::CornerRadius::same(3))
+                .inner_margin(egui::Margin::symmetric(6, 5));
+            let resp = frame.show(ui, |ui| {
+                ui.set_width(menu_w);
+                ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+                ui.label(
+                    RichText::new(scene_name)
+                        .font(fonts::semibold(10.5))
+                        .color(Color32::from_rgb(0xA4, 0xA8, 0xB2)),
+                );
+                ui.separator();
+                if ui.button("Launch Scene").clicked() {
+                    trigger_now = true;
+                    close_menu = true;
+                }
+                if ui.button("Insert Scene Before").clicked() {
+                    insert_at = Some(scene_idx);
+                    close_menu = true;
+                }
+                if ui.button("Insert Scene After").clicked() {
+                    insert_at = Some(scene_idx + 1);
+                    close_menu = true;
+                }
+                if ui
+                    .add_enabled(can_delete, Button::new("Delete Scene"))
+                    .clicked()
+                {
+                    delete_this = true;
+                    close_menu = true;
+                }
+                ui.separator();
+                ui.label(
+                    RichText::new("Launch Quantization")
+                        .font(fonts::semibold(9.5))
+                        .color(Color32::from_rgb(0x96, 0x9A, 0xA4)),
+                );
+                let global_label = format!(
+                    "{} Global ({})",
+                    if current_override.is_none() { "●" } else { "○" },
+                    global_q.label()
+                );
+                if ui.button(global_label).clicked() {
+                    set_override = Some(None);
+                    close_menu = true;
+                }
+                for grid in QuantizationGrid::ALL {
+                    let selected = current_override == Some(grid);
+                    let label = format!("{} {}", if selected { "●" } else { "○" }, grid.label());
+                    if ui.button(label).clicked() {
+                        set_override = Some(Some(grid));
+                        close_menu = true;
+                    }
+                }
+            });
+
+            if ui.input(|i| i.pointer.any_pressed()) {
+                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    if !resp.response.rect.contains(pos) {
+                        close_menu = true;
+                    }
+                }
+            }
+        });
+
+    if close_menu {
+        state.matrix_state.scene_context_menu = None;
+    }
+    if trigger_now {
+        trigger_scene(&mut state.matrix_state, &state.audio_proxy, scene_idx);
+    }
+    if let Some(idx) = insert_at {
+        state.insert_scene_at(idx);
+    }
+    if delete_this {
+        state.remove_scene_at(scene_idx);
+    }
+    if let Some(ov) = set_override {
+        state
+            .matrix_state
+            .set_scene_launch_quantization(scene_idx, ov, &state.audio_proxy);
+    }
 }
 
 #[allow(dead_code)]

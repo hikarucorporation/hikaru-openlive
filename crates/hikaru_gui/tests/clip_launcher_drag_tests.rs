@@ -58,6 +58,7 @@ fn create_sample_audio_clip(id: usize, name: &str) -> MatrixClip {
         loop_start: 0,
         loop_end: 44100,
         loop_enabled: true,
+        launch_legato: true,
         has_time_selection: true,
         peaks: Vec::new(),
         muted: false,

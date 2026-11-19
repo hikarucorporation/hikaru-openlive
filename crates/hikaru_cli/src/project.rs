@@ -995,6 +995,7 @@ mod tests {
             loop_start: 0,
             loop_end: 0,
             loop_enabled: false,
+            launch_legato: None,
             volume: 1.0,
             pan: 0.0,
             mute: false,

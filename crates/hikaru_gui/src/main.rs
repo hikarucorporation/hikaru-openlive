@@ -459,6 +459,41 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.set_midi_clip_loop(track_idx, scene_idx, loop_start_ticks, loop_end_ticks);
                     }
                 }
+                GuiCommand::SetMidiClipLoopEnabled { track_idx, scene_idx, enabled } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_midi_clip_loop_enabled(track_idx, scene_idx, enabled);
+                    }
+                }
+                GuiCommand::SetClipLegato { track_idx, scene_idx, legato } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_clip_legato(track_idx, scene_idx, legato);
+                    }
+                }
+                GuiCommand::SetGlobalLaunchQuantization { grid } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_global_launch_quantization(grid);
+                    }
+                }
+                GuiCommand::SetSceneLaunchQuantization { scene_idx, grid } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_scene_launch_quantization(scene_idx, grid);
+                    }
+                }
+                GuiCommand::AddScene => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.add_scene();
+                    }
+                }
+                GuiCommand::InsertScene { scene_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.insert_scene(scene_idx);
+                    }
+                }
+                GuiCommand::RemoveScene { scene_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.remove_scene(scene_idx);
+                    }
+                }
 
                 GuiCommand::LoadDmsSample { pad_idx, path } => {
                     if let Ok(mut reader) = hikaru_gui::wav_io::open(&path) {

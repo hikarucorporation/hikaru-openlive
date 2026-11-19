@@ -11,6 +11,7 @@ hikaru_midi = { path = "../hikaru_midi" }
 hikaru_audio_engine = { path = "../hikaru_audio_engine" }
 hikaru_dsp = { path = "../hikaru_dsp" }
 hikaru_transport = { path = "../hikaru_transport" }
+hikaru_sequencer = { path = "../hikaru_sequencer" }
 hikaru_plugin_host = { path = "../hikaru_plugin_host" }
 # El puerto MCP: la configuración de los slots por los que los agentes de IA
 # se enganchan al DAW. Es un crate aparte para que el binario standalone del

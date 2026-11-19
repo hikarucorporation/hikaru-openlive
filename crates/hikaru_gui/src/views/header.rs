@@ -588,6 +588,28 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             state.matrix_state.stop_all_clips(&state.audio_proxy);
                             ui.close_menu();
                         }
+                        ui.separator();
+                        if ui.button("Tap Tempo (Ctrl+Alt+T)").clicked() {
+                            let now = ui.input(|i| i.time);
+                            state.tap_tempo(now);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new("Launch Quantization")
+                                .size(10.0)
+                                .color(Color32::from_rgb(160, 165, 175)),
+                        );
+                        let cur_q = state.matrix_state.global_launch_quantization;
+                        for grid in hikaru_sequencer::QuantizationGrid::ALL {
+                            let mark = if cur_q == grid { "●" } else { "○" };
+                            if ui.button(format!("{mark} {}", grid.label())).clicked() {
+                                state
+                                    .matrix_state
+                                    .set_global_launch_quantization(grid, &state.audio_proxy);
+                                ui.close_menu();
+                            }
+                        }
                     },
                 );
 
@@ -1261,7 +1283,38 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     icons::paint_punch_step(p, punch_out_box.shrink(2.0), punch_out_col, false);
                 }
 
-                ui.add_space(6.0);
+                ui.add_space(5.0);
+
+                // 4f. Botón TAP TEMPO en transporte
+                let now_secs = ui.input(|i| i.time);
+                let tap_active = state.tap_tempo.is_active_at(now_secs);
+                let tap_resp = capsule_text_button(
+                    ui,
+                    vec2(34.0, CAPSULE_H),
+                    "TAP",
+                    10.5,
+                    tap_active,
+                    BW_ACCENT_ORANGE,
+                    JoinSide::Standalone,
+                    false,
+                );
+                if tap_resp.clicked() {
+                    state.tap_tempo(now_secs);
+                }
+                if tap_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    let bpm_str = format!("{:.2} BPM", state.transport.bpm);
+                    set_footer_cues(
+                        state,
+                        Some(("TAP TEMPO", &bpm_str)),
+                        &[
+                            ("CLICK", "Tap Tempo"),
+                            ("CTRL+ALT+T", "Tap Tempo Shortcut"),
+                        ],
+                    );
+                }
+
+                ui.add_space(5.0);
 
                 // 5. Cápsula independiente [ADD ◢]
                 let add_popup_id = ui.make_persistent_id("bw_add_popup");
@@ -1290,7 +1343,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             ui.close_menu();
                         }
                         if ui.button("Add Launcher Scene").clicked() {
-                            state.matrix_state.add_scene();
+                            state.matrix_state.add_scene_synced(&state.audio_proxy);
                             ui.close_menu();
                         }
                         ui.separator();

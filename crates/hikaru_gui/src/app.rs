@@ -3,14 +3,14 @@
 // crates/hikaru_gui/src/app.rs
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 
 use hikaru_audio_engine::AudioEngine;
 use hikaru_core::SampleRate;
-use hikaru_transport::{TransportPlaybackState, TransportPosition};
+use hikaru_transport::{TapTempoDetector, TransportPlaybackState, TransportPosition};
 use hikaru_plugin_host::PluginInstance;
 
 use crate::audio_proxy::{AudioProxy, GuiCommand};
@@ -387,6 +387,10 @@ pub struct AppState {
     pub metronome_enabled: bool,
     pub punch_in: bool,
     pub punch_out: bool,
+    pub tap_tempo: TapTempoDetector,
+    pub tap_tempo_enabled: bool,
+    pub pending_scene_index_atomic: Arc<AtomicI32>,
+    pub queued_scene_index: Option<usize>,
     pub editing_bpm: bool,
     pub editing_sig: bool,
     pub bpm_input_first_key: bool,
@@ -514,25 +518,31 @@ impl AppState {
         }
         let fx_tracks = vec![mixer::Track::new_fx(0, "FX 1".to_string())];
 
-        let (track_peak_bits, track_clip_playhead): (Vec<Arc<AtomicU32>>, Vec<Arc<AtomicU64>>) =
-            if let Some(ref handle) = engine_handle {
-                if let Ok(engine) = handle.try_lock() {
-                    (
-                        engine.track_peak_bits.iter().map(|a| Arc::clone(a)).collect(),
-                        engine.track_clip_playhead.iter().map(|a| Arc::clone(a)).collect(),
-                    )
-                } else {
-                    (
-                        (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
-                        (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
-                    )
-                }
+        let (track_peak_bits, track_clip_playhead, pending_scene_index_atomic): (
+            Vec<Arc<AtomicU32>>,
+            Vec<Arc<AtomicU64>>,
+            Arc<AtomicI32>,
+        ) = if let Some(ref handle) = engine_handle {
+            if let Ok(engine) = handle.try_lock() {
+                (
+                    engine.track_peak_bits.iter().map(|a| Arc::clone(a)).collect(),
+                    engine.track_clip_playhead.iter().map(|a| Arc::clone(a)).collect(),
+                    Arc::clone(&engine.pending_scene_index_atomic),
+                )
             } else {
                 (
                     (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
                     (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
+                    Arc::new(AtomicI32::new(-1)),
                 )
-            };
+            }
+        } else {
+            (
+                (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
+                (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
+                Arc::new(AtomicI32::new(-1)),
+            )
+        };
 
         let (param_probe_tx, param_probe_rx) = std::sync::mpsc::channel();
         let initial_bpm = transport.bpm;
@@ -547,6 +557,10 @@ impl AppState {
             metronome_enabled: false,
             punch_in: false,
             punch_out: false,
+            tap_tempo: TapTempoDetector::with_bpm_range(BPM_MIN, BPM_MAX),
+            tap_tempo_enabled: false,
+            pending_scene_index_atomic,
+            queued_scene_index: None,
             editing_bpm: false,
             editing_sig: false,
             bpm_input_first_key: false,
@@ -1243,6 +1257,60 @@ impl AppState {
         self.audio_proxy.send(GuiCommand::SetBpm(clamped as f32));
     }
 
+    /// Registra un tap de tiempo (en segundos monotónicos) y, a partir del
+    /// segundo tap dentro de la ventana, actualiza el BPM del transporte y
+    /// del motor de audio.
+    pub fn tap_tempo(&mut self, now_secs: f64) -> Option<f64> {
+        self.tap_tempo_enabled = true;
+        if let Some(bpm) = self.tap_tempo.tap_at(now_secs) {
+            self.set_bpm(bpm);
+            Some(bpm)
+        } else {
+            None
+        }
+    }
+
+    /// Inserta una escena en `scene_idx` manteniendo matriz, motor y
+    /// `clip_editor` sincronizados.
+    pub fn insert_scene_at(&mut self, scene_idx: usize) -> usize {
+        let idx = self
+            .matrix_state
+            .insert_scene_synced(scene_idx, &self.audio_proxy);
+        let shift_target = |t: &mut Option<detail_editor_panel::ClipEditorTarget>| {
+            if let Some(detail_editor_panel::ClipEditorTarget::Matrix { slot_idx, .. }) = t {
+                if *slot_idx >= idx {
+                    *slot_idx += 1;
+                }
+            }
+        };
+        shift_target(&mut self.clip_editor.target);
+        shift_target(&mut self.clip_editor.active_target);
+        idx
+    }
+
+    /// Elimina la escena `scene_idx` manteniendo matriz, motor y `clip_editor`
+    /// sincronizados (conserva siempre al menos 1 escena).
+    pub fn remove_scene_at(&mut self, scene_idx: usize) -> bool {
+        if !self
+            .matrix_state
+            .remove_scene_synced(scene_idx, &self.audio_proxy)
+        {
+            return false;
+        }
+        let adjust_target = |t: &mut Option<detail_editor_panel::ClipEditorTarget>| {
+            if let Some(detail_editor_panel::ClipEditorTarget::Matrix { slot_idx, .. }) = t {
+                if *slot_idx == scene_idx {
+                    *t = None;
+                } else if *slot_idx > scene_idx {
+                    *slot_idx -= 1;
+                }
+            }
+        };
+        adjust_target(&mut self.clip_editor.target);
+        adjust_target(&mut self.clip_editor.active_target);
+        true
+    }
+
     pub fn set_sig(&mut self, num: u32, den: u32) {
         self.transport.beats_per_bar = num.max(1);
         self.transport.beat_division = den.max(1);
@@ -1333,6 +1401,12 @@ impl HikaruApp {
         }
 
         self.state.transport.sample_count = self.state.position_clock.load(Ordering::Relaxed);
+        let pending_raw = self.state.pending_scene_index_atomic.load(Ordering::Relaxed);
+        self.state.queued_scene_index = if pending_raw >= 0 {
+            Some(pending_raw as usize)
+        } else {
+            None
+        };
         self.state.playlist_state.ppqn = self.state.transport.ppqn();
         let raw_tick = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
         self.state.playlist_state.playhead_tick = raw_tick;
@@ -1436,7 +1510,15 @@ impl eframe::App for HikaruApp {
                 }
             }
             let cmd = i.modifiers.ctrl || i.modifiers.command;
-            if cmd && !ctx.wants_keyboard_input() && i.key_pressed(egui::Key::T) {
+            if cmd
+                && i.modifiers.alt
+                && !ctx.wants_keyboard_input()
+                && !self.state.editing_bpm
+                && !self.state.editing_sig
+                && i.key_pressed(egui::Key::T)
+            {
+                self.state.tap_tempo(i.time);
+            } else if cmd && !ctx.wants_keyboard_input() && i.key_pressed(egui::Key::T) {
                 self.state.popup_browser.open_new_instrument();
             }
             if cmd && !ctx.wants_keyboard_input() && self.state.panel_layout.show_arranger {

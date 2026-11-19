@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" height="480" viewBox="0 0 680 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.1.7: 148 of 398 features done">
-<title>Hikaru OpenLive vs Bitwig Studio 5.1.7: 148 of 398 features done</title>
-<desc>Feature parity of Hikaru OpenLive against Bitwig Studio 5.1.7. 148 of 398 tracked features are done; 1 open bug.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="480" viewBox="0 0 680 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.1.7: 153 of 398 features done">
+<title>Hikaru OpenLive vs Bitwig Studio 5.1.7: 153 of 398 features done</title>
+<desc>Feature parity of Hikaru OpenLive against Bitwig Studio 5.1.7. 153 of 398 tracked features are done; 1 open bug.</desc>
 <rect width="680" height="480" fill="#0d1117"/>
-<text x="678.0" y="20.0" font-size="12" font-weight="600" text-anchor="end" fill="#F1EFE8">37% · 148 of 398 done</text>
+<text x="678.0" y="20.0" font-size="12" font-weight="600" text-anchor="end" fill="#F1EFE8">38% · 153 of 398 done</text>
 <rect x="2.0" y="11" width="10" height="10" rx="2" fill="#1D9E75"/>
 <text x="17.0" y="20.0" font-size="12" fill="#B4B2A9">Done</text>
 <rect x="64.0" y="11" width="10" height="10" rx="2" fill="#EF9F27"/>
@@ -11,17 +11,16 @@
 <text x="174.8" y="20.0" font-size="12" fill="#B4B2A9">Planned</text>
 <rect x="238.4" y="11" width="10" height="10" rx="2" fill="#E24B4A"/>
 <text x="253.4" y="20.0" font-size="12" fill="#B4B2A9">Open bugs</text>
-<g><title>Clip Launcher: 14 done, 4 in progress, 8 planned</title>
+<g><title>Clip Launcher: 18 done, 0 in progress, 8 planned</title>
 <clipPath id="b0"><rect x="531.5" y="35.5" width="147.0" height="129.1" rx="6"/></clipPath>
 <g clip-path="url(#b0)">
 <rect x="531.5" y="35.5" width="147.0" height="129.1" fill="#2C2C2A"/>
-<rect x="531.5" y="35.5" width="79.2" height="129.1" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="531.5" y="158.6" width="79.2" height="6" fill="#1D9E75"/>
-<rect x="610.6" y="158.6" width="22.6" height="6" fill="#EF9F27"/>
+<rect x="531.5" y="35.5" width="101.8" height="129.1" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="531.5" y="158.6" width="101.8" height="6" fill="#1D9E75"/>
 </g>
 <text x="539.5" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Clip Launcher</text>
-<text x="539.5" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">54%</text>
-<text x="539.5" y="104.8" font-size="11" fill="#B4B2A9">14 of 26 done</text>
+<text x="539.5" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">69%</text>
+<text x="539.5" y="104.8" font-size="11" fill="#B4B2A9">18 of 26 done</text>
 </g>
 <g><title>Arranger: 14 done, 4 in progress, 10 planned</title>
 <clipPath id="b1"><rect x="203.1" y="357.9" width="169.6" height="120.6" rx="6"/></clipPath>
@@ -35,17 +34,17 @@
 <text x="211.1" y="412.2" font-size="28" font-weight="600" fill="#F1EFE8">50%</text>
 <text x="211.1" y="427.2" font-size="11" fill="#B4B2A9">14 of 28 done</text>
 </g>
-<g><title>Transport &amp; Sync: 11 done, 2 in progress, 5 planned</title>
+<g><title>Transport &amp; Sync: 12 done, 1 in progress, 5 planned</title>
 <clipPath id="b2"><rect x="546.5" y="289.6" width="132.0" height="98.6" rx="6"/></clipPath>
 <g clip-path="url(#b2)">
 <rect x="546.5" y="289.6" width="132.0" height="98.6" fill="#2C2C2A"/>
-<rect x="546.5" y="289.6" width="80.7" height="98.6" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="546.5" y="382.2" width="80.7" height="6" fill="#1D9E75"/>
-<rect x="627.2" y="382.2" width="14.7" height="6" fill="#EF9F27"/>
+<rect x="546.5" y="289.6" width="88.0" height="98.6" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="546.5" y="382.2" width="88.0" height="6" fill="#1D9E75"/>
+<rect x="634.5" y="382.2" width="7.3" height="6" fill="#EF9F27"/>
 </g>
 <text x="554.5" y="310.6" font-size="13" font-weight="600" fill="#F1EFE8">Transport &amp; Sync</text>
-<text x="554.5" y="343.9" font-size="28" font-weight="600" fill="#F1EFE8">61%</text>
-<text x="554.5" y="358.9" font-size="11" fill="#B4B2A9">11 of 18 done</text>
+<text x="554.5" y="343.9" font-size="28" font-weight="600" fill="#F1EFE8">67%</text>
+<text x="554.5" y="358.9" font-size="11" fill="#B4B2A9">12 of 18 done</text>
 </g>
 <g><title>Group Tracks &amp; Routing: 14 done, 2 in progress, 6 planned</title>
 <clipPath id="b3"><rect x="375.7" y="289.6" width="167.8" height="95.2" rx="6"/></clipPath>

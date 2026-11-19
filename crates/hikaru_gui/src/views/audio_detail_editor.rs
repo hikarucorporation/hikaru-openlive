@@ -629,6 +629,118 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 }
             });
         }
+        if let AudioEditorTarget::Matrix { track, slot } = target {
+            tui.add_space(4.0);
+            let cur_legato = app
+                .matrix_state
+                .slot(track, slot)
+                .and_then(|s| s.clip.as_ref())
+                .map(|c| c.launch_legato)
+                .unwrap_or(true);
+            let clip_dur_beats = (ev_len / spb).max(0.25);
+            let mut cur_ls_b = if loop_e > loop_s {
+                (loop_s / spb).clamp(0.0, clip_dur_beats)
+            } else {
+                0.0
+            };
+            let mut cur_le_b = if loop_e > loop_s {
+                (loop_e / spb).clamp((cur_ls_b + 0.0625).min(clip_dur_beats), clip_dur_beats)
+            } else {
+                clip_dur_beats
+            };
+
+            tui.horizontal(|ui| {
+                let hw = (w - 4.0) / 2.0;
+                if tool_btn(ui, "Loop", loop_en, hw, 20.0, 10.5)
+                    .on_hover_text("Activar/desactivar loop del clip")
+                    .clicked()
+                {
+                    crate::views::matrix::toggle_clip_loop(
+                        &mut app.matrix_state,
+                        &app.audio_proxy,
+                        track,
+                        slot,
+                    );
+                }
+                if tool_btn(ui, "Legato", cur_legato, hw, 20.0, 10.5)
+                    .on_hover_text("Disparo Legato (continúa fase al cambiar clip)")
+                    .clicked()
+                {
+                    app.matrix_state
+                        .set_clip_legato(track, slot, !cur_legato, &app.audio_proxy);
+                }
+            });
+
+            let mut edited_loop = false;
+            tui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Start").size(9.5).color(theme::TEXT_SECONDARY));
+                let dv = ui.add(
+                    egui::DragValue::new(&mut cur_ls_b)
+                        .speed(0.05)
+                        .range(0.0..=(clip_dur_beats - 0.0625).max(0.0))
+                        .suffix(" b")
+                        .fixed_decimals(2),
+                );
+                if dv.changed() {
+                    cur_le_b = cur_le_b.max((cur_ls_b + 0.0625).min(clip_dur_beats));
+                    edited_loop = true;
+                }
+            });
+            tui.horizontal(|ui| {
+                ui.label(egui::RichText::new("End  ").size(9.5).color(theme::TEXT_SECONDARY));
+                let dv = ui.add(
+                    egui::DragValue::new(&mut cur_le_b)
+                        .speed(0.05)
+                        .range((cur_ls_b + 0.0625).min(clip_dur_beats)..=clip_dur_beats)
+                        .suffix(" b")
+                        .fixed_decimals(2),
+                );
+                if dv.changed() {
+                    edited_loop = true;
+                }
+            });
+            tui.horizontal(|ui| {
+                let bw = (w - 8.0) / 3.0;
+                if tool_btn(ui, "÷2", false, bw, 18.0, 9.5)
+                    .on_hover_text("Reducir longitud de loop a la mitad")
+                    .clicked()
+                {
+                    let len = (cur_le_b - cur_ls_b) * 0.5;
+                    if len >= 0.0625 {
+                        cur_le_b = cur_ls_b + len;
+                        edited_loop = true;
+                    }
+                }
+                if tool_btn(ui, "×2", false, bw, 18.0, 9.5)
+                    .on_hover_text("Duplicar longitud de loop dentro del clip")
+                    .clicked()
+                {
+                    let len = ((cur_le_b - cur_ls_b) * 2.0).max(0.25);
+                    cur_le_b = (cur_ls_b + len).min(clip_dur_beats);
+                    edited_loop = true;
+                }
+                if tool_btn(ui, "Full", false, bw, 18.0, 9.5)
+                    .on_hover_text("Restaurar loop al clip completo")
+                    .clicked()
+                {
+                    cur_ls_b = 0.0;
+                    cur_le_b = clip_dur_beats;
+                    edited_loop = true;
+                }
+            });
+
+            if edited_loop {
+                crate::views::matrix::set_audio_clip_loop_secs(
+                    &mut app.matrix_state,
+                    &app.audio_proxy,
+                    track,
+                    slot,
+                    cur_ls_b * spb,
+                    cur_le_b * spb,
+                    true,
+                );
+            }
+        }
     }
     // Selector de herramienta (flecha)
     let tool_icon = Rect::from_min_size(tools.min + vec2(0.0, 0.0), vec2(40.0, 30.0));
@@ -1128,15 +1240,16 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     if loop_changed {
         let start_secs = (ls * spb).max(0.0);
         let end_secs = (le * spb).max(start_secs);
-        let start_frames = (start_secs * sr).round() as u64;
-        let end_frames = ((end_secs * sr).round() as u64).max(start_frames + 1);
         if let AudioEditorTarget::Matrix { track, slot } = target {
-            if let Some(clip) = app.matrix_state.slot_mut(track, slot).and_then(|s| s.clip.as_mut()) {
-                clip.loop_start = start_frames;
-                clip.loop_end = end_frames;
-                clip.loop_enabled = loop_en;
-            }
-            app.audio_proxy.set_clip_loop(track, slot, start_secs as f32, end_secs as f32, loop_en);
+            crate::views::matrix::set_audio_clip_loop_secs(
+                &mut app.matrix_state,
+                &app.audio_proxy,
+                track,
+                slot,
+                start_secs,
+                end_secs,
+                loop_en,
+            );
         }
     }
 
