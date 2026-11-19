@@ -13,7 +13,7 @@
 //! Incorpora la familia **Barlow Semi Condensed** (SIL Open Font License 1.1,
 //! adaptada del kit `os-ui` de Lemon-Studio) como fuente proporcional primaria
 //! y expone una familia `"semibold"` para cabeceras de pista, cápsulas de
-//! transporte (`FILE`, `PLAY`, `ADD`, `EDIT`, `TRACK`) y selectores de vista.
+//! transporte (`FILE`, `PLAY`, `ADD`, `EDIT`, `CLIP`) y selectores de vista.
 
 use egui::{Context, FontData, FontDefinitions, FontFamily, FontId, Id};
 

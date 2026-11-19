@@ -1648,6 +1648,58 @@ impl eframe::App for HikaruApp {
                     playlist::split_selected_clips_at(&mut self.state.playlist_state, split_tick);
                 }
             }
+            if !wants_keyboard_input {
+                use crate::ui::clip_menu::ClipMenuAction;
+                if cmd && i.modifiers.shift && i.modifiers.alt && i.key_pressed(egui::Key::L) {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::MakeLegato,
+                    );
+                } else if cmd && !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::L)
+                {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::LoopSelectedRegion,
+                    );
+                } else if cmd && !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::J)
+                {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::Consolidate,
+                    );
+                } else if !cmd && !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::Q)
+                {
+                    crate::ui::clip_menu::execute_action(&mut self.state, ClipMenuAction::Quantize);
+                } else if !cmd && i.modifiers.alt && i.modifiers.shift
+                    && (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
+                {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::TransposeOctaveUp,
+                    );
+                } else if !cmd && i.modifiers.alt && i.modifiers.shift
+                    && i.key_pressed(egui::Key::Minus)
+                {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::TransposeOctaveDown,
+                    );
+                } else if !cmd && i.modifiers.alt && !i.modifiers.shift
+                    && (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
+                {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::TransposeSemitoneUp,
+                    );
+                } else if !cmd && i.modifiers.alt && !i.modifiers.shift
+                    && i.key_pressed(egui::Key::Minus)
+                {
+                    crate::ui::clip_menu::execute_action(
+                        &mut self.state,
+                        ClipMenuAction::TransposeSemitoneDown,
+                    );
+                }
+            }
         });
         if let Some(action) = pending_file_action {
             crate::ui::file_menu::execute_action(ctx, &mut self.state, action);

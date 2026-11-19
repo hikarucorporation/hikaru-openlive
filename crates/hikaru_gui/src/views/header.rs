@@ -2,7 +2,7 @@
 // GNU AGPLv3
 // crates/hikaru_gui/src/views/header.rs
 
-use egui::{pos2, vec2, Align2, Color32, CursorIcon, PopupCloseBehavior, Rect, Sense, Stroke, Ui};
+use egui::{pos2, vec2, Align2, Color32, CursorIcon, Rect, Sense, Stroke, Ui};
 
 use crate::app::{format_sig, set_footer_cues, step_sig, AppMode, AppState};
 use crate::audio_proxy::{AudioClipData, GuiCommand};
@@ -17,7 +17,6 @@ use crate::ui::bitwig_wgpu::{
 };
 use crate::ui::fonts;
 use crate::ui::icons;
-use crate::views::mixer::Track;
 use crate::views::playlist::ClipType;
 use hikaru_transport::transport_state::TransportPlaybackState;
 
@@ -230,15 +229,6 @@ fn save_project_action(state: &mut AppState) {
             state.project_dirty = false;
         }
     }
-}
-
-fn add_audio_track_action(state: &mut AppState) {
-    state.matrix_state.add_track();
-    let new_idx = state.matrix_state.tracks.len();
-    let mut tr = Track::new(new_idx, format!("Audio {new_idx}"), false);
-    tr.matrix_idx = Some(new_idx - 1);
-    state.live_tracks.push(tr.clone());
-    state.studio_tracks.push(tr);
 }
 
 /// Renderiza la cabecera doble estilo **Bitwig Studio 5.1.7**:
@@ -1509,49 +1499,134 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 ui.add_space(5.0);
 
-                // 7. Cápsula independiente [TRACK ◢]
-                let track_popup_id = ui.make_persistent_id("bw_track_popup");
-                let track_resp = capsule_text_button(
-                    ui,
-                    vec2(46.0, CAPSULE_H),
-                    "TRACK",
-                    11.0,
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Standalone,
-                    true,
-                );
-                if track_resp.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(track_popup_id));
+                // 7. Cápsula [CLIP ◢] + botones anclados estilo Bitwig 5.x (por defecto: ninguno)
+                let clip_popup_id = ui.make_persistent_id("bw_clip_popup");
+                let clip_menu_open = crate::ui::clip_menu::is_open(ui.ctx(), clip_popup_id);
+                let pinned_clip_actions =
+                    crate::ui::clip_menu::pinned_actions(ui.ctx(), clip_popup_id);
+                let clip_join = if pinned_clip_actions.is_empty() {
+                    JoinSide::Standalone
+                } else {
+                    JoinSide::Left
+                };
+                let clip_resp = if clip_menu_open {
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(38.0, CAPSULE_H), Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        paint_capsule(
+                            ui.painter(),
+                            rect,
+                            3.0,
+                            Color32::from_rgb(56, 57, 62),
+                            BW_ACCENT_ORANGE,
+                            clip_join.to_flags() | FLAG_HOVERED,
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "CLIP",
+                            fonts::semibold(11.0),
+                            BW_ACCENT_ORANGE,
+                        );
+                        let tri = vec![
+                            pos2(rect.max.x - 1.5, rect.max.y - 6.5),
+                            pos2(rect.max.x - 1.5, rect.max.y - 1.5),
+                            pos2(rect.max.x - 6.5, rect.max.y - 1.5),
+                        ];
+                        ui.painter().add(egui::Shape::convex_polygon(
+                            tri,
+                            BW_ACCENT_ORANGE,
+                            Stroke::NONE,
+                        ));
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    response
+                } else {
+                    capsule_text_button(
+                        ui,
+                        vec2(38.0, CAPSULE_H),
+                        "CLIP",
+                        11.0,
+                        false,
+                        BW_ACCENT_ORANGE,
+                        clip_join,
+                        true,
+                    )
+                };
+                if clip_resp.clicked() {
+                    crate::ui::clip_menu::toggle(
+                        ui.ctx(),
+                        clip_popup_id,
+                        pos2(clip_resp.rect.min.x, clip_resp.rect.max.y + 2.0),
+                    );
                 }
-                egui::popup_below_widget(
-                    ui,
-                    track_popup_id,
-                    &track_resp,
-                    PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(165.0);
-                        if ui.button("Add Track").clicked() {
-                            add_audio_track_action(state);
-                            ui.close_menu();
+
+                let pinned_clip_count = pinned_clip_actions.len();
+                let mut pending_clip_action: Option<crate::ui::clip_menu::ClipMenuAction> = None;
+                for (idx, action) in pinned_clip_actions.into_iter().enumerate() {
+                    let join = if idx + 1 == pinned_clip_count {
+                        JoinSide::Right
+                    } else {
+                        JoinSide::Middle
+                    };
+                    let enabled = crate::ui::clip_menu::action_enabled(state, action);
+                    let icon = crate::ui::clip_menu::action_icon(action);
+                    let label = crate::ui::clip_menu::action_label(action);
+                    let shortcut = crate::ui::clip_menu::action_shortcut(action);
+                    let tooltip = if shortcut.is_empty() {
+                        label.to_string()
+                    } else {
+                        format!("{label} ({shortcut})")
+                    };
+
+                    let btn_resp = if enabled {
+                        capsule_icon_button(
+                            ui,
+                            vec2(32.0, CAPSULE_H),
+                            false,
+                            BW_ACCENT_ORANGE,
+                            join,
+                            |p, r, fg| icons::paint_icon(p, r, icon, fg, 1.3),
+                        )
+                    } else {
+                        let (rect, response) =
+                            ui.allocate_exact_size(vec2(32.0, CAPSULE_H), Sense::hover());
+                        if ui.is_rect_visible(rect) {
+                            paint_capsule(
+                                ui.painter(),
+                                rect,
+                                3.0,
+                                crate::ui::bitwig_kit::BW_CAPSULE_IDLE,
+                                BW_ACCENT_ORANGE,
+                                join.to_flags(),
+                            );
+                            let pad = (32.0_f32.min(CAPSULE_H) * 0.22).clamp(3.0, 6.5);
+                            icons::paint_icon(
+                                ui.painter(),
+                                rect.shrink(pad),
+                                icon,
+                                Color32::from_rgb(108, 110, 116),
+                                1.3,
+                            );
                         }
-                        if ui.button("Open Track Devices (F10)").clicked() {
-                            state.show_dsp_rack = true;
-                            ui.close_menu();
-                        }
-                        if ui.button("Clear All Mute / Solo").clicked() {
-                            for tr in &mut state.matrix_state.tracks {
-                                tr.muted = false;
-                                tr.soloed = false;
-                            }
-                            for tr in &mut state.live_tracks {
-                                tr.mute = false;
-                                tr.solo = false;
-                            }
-                            ui.close_menu();
-                        }
-                    },
-                );
+                        response
+                    };
+
+                    if btn_resp.on_hover_text(tooltip).clicked() && enabled {
+                        pending_clip_action = Some(action);
+                    }
+                }
+
+                if let Some(action) =
+                    crate::ui::clip_menu::show(ui.ctx(), clip_popup_id, clip_resp.rect, state)
+                {
+                    pending_clip_action = Some(action);
+                }
+                if let Some(action) = pending_clip_action {
+                    crate::ui::clip_menu::execute_action(state, action);
+                }
             });
         });
 
