@@ -1581,16 +1581,27 @@ impl eframe::App for HikaruApp {
                     pending_file_action = Some(FileMenuAction::Quit);
                 }
             }
-            if cmd
-                && i.modifiers.alt
-                && !wants_keyboard_input
-                && !self.state.editing_bpm
-                && !self.state.editing_sig
-                && i.key_pressed(egui::Key::T)
-            {
-                self.state.tap_tempo(i.time);
-            } else if cmd && !wants_keyboard_input && i.key_pressed(egui::Key::T) {
-                self.state.popup_browser.open_new_instrument();
+            if cmd && !wants_keyboard_input {
+                use crate::ui::add_menu::AddMenuAction;
+                if i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::T) {
+                    crate::ui::add_menu::execute_action(&mut self.state, AddMenuAction::AddFxTrack);
+                } else if i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::T) {
+                    crate::ui::add_menu::execute_action(&mut self.state, AddMenuAction::AddAudioTrack);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::T) {
+                    crate::ui::add_menu::execute_action(
+                        &mut self.state,
+                        AddMenuAction::AddInstrumentTrack,
+                    );
+                } else if i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::G) {
+                    crate::ui::add_menu::execute_action(&mut self.state, AddMenuAction::AddGroupTrack);
+                } else if i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::I) {
+                    crate::ui::add_menu::execute_action(
+                        &mut self.state,
+                        AddMenuAction::AddSceneFromPlayingClips,
+                    );
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::I) {
+                    crate::ui::add_menu::execute_action(&mut self.state, AddMenuAction::AddScene);
+                }
             }
             if cmd && !wants_keyboard_input {
                 if let Some(scene_idx) = self.state.matrix_state.selected_scene {

@@ -3591,8 +3591,69 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             }
         }
 
+        // Cue Markers on Arranger Ruler (Bitwig style flag + label)
+        let mut cue_seek_tick: Option<u64> = None;
+        let mut cue_remove_id: Option<usize> = None;
+        let mut cue_hover_name: Option<String> = None;
+        let mut cue_hit = false;
+        for marker in &state.playlist_state.cue_markers {
+            let mx = timeline_x0 + scroll_x + ticks_to_px(marker.tick, zoom_x);
+            if mx < timeline_x0 - 40.0 || mx > timeline_x1 + 8.0 {
+                continue;
+            }
+            let col = Color32::from_rgb(marker.color[0], marker.color[1], marker.color[2]);
+            let flag_w = (marker.name.len() as f32 * 5.6 + 10.0).clamp(24.0, 92.0);
+            let flag_rect = Rect::from_min_max(
+                pos2(mx, ruler_rect.min.y + 1.0),
+                pos2(mx + flag_w, ruler_rect.min.y + 11.0),
+            );
+            // Vertical guide tick on the ruler
+            ruler_painter.line_segment(
+                [pos2(mx, ruler_rect.min.y + 1.0), pos2(mx, ruler_rect.max.y)],
+                Stroke::new(1.25_f32, col),
+            );
+            // Flag pill
+            ruler_painter.rect_filled(flag_rect, 1.5, col);
+            ruler_painter.text(
+                pos2(flag_rect.min.x + 3.5, flag_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &marker.name,
+                fonts::semibold(8.5),
+                Color32::from_rgb(0x16, 0x16, 0x18),
+            );
+            if let Some(pos) = pointer_pos {
+                if flag_rect.contains(pos) {
+                    cue_hit = true;
+                    cue_hover_name = Some(marker.name.clone());
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    if primary_clicked {
+                        cue_seek_tick = Some(marker.tick);
+                    } else if workspace_resp.secondary_clicked() {
+                        cue_remove_id = Some(marker.id);
+                    }
+                }
+            }
+        }
+        if let Some(ref name) = cue_hover_name {
+            crate::app::set_footer_cues(
+                state,
+                Some(("CUE MARKER", name)),
+                &[("CLICK", "Jump to Cue Marker"), ("RIGHT-CLICK", "Delete Cue Marker")],
+            );
+        }
+        if let Some(tick) = cue_seek_tick {
+            state.playlist_state.playhead_tick = tick;
+            let sample_count = state.transport.ticks_to_samples(tick);
+            state.transport.sample_count = sample_count;
+            state.audio_proxy.send(GuiCommand::Seek { sample_count });
+        }
+        if let Some(id) = cue_remove_id {
+            state.playlist_state.remove_cue_marker(id);
+            state.project_dirty = true;
+        }
+
         // Seek playhead when clicking/dragging on lower ruler (when not dragging loop)
-        if state.playlist_state.loop_drag_handle == playlist::LoopDragHandle::None {
+        if !cue_hit && state.playlist_state.loop_drag_handle == playlist::LoopDragHandle::None {
             if let Some(pos) = pointer_pos {
                 if ruler_seek_rect.contains(pos) && state.playlist_pan.is_none() {
                     crate::app::set_footer_cues(

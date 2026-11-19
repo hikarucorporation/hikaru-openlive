@@ -17,8 +17,7 @@ use crate::ui::bitwig_wgpu::{
 };
 use crate::ui::fonts;
 use crate::ui::icons;
-use crate::views::dsp_rack::PLUGIN_CATALOG;
-use crate::views::mixer::{DspSlot, Track};
+use crate::views::mixer::Track;
 use crate::views::playlist::ClipType;
 use hikaru_transport::transport_state::TransportPlaybackState;
 
@@ -1301,60 +1300,70 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 // 5. Cápsula independiente [ADD ◢]
                 let add_popup_id = ui.make_persistent_id("bw_add_popup");
-                let add_resp = capsule_text_button(
-                    ui,
-                    vec2(38.0, CAPSULE_H),
-                    "ADD",
-                    11.0,
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Standalone,
-                    true,
-                );
+                let add_menu_open = crate::ui::add_menu::is_open(ui.ctx(), add_popup_id);
+                let add_resp = if add_menu_open {
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(38.0, CAPSULE_H), Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let mut flags = crate::ui::bitwig_wgpu::FLAG_CORNER_NOTCH;
+                        if response.hovered() {
+                            flags |= FLAG_HOVERED;
+                        }
+                        paint_capsule(
+                            ui.painter(),
+                            rect,
+                            3.0,
+                            Color32::from_rgb(44, 45, 49),
+                            BW_ACCENT_ORANGE,
+                            flags,
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "ADD",
+                            fonts::semibold(11.0),
+                            BW_ACCENT_ORANGE,
+                        );
+                        // Triángulo naranja en esquina inferior derecha (Bitwig 5.x active menu)
+                        let tri = vec![
+                            pos2(rect.max.x - 1.5, rect.max.y - 6.5),
+                            pos2(rect.max.x - 1.5, rect.max.y - 1.5),
+                            pos2(rect.max.x - 6.5, rect.max.y - 1.5),
+                        ];
+                        ui.painter().add(egui::Shape::convex_polygon(
+                            tri,
+                            BW_ACCENT_ORANGE,
+                            Stroke::NONE,
+                        ));
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    response
+                } else {
+                    capsule_text_button(
+                        ui,
+                        vec2(38.0, CAPSULE_H),
+                        "ADD",
+                        11.0,
+                        false,
+                        BW_ACCENT_ORANGE,
+                        JoinSide::Standalone,
+                        true,
+                    )
+                };
                 if add_resp.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(add_popup_id));
+                    crate::ui::add_menu::toggle(
+                        ui.ctx(),
+                        add_popup_id,
+                        pos2(add_resp.rect.min.x, add_resp.rect.max.y + 2.0),
+                    );
                 }
-                egui::popup_below_widget(
-                    ui,
-                    add_popup_id,
-                    &add_resp,
-                    PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(175.0);
-                        if ui.button("Add Audio / Instrument Track").clicked() {
-                            add_audio_track_action(state);
-                            ui.close_menu();
-                        }
-                        if ui.button("Add Launcher Scene").clicked() {
-                            state.matrix_state.add_scene_synced(&state.audio_proxy);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        let track_idx = state.safe_track_index();
-                        for plugin in &PLUGIN_CATALOG {
-                            if ui.button(format!("Insert {}", plugin.label)).clicked() {
-                                if let Some(t) = state.current_tracks_mut().get_mut(track_idx) {
-                                    let mut s = DspSlot::default();
-                                    s.name = plugin.name.to_string();
-                                    let new_slot_idx = t.effects.len();
-                                    t.effects.push(s);
-                                    state.selected_slot_index = new_slot_idx;
-                                    state.show_dsp_rack = true;
-                                    if plugin.name == "Hikaru Ultracomb" {
-                                        if let Some(et_idx) = track_idx.checked_sub(1) {
-                                            state.audio_proxy.send(crate::audio_proxy::GuiCommand::LoadNativeEffect {
-                                                track_idx: et_idx,
-                                                slot_idx: new_slot_idx,
-                                                name: plugin.name.to_string(),
-                                            });
-                                        }
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                        }
-                    },
-                );
+                if let Some(action) =
+                    crate::ui::add_menu::show(ui.ctx(), add_popup_id, add_resp.rect)
+                {
+                    crate::ui::add_menu::execute_action(state, action);
+                }
 
                 ui.add_space(5.0);
 

@@ -101,9 +101,19 @@ pub struct PlaylistClipDrag {
     pub moved: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CueMarker {
+    pub id: usize,
+    pub tick: u64,
+    pub name: String,
+    pub color: [u8; 3],
+}
+
 #[derive(Clone, Debug)]
 pub struct PlaylistState {
     pub clips: Vec<(usize, PlaylistClip)>,
+    pub cue_markers: Vec<CueMarker>,
+    pub next_cue_marker_id: usize,
     pub playhead_tick: u64,
     pub ppqn: u64,
     pub next_clip_id: usize,
@@ -143,6 +153,8 @@ impl Default for PlaylistState {
     fn default() -> Self {
         Self {
             clips: Vec::new(),
+            cue_markers: Vec::new(),
+            next_cue_marker_id: 1,
             playhead_tick: 0,
             ppqn: DEFAULT_PPQN,
             next_clip_id: 1,
@@ -181,6 +193,35 @@ impl Default for PlaylistState {
 }
 
 impl PlaylistState {
+    pub fn insert_cue_marker_at(&mut self, tick: u64) -> usize {
+        if let Some(existing) = self.cue_markers.iter().find(|m| m.tick == tick) {
+            return existing.id;
+        }
+        let id = self.next_cue_marker_id;
+        self.next_cue_marker_id = self.next_cue_marker_id.saturating_add(1);
+        let palette: [[u8; 3]; 6] = [
+            [0x44, 0xB8, 0xFF], // Bitwig cyan
+            [0xFF, 0x72, 0x00], // Bitwig orange
+            [0x6C, 0xD2, 0x5B], // Bitwig green
+            [0xE6, 0xC8, 0x4A], // Amber yellow
+            [0xC2, 0x6B, 0xE6], // Purple
+            [0xE0, 0x5A, 0x5A], // Coral red
+        ];
+        let color = palette[(id.saturating_sub(1)) % palette.len()];
+        self.cue_markers.push(CueMarker {
+            id,
+            tick,
+            name: format!("Cue {id}"),
+            color,
+        });
+        self.cue_markers.sort_by_key(|m| m.tick);
+        id
+    }
+
+    pub fn remove_cue_marker(&mut self, id: usize) {
+        self.cue_markers.retain(|m| m.id != id);
+    }
+
     pub fn track_height(&self) -> f32 {
         clamped_row_h(self.row_h)
     }

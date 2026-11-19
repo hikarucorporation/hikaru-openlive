@@ -17,6 +17,7 @@ Actions.
 Usage:
     python3 docs/bitwig-parity/generate_status.py
     python3 docs/bitwig-parity/generate_status.py [features.json] [status.svg] [parity-detail.svg] [audit.md]
+    python3 docs/bitwig-parity/generate_status.py --watch [--interval=0.25]
     python3 docs/bitwig-parity/generate_status.py --check
 
 When the file is generated, the ``summary`` object in the JSON is refreshed and
@@ -31,6 +32,7 @@ import math
 import os
 import re
 import sys
+import time
 from xml.sax.saxutils import escape
 
 # --------------------------------------------------------------------------- #
@@ -913,12 +915,110 @@ def render_detail(document: dict) -> str:
     return rendered + "\n</svg>\n"
 
 
+def generate_files(
+    features_path: str, svg_path: str, detail_path: str, audit_path: str
+) -> dict:
+    """Read the database and refresh the JSON summary, both SVGs and audit."""
+    with open(features_path, "r", encoding="utf-8") as handle:
+        document = json.load(handle)
+
+    summary = summary_of(document)
+    if document.get("summary") != summary:
+        document["summary"] = summary
+        with open(features_path, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+
+    with open(svg_path, "w", encoding="utf-8") as handle:
+        handle.write(render(document))
+    with open(detail_path, "w", encoding="utf-8") as handle:
+        handle.write(render_detail(document))
+
+    if os.path.exists(audit_path):
+        with open(audit_path, "r", encoding="utf-8") as handle:
+            original = handle.read()
+        synced = sync_audit_markdown(original, document)
+        if synced != original:
+            with open(audit_path, "w", encoding="utf-8") as handle:
+                handle.write(synced)
+    return summary
+
+
+def watch_files(
+    features_path: str,
+    svg_path: str,
+    detail_path: str,
+    audit_path: str,
+    interval: float,
+) -> int:
+    """Regenerate on every save of the database until interrupted.
+
+    Polling the mtime keeps the script dependency-free (stdlib only) and works
+    on every editor. A half-written JSON is reported but not fatal: the next
+    save triggers another attempt.
+    """
+
+    def fingerprint() -> tuple[int, int] | None:
+        try:
+            stat = os.stat(features_path)
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    print(
+        f"watching {features_path} every {interval:g}s · Ctrl+C to stop",
+        flush=True,
+    )
+    last = None
+    while True:
+        try:
+            current = fingerprint()
+            if current is not None and current != last:
+                try:
+                    summary = generate_files(
+                        features_path, svg_path, detail_path, audit_path
+                    )
+                except json.JSONDecodeError as exc:
+                    last = current
+                    print(f"esperando JSON válido: {exc}", file=sys.stderr, flush=True)
+                except OSError as exc:
+                    last = current
+                    print(f"no pude leer/escribir: {exc}", file=sys.stderr, flush=True)
+                else:
+                    last = fingerprint()
+                    stamp = time.strftime("%H:%M:%S")
+                    print(
+                        f"[{stamp}] {summary['done']}/{summary['features']} · "
+                        f"{summary['parity_percent']}% · "
+                        f"{summary['in_progress']} en progreso · "
+                        f"{summary['planned']} pendientes · "
+                        f"{summary['bugs']} bug(s)",
+                        flush=True,
+                    )
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\nwatch detenido", flush=True)
+            return 0
+
+
 def main(argv: list[str]) -> int:
     # Defaults live next to this script, so the parity directory is portable:
     # it can be executed from the repo root, from CI, or from anywhere else.
     base = os.path.dirname(os.path.abspath(__file__))
-    args = [arg for arg in argv[1:] if not arg.startswith("--")]
     check = "--check" in argv
+    watch = "--watch" in argv
+    interval = 0.25
+    args: list[str] = []
+    for arg in argv[1:]:
+        if arg.startswith("--interval="):
+            try:
+                interval = max(0.05, float(arg.split("=", 1)[1]))
+            except ValueError:
+                print(f"intervalo inválido: {arg!r}", file=sys.stderr)
+                return 2
+        elif not arg.startswith("--"):
+            args.append(arg)
+
     features_path = args[0] if args else os.path.join(base, "features_bitwig.json")
     svg_path = args[1] if len(args) > 1 else os.path.join(base, "status.svg")
     detail_path = args[2] if len(args) > 2 else os.path.join(base, "parity-detail.svg")
@@ -928,32 +1028,23 @@ def main(argv: list[str]) -> int:
         else os.path.join(os.path.dirname(features_path), "bitwig-5.1.7-parity-audit.md")
     )
 
-    with open(features_path, "r", encoding="utf-8") as handle:
-        document = json.load(handle)
-
-    summary = summary_of(document)
-    if document.get("summary") != summary and not check:
-        document["summary"] = summary
-        with open(features_path, "w", encoding="utf-8") as handle:
-            json.dump(document, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-
-    svg = render(document)
-    detail_svg = render_detail(document)
-    audit_original = None
-    audit_synced = None
-    if os.path.exists(audit_path):
-        with open(audit_path, "r", encoding="utf-8") as handle:
-            audit_original = handle.read()
-        audit_synced = sync_audit_markdown(audit_original, document)
+    if watch:
+        if check:
+            print("error: --watch y --check son mutuamente excluyentes", file=sys.stderr)
+            return 2
+        return watch_files(features_path, svg_path, detail_path, audit_path, interval)
 
     if check:
+        with open(features_path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+
+        summary = summary_of(document)
         problems = []
         if document.get("summary") != summary:
             problems.append("summary in features JSON is stale")
         for path, generated, label in (
-            (svg_path, svg, "status.svg"),
-            (detail_path, detail_svg, "parity-detail.svg"),
+            (svg_path, render(document), "status.svg"),
+            (detail_path, render_detail(document), "parity-detail.svg"),
         ):
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as handle:
@@ -961,8 +1052,11 @@ def main(argv: list[str]) -> int:
                         problems.append(f"{label} is stale")
             else:
                 problems.append(f"{label} is missing")
-        if audit_synced is not None and audit_synced != audit_original:
-            problems.append("parity table in bitwig-5.1.7-parity-audit.md is stale")
+        if os.path.exists(audit_path):
+            with open(audit_path, "r", encoding="utf-8") as handle:
+                audit_original = handle.read()
+            if sync_audit_markdown(audit_original, document) != audit_original:
+                problems.append("parity table in bitwig-5.1.7-parity-audit.md is stale")
         if problems:
             for problem in problems:
                 print(f"error: {problem}", file=sys.stderr)
@@ -971,14 +1065,7 @@ def main(argv: list[str]) -> int:
         print("status figures are up to date")
         return 0
 
-    with open(svg_path, "w", encoding="utf-8") as handle:
-        handle.write(svg)
-    with open(detail_path, "w", encoding="utf-8") as handle:
-        handle.write(detail_svg)
-    if audit_synced is not None and audit_synced != audit_original:
-        with open(audit_path, "w", encoding="utf-8") as handle:
-            handle.write(audit_synced)
-
+    summary = generate_files(features_path, svg_path, detail_path, audit_path)
     print(
         f"wrote {svg_path} and {detail_path}: {summary['done']} of "
         f"{summary['features']} features done ({summary['parity_percent']}%), "

@@ -35,6 +35,7 @@ MAN1DIR    := $(DESTDIR)$(MANDIR)/man1
 USER_MAN1DIR ?= $(HOME)/.local/share/man/man1
 
 .PHONY: help all build release test run \
+        status status-watch \
         man man-render man-check man-sync man-pack \
         man-install man-install-user man-uninstall clean
 
@@ -47,6 +48,9 @@ help:
 	@echo "  release           Compila el binario $(BIN) (release)"
 	@echo "  test              Corre los tests del crate de la consola"
 	@echo "  run               Levanta la GUI (o la consola, según los args)"
+	@echo ""
+	@echo "  status            Regenera las figuras de paridad con Bitwig"
+	@echo "  status-watch      Las regenera en cada guardado del catálogo"
 	@echo ""
 	@echo "  man               Muestra la página de manual"
 	@echo "  man-render        La renderiza en texto plano (sin paginador)"
@@ -73,6 +77,14 @@ test:
 
 run:
 	$(CARGO) run --bin $(BIN) -- $(ARGS)
+
+# --- Paridad con Bitwig ----------------------------------------------------
+
+status:
+	python3 docs/bitwig-parity/generate_status.py
+
+status-watch:
+	python3 docs/bitwig-parity/generate_status.py --watch
 
 # --- La página de manual ---------------------------------------------------
 

@@ -47,6 +47,25 @@ nada:
 python3 docs/bitwig-parity/generate_status.py --check
 ```
 
+### Modo watch (mientras editás el catálogo)
+
+Para que las cifras y el póster se actualicen solos en cada guardado del JSON:
+
+```bash
+python3 docs/bitwig-parity/generate_status.py --watch
+```
+
+Queda corriendo, detecta el cambio de `features_bitwig.json` y regenera el
+`summary`, los dos SVG y la tabla de la auditoría en ~150 ms. Imprime una línea
+por actualización con el porcentaje y los conteos. `--interval=0.5` ajusta el
+sondeo (por defecto 0.25 s). Si el editor deja el JSON a medio escribir, avisa
+y reintenta en el siguiente guardado. Se corta con `Ctrl+C`.
+
+> **Ojo:** el porcentaje sale de los `status` del JSON. Copiar menús en
+> `crates/hikaru_gui` no mueve la paridad por sí solo: hay que marcar la feature
+> como `done` y agregarle `evidence` (o pasar la a `in_progress`). El watch
+> acelera el reflejo, no inventa el estado.
+
 ## Editar la base de paridad
 
 Cada área tiene esta forma:
