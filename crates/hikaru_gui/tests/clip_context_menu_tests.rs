@@ -191,3 +191,39 @@ fn test_midi_clip_transpose_double_and_legato() {
         assert_eq!(notes[0].3, 480); // Duración extendida sin gap
     }
 }
+
+#[test]
+fn test_scene_selection_delete_color_and_clipboard_ops() {
+    let (mut matrix, proxy) = create_test_state();
+    let initial_scenes = matrix.scenes.len();
+    assert!(initial_scenes >= 2);
+
+    // 1. Seleccionar Scene 1 y colorearla con un color de la paleta 9x3
+    matrix.selected_scene = Some(1);
+    let hex = hikaru_gui::ui::scene_context_menu::SCENE_PALETTE[1][2]; // Naranja Bitwig
+    let orange = egui::Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+    assert!(matrix.set_scene_color(1, orange));
+    assert_eq!(matrix.scenes[1].color, Some(orange));
+
+    // Crear un clip MIDI en Scene 1 Track 0 para probar Copy/Paste
+    matrix::create_empty_midi_clip(&mut matrix, &proxy, 0, 1);
+    assert!(matrix.slot(0, 1).unwrap().clip.is_some());
+
+    // 2. Copiar Scene 1 y pegarla en Scene 0
+    let copied = matrix.copy_scene(1).expect("scene 1 should copy");
+    assert_eq!(copied.meta.color, Some(orange));
+    assert!(matrix.paste_scene(0, &copied, &proxy));
+    assert_eq!(matrix.scenes[0].color, Some(orange));
+    assert!(matrix.slot(0, 0).unwrap().clip.is_some());
+
+    // 3. Eliminar escena seleccionada (Scene 1) mantiene selected_scene en rango válido
+    assert!(matrix.remove_scene_at(1));
+    assert_eq!(matrix.scenes.len(), initial_scenes - 1);
+    assert_eq!(matrix.selected_scene, Some(1.min(matrix.scenes.len() - 1)));
+
+    // 4. Eliminar última escena seleccionada ajusta selected_scene al último índice válido
+    let last_idx = matrix.scenes.len() - 1;
+    matrix.selected_scene = Some(last_idx);
+    assert!(matrix.remove_scene_at(last_idx));
+    assert_eq!(matrix.selected_scene, Some(last_idx - 1));
+}

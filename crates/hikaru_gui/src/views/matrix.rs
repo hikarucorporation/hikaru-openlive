@@ -344,6 +344,8 @@ pub struct SceneMeta {
     /// Override opcional de cuantización de lanzamiento para esta escena.
     /// `None` hereda `SessionMatrixState::global_launch_quantization`.
     pub launch_quantization: Option<QuantizationGrid>,
+    /// Color opcional asignado a la cabecera de esta escena.
+    pub color: Option<Color32>,
 }
 
 #[derive(Clone, Debug)]
@@ -368,6 +370,7 @@ pub struct SessionMatrixState {
     pub scenes: Vec<SceneMeta>,
     pub next_clip_id: usize,
     pub selected_slot: Option<(usize, usize)>,
+    pub selected_scene: Option<usize>,
     pub editor_height: f32,
     pub editor_zoom_x: f32,
     pub show_editor: bool,
@@ -402,6 +405,7 @@ impl Default for SessionMatrixState {
                     .launch_quantization
                     .as_deref()
                     .and_then(QuantizationGrid::from_notation),
+                color: s.color.map(|[r, g, b]| Color32::from_rgb(r, g, b)),
             })
             .collect();
 
@@ -413,6 +417,7 @@ impl Default for SessionMatrixState {
             scenes,
             next_clip_id: 1,
             selected_slot: None,
+            selected_scene: None,
             editor_height: 104.0,
             editor_zoom_x: 0.04,
             show_editor: true,
@@ -498,6 +503,7 @@ impl SessionMatrixState {
         self.scenes.push(SceneMeta {
             name: format!("Scene {}", scene_num),
             launch_quantization: None,
+            color: None,
         });
 
         for track_row in &mut self.grid {
@@ -519,6 +525,7 @@ impl SessionMatrixState {
             SceneMeta {
                 name: format!("Scene {}", scene_num),
                 launch_quantization: None,
+                color: None,
             },
         );
         for track_row in &mut self.grid {
@@ -528,6 +535,11 @@ impl SessionMatrixState {
         if let Some((t, s)) = self.selected_slot {
             if s >= idx {
                 self.selected_slot = Some((t, s + 1));
+            }
+        }
+        if let Some(sel) = self.selected_scene {
+            if sel >= idx {
+                self.selected_scene = Some(sel + 1);
             }
         }
         self.context_menu = None;
@@ -564,6 +576,13 @@ impl SessionMatrixState {
                 self.selected_slot = Some((t, s - 1));
             }
         }
+        if let Some(sel) = self.selected_scene {
+            if sel == scene_idx {
+                self.selected_scene = Some(scene_idx.min(self.scenes.len().saturating_sub(1)));
+            } else if sel > scene_idx {
+                self.selected_scene = Some(sel - 1);
+            }
+        }
         self.context_menu = None;
         self.scene_context_menu = None;
         self.clip_drag = None;
@@ -576,6 +595,67 @@ impl SessionMatrixState {
             true
         } else {
             false
+        }
+    }
+
+    pub fn set_scene_color(&mut self, scene_idx: usize, color: Color32) -> bool {
+        let Some(scene) = self.scenes.get_mut(scene_idx) else {
+            return false;
+        };
+        scene.color = Some(color);
+        true
+    }
+
+    pub fn copy_scene(&self, scene_idx: usize) -> Option<crate::views::clipboard::CopiedScene> {
+        let meta = self.scenes.get(scene_idx)?.clone();
+        let slots = self
+            .grid
+            .iter()
+            .map(|row| row.get(scene_idx).cloned().unwrap_or_default())
+            .collect();
+        Some(crate::views::clipboard::CopiedScene { meta, slots })
+    }
+
+    pub fn paste_scene(
+        &mut self,
+        scene_idx: usize,
+        copied: &crate::views::clipboard::CopiedScene,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        if scene_idx >= self.scenes.len() {
+            return false;
+        }
+        self.scenes[scene_idx].color = copied.meta.color;
+        self.scenes[scene_idx].launch_quantization = copied.meta.launch_quantization;
+        audio_proxy.send(GuiCommand::SetSceneLaunchQuantization {
+            scene_idx,
+            grid: copied.meta.launch_quantization,
+        });
+        for (track_idx, row) in self.grid.iter_mut().enumerate() {
+            if let Some(target_slot) = row.get_mut(scene_idx) {
+                if let Some(src_slot) = copied.slots.get(track_idx) {
+                    target_slot.clip = src_slot.clip.clone();
+                    target_slot.state = if target_slot.clip.is_some() {
+                        SlotState::Stopped
+                    } else {
+                        SlotState::Empty
+                    };
+                    target_slot.has_stop_button = src_slot.has_stop_button;
+                } else {
+                    target_slot.clip = None;
+                    target_slot.state = SlotState::Empty;
+                }
+            }
+        }
+        true
+    }
+
+    pub fn clear_scene_clips(&mut self, scene_idx: usize) {
+        for row in &mut self.grid {
+            if let Some(slot) = row.get_mut(scene_idx) {
+                slot.clip = None;
+                slot.state = SlotState::Empty;
+            }
         }
     }
 
@@ -1409,6 +1489,60 @@ pub fn mixer_index_of_matrix_track(matrix_idx: usize) -> usize {
 
 pub fn select_matrix_track(s: &mut AppState, track_idx: usize) {
     s.selected_track_index = mixer_index_of_matrix_track(track_idx);
+    s.matrix_state.selected_scene = None;
+}
+
+/// Calcula los colores `(fondo, texto, triángulo play)` para la cabecera de una escena,
+/// asegurando contraste legible cuando la escena tiene un color personalizado.
+pub fn scene_header_colors(
+    custom_color: Option<Color32>,
+    is_queued: bool,
+    is_hovered: bool,
+    is_selected: bool,
+    play_hovered: bool,
+) -> (Color32, Color32, Color32) {
+    let bg = if is_queued {
+        Color32::from_rgb(0x6E, 0x4A, 0x24)
+    } else if let Some(c) = custom_color {
+        if is_hovered {
+            Color32::from_rgb(
+                c.r().saturating_add(16),
+                c.g().saturating_add(16),
+                c.b().saturating_add(16),
+            )
+        } else {
+            c
+        }
+    } else if is_hovered {
+        Color32::from_rgb(0x5E, 0x60, 0x66)
+    } else if is_selected {
+        Color32::from_rgb(0x55, 0x57, 0x5E)
+    } else {
+        Color32::from_rgb(0x4B, 0x4D, 0x53)
+    };
+
+    let luma = 0.299 * bg.r() as f32 + 0.587 * bg.g() as f32 + 0.114 * bg.b() as f32;
+    let light_bg = luma > 155.0;
+    let text_col = if light_bg {
+        Color32::from_rgb(0x14, 0x15, 0x18)
+    } else {
+        Color32::WHITE
+    };
+    let play_col = if is_queued {
+        ACCENT_ORANGE
+    } else if play_hovered {
+        if light_bg {
+            Color32::BLACK
+        } else {
+            Color32::WHITE
+        }
+    } else if light_bg {
+        Color32::from_rgb(0x28, 0x2A, 0x30)
+    } else {
+        Color32::from_rgb(0xBF, 0xC2, 0xC7)
+    };
+
+    (bg, text_col, play_col)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1921,10 +2055,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut toggle_arm_action: Option<usize> = None;
     let mut stop_track_action: Option<usize> = None;
     let mut trigger_scene_action: Option<usize> = None;
+    let mut select_scene_action: Option<usize> = None;
     let mut add_track_action = false;
     let mut delete_track_action: Option<usize> = None;
     let mut add_scene_action = false;
-    let mut remove_scene_action: Option<usize> = None;
     let mut open_scene_menu_action: Option<(usize, egui::Pos2)> = None;
     let mut drop_slot_action: Option<(usize, usize, PathBuf)> = None;
     let mut drop_timeline_action: Option<(usize, u64, PathBuf)> = None;
@@ -2462,7 +2596,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             Stroke::new(1.0_f32, BW_CAPSULE_BORDER),
         );
 
-        // Scene Column Headers (`[▶ Scene 1]`, `[▶ Scene 2]`...) with vector play triangle
+        // Scene Column Headers (`[▶ Scene 1]`, `[▶ Scene 2]`...) with selection border & play triangle
         for scene_idx in 0..scenes_count {
             let sx0 = launcher_x0 + scene_idx as f32 * BITWIG_SCENE_W;
             let sx1 = sx0 + BITWIG_SCENE_W;
@@ -2475,19 +2609,36 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             );
             let s_hovered =
                 pointer_pos.is_some_and(|p| scene_header_rect.contains(p) && s_rect.contains(p));
-            let is_queued = state.queued_scene_index == Some(scene_idx);
-            scene_painter.rect_filled(
-                s_rect,
-                1.5,
-                if is_queued {
-                    Color32::from_rgb(0x6E, 0x4A, 0x24)
-                } else if s_hovered {
-                    Color32::from_rgb(0x5E, 0x60, 0x66)
-                } else {
-                    Color32::from_rgb(0x4B, 0x4D, 0x53)
-                },
+            let play_hit_rect = Rect::from_min_max(
+                s_rect.min,
+                pos2((s_rect.min.x + 18.0).min(s_rect.max.x), s_rect.max.y),
             );
-            if is_queued {
+            let play_hovered = s_hovered && pointer_pos.is_some_and(|p| play_hit_rect.contains(p));
+            let is_queued = state.queued_scene_index == Some(scene_idx);
+            let is_selected = state.matrix_state.selected_scene == Some(scene_idx);
+            let (s_name, q_override, custom_color) = state
+                .matrix_state
+                .scenes
+                .get(scene_idx)
+                .map(|s| (s.name.as_str(), s.launch_quantization, s.color))
+                .unwrap_or(("Scene", None, None));
+
+            let (s_bg, s_txt_col, play_col) = scene_header_colors(
+                custom_color,
+                is_queued,
+                s_hovered,
+                is_selected,
+                play_hovered,
+            );
+            scene_painter.rect_filled(s_rect, 1.5, s_bg);
+            if is_selected {
+                scene_painter.rect_stroke(
+                    s_rect,
+                    1.5,
+                    Stroke::new(1.5_f32, Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+            } else if is_queued {
                 scene_painter.rect_stroke(
                     s_rect,
                     1.5,
@@ -2495,29 +2646,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     egui::StrokeKind::Inside,
                 );
             }
-            let (s_name, q_override) = state
-                .matrix_state
-                .scenes
-                .get(scene_idx)
-                .map(|s| (s.name.as_str(), s.launch_quantization))
-                .unwrap_or(("Scene", None));
-            let play_r =
-                Rect::from_min_size(pos2(s_rect.min.x + 4.0, s_rect.center().y - 6.0), vec2(12.0, 12.0));
-            icons::paint_play_triangle(
-                &scene_painter,
-                play_r,
-                if is_queued {
-                    ACCENT_ORANGE
-                } else {
-                    Color32::from_rgb(0xBF, 0xC2, 0xC7)
-                },
+            let play_r = Rect::from_min_size(
+                pos2(s_rect.min.x + 4.0, s_rect.center().y - 6.0),
+                vec2(12.0, 12.0),
             );
+            icons::paint_play_triangle(&scene_painter, play_r, play_col);
             scene_painter.text(
                 pos2(s_rect.min.x + 18.0, s_rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 s_name,
                 fonts::semibold(10.5),
-                Color32::WHITE,
+                s_txt_col,
             );
             if let Some(ov) = q_override {
                 let badge_r = Rect::from_min_max(
@@ -2534,67 +2673,49 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 );
             }
 
-            if primary_clicked && s_hovered {
+            if double_clicked && s_hovered {
+                select_scene_action = Some(scene_idx);
                 trigger_scene_action = Some(scene_idx);
-            } else if secondary_clicked && s_hovered {
-                if let Some(pos) = pointer_pos {
-                    open_scene_menu_action = Some((scene_idx, pos));
+            } else if primary_clicked && s_hovered {
+                select_scene_action = Some(scene_idx);
+                if play_hovered {
+                    trigger_scene_action = Some(scene_idx);
                 }
+            } else if secondary_clicked && s_hovered {
+                select_scene_action = Some(scene_idx);
+                let menu_pos = pointer_pos.unwrap_or(pos2(s_rect.min.x, s_rect.max.y + 2.0));
+                open_scene_menu_action = Some((scene_idx, menu_pos));
             }
         }
 
-        // Vector `+` and `-` buttons at end of Scene headers
+        // Vector `+` button at end of Scene headers (Bitwig Studio style — no `-` button; use Delete on selected scene)
         let add_scene_x = launcher_x0 + scenes_count as f32 * BITWIG_SCENE_W + 3.0;
         if add_scene_x + 22.0 <= launcher_x1 {
             let add_s_rect = Rect::from_min_size(
                 pos2(add_scene_x, toolbar_y0 + 3.0),
-                vec2(22.0, BITWIG_TOOLBAR_H - 6.0),
+                vec2(20.0, BITWIG_TOOLBAR_H - 6.0),
             );
             let add_s_hov = pointer_pos.is_some_and(|p| add_s_rect.contains(p));
-            scene_painter.rect_filled(
-                add_s_rect,
-                2.0,
-                if add_s_hov {
-                    Color32::from_rgb(0x44, 0x46, 0x4E)
-                } else {
-                    Color32::from_rgb(0x2E, 0x30, 0x36)
-                },
-            );
+            if add_s_hov {
+                scene_painter.rect_filled(
+                    add_s_rect,
+                    2.0,
+                    Color32::from_rgb(0x44, 0x46, 0x4E),
+                );
+            }
             icons::paint_icon(
                 &scene_painter,
                 add_s_rect.shrink(4.5),
                 icons::PLUS,
-                Color32::from_rgb(0xE0, 0xE2, 0xE8),
-                1.7,
+                if add_s_hov {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(0xB8, 0xBA, 0xC2)
+                },
+                1.6,
             );
             if primary_clicked && add_s_hov {
                 add_scene_action = true;
-            }
-
-            let rem_scene_x = add_scene_x + 25.0;
-            if scenes_count > 1 && rem_scene_x + 22.0 <= launcher_x1 {
-                let rem_s_rect = Rect::from_min_size(
-                    pos2(rem_scene_x, toolbar_y0 + 3.0),
-                    vec2(22.0, BITWIG_TOOLBAR_H - 6.0),
-                );
-                let rem_s_hov = pointer_pos.is_some_and(|p| rem_s_rect.contains(p));
-                scene_painter.rect_filled(
-                    rem_s_rect,
-                    2.0,
-                    if rem_s_hov {
-                        Color32::from_rgb(0x52, 0x34, 0x34)
-                    } else {
-                        Color32::from_rgb(0x2E, 0x30, 0x36)
-                    },
-                );
-                let c = rem_s_rect.center();
-                scene_painter.line_segment(
-                    [pos2(c.x - 4.5, c.y), pos2(c.x + 4.5, c.y)],
-                    Stroke::new(1.7_f32, Color32::from_rgb(0xE0, 0xE2, 0xE8)),
-                );
-                if primary_clicked && rem_s_hov {
-                    remove_scene_action = Some(scenes_count - 1);
-                }
             }
         }
 
@@ -4595,14 +4716,24 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if add_scene_action {
-        state.matrix_state.add_scene_synced(&state.audio_proxy);
+        let new_idx = state.matrix_state.add_scene_synced(&state.audio_proxy);
+        state.matrix_state.selected_scene = Some(new_idx);
+        state.matrix_state.selected_slot = None;
     }
 
-    if let Some(s_idx) = remove_scene_action {
-        state.remove_scene_at(s_idx);
+    if let Some(s_idx) = select_scene_action {
+        state.matrix_state.selected_scene = Some(s_idx);
+        state.matrix_state.selected_slot = None;
+        state.playlist_state.selected_clips.clear();
+        state.selected_fx_index = None;
+        if let Some(focused) = ui.ctx().memory(|m| m.focused()) {
+            ui.ctx().memory_mut(|m| m.surrender_focus(focused));
+        }
     }
 
     if let Some((s_idx, click_pos)) = open_scene_menu_action {
+        state.matrix_state.selected_scene = Some(s_idx);
+        state.matrix_state.selected_slot = None;
         state.matrix_state.context_menu = None;
         state.matrix_state.scene_context_menu = Some(SceneContextMenu {
             scene_idx: s_idx,
@@ -4787,8 +4918,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     render_scene_context_menu(ui, state);
 }
 
-/// Menú contextual de cabecera de escena (click derecho): lanzar, insertar,
-/// eliminar escena y configurar override de cuantización de lanzamiento.
+/// Menú contextual de cabecera de escena (click derecho, estilo Bitwig Studio):
+/// paleta de colores 9x3 + acciones CUT / COPY / PASTE / DUPL. / DELETE.
 pub fn render_scene_context_menu(ui: &mut Ui, state: &mut AppState) {
     let Some(menu) = state.matrix_state.scene_context_menu.clone() else {
         return;
@@ -4799,115 +4930,45 @@ pub fn render_scene_context_menu(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    let mc = crate::ui::scene_context_menu::SceneMenuContext {
+        current_color: state.matrix_state.scenes[scene_idx].color,
+        can_paste: state.matrix_clipboard.has_scene(),
+        can_delete: state.matrix_state.scenes.len() > 1,
+    };
+
+    let (action, should_close) = crate::ui::scene_context_menu::show(
+        ui.ctx(),
+        egui::Id::new("bitwig_scene_context_menu_area"),
+        menu.click_pos,
+        &mc,
+    );
+
+    if should_close {
         state.matrix_state.scene_context_menu = None;
-        return;
     }
 
-    let can_delete = state.matrix_state.scenes.len() > 1;
-    let global_q = state.matrix_state.global_launch_quantization;
-    let current_override = state.matrix_state.scenes[scene_idx].launch_quantization;
-    let scene_name = state.matrix_state.scenes[scene_idx].name.clone();
-
-    let screen = ui.ctx().screen_rect();
-    let menu_w = 212.0;
-    let est_h = 265.0;
-    let x = (menu.click_pos.x).min(screen.max.x - menu_w - 8.0).max(6.0);
-    let y = (menu.click_pos.y).min(screen.max.y - est_h - 8.0).max(6.0);
-
-    let mut close_menu = false;
-    let mut trigger_now = false;
-    let mut insert_at: Option<usize> = None;
-    let mut delete_this = false;
-    let mut set_override: Option<Option<QuantizationGrid>> = None;
-
-    egui::Area::new(egui::Id::new("bitwig_scene_context_menu_area"))
-        .fixed_pos(pos2(x, y))
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            let frame = egui::Frame::new()
-                .fill(Color32::from_rgb(0x22, 0x24, 0x28))
-                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x2F, 0x32, 0x38)))
-                .corner_radius(egui::CornerRadius::same(3))
-                .inner_margin(egui::Margin::symmetric(6, 5));
-            let resp = frame.show(ui, |ui| {
-                ui.set_width(menu_w);
-                ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
-                ui.label(
-                    RichText::new(scene_name)
-                        .font(fonts::semibold(10.5))
-                        .color(Color32::from_rgb(0xA4, 0xA8, 0xB2)),
-                );
-                ui.separator();
-                if ui.button("Launch Scene").clicked() {
-                    trigger_now = true;
-                    close_menu = true;
-                }
-                if ui.button("Insert Scene Before").clicked() {
-                    insert_at = Some(scene_idx);
-                    close_menu = true;
-                }
-                if ui.button("Insert Scene After").clicked() {
-                    insert_at = Some(scene_idx + 1);
-                    close_menu = true;
-                }
-                if ui
-                    .add_enabled(can_delete, Button::new("Delete Scene"))
-                    .clicked()
-                {
-                    delete_this = true;
-                    close_menu = true;
-                }
-                ui.separator();
-                ui.label(
-                    RichText::new("Launch Quantization")
-                        .font(fonts::semibold(9.5))
-                        .color(Color32::from_rgb(0x96, 0x9A, 0xA4)),
-                );
-                let global_label = format!(
-                    "{} Global ({})",
-                    if current_override.is_none() { "●" } else { "○" },
-                    global_q.label()
-                );
-                if ui.button(global_label).clicked() {
-                    set_override = Some(None);
-                    close_menu = true;
-                }
-                for grid in QuantizationGrid::ALL {
-                    let selected = current_override == Some(grid);
-                    let label = format!("{} {}", if selected { "●" } else { "○" }, grid.label());
-                    if ui.button(label).clicked() {
-                        set_override = Some(Some(grid));
-                        close_menu = true;
-                    }
-                }
-            });
-
-            if ui.input(|i| i.pointer.any_pressed()) {
-                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                    if !resp.response.rect.contains(pos) {
-                        close_menu = true;
-                    }
-                }
+    if let Some(act) = action {
+        use crate::ui::scene_context_menu::SceneMenuAction;
+        match act {
+            SceneMenuAction::SetColor(col) => {
+                state.matrix_state.set_scene_color(scene_idx, col);
             }
-        });
-
-    if close_menu {
-        state.matrix_state.scene_context_menu = None;
-    }
-    if trigger_now {
-        trigger_scene(&mut state.matrix_state, &state.audio_proxy, scene_idx);
-    }
-    if let Some(idx) = insert_at {
-        state.insert_scene_at(idx);
-    }
-    if delete_this {
-        state.remove_scene_at(scene_idx);
-    }
-    if let Some(ov) = set_override {
-        state
-            .matrix_state
-            .set_scene_launch_quantization(scene_idx, ov, &state.audio_proxy);
+            SceneMenuAction::Cut => {
+                state.cut_scene_at(scene_idx);
+            }
+            SceneMenuAction::Copy => {
+                state.copy_scene_at(scene_idx);
+            }
+            SceneMenuAction::Paste => {
+                state.paste_scene_at(scene_idx);
+            }
+            SceneMenuAction::Duplicate => {
+                state.duplicate_scene_at(scene_idx);
+            }
+            SceneMenuAction::Delete => {
+                state.remove_scene_at(scene_idx);
+            }
+        }
     }
 }
 

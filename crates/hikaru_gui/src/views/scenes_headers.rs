@@ -12,38 +12,62 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let scenes_count = state.matrix_state.scenes.len();
     let mut open_scene_menu: Option<(usize, egui::Pos2)> = None;
     let mut add_scene_clicked = false;
-    let mut remove_last_clicked = false;
+    let mut select_scene: Option<usize> = None;
+    let mut trigger_scene_idx: Option<usize> = None;
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for i in 0..scenes_count {
             let (rect, resp) = ui.allocate_exact_size(vec2(92.0, 24.0), Sense::click());
-            let (name, q_override) = state
+            let (name, q_override, custom_color) = state
                 .matrix_state
                 .scenes
                 .get(i)
-                .map(|s| (s.name.clone(), s.launch_quantization))
-                .unwrap_or_else(|| (format!("Scene {}", i + 1), None));
-            ui.painter().rect_filled(
-                rect,
-                1.5,
-                if resp.hovered() {
-                    egui::Color32::from_rgb(0x5C, 0x5E, 0x64)
-                } else {
-                    egui::Color32::from_rgb(0x4A, 0x4C, 0x52)
-                },
+                .map(|s| (s.name.clone(), s.launch_quantization, s.color))
+                .unwrap_or_else(|| (format!("Scene {}", i + 1), None, None));
+            let is_queued = state.queued_scene_index == Some(i);
+            let is_selected = state.matrix_state.selected_scene == Some(i);
+            let play_hit_rect = Rect::from_min_max(
+                rect.min,
+                pos2((rect.min.x + 18.0).min(rect.max.x), rect.max.y),
             );
+            let play_hovered = resp
+                .hover_pos()
+                .is_some_and(|p| play_hit_rect.contains(p));
+            let (bg, txt_col, play_col) = crate::views::matrix::scene_header_colors(
+                custom_color,
+                is_queued,
+                resp.hovered(),
+                is_selected,
+                play_hovered,
+            );
+            ui.painter().rect_filled(rect, 1.5, bg);
+            if is_selected {
+                ui.painter().rect_stroke(
+                    rect,
+                    1.5,
+                    egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+            } else if is_queued {
+                ui.painter().rect_stroke(
+                    rect,
+                    1.5,
+                    egui::Stroke::new(1.2_f32, crate::theme::ACCENT_ORANGE),
+                    egui::StrokeKind::Inside,
+                );
+            }
             icons::paint_play_triangle(
                 ui.painter(),
                 Rect::from_min_size(pos2(rect.min.x + 4.0, rect.min.y + 6.0), vec2(12.0, 12.0)),
-                egui::Color32::from_rgb(0x12, 0x13, 0x16),
+                play_col,
             );
             ui.painter().text(
                 pos2(rect.min.x + 19.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 &name,
                 fonts::semibold(10.5),
-                egui::Color32::from_rgb(0x12, 0x13, 0x16),
+                txt_col,
             );
             if let Some(ov) = q_override {
                 let badge = Rect::from_min_max(
@@ -60,13 +84,19 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     crate::theme::ACCENT_ORANGE,
                 );
             }
-            if resp.clicked() {
-                crate::views::matrix::trigger_scene(
-                    &mut state.matrix_state,
-                    &state.audio_proxy,
-                    i,
-                );
+            if resp.double_clicked() {
+                select_scene = Some(i);
+                trigger_scene_idx = Some(i);
+            } else if resp.clicked() {
+                select_scene = Some(i);
+                if resp
+                    .interact_pointer_pos()
+                    .is_some_and(|p| play_hit_rect.contains(p))
+                {
+                    trigger_scene_idx = Some(i);
+                }
             } else if resp.secondary_clicked() {
+                select_scene = Some(i);
                 if let Some(pos) = resp.interact_pointer_pos() {
                     open_scene_menu = Some((i, pos));
                 }
@@ -75,18 +105,24 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         if ui.small_button("+").on_hover_text("Add Scene").clicked() {
             add_scene_clicked = true;
         }
-        if scenes_count > 1 && ui.small_button("-").on_hover_text("Remove Last Scene").clicked() {
-            remove_last_clicked = true;
-        }
     });
 
     if add_scene_clicked {
-        state.matrix_state.add_scene_synced(&state.audio_proxy);
+        let new_idx = state.matrix_state.add_scene_synced(&state.audio_proxy);
+        state.matrix_state.selected_scene = Some(new_idx);
+        state.matrix_state.selected_slot = None;
     }
-    if remove_last_clicked && scenes_count > 1 {
-        state.remove_scene_at(scenes_count - 1);
+    if let Some(idx) = select_scene {
+        state.matrix_state.selected_scene = Some(idx);
+        state.matrix_state.selected_slot = None;
+        state.playlist_state.selected_clips.clear();
+        state.selected_fx_index = None;
+    }
+    if let Some(idx) = trigger_scene_idx {
+        crate::views::matrix::trigger_scene(&mut state.matrix_state, &state.audio_proxy, idx);
     }
     if let Some((scene_idx, click_pos)) = open_scene_menu {
+        state.matrix_state.selected_scene = Some(scene_idx);
         state.matrix_state.context_menu = None;
         state.matrix_state.scene_context_menu = Some(crate::views::matrix::SceneContextMenu {
             scene_idx,

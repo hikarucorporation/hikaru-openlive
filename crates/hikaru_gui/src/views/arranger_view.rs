@@ -343,38 +343,65 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 if show_launcher {
                     let mut legend_scene_click = None;
+                    let mut legend_scene_select = None;
                     let mut legend_scene_menu: Option<(usize, egui::Pos2)> = None;
                     scene_viewport(ui, LEGEND_COL_W, slots_view_h, scene_scroll, content_h, "mix_scene_legend", |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     for scene_idx in 0..scenes_count {
-                        let (s_name, q_override) = state
+                        let (s_name, q_override, custom_color) = state
                             .matrix_state
                             .scenes
                             .get(scene_idx)
-                            .map(|s| (s.name.clone(), s.launch_quantization))
-                            .unwrap_or_else(|| (format!("Scene {}", scene_idx + 1), None));
+                            .map(|s| (s.name.clone(), s.launch_quantization, s.color))
+                            .unwrap_or_else(|| (format!("Scene {}", scene_idx + 1), None, None));
 
                         let (s_rect, s_resp) =
                             ui.allocate_exact_size(vec2(LEGEND_COL_W, CLIP_SLOT_H), Sense::click());
-                        let s_bg = if s_resp.hovered() {
-                            Color32::from_rgb(0x5E, 0x60, 0x66)
-                        } else {
-                            Color32::from_rgb(0x4C, 0x4E, 0x54)
-                        };
+                        let is_queued = state.queued_scene_index == Some(scene_idx);
+                        let is_selected = state.matrix_state.selected_scene == Some(scene_idx);
+                        let play_hit_rect = Rect::from_min_max(
+                            s_rect.min,
+                            pos2((s_rect.min.x + 18.0).min(s_rect.max.x), s_rect.max.y),
+                        );
+                        let play_hovered = s_resp
+                            .hover_pos()
+                            .is_some_and(|p| play_hit_rect.contains(p));
+                        let (s_bg, s_txt_col, play_col) = matrix::scene_header_colors(
+                            custom_color,
+                            is_queued,
+                            s_resp.hovered(),
+                            is_selected,
+                            play_hovered,
+                        );
                         ui.painter().rect_filled(s_rect, 1.5, s_bg);
+                        if is_selected {
+                            ui.painter().rect_stroke(
+                                s_rect,
+                                1.5,
+                                Stroke::new(1.5_f32, Color32::WHITE),
+                                egui::StrokeKind::Inside,
+                            );
+                        } else if is_queued {
+                            ui.painter().rect_stroke(
+                                s_rect,
+                                1.5,
+                                Stroke::new(1.2_f32, ACCENT_ORANGE),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
                         let play_rect =
                             Rect::from_min_size(pos2(s_rect.min.x + 3.0, s_rect.min.y + 4.0), vec2(13.0, 13.0));
                         icons::paint_play_triangle(
                             ui.painter(),
                             play_rect,
-                            Color32::from_rgb(0xBF, 0xC2, 0xC7),
+                            play_col,
                         );
                         ui.painter().text(
                             pos2(s_rect.min.x + 18.0, s_rect.center().y),
                             Align2::LEFT_CENTER,
                             &s_name,
                             fonts::semibold(10.5),
-                            Color32::WHITE,
+                            s_txt_col,
                         );
                         if let Some(ov) = q_override {
                             ui.painter().text(
@@ -385,19 +412,36 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 ACCENT_ORANGE,
                             );
                         }
-                        if s_resp.clicked() {
+                        if s_resp.double_clicked() {
+                            legend_scene_select = Some(scene_idx);
                             legend_scene_click = Some(scene_idx);
+                        } else if s_resp.clicked() {
+                            legend_scene_select = Some(scene_idx);
+                            if s_resp
+                                .interact_pointer_pos()
+                                .is_some_and(|p| play_hit_rect.contains(p))
+                            {
+                                legend_scene_click = Some(scene_idx);
+                            }
                         } else if s_resp.secondary_clicked() {
+                            legend_scene_select = Some(scene_idx);
                             if let Some(pos) = s_resp.interact_pointer_pos() {
                                 legend_scene_menu = Some((scene_idx, pos));
                             }
                         }
                     }
                     });
+                    if let Some(s_idx) = legend_scene_select {
+                        state.matrix_state.selected_scene = Some(s_idx);
+                        state.matrix_state.selected_slot = None;
+                        state.playlist_state.selected_clips.clear();
+                        state.selected_fx_index = None;
+                    }
                     if legend_scene_click.is_some() {
                         trigger_scene = legend_scene_click;
                     }
                     if let Some((scene_idx, click_pos)) = legend_scene_menu {
+                        state.matrix_state.selected_scene = Some(scene_idx);
                         state.matrix_state.context_menu = None;
                         state.matrix_state.scene_context_menu =
                             Some(matrix::SceneContextMenu { scene_idx, click_pos });

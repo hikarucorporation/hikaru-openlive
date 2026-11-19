@@ -1313,6 +1313,45 @@ impl AppState {
         true
     }
 
+    pub fn copy_scene_at(&mut self, scene_idx: usize) -> bool {
+        if let Some(copied) = self.matrix_state.copy_scene(scene_idx) {
+            self.matrix_clipboard.copy_scene(copied);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn cut_scene_at(&mut self, scene_idx: usize) -> bool {
+        if !self.copy_scene_at(scene_idx) {
+            return false;
+        }
+        if self.matrix_state.scenes.len() > 1 {
+            self.remove_scene_at(scene_idx)
+        } else {
+            self.matrix_state.clear_scene_clips(scene_idx);
+            true
+        }
+    }
+
+    pub fn paste_scene_at(&mut self, scene_idx: usize) -> bool {
+        let Some(copied) = self.matrix_clipboard.copied_scene.clone() else {
+            return false;
+        };
+        self.matrix_state
+            .paste_scene(scene_idx, &copied, &self.audio_proxy)
+    }
+
+    pub fn duplicate_scene_at(&mut self, scene_idx: usize) -> Option<usize> {
+        let copied = self.matrix_state.copy_scene(scene_idx)?;
+        let new_idx = self.insert_scene_at(scene_idx + 1);
+        self.matrix_state
+            .paste_scene(new_idx, &copied, &self.audio_proxy);
+        self.matrix_state.selected_scene = Some(new_idx);
+        self.matrix_state.selected_slot = None;
+        Some(new_idx)
+    }
+
     pub fn set_sig(&mut self, num: u32, den: u32) {
         self.transport.beats_per_bar = num.max(1);
         self.transport.beat_division = den.max(1);
@@ -1484,6 +1523,9 @@ impl eframe::App for HikaruApp {
         self.sync_frame(ctx);
 
         // Global Keyboard shortcuts
+        // IMPORTANT: query `ctx.wants_keyboard_input()` OUTSIDE `ctx.input(...)`
+        // to avoid re-entrant egui Context lock deadlock!
+        let wants_keyboard_input = ctx.wants_keyboard_input();
         let mut pending_file_action: Option<crate::ui::file_menu::FileMenuAction> = None;
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Space) {
@@ -1498,8 +1540,14 @@ impl eframe::App for HikaruApp {
             if i.key_pressed(egui::Key::F11) {
                 self.state.show_explorer = !self.state.show_explorer;
             }
-            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
-                if self.state.show_dsp_rack {
+            if (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+                && !wants_keyboard_input
+                && !self.state.editing_bpm
+                && !self.state.editing_sig
+            {
+                if let Some(scene_idx) = self.state.matrix_state.selected_scene {
+                    self.state.remove_scene_at(scene_idx);
+                } else if self.state.show_dsp_rack {
                     dsp_rack::handle_delete_key(&mut self.state);
                 } else if !self.state.playlist_state.selected_clips.is_empty() {
                     let selected = self.state.playlist_state.selected_clips.clone();
@@ -1513,7 +1561,7 @@ impl eframe::App for HikaruApp {
                 }
             }
             let cmd = i.modifiers.ctrl || i.modifiers.command;
-            if cmd && !ctx.wants_keyboard_input() {
+            if cmd && !wants_keyboard_input {
                 use crate::ui::file_menu::FileMenuAction;
                 if i.modifiers.shift && i.key_pressed(egui::Key::S) {
                     pending_file_action = Some(FileMenuAction::SaveAs);
@@ -1535,16 +1583,29 @@ impl eframe::App for HikaruApp {
             }
             if cmd
                 && i.modifiers.alt
-                && !ctx.wants_keyboard_input()
+                && !wants_keyboard_input
                 && !self.state.editing_bpm
                 && !self.state.editing_sig
                 && i.key_pressed(egui::Key::T)
             {
                 self.state.tap_tempo(i.time);
-            } else if cmd && !ctx.wants_keyboard_input() && i.key_pressed(egui::Key::T) {
+            } else if cmd && !wants_keyboard_input && i.key_pressed(egui::Key::T) {
                 self.state.popup_browser.open_new_instrument();
             }
-            if cmd && !ctx.wants_keyboard_input() && self.state.panel_layout.show_arranger {
+            if cmd && !wants_keyboard_input {
+                if let Some(scene_idx) = self.state.matrix_state.selected_scene {
+                    if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::C) {
+                        self.state.copy_scene_at(scene_idx);
+                    } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::X) {
+                        self.state.cut_scene_at(scene_idx);
+                    } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::V) {
+                        self.state.paste_scene_at(scene_idx);
+                    } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::D) {
+                        self.state.duplicate_scene_at(scene_idx);
+                    }
+                }
+            }
+            if cmd && !wants_keyboard_input && self.state.panel_layout.show_arranger && self.state.matrix_state.selected_scene.is_none() {
                 if i.key_pressed(egui::Key::C) && !self.state.playlist_state.selected_clips.is_empty() {
                     playlist::copy_selected_clips(&mut self.state.playlist_state);
                 } else if i.key_pressed(egui::Key::X) && !self.state.playlist_state.selected_clips.is_empty() {

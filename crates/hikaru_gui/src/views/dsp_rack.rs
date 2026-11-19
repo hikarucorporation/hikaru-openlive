@@ -666,6 +666,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             }
                             if sb_out.clicked_title {
                                 app.selected_slot_index = slot_idx;
+                                app.matrix_state.selected_scene = None;
                             }
 
                             let body_rect = Rect::from_min_max(
@@ -783,6 +784,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 );
                                 if title_resp.clicked() {
                                     app.selected_slot_index = slot_idx;
+                                    app.matrix_state.selected_scene = None;
                                 }
 
                                 let close_r = Rect::from_min_size(

@@ -221,6 +221,9 @@ pub struct SceneMeta {
     /// significa heredar `Transport::launch_quantization`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_quantization: Option<String>,
+    /// Color RGB opcional asignado a la cabecera de la escena.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 3]>,
 }
 
 /// Un clip de un pad de la Session Matrix.
@@ -318,6 +321,7 @@ pub fn default_matrix() -> Matrix {
         .map(|i| SceneMeta {
             name: format!("Scene {}", i + 1),
             launch_quantization: None,
+            color: None,
         })
         .collect();
 

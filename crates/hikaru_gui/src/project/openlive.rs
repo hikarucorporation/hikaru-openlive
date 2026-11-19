@@ -171,6 +171,7 @@ fn capture_matrix(state: &matrix::SessionMatrixState) -> Matrix {
                 launch_quantization: s
                     .launch_quantization
                     .map(|q| q.to_notation().to_string()),
+                color: s.color.map(|c| [c.r(), c.g(), c.b()]),
             })
             .collect(),
         grid: state
@@ -371,6 +372,9 @@ fn apply_matrix(
                 .launch_quantization
                 .as_deref()
                 .and_then(hikaru_sequencer::QuantizationGrid::from_notation),
+            color: s
+                .color
+                .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)),
         })
         .collect();
     for (scene_idx, s) in next.scenes.iter().enumerate() {
