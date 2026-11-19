@@ -720,6 +720,7 @@ fn hikaru_opengrid_rack_card_editor_presets_roundtrip_and_audio_engine() {
     let mut found_wavetable = false;
     let mut found_adsr = false;
     let mut found_audio_out = false;
+    let mut found_palette_gate_in = false;
     for clipped in &out.shapes {
         if let egui::epaint::Shape::Text(txt) = &clipped.shape {
             let s = txt.galley.text();
@@ -732,11 +733,20 @@ fn hikaru_opengrid_rack_card_editor_presets_roundtrip_and_audio_engine() {
             if s == "Audio Out" {
                 found_audio_out = true;
             }
+            if s == "Gate In" {
+                found_palette_gate_in = true;
+                assert!(
+                    txt.pos.y < 104.0,
+                    "El nombre 'Gate In' de la paleta debe quedar visible dentro de la barra superior (y={})",
+                    txt.pos.y
+                );
+            }
         }
     }
     assert!(found_wavetable, "OpenGrid editor debe dibujar el módulo inicial Wavetable");
     assert!(found_adsr, "OpenGrid editor debe dibujar el módulo inicial ADSR");
     assert!(found_audio_out, "OpenGrid editor debe dibujar el módulo inicial Audio Out");
+    assert!(found_palette_gate_in, "La paleta de OpenGrid debe mostrar el texto de las tarjetas (ej. Gate In)");
 
     // 3. Factory presets + add/connect/roundtrip persistence
     let mut g = HikaruOpenGrid::default();

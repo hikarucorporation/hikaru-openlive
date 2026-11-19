@@ -765,7 +765,7 @@ pub fn render_editor_panel(ui: &mut Ui, app: &mut AppState, track_idx: usize, sl
     let mut shelf_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(shelf_rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     shelf_ui.set_clip_rect(shelf_rect);
     let cat_modules = GridModuleKind::in_category(grid.selected_category);
@@ -774,10 +774,10 @@ pub fn render_editor_panel(ui: &mut Ui, app: &mut AppState, track_idx: usize, sl
         .id_salt(("og_palette_shelf", track_idx, slot_idx))
         .auto_shrink([false; 2])
         .show(&mut shelf_ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
                 for kind in cat_modules {
-                    let (tile_r, tile_resp) = ui.allocate_exact_size(vec2(66.0, 68.0), Sense::click());
+                    let (tile_r, tile_resp) = ui.allocate_exact_size(vec2(68.0, 64.0), Sense::click());
                     let tp = ui.painter();
                     let bg = if tile_resp.hovered() {
                         Color32::from_rgb(0x2D, 0x31, 0x3A)
@@ -795,7 +795,7 @@ pub fn render_editor_panel(ui: &mut Ui, app: &mut AppState, track_idx: usize, sl
                         egui::StrokeKind::Inside,
                     );
                     // Mini visual icon box
-                    let icon_r = Rect::from_min_size(pos2(tile_r.min.x + 8.0, tile_r.min.y + 7.0), vec2(50.0, 36.0));
+                    let icon_r = Rect::from_min_size(pos2(tile_r.min.x + 8.0, tile_r.min.y + 6.0), vec2(52.0, 34.0));
                     tp.rect_filled(icon_r, 2.0, Color32::from_rgb(0x14, 0x16, 0x1B));
                     paint_palette_glyph(tp, icon_r.shrink(4.0), kind, shelf_accent);
 
