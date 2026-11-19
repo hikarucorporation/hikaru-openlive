@@ -545,62 +545,56 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 // 2. Grupo unido de 5 segmentos: [PLAY ◢ | ▶ | ■ | ● | Auto]
                 let play_popup_id = ui.make_persistent_id("bw_play_popup");
-                let play_menu_resp = capsule_text_button(
-                    ui,
-                    vec2(40.0, CAPSULE_H),
-                    "PLAY",
-                    11.0,
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Left,
-                    true,
-                );
-                if play_menu_resp.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(play_popup_id));
-                }
-                egui::popup_below_widget(
-                    ui,
-                    play_popup_id,
-                    &play_menu_resp,
-                    PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(165.0);
-                        if ui.button("Start / Pause Playback (Space)").clicked() {
-                            trigger_play_or_pause(state);
-                            ui.close_menu();
+                let play_menu_open = crate::ui::play_menu::is_open(ui.ctx(), play_popup_id);
+                let play_menu_resp = if play_menu_open {
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(40.0, CAPSULE_H), Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let mut flags = JoinSide::Left.to_flags()
+                            | crate::ui::bitwig_wgpu::FLAG_CORNER_NOTCH;
+                        if response.hovered() {
+                            flags |= FLAG_HOVERED;
                         }
-                        if ui.button("Stop & Return to Zero").clicked() {
-                            state.stop();
-                            ui.close_menu();
-                        }
-                        if ui.button("Stop All Launcher Clips").clicked() {
-                            state.matrix_state.stop_all_clips(&state.audio_proxy);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Tap Tempo (Ctrl+Alt+T)").clicked() {
-                            let now = ui.input(|i| i.time);
-                            state.tap_tempo(now);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        ui.label(
-                            egui::RichText::new("Launch Quantization")
-                                .size(10.0)
-                                .color(Color32::from_rgb(160, 165, 175)),
+                        paint_capsule(
+                            ui.painter(),
+                            rect,
+                            3.0,
+                            Color32::from_rgb(44, 45, 49),
+                            BW_ACCENT_ORANGE,
+                            flags,
                         );
-                        let cur_q = state.matrix_state.global_launch_quantization;
-                        for grid in hikaru_sequencer::QuantizationGrid::ALL {
-                            let mark = if cur_q == grid { "●" } else { "○" };
-                            if ui.button(format!("{mark} {}", grid.label())).clicked() {
-                                state
-                                    .matrix_state
-                                    .set_global_launch_quantization(grid, &state.audio_proxy);
-                                ui.close_menu();
-                            }
-                        }
-                    },
-                );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "PLAY",
+                            fonts::semibold(11.0),
+                            BW_ACCENT_ORANGE,
+                        );
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    response
+                } else {
+                    capsule_text_button(
+                        ui,
+                        vec2(40.0, CAPSULE_H),
+                        "PLAY",
+                        11.0,
+                        false,
+                        BW_ACCENT_ORANGE,
+                        JoinSide::Left,
+                        true,
+                    )
+                };
+                if play_menu_resp.clicked() {
+                    crate::ui::play_menu::toggle(
+                        ui.ctx(),
+                        play_popup_id,
+                        pos2(play_menu_resp.rect.min.x, play_menu_resp.rect.max.y + 2.0),
+                    );
+                }
+                crate::ui::play_menu::show(ui.ctx(), play_popup_id, play_menu_resp.rect, state);
 
                 if capsule_icon_button(
                     ui,

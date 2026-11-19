@@ -8,6 +8,7 @@ pub mod file_menu;
 pub mod fonts;
 pub mod icons;
 pub mod meters;
+pub mod play_menu;
 pub mod playlist_audio_clip_context_menu;
 pub mod playlist_context_menu;
 pub mod text_style_scope;
