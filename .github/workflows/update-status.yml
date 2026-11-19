@@ -32,12 +32,12 @@ jobs:
 
       - name: Commit changes
         run: |
-          if git diff --quiet -- docs/bitwig-parity/status.svg docs/bitwig-parity/parity-detail.svg docs/bitwig-parity/features_bitwig.json; then
+          if git diff --quiet -- docs/bitwig-parity/status.svg docs/bitwig-parity/parity-detail.svg docs/bitwig-parity/features_bitwig.json docs/bitwig-parity/bitwig-5.1.7-parity-audit.md; then
             echo "status figures are already up to date"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/bitwig-parity/status.svg docs/bitwig-parity/parity-detail.svg docs/bitwig-parity/features_bitwig.json
+          git add docs/bitwig-parity/status.svg docs/bitwig-parity/parity-detail.svg docs/bitwig-parity/features_bitwig.json docs/bitwig-parity/bitwig-5.1.7-parity-audit.md
           git commit -m "chore(status): regenerate Bitwig 5.1.7 parity figures"
           git push

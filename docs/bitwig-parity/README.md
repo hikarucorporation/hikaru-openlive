@@ -10,7 +10,7 @@ de la auditoría.
 | Archivo | Qué es |
 |---|---|
 | [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 12 áreas y 398 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
-| [`generate_status.py`](generate_status.py) | Generador autocontenido (sólo stdlib de Python). Lee el JSON y produce `status.svg` y `parity-detail.svg`; refresca el `summary` del JSON para que nunca se desincronicen. |
+| [`generate_status.py`](generate_status.py) | Generador autocontenido (sólo stdlib de Python). Lee el JSON y produce `status.svg` y `parity-detail.svg`; refresca el `summary` del JSON y la tabla de paridad de la auditoría para que nunca se desincronicen. |
 | [`status.svg`](status.svg) | Squarified treemap oscuro de 680×480, con leyenda, porcentaje global, barras de estado y badges de bugs. Es el archivo que muestra el `README.md` raíz. |
 | [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 398 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
 | [`bitwig-5.1.7-parity-audit.md`](bitwig-5.1.7-parity-audit.md) | Auditoría completa: instalación local de Bitwig, catálogo de 118 dispositivos y 43 moduladores, crates de Hikaru y metodología. |
@@ -32,15 +32,16 @@ Desde cualquier directorio:
 python3 docs/bitwig-parity/generate_status.py
 ```
 
-El script resuelve `features_bitwig.json`, `status.svg` y `parity-detail.svg`
-relativos a su propia ubicación, así que no depende del `cwd`. También se pueden
-pasar rutas explícitas:
+El script resuelve `features_bitwig.json`, `status.svg`, `parity-detail.svg` y
+`bitwig-5.1.7-parity-audit.md` relativos a su propia ubicación, así que no
+depende del `cwd`. También se pueden pasar rutas explícitas:
 
 ```bash
-python3 docs/bitwig-parity/generate_status.py ruta/features.json ruta/status.svg ruta/parity-detail.svg
+python3 docs/bitwig-parity/generate_status.py ruta/features.json ruta/status.svg ruta/parity-detail.svg ruta/audit.md
 ```
 
-Para verificar que el JSON y ambos SVG están al día sin escribir nada:
+Para verificar que el JSON, la auditoría y ambos SVG están al día sin escribir
+nada:
 
 ```bash
 python3 docs/bitwig-parity/generate_status.py --check
@@ -71,15 +72,15 @@ Cada área tiene esta forma:
 - `evidence` es una ruta relativa a la raíz del repo; apunta al código que
   respalda la feature.
 - `bugs` es el número de issues abiertos de esa área.
-- Después de editar, correr el generador: recalcula el bloque `summary` y
-  redibuja `status.svg` y `parity-detail.svg`.
+- Después de editar, correr el generador: recalcula el bloque `summary`, la
+  tabla de la auditoría y redibuja `status.svg` y `parity-detail.svg`.
 
 ## Automatización
 
 El workflow [`.github/workflows/update-status.yml`](../../.github/workflows/update-status.yml)
 se ejecuta en cada push a `main` (y manualmente con `workflow_dispatch`). Corre
-el generador, valida el resultado y commitea `status.svg`,
-`parity-detail.svg` + `features_bitwig.json` si cambiaron.
+el generador, valida el resultado y commitea `status.svg`, `parity-detail.svg`,
+`bitwig-5.1.7-parity-audit.md` + `features_bitwig.json` si cambiaron.
 
 ## Criterio de medición
 

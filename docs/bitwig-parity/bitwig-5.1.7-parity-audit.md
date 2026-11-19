@@ -133,9 +133,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 
 | Área | Features | Done | In progress | Planned | Bugs |
 |---|---:|---:|---:|---:|---:|
-| Clip Launcher | 26 | 14 | 4 | 8 | 0 |
+| Clip Launcher | 26 | 18 | 0 | 8 | 0 |
 | Arranger | 28 | 14 | 4 | 10 | 0 |
-| Transport & Sync | 18 | 11 | 2 | 5 | 0 |
+| Transport & Sync | 18 | 12 | 1 | 5 | 0 |
 | Group Tracks & Routing | 22 | 14 | 2 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
 | Built-in Devices & FX | 118 | 8 | 3 | 107 | 0 |
@@ -145,9 +145,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
 | Build & Platform | 16 | 10 | 2 | 4 | 1 |
-| **Total** | **398** | **148** | **23** | **227** | **1** |
+| **Total** | **398** | **153** | **18** | **227** | **1** |
 
-Paridad global: **148 / 398 = 37 %**.
+Paridad global: **153 / 398 = 38 %**.
 
 ### Bugs abiertos
 

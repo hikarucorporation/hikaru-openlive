@@ -16,11 +16,12 @@ Actions.
 
 Usage:
     python3 docs/bitwig-parity/generate_status.py
-    python3 docs/bitwig-parity/generate_status.py [features.json] [status.svg] [parity-detail.svg]
+    python3 docs/bitwig-parity/generate_status.py [features.json] [status.svg] [parity-detail.svg] [audit.md]
     python3 docs/bitwig-parity/generate_status.py --check
 
-When the file is generated, the ``summary`` object in the JSON is refreshed so
-the database and the figure can never disagree.
+When the file is generated, the ``summary`` object in the JSON is refreshed and
+the parity table in ``bitwig-5.1.7-parity-audit.md`` is rewritten from the same
+counts, so the database, the document and both figures can never disagree.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 from xml.sax.saxutils import escape
 
@@ -207,15 +209,10 @@ def summary_of(document: dict) -> dict:
     bugs = 0
     areas = document.get("areas", [])
     for area in areas:
-        bugs += int(area.get("bugs", 0))
-        for feature in area.get("features", []):
-            status = feature.get("status")
-            if status not in counts:
-                raise SystemExit(
-                    f"invalid status {status!r} in area {area.get('id')!r} "
-                    f"(feature {feature.get('id')!r})"
-                )
-            counts[status] += 1
+        area_summary = area_counts(area)
+        bugs += area_summary["bugs"]
+        for status in STATUSES:
+            counts[status] += area_summary[status]
     total = sum(counts.values())
     done = counts["done"]
     return {
@@ -227,6 +224,60 @@ def summary_of(document: dict) -> dict:
         "bugs": bugs,
         "parity_percent": round((done * 100.0) / total) if total else 0,
     }
+
+
+def area_counts(area: dict) -> dict:
+    """Count one area's features and open bugs."""
+    counts = {status: 0 for status in STATUSES}
+    for feature in area.get("features", []):
+        status = feature.get("status")
+        if status not in counts:
+            raise SystemExit(
+                f"invalid status {status!r} in area {area.get('id')!r} "
+                f"(feature {feature.get('id')!r})"
+            )
+        counts[status] += 1
+    counts["total"] = sum(counts[status] for status in STATUSES)
+    counts["bugs"] = int(area.get("bugs", 0))
+    return counts
+
+
+def sync_audit_markdown(text: str, document: dict) -> str:
+    """Refresh the parity table and global figure in the audit document.
+
+    The audit markdown is part of the same source of truth, so its summary
+    table is rewritten from the JSON exactly like the JSON ``summary`` and the
+    two SVGs. Lines that do not match the expected shapes are left untouched.
+    """
+    summary = summary_of(document)
+    areas = document.get("areas", [])
+
+    for area in areas:
+        name = area.get("name", area.get("id", ""))
+        counts = area_counts(area)
+        row = (
+            f"| {name} | {counts['total']} | {counts['done']} | "
+            f"{counts['in_progress']} | {counts['planned']} | {counts['bugs']} |"
+        )
+        pattern = re.compile(rf"^\| {re.escape(name)} \|.*$", re.MULTILINE)
+        text = pattern.sub(lambda _match, row=row: row, text, count=1)
+
+    total_row = (
+        f"| **Total** | **{summary['features']}** | **{summary['done']}** | "
+        f"**{summary['in_progress']}** | **{summary['planned']}** | "
+        f"**{summary['bugs']}** |"
+    )
+    text = re.sub(r"^\| \*\*Total\*\* \|.*$", lambda _match: total_row, text,
+                  count=1, flags=re.MULTILINE)
+
+    parity = summary["parity_percent"]
+    parity_line = (
+        f"Paridad global: **{summary['done']} / {summary['features']} = "
+        f"{parity} %**."
+    )
+    text = re.sub(r"^Paridad global: .*$", lambda _match: parity_line, text,
+                  count=1, flags=re.MULTILINE)
+    return text
 
 
 def render(document: dict) -> str:
@@ -871,6 +922,11 @@ def main(argv: list[str]) -> int:
     features_path = args[0] if args else os.path.join(base, "features_bitwig.json")
     svg_path = args[1] if len(args) > 1 else os.path.join(base, "status.svg")
     detail_path = args[2] if len(args) > 2 else os.path.join(base, "parity-detail.svg")
+    audit_path = (
+        args[3]
+        if len(args) > 3
+        else os.path.join(os.path.dirname(features_path), "bitwig-5.1.7-parity-audit.md")
+    )
 
     with open(features_path, "r", encoding="utf-8") as handle:
         document = json.load(handle)
@@ -884,6 +940,13 @@ def main(argv: list[str]) -> int:
 
     svg = render(document)
     detail_svg = render_detail(document)
+    audit_original = None
+    audit_synced = None
+    if os.path.exists(audit_path):
+        with open(audit_path, "r", encoding="utf-8") as handle:
+            audit_original = handle.read()
+        audit_synced = sync_audit_markdown(audit_original, document)
+
     if check:
         problems = []
         if document.get("summary") != summary:
@@ -898,6 +961,8 @@ def main(argv: list[str]) -> int:
                         problems.append(f"{label} is stale")
             else:
                 problems.append(f"{label} is missing")
+        if audit_synced is not None and audit_synced != audit_original:
+            problems.append("parity table in bitwig-5.1.7-parity-audit.md is stale")
         if problems:
             for problem in problems:
                 print(f"error: {problem}", file=sys.stderr)
@@ -910,6 +975,9 @@ def main(argv: list[str]) -> int:
         handle.write(svg)
     with open(detail_path, "w", encoding="utf-8") as handle:
         handle.write(detail_svg)
+    if audit_synced is not None and audit_synced != audit_original:
+        with open(audit_path, "w", encoding="utf-8") as handle:
+            handle.write(audit_synced)
 
     print(
         f"wrote {svg_path} and {detail_path}: {summary['done']} of "
