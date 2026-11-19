@@ -898,13 +898,13 @@ fn test_openmodulation_in_catalog_and_lfo_modulates_openwavetable_wt_pos() {
     };
     use hikaru_gui::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::WavetableEditor;
 
-    // 1. Catálogo de plugins del DSP Rack contiene Hikaru OpenModulation
+    // 1. Catálogo de plugins del DSP Rack contiene Hikaru OpenLFO MOD
     let has_mod = PLUGIN_CATALOG
         .iter()
-        .any(|entry| entry.name == "OpenModulation" && entry.label == "Hikaru OpenModulation" && entry.category == "Modulation");
+        .any(|entry| entry.name == "OpenLFO MOD" && entry.label == "Hikaru OpenLFO MOD" && entry.category == "Modulation");
     assert!(
         has_mod,
-        "Hikaru OpenModulation debe estar registrado en PLUGIN_CATALOG bajo la categoría Modulation"
+        "Hikaru OpenLFO MOD debe estar registrado en PLUGIN_CATALOG bajo la categoría Modulation"
     );
 
     // 2. Registro de LFO apuntando al parámetro WT POS de OpenWavetable en la pista 1

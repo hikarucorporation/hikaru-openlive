@@ -1,22 +1,36 @@
 // crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs
-// Hikaru OpenModulation - LFO MOD
-// Hardware-modeled, tempo-synced LFO modulator for any device knob in Hikaru OpenLive.
+// Hikaru OpenLFO MOD (Bitwig-style Dual LFO MOD Device)
+// Dual hardware-modeled, tempo-synced LFO modulator with phase, depth, retrigger,
+// polarity, dual oscilloscope, FX slot, and Mix control.
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, OnceLock};
 
-use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
+use egui::{pos2, vec2, Align2, Color32, CursorIcon, Painter, Pos2, Rect, RichText, Sense, Stroke};
 use hikaru_dsp::effects::lfo::{
     evaluate_waveform, pseudo_random_step, LfoSyncMode, LfoWaveform, SyncRate,
 };
-use hikaru_project_file::OpenModulationParams;
+use hikaru_project_file::{LfoChannelParams, OpenModulationParams};
 
 use crate::app::AppState;
 use crate::theme;
 use crate::ui::bitwig_kit;
 use crate::ui::fonts;
 
-pub const MODULATION_CARD_WIDTH: f32 = 426.0;
+pub const MODULATION_CARD_WIDTH: f32 = 272.0;
+
+const LFO1_WAVE_ORANGE: Color32 = Color32::from_rgb(0xE8, 0x7A, 0x24);
+const LFO2_WAVE_BLUE: Color32 = Color32::from_rgb(0x38, 0xA8, 0xE8);
+const MOD_ARROW_CYAN: Color32 = Color32::from_rgb(0x46, 0xC8, 0xF5);
+const PHASE_ARC_SILVER: Color32 = Color32::from_rgb(0xC8, 0xCC, 0xD4);
+const PANEL_BG: Color32 = Color32::from_rgb(0x28, 0x2A, 0x30);
+const PANEL_BORDER: Color32 = Color32::from_rgb(0x3A, 0x3D, 0x46);
+const WELL_BG: Color32 = Color32::from_rgb(0x16, 0x18, 0x1D);
+const WELL_BORDER: Color32 = Color32::from_rgb(0x34, 0x37, 0x40);
+const RIGHT_COL_BG: Color32 = Color32::from_rgb(0x33, 0x36, 0x3E);
+const BTN_IDLE_BG: Color32 = Color32::from_rgb(0x2E, 0x31, 0x38);
+const BTN_ACTIVE_BG: Color32 = Color32::from_rgb(0x4A, 0x4E, 0x58);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModulationTarget {
@@ -110,7 +124,9 @@ impl ModulationTarget {
             "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable" => {
                 self.device_name() == "OpenPoly"
             }
-            "OpenSpectral Phaser" | "OpenSpectralPhaser" => self.device_name() == "OpenSpectral Phaser",
+            "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
+                self.device_name() == "OpenSpectral Phaser"
+            }
             "OpenEQ3" => self.device_name() == "OpenEQ3",
             _ => device == self.device_name(),
         };
@@ -130,10 +146,28 @@ impl ModulationTarget {
         }
         None
     }
+
+    fn parse_saved(label: &str, fallback: Self) -> Self {
+        Self::ALL
+            .iter()
+            .find(|t| t.label().eq_ignore_ascii_case(label))
+            .copied()
+            .or_else(|| match label {
+                "OpenWavetable: WT POS" | "OpenPoly: WT POS" => {
+                    Some(ModulationTarget::OpenWavetableWtPos)
+                }
+                "OpenWavetable: DETUNE" => Some(ModulationTarget::OpenWavetableDetune),
+                "OpenWavetable: PHASE" => Some(ModulationTarget::OpenWavetablePhase),
+                "OpenWavetable: VOL" => Some(ModulationTarget::OpenWavetableVolume),
+                _ => None,
+            })
+            .unwrap_or(fallback)
+    }
 }
 
+/// Independent LFO channel state (used for LFO1 and LFO2 inside Hikaru OpenLFO MOD).
 #[derive(Debug, Clone)]
-pub struct LfoModState {
+pub struct LfoChannelState {
     pub waveform: LfoWaveform,
     pub sync_mode: LfoSyncMode,
     pub rate_hz: f32,
@@ -142,14 +176,15 @@ pub struct LfoModState {
     pub depth: f32,           // 0.0 .. 1.0
     pub phase_deg: f32,       // 0.0 .. 360.0
     pub bipolar: bool,        // true = +/-1.0, false = 0.0 .. 1.0
-    pub amount: f32,          // -1.0 .. +1.0 modulation intensity
+    pub retrigger: bool,      // true = reset phase on transport play/start
+    pub amount: f32,          // -1.0 .. +1.0 modulation routing intensity
     pub target: ModulationTarget,
     pub is_mapping: bool,
     last_cycle_index: u64,
     current_sh_val: f32,
 }
 
-impl Default for LfoModState {
+impl Default for LfoChannelState {
     fn default() -> Self {
         Self {
             waveform: LfoWaveform::Sine,
@@ -160,6 +195,7 @@ impl Default for LfoModState {
             depth: 1.0,
             phase_deg: 0.0,
             bipolar: true,
+            retrigger: true,
             amount: 0.5,
             target: ModulationTarget::OpenWavetableWtPos,
             is_mapping: false,
@@ -169,7 +205,14 @@ impl Default for LfoModState {
     }
 }
 
-impl LfoModState {
+impl LfoChannelState {
+    pub fn default_lfo2() -> Self {
+        Self {
+            target: ModulationTarget::None,
+            ..Self::default()
+        }
+    }
+
     pub fn sync_index(&self) -> usize {
         SyncRate::ALL
             .iter()
@@ -182,43 +225,24 @@ impl LfoModState {
         self.sync_continuous = self.sync_index() as f32;
     }
 
-    pub fn to_params(&self) -> OpenModulationParams {
-        OpenModulationParams {
-            waveform: match self.waveform {
-                LfoWaveform::Sine => "Sine".to_string(),
-                LfoWaveform::Triangle => "Triangle".to_string(),
-                LfoWaveform::SawUp => "SawUp".to_string(),
-                LfoWaveform::SawDown => "SawDown".to_string(),
-                LfoWaveform::Square => "Square".to_string(),
-                LfoWaveform::SampleAndHold => "SampleAndHold".to_string(),
-            },
-            sync_mode: match self.sync_mode {
-                LfoSyncMode::FreeHz => "FreeHz".to_string(),
-                LfoSyncMode::TempoSync => "TempoSync".to_string(),
-            },
+    pub fn to_channel_params(&self) -> LfoChannelParams {
+        LfoChannelParams {
+            waveform: waveform_to_str(self.waveform).to_string(),
+            sync_mode: sync_mode_to_str(self.sync_mode).to_string(),
             rate_hz: self.rate_hz,
             sync_rate: self.sync_rate.label().to_string(),
             depth: self.depth,
             phase_deg: self.phase_deg,
             bipolar: self.bipolar,
+            retrigger: self.retrigger,
             amount: self.amount,
             target: self.target.label().to_string(),
         }
     }
 
-    pub fn apply_params(&mut self, p: &OpenModulationParams) {
-        self.waveform = match p.waveform.as_str() {
-            "Tri" | "Triangle" => LfoWaveform::Triangle,
-            "Saw Up" | "SawUp" => LfoWaveform::SawUp,
-            "Saw Dn" | "SawDown" => LfoWaveform::SawDown,
-            "Square" => LfoWaveform::Square,
-            "S&H" | "SampleAndHold" => LfoWaveform::SampleAndHold,
-            _ => LfoWaveform::Sine,
-        };
-        self.sync_mode = match p.sync_mode.as_str() {
-            "TempoSync" | "Sync" => LfoSyncMode::TempoSync,
-            _ => LfoSyncMode::FreeHz,
-        };
+    pub fn apply_channel_params(&mut self, p: &LfoChannelParams, fallback_target: ModulationTarget) {
+        self.waveform = parse_waveform(&p.waveform);
+        self.sync_mode = parse_sync_mode(&p.sync_mode);
         self.rate_hz = p.rate_hz.clamp(0.02, 30.0);
         let matched_rate = SyncRate::ALL
             .iter()
@@ -229,19 +253,9 @@ impl LfoModState {
         self.depth = p.depth.clamp(0.0, 1.0);
         self.phase_deg = p.phase_deg.clamp(0.0, 360.0);
         self.bipolar = p.bipolar;
+        self.retrigger = p.retrigger;
         self.amount = p.amount.clamp(-1.0, 1.0);
-        self.target = ModulationTarget::ALL
-            .iter()
-            .find(|t| t.label().eq_ignore_ascii_case(&p.target))
-            .copied()
-            .or_else(|| match p.target.as_str() {
-                "OpenWavetable: WT POS" | "OpenPoly: WT POS" => Some(ModulationTarget::OpenWavetableWtPos),
-                "OpenWavetable: DETUNE" => Some(ModulationTarget::OpenWavetableDetune),
-                "OpenWavetable: PHASE" => Some(ModulationTarget::OpenWavetablePhase),
-                "OpenWavetable: VOL" => Some(ModulationTarget::OpenWavetableVolume),
-                _ => None,
-            })
-            .unwrap_or(ModulationTarget::OpenWavetableWtPos);
+        self.target = ModulationTarget::parse_saved(&p.target, fallback_target);
     }
 
     pub fn effective_hz(&self, bpm: f32) -> f32 {
@@ -274,15 +288,14 @@ impl LfoModState {
     }
 
     /// Evaluates live LFO sample phase-locked to host transport position and project BPM.
-    /// When transport is paused or stopped, the LFO halts ("frenar") and holds at the initial
-    /// phase (0.0 + phase offset). When play starts, it launches smoothly from the beginning.
+    /// When transport is paused or stopped, the LFO halts and holds at the initial phase.
+    /// When `retrigger` is enabled, phase restarts cleanly from `playback_start_sample`.
     pub fn compute_live_sample_from_transport(
         &mut self,
         transport: &LfoTransportState,
     ) -> (f32, f32, f32) {
         let phase_offset = (self.phase_deg / 360.0).rem_euclid(1.0);
 
-        // When transport is not running (stopped or paused), halt and stay at the beginning
         if !transport.is_playing {
             let frac_phase = phase_offset;
             let raw = evaluate_waveform(self.waveform, frac_phase, self.current_sh_val);
@@ -297,7 +310,13 @@ impl LfoModState {
 
         let bpm = transport.bpm.clamp(20.0, 400.0);
         let sr = transport.sample_rate.max(1.0);
-        let elapsed_samples = transport.sample_count.saturating_sub(transport.playback_start_sample);
+        let elapsed_samples = if self.retrigger {
+            transport
+                .sample_count
+                .saturating_sub(transport.playback_start_sample)
+        } else {
+            transport.sample_count
+        };
 
         let (cycle_idx, frac_phase) = match self.sync_mode {
             LfoSyncMode::TempoSync => {
@@ -305,12 +324,18 @@ impl LfoModState {
                 let beats = elapsed_samples as f64 / samples_per_beat as f64;
                 let beats_per_cycle = self.sync_rate.beats_per_cycle() as f64;
                 let total_cycles = (beats / beats_per_cycle) + phase_offset as f64;
-                (total_cycles.floor() as u64, total_cycles.rem_euclid(1.0) as f32)
+                (
+                    total_cycles.floor() as u64,
+                    total_cycles.rem_euclid(1.0) as f32,
+                )
             }
             LfoSyncMode::FreeHz => {
                 let seconds = elapsed_samples as f64 / sr as f64;
                 let total_cycles = (seconds * self.rate_hz as f64) + phase_offset as f64;
-                (total_cycles.floor() as u64, total_cycles.rem_euclid(1.0) as f32)
+                (
+                    total_cycles.floor() as u64,
+                    total_cycles.rem_euclid(1.0) as f32,
+                )
             }
         };
 
@@ -330,13 +355,130 @@ impl LfoModState {
     }
 }
 
+/// Complete Hikaru OpenLFO MOD state (Dual LFO1 + LFO2 + FX slot + Mix).
+/// Implements `Deref`/`DerefMut` to `lfo1` for seamless backwards compatibility.
+#[derive(Debug, Clone)]
+pub struct LfoModState {
+    pub lfo1: LfoChannelState,
+    pub lfo2: LfoChannelState,
+    pub mix: f32,      // 0.0 .. 1.0 overall modulation mix
+    pub fx_open: bool, // FX slot toggle
+}
+
+impl Default for LfoModState {
+    fn default() -> Self {
+        Self {
+            lfo1: LfoChannelState::default(),
+            lfo2: LfoChannelState::default_lfo2(),
+            mix: 1.0,
+            fx_open: false,
+        }
+    }
+}
+
+impl Deref for LfoModState {
+    type Target = LfoChannelState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.lfo1
+    }
+}
+
+impl DerefMut for LfoModState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.lfo1
+    }
+}
+
+impl LfoModState {
+    pub fn to_params(&self) -> OpenModulationParams {
+        OpenModulationParams {
+            waveform: waveform_to_str(self.lfo1.waveform).to_string(),
+            sync_mode: sync_mode_to_str(self.lfo1.sync_mode).to_string(),
+            rate_hz: self.lfo1.rate_hz,
+            sync_rate: self.lfo1.sync_rate.label().to_string(),
+            depth: self.lfo1.depth,
+            phase_deg: self.lfo1.phase_deg,
+            bipolar: self.lfo1.bipolar,
+            amount: self.lfo1.amount,
+            target: self.lfo1.target.label().to_string(),
+            retrigger: self.lfo1.retrigger,
+            lfo2: Some(self.lfo2.to_channel_params()),
+            mix: self.mix,
+        }
+    }
+
+    pub fn apply_params(&mut self, p: &OpenModulationParams) {
+        self.lfo1.waveform = parse_waveform(&p.waveform);
+        self.lfo1.sync_mode = parse_sync_mode(&p.sync_mode);
+        self.lfo1.rate_hz = p.rate_hz.clamp(0.02, 30.0);
+        let matched_rate = SyncRate::ALL
+            .iter()
+            .find(|r| r.label().eq_ignore_ascii_case(&p.sync_rate))
+            .copied()
+            .unwrap_or(SyncRate::Quarter);
+        self.lfo1.set_sync_rate(matched_rate);
+        self.lfo1.depth = p.depth.clamp(0.0, 1.0);
+        self.lfo1.phase_deg = p.phase_deg.clamp(0.0, 360.0);
+        self.lfo1.bipolar = p.bipolar;
+        self.lfo1.retrigger = p.retrigger;
+        self.lfo1.amount = p.amount.clamp(-1.0, 1.0);
+        self.lfo1.target =
+            ModulationTarget::parse_saved(&p.target, ModulationTarget::OpenWavetableWtPos);
+
+        if let Some(ref ch2) = p.lfo2 {
+            self.lfo2.apply_channel_params(ch2, ModulationTarget::None);
+        } else {
+            self.lfo2 = LfoChannelState::default_lfo2();
+        }
+        self.mix = p.mix.clamp(0.0, 1.0);
+    }
+}
+
+fn waveform_to_str(wf: LfoWaveform) -> &'static str {
+    match wf {
+        LfoWaveform::Sine => "Sine",
+        LfoWaveform::Triangle => "Triangle",
+        LfoWaveform::SawUp => "SawUp",
+        LfoWaveform::SawDown => "SawDown",
+        LfoWaveform::Square => "Square",
+        LfoWaveform::SampleAndHold => "SampleAndHold",
+    }
+}
+
+fn parse_waveform(s: &str) -> LfoWaveform {
+    match s {
+        "Tri" | "Triangle" => LfoWaveform::Triangle,
+        "Saw Up" | "SawUp" => LfoWaveform::SawUp,
+        "Saw Dn" | "SawDown" => LfoWaveform::SawDown,
+        "Square" => LfoWaveform::Square,
+        "S&H" | "SampleAndHold" => LfoWaveform::SampleAndHold,
+        _ => LfoWaveform::Sine,
+    }
+}
+
+fn sync_mode_to_str(mode: LfoSyncMode) -> &'static str {
+    match mode {
+        LfoSyncMode::FreeHz => "FreeHz",
+        LfoSyncMode::TempoSync => "TempoSync",
+    }
+}
+
+fn parse_sync_mode(s: &str) -> LfoSyncMode {
+    match s {
+        "TempoSync" | "Sync" => LfoSyncMode::TempoSync,
+        _ => LfoSyncMode::FreeHz,
+    }
+}
+
 type LfoMap = Mutex<HashMap<(usize, usize), LfoModState>>;
 fn lfo_state_map() -> &'static LfoMap {
     static CELL: OnceLock<LfoMap> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-type MappingActive = Mutex<Option<(usize, usize)>>;
+// Stores (track_idx, slot_idx, channel_idx: 0 = LFO1, 1 = LFO2)
+type MappingActive = Mutex<Option<(usize, usize, u8)>>;
 fn mapping_mode_active() -> &'static MappingActive {
     static CELL: OnceLock<MappingActive> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
@@ -391,8 +533,6 @@ fn global_transport() -> &'static Mutex<LfoTransportState> {
 }
 
 /// Updates the global modulation transport clock from the DAW state.
-/// Seamlessly tracks Play, Pause, Stop, and Loop wraps so all LFO modulators
-/// stay perfectly locked to tempo without drift or polyrhythms.
 pub fn update_global_transport(bpm: f32, sample_count: u64, sample_rate: f32, is_playing: bool) {
     if let Ok(mut lock) = global_transport().lock() {
         let prev_playing = lock.is_playing;
@@ -401,13 +541,11 @@ pub fn update_global_transport(bpm: f32, sample_count: u64, sample_rate: f32, is
         lock.sample_rate = sample_rate.max(1.0);
         lock.is_playing = is_playing;
 
-        // Detect transition from stopped/paused -> playing: latch playback origin
         if !prev_playing && is_playing {
             lock.playback_start_sample = sample_count;
         } else if !is_playing {
             lock.playback_start_sample = 0;
         } else if sample_count < lock.playback_start_sample {
-            // Loop wrap or timeline seek during playback
             lock.playback_start_sample = sample_count;
         }
     }
@@ -442,24 +580,52 @@ pub struct ActiveModulation {
     pub phase: f32,
 }
 
-/// Queries whether a given device knob on track_idx is currently modulated by any active LFO.
-/// Uses host transport sync to guarantee exact phase alignment with the audio engine.
+/// Queries whether a given device knob on track_idx is currently modulated by any active LFO1 or LFO2.
+/// Sums contributions from both channels, scaled by the device's `mix` knob.
 pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<ActiveModulation> {
     let transport = get_global_transport();
     let mut map = lfo_state_map().lock().unwrap();
 
-    for (&(tr, _slot), lfo) in map.iter_mut() {
-        if tr == track_idx && lfo.target.matches(device, param) {
-            let (phase, raw, delta) = lfo.compute_live_sample_from_transport(&transport);
-            return Some(ActiveModulation {
-                raw_lfo: raw,
-                delta,
-                amount: lfo.amount,
-                phase,
-            });
+    let mut matched = false;
+    let mut total_delta = 0.0_f32;
+    let mut total_raw = 0.0_f32;
+    let mut total_amount = 0.0_f32;
+    let mut last_phase = 0.0_f32;
+
+    for (&(tr, _slot), state) in map.iter_mut() {
+        if tr != track_idx {
+            continue;
+        }
+        let mix = state.mix.clamp(0.0, 1.0);
+
+        if state.lfo1.target.matches(device, param) {
+            let (phase, raw, delta) = state.lfo1.compute_live_sample_from_transport(&transport);
+            matched = true;
+            total_raw += raw * mix;
+            total_delta += delta * mix;
+            total_amount += state.lfo1.amount * mix;
+            last_phase = phase;
+        }
+        if state.lfo2.target.matches(device, param) {
+            let (phase, raw, delta) = state.lfo2.compute_live_sample_from_transport(&transport);
+            matched = true;
+            total_raw += raw * mix;
+            total_delta += delta * mix;
+            total_amount += state.lfo2.amount * mix;
+            last_phase = phase;
         }
     }
-    None
+
+    if matched {
+        Some(ActiveModulation {
+            raw_lfo: total_raw.clamp(-1.0, 1.0),
+            delta: total_delta.clamp(-1.0, 1.0),
+            amount: total_amount.clamp(-1.0, 1.0),
+            phase: last_phase,
+        })
+    } else {
+        None
+    }
 }
 
 /// Queries whether mapping mode is active and listening for knob clicks on this track.
@@ -470,12 +636,17 @@ pub fn is_mapping_target(_track_idx: usize, _device: &str, _param: &str) -> bool
 /// Binds a knob as target if mapping mode is active. Returns true if bound.
 pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) -> bool {
     let mut active = mapping_mode_active().lock().unwrap();
-    if let Some((map_tr, map_slot)) = *active {
+    if let Some((map_tr, map_slot, channel)) = *active {
         if map_tr == track_idx {
             if let Some(target) = ModulationTarget::from_device_and_param(device, param) {
                 update_lfo_state(map_tr, map_slot, |st| {
-                    st.target = target;
-                    st.is_mapping = false;
+                    if channel == 0 {
+                        st.lfo1.target = target;
+                        st.lfo1.is_mapping = false;
+                    } else {
+                        st.lfo2.target = target;
+                        st.lfo2.is_mapping = false;
+                    }
                 });
                 *active = None;
                 return true;
@@ -485,12 +656,13 @@ pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) ->
     false
 }
 
-/// Renders the complete Hikaru OpenModulation (LFO MOD) device module inside the DSP rack card.
+/// Renders the Bitwig-style Hikaru OpenLFO MOD body inside the DSP rack card
+/// (to the right of the vertical `OPENLFO MOD` sidebar).
 pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, slot_idx: usize) {
-    // Request continuous repaint for fluid 60fps LFO animation
     ui.ctx().request_repaint();
 
-    let is_playing = app.transport.playback_state == hikaru_transport::TransportPlaybackState::Playing;
+    let is_playing =
+        app.transport.playback_state == hikaru_transport::TransportPlaybackState::Playing;
     update_global_transport(
         app.transport.bpm as f32,
         app.transport.sample_count,
@@ -498,664 +670,1039 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         is_playing,
     );
     let transport = get_global_transport();
-    let bpm = transport.bpm;
 
     let mut state = get_lfo_state(track_idx, slot_idx);
-    let (current_phase, current_val, current_delta) =
-        state.compute_live_sample_from_transport(&transport);
-
-    // Keep global mapping mode synchronized
-    let mut is_global_mapping = {
-        let active = mapping_mode_active().lock().unwrap();
-        *active == Some((track_idx, slot_idx))
-    };
+    let (phase1, val1, _delta1) = state.lfo1.compute_live_sample_from_transport(&transport);
+    let (phase2, val2, _delta2) = state.lfo2.compute_live_sample_from_transport(&transport);
 
     let full_rect = ui.available_rect_before_wrap();
-    let body_h = full_rect.height().max(104.0);
+    let body_h = full_rect.height().max(210.0);
+    let right_col_w = 58.0;
+    let gap = 4.0;
+    let main_w = (full_rect.width() - right_col_w - gap).max(164.0);
 
-    let left_w = 178.0;
-    let right_w = (full_rect.width() - left_w - 6.0).max(220.0);
-
-    let left_rect = Rect::from_min_size(full_rect.min, vec2(left_w, body_h));
+    let main_rect = Rect::from_min_size(full_rect.min, vec2(main_w, body_h));
     let right_rect = Rect::from_min_size(
-        pos2(left_rect.max.x + 6.0, full_rect.min.y),
-        vec2(right_w, body_h),
+        pos2(main_rect.max.x + gap, full_rect.min.y),
+        vec2(right_col_w, body_h),
     );
 
     // =========================================================================
-    // 1. LEFT COLUMN: Oscilloscope Waveform Display + Shape Selector
+    // 1. MAIN LEFT COLUMN: LFO1 Panel + Dual Oscilloscope + LFO2 Panel
     // =========================================================================
-    let mut left_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(left_rect)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
+    let v_gap = 3.0;
+    let lfo_h = ((body_h - v_gap * 2.0) * 0.355).floor().max(72.0);
+    let scope_h = (body_h - lfo_h * 2.0 - v_gap * 2.0).max(54.0);
+
+    let lfo1_rect = Rect::from_min_size(main_rect.min, vec2(main_w, lfo_h));
+    let scope_rect = Rect::from_min_size(
+        pos2(main_rect.min.x, lfo1_rect.max.y + v_gap),
+        vec2(main_w, scope_h),
     );
-    let left_clip = left_rect.intersect(left_ui.clip_rect());
-    left_ui.set_clip_rect(left_clip);
-    left_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
+    let lfo2_rect = Rect::from_min_size(
+        pos2(main_rect.min.x, scope_rect.max.y + v_gap),
+        vec2(main_w, lfo_h),
+    );
 
-    // Oscilloscope Viewport (176 x 78 px)
-    let scope_h = 76.0;
-    let (scope_rect, _) =
-        left_ui.allocate_exact_size(vec2(left_w, scope_h), Sense::hover());
+    render_lfo_channel_panel(
+        ui,
+        lfo1_rect,
+        track_idx,
+        slot_idx,
+        0,
+        "LFO1",
+        &mut state.lfo1,
+        transport.bpm,
+    );
 
-    let p = left_ui.painter_at(scope_rect);
-    // Dark LCD Well Background
-    p.rect_filled(scope_rect, 3.5, Color32::from_rgb(0x0A, 0x0C, 0x10));
-    p.rect_stroke(
+    render_dual_scope(
+        ui,
         scope_rect,
-        3.5,
-        Stroke::new(1.0_f32, Color32::from_rgb(0x22, 0x25, 0x2D)),
-        egui::StrokeKind::Inside,
+        &state.lfo1,
+        phase1,
+        val1,
+        &state.lfo2,
+        phase2,
+        val2,
+        transport.is_playing,
     );
 
-    let cy = scope_rect.center().y;
-    // Zero baseline
-    p.line_segment(
-        [
-            pos2(scope_rect.min.x + 2.0, cy),
-            pos2(scope_rect.max.x - 2.0, cy),
-        ],
-        Stroke::new(1.0_f32, Color32::from_rgb(0x18, 0x1C, 0x24)),
+    render_lfo_channel_panel(
+        ui,
+        lfo2_rect,
+        track_idx,
+        slot_idx,
+        1,
+        "LFO2",
+        &mut state.lfo2,
+        transport.bpm,
     );
-
-    // Subtle Quarter-Phase Grid Lines
-    for q in 1..4 {
-        let gx = scope_rect.min.x + (q as f32 / 4.0) * scope_rect.width();
-        p.line_segment(
-            [pos2(gx, scope_rect.min.y + 2.0), pos2(gx, scope_rect.max.y - 2.0)],
-            Stroke::new(0.5_f32, Color32::from_rgb(0x16, 0x1A, 0x22)),
-        );
-    }
-
-    // Render Full-Cycle Waveform Polyline
-    let pad_x = 4.0;
-    let wave_w = scope_rect.width() - pad_x * 2.0;
-    let amp_y = (scope_rect.height() * 0.40) * state.depth;
-
-    let points_count = 64;
-    let mut pts = Vec::with_capacity(points_count);
-    for i in 0..points_count {
-        let norm_x = i as f32 / (points_count - 1) as f32;
-        let x = scope_rect.min.x + pad_x + norm_x * wave_w;
-        let raw = evaluate_waveform(state.waveform, norm_x, state.current_sh_val);
-        let val = if state.bipolar {
-            raw
-        } else {
-            (raw + 1.0) * 0.5 * 2.0 - 1.0
-        };
-        let y = cy - val * amp_y;
-        pts.push(pos2(x, y));
-    }
-
-    // Faint outer glow
-    p.add(egui::epaint::PathShape::line(
-        pts.clone(),
-        Stroke::new(2.8_f32, Color32::from_rgba_unmultiplied(0x00, 0xE5, 0xFF, 50)),
-    ));
-    // Crisp inner trace
-    p.add(egui::epaint::PathShape::line(
-        pts,
-        Stroke::new(1.5_f32, theme::BW_LCD_CYAN),
-    ));
-
-    // Animated Phase Scanner Cursor & Glowing Puck
-    let puck_x = scope_rect.min.x + pad_x + current_phase * wave_w;
-    let puck_val = if state.bipolar {
-        current_val / state.depth.max(1e-4)
-    } else {
-        (current_val / state.depth.max(1e-4)) * 2.0 - 1.0
-    };
-    let puck_y = cy - puck_val * amp_y;
-
-    // Vertical playhead hair-line
-    p.line_segment(
-        [
-            pos2(puck_x, scope_rect.min.y + 2.0),
-            pos2(puck_x, scope_rect.max.y - 2.0),
-        ],
-        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0x00, 0xE5, 0xFF, 80)),
-    );
-
-    // Glowing Dot / Puck
-    p.circle_filled(
-        pos2(puck_x, puck_y),
-        4.5,
-        Color32::from_rgba_unmultiplied(0x00, 0xE5, 0xFF, 120),
-    );
-    p.circle_filled(pos2(puck_x, puck_y), 2.2, Color32::WHITE);
-
-    // Digital Readouts inside Scope
-    p.text(
-        pos2(scope_rect.max.x - 4.0, scope_rect.min.y + 4.0),
-        Align2::RIGHT_TOP,
-        format!("{:+0.2}", current_val),
-        fonts::lcd(9.5),
-        theme::BW_LCD_CYAN,
-    );
-
-    let freq_txt = match state.sync_mode {
-        LfoSyncMode::FreeHz => {
-            if transport.is_playing {
-                format!("{:.2} Hz ▶", state.effective_hz(bpm))
-            } else {
-                format!("{:.2} Hz ⏸", state.effective_hz(bpm))
-            }
-        }
-        LfoSyncMode::TempoSync => {
-            if transport.is_playing {
-                format!("{} ({} BPM) ▶", state.sync_rate.label(), bpm.round())
-            } else {
-                format!("{} ({} BPM) ⏸", state.sync_rate.label(), bpm.round())
-            }
-        }
-    };
-    p.text(
-        pos2(scope_rect.min.x + 4.0, scope_rect.max.y - 4.0),
-        Align2::LEFT_BOTTOM,
-        freq_txt,
-        fonts::regular(8.5),
-        Color32::from_rgb(0x8A, 0x90, 0x9C),
-    );
-
-    // Waveform Shape Selector Row
-    left_ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        let btn_w = (left_w - 10.0) / 6.0;
-
-        for wf in &LfoWaveform::ALL {
-            let is_sel = state.waveform == *wf;
-            let (rect, resp) = ui.allocate_exact_size(vec2(btn_w, 18.0), Sense::click());
-            let painter = ui.painter();
-
-            painter.rect_filled(
-                rect,
-                2.0,
-                if is_sel {
-                    Color32::from_rgb(0x1F, 0x36, 0x44)
-                } else if resp.hovered() {
-                    Color32::from_rgb(0x36, 0x3A, 0x44)
-                } else {
-                    Color32::from_rgb(0x24, 0x27, 0x2E)
-                },
-            );
-
-            if is_sel {
-                painter.rect_stroke(
-                    rect,
-                    2.0,
-                    Stroke::new(1.0_f32, theme::BW_LCD_CYAN),
-                    egui::StrokeKind::Inside,
-                );
-            }
-
-            painter.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                wf.short_symbol(),
-                fonts::semibold(9.0),
-                if is_sel {
-                    theme::BW_LCD_CYAN
-                } else {
-                    theme::TEXT_SECONDARY
-                },
-            );
-
-            if resp.on_hover_text(format!("Waveform: {}", wf.label())).clicked() {
-                state.waveform = *wf;
-            }
-        }
-    });
 
     // =========================================================================
-    // 2. RIGHT COLUMN: Rotary Knobs + Mod Target Router
+    // 2. RIGHT COLUMN: FX Slot Button + Mix Rotary Knob (Bitwig LFO MOD style)
     // =========================================================================
-    let mut right_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(right_rect)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    let right_clip = right_rect.intersect(right_ui.clip_rect());
-    right_ui.set_clip_rect(right_clip);
-    right_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
+    render_right_column(ui, right_rect, track_idx, slot_idx, &mut state);
 
-    // Row 1: Primary Knobs (RATE, DEPTH, AMOUNT)
-    let knobs_row_h = 50.0;
-    let (knobs_row_rect, _) =
-        right_ui.allocate_exact_size(vec2(right_w, knobs_row_h), Sense::hover());
-    let col_w = (right_w / 3.0).floor();
-
-    for col in 0..3 {
-        let cell_rect = Rect::from_min_size(
-            pos2(knobs_row_rect.min.x + col as f32 * col_w, knobs_row_rect.min.y),
-            vec2(col_w, knobs_row_h),
-        );
-        let mut cell_ui = right_ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(cell_rect)
-                .layout(egui::Layout::top_down(egui::Align::Center)),
-        );
-        cell_ui.spacing_mut().item_spacing.y = 1.0;
-
-        match col {
-            0 => {
-                // Rate knob (Dual-Mode: TempoSync with persistent fractional accumulator & mouse wheel, or FreeHz with perceptual exponential taper)
-                let max_sync_idx = (SyncRate::ALL.len() - 1) as f32;
-                const MIN_HZ: f32 = 0.05;
-                const MAX_HZ: f32 = 20.0;
-
-                let (resp, display_val) = match state.sync_mode {
-                    LfoSyncMode::TempoSync => {
-                        let cur_idx = state.sync_index() as f32;
-                        if (state.sync_continuous - cur_idx).abs() > 1.0 {
-                            state.sync_continuous = cur_idx;
-                        }
-
-                        let (r, mut ch) = bitwig_kit::rotary_knob(
-                            &mut cell_ui,
-                            26.0,
-                            &mut state.sync_continuous,
-                            0.0..=max_sync_idx,
-                            4.0, // Default 1/4 (index 4)
-                            theme::BW_LCD_CYAN,
-                            false,
-                        );
-
-                        // Mouse wheel scroll to easily step through musical divisions
-                        let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
-                        if r.hovered() && scroll_y.abs() > 0.0 {
-                            let step = if scroll_y > 0.0 { 1.0 } else { -1.0 };
-                            state.sync_continuous =
-                                (state.sync_continuous + step).clamp(0.0, max_sync_idx);
-                            ch = true;
-                        }
-
-                        if ch {
-                            let idx = state
-                                .sync_continuous
-                                .round()
-                                .clamp(0.0, max_sync_idx) as usize;
-                            state.sync_rate = SyncRate::ALL[idx];
-                        }
-
-                        let r = r.on_hover_text(format!(
-                            "Sync Rate: {} (Drag, scroll wheel, or click badge to change)",
-                            state.sync_rate.label()
-                        ));
-                        (r, state.sync_rate.label().to_string())
-                    }
-                    LfoSyncMode::FreeHz => {
-                        // Perceptual exponential taper: 0.05 Hz to 20.0 Hz with 1.00 Hz at center (norm = 0.5)
-                        let hz_to_norm = |hz: f32| -> f32 {
-                            let ratio = (hz / MIN_HZ).clamp(1.0, MAX_HZ / MIN_HZ);
-                            ratio.ln() / (MAX_HZ / MIN_HZ).ln()
-                        };
-                        let norm_to_hz = |norm: f32| -> f32 {
-                            MIN_HZ * (MAX_HZ / MIN_HZ).powf(norm.clamp(0.0, 1.0))
-                        };
-
-                        let mut norm = hz_to_norm(state.rate_hz);
-                        let (r, mut ch) = bitwig_kit::rotary_knob(
-                            &mut cell_ui,
-                            26.0,
-                            &mut norm,
-                            0.0..=1.0,
-                            0.5, // 1.00 Hz default
-                            theme::BW_LCD_CYAN,
-                            false,
-                        );
-
-                        // Mouse wheel scroll
-                        let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
-                        if r.hovered() && scroll_y.abs() > 0.0 {
-                            let step = if scroll_y > 0.0 { 0.02 } else { -0.02 };
-                            norm = (norm + step).clamp(0.0, 1.0);
-                            ch = true;
-                        }
-
-                        if ch {
-                            state.rate_hz = norm_to_hz(norm);
-                        }
-
-                        let r = r.on_hover_text(format!(
-                            "Rate: {:.2} Hz (Drag, scroll wheel, or click badge to tune)",
-                            state.rate_hz
-                        ));
-                        (r, format!("{:.2} Hz", state.rate_hz))
-                    }
-                };
-                let _ = resp;
-
-                // Live digital readout badge (clickable to cycle or open menu)
-                let badge_btn = egui::Button::new(
-                    RichText::new(&display_val)
-                        .font(fonts::lcd(9.0))
-                        .color(theme::BW_LCD_CYAN),
-                )
-                .fill(Color32::from_rgb(0x10, 0x14, 0x1C))
-                .stroke(Stroke::new(0.5_f32, Color32::from_rgb(0x1F, 0x36, 0x44)))
-                .corner_radius(2.0);
-
-                let badge_resp = cell_ui.add(badge_btn);
-                if state.sync_mode == LfoSyncMode::TempoSync {
-                    if badge_resp.clicked() {
-                        let next_idx = (state.sync_index() + 1) % SyncRate::ALL.len();
-                        state.set_sync_rate(SyncRate::ALL[next_idx]);
-                    }
-                    badge_resp.context_menu(|menu_ui| {
-                        menu_ui.label(
-                            RichText::new("Tempo-Sync Division")
-                                .font(fonts::semibold(9.5))
-                                .color(theme::ACCENT_ORANGE),
-                        );
-                        menu_ui.separator();
-                        for &rate in &SyncRate::ALL {
-                            if menu_ui
-                                .selectable_label(state.sync_rate == rate, rate.label())
-                                .clicked()
-                            {
-                                state.set_sync_rate(rate);
-                                menu_ui.close_menu();
-                            }
-                        }
-                    });
-                } else {
-                    badge_resp.context_menu(|menu_ui| {
-                        menu_ui.label(
-                            RichText::new("Rate Presets")
-                                .font(fonts::semibold(9.5))
-                                .color(theme::ACCENT_ORANGE),
-                        );
-                        menu_ui.separator();
-                        for preset_hz in [0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {
-                            if menu_ui
-                                .selectable_label(
-                                    (state.rate_hz - preset_hz).abs() < 0.05,
-                                    format!("{preset_hz:.2} Hz"),
-                                )
-                                .clicked()
-                            {
-                                state.rate_hz = preset_hz;
-                                menu_ui.close_menu();
-                            }
-                        }
-                    });
-                }
-
-                cell_ui.label(
-                    RichText::new("RATE")
-                        .font(fonts::semibold(8.0))
-                        .color(theme::TEXT_SECONDARY),
-                );
-            }
-            1 => {
-                // Depth knob
-                let (r, mut ch) = bitwig_kit::rotary_knob(
-                    &mut cell_ui,
-                    26.0,
-                    &mut state.depth,
-                    0.0..=1.0,
-                    1.0,
-                    theme::ACCENT_ORANGE,
-                    false,
-                );
-                let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
-                if r.hovered() && scroll_y.abs() > 0.0 {
-                    let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
-                    state.depth = (state.depth + step).clamp(0.0, 1.0);
-                    ch = true;
-                }
-                let _ = ch;
-                r.on_hover_text(format!("Depth: {:.0}%", state.depth * 100.0));
-
-                let badge_btn = egui::Button::new(
-                    RichText::new(format!("{:.0}%", state.depth * 100.0))
-                        .font(fonts::lcd(9.0))
-                        .color(theme::ACCENT_ORANGE),
-                )
-                .fill(Color32::from_rgb(0x16, 0x12, 0x10))
-                .stroke(Stroke::new(0.5_f32, Color32::from_rgb(0x44, 0x24, 0x1B)))
-                .corner_radius(2.0);
-                cell_ui.add(badge_btn);
-
-                cell_ui.label(
-                    RichText::new("DEPTH")
-                        .font(fonts::semibold(8.0))
-                        .color(theme::TEXT_SECONDARY),
-                );
-            }
-            _ => {
-                // Amount knob (Target modulation intensity, bipolar -1.0 .. +1.0)
-                let (r, mut ch) = bitwig_kit::rotary_knob(
-                    &mut cell_ui,
-                    26.0,
-                    &mut state.amount,
-                    -1.0..=1.0,
-                    0.5,
-                    theme::BW_FADER_AMBER,
-                    true,
-                );
-                let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
-                if r.hovered() && scroll_y.abs() > 0.0 {
-                    let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
-                    state.amount = (state.amount + step).clamp(-1.0, 1.0);
-                    ch = true;
-                }
-                let _ = ch;
-                r.on_hover_text(format!(
-                    "Modulation Amount: {:+.0}% (Live Delta: {:+.2})",
-                    state.amount * 100.0,
-                    current_delta
-                ));
-
-                let badge_btn = egui::Button::new(
-                    RichText::new(format!("{:+.0}%", state.amount * 100.0))
-                        .font(fonts::lcd(9.0))
-                        .color(theme::BW_FADER_AMBER),
-                )
-                .fill(Color32::from_rgb(0x16, 0x14, 0x10))
-                .stroke(Stroke::new(0.5_f32, Color32::from_rgb(0x44, 0x36, 0x1A)))
-                .corner_radius(2.0);
-                cell_ui.add(badge_btn);
-
-                cell_ui.label(
-                    RichText::new("AMOUNT")
-                        .font(fonts::semibold(8.0))
-                        .color(theme::TEXT_SECONDARY),
-                );
-            }
-        }
-    }
-
-    // Row 2: Mode Toggles (Sync Mode, Bipolar, Phase)
-    right_ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-
-        // Hz vs Sync toggle
-        let is_sync = state.sync_mode == LfoSyncMode::TempoSync;
-        if bitwig_kit::capsule_text_button(
-            ui,
-            vec2(44.0, 16.0),
-            if is_sync { "SYNC" } else { "Hz" },
-            8.5,
-            is_sync,
-            theme::BW_LCD_CYAN,
-            bitwig_kit::JoinSide::Standalone,
-            false,
-        )
-        .on_hover_text("Toggle Tempo-Sync / Free Hz")
-        .clicked()
-        {
-            if is_sync {
-                state.sync_mode = LfoSyncMode::FreeHz;
-            } else {
-                state.sync_mode = LfoSyncMode::TempoSync;
-                state.sync_continuous = state.sync_index() as f32;
-            }
-        }
-
-        // Bipolar vs Unipolar toggle
-        if bitwig_kit::capsule_text_button(
-            ui,
-            vec2(46.0, 16.0),
-            if state.bipolar { "+ / -" } else { "+ 0..1" },
-            8.0,
-            state.bipolar,
-            theme::BW_FADER_AMBER,
-            bitwig_kit::JoinSide::Standalone,
-            false,
-        )
-        .on_hover_text("Toggle Bipolar (+/-) or Unipolar (0..1) Modulation")
-        .clicked()
-        {
-            state.bipolar = !state.bipolar;
-        }
-
-        // Phase Slider / Readout
-        ui.label(
-            RichText::new(format!("Ø {:3.0}°", state.phase_deg))
-                .font(fonts::lcd(9.0))
-                .color(theme::TEXT_MUTED),
-        );
-        let mut phase_norm = state.phase_deg / 360.0;
-        if bitwig_kit::fader_horizontal_range(
-            ui,
-            vec2(58.0, 11.0),
-            &mut phase_norm,
-            0.0..=1.0,
-            0.0,
-            theme::BW_FADER_AMBER,
-            theme::ACCENT_ORANGE,
-            false,
-        )
-        .1
-        {
-            state.phase_deg = phase_norm * 360.0;
-        }
-    });
-
-    // Row 3: Modulation Target Routing & Interactive Mapping (Bitwig Style)
-    right_ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-
-        // Interactive "MOD" Mapping Button
-        let mod_btn_rect = ui.allocate_exact_size(vec2(50.0, 19.0), Sense::click());
-        let p_btn = ui.painter_at(mod_btn_rect.0);
-
-        let map_active = is_global_mapping || state.is_mapping;
-        let btn_bg = if map_active {
-            Color32::from_rgb(0x00, 0xE5, 0xFF)
-        } else if mod_btn_rect.1.hovered() {
-            Color32::from_rgb(0x28, 0x48, 0x58)
-        } else {
-            Color32::from_rgb(0x1B, 0x2A, 0x34)
-        };
-        p_btn.rect_filled(mod_btn_rect.0, 3.0, btn_bg);
-        p_btn.rect_stroke(
-            mod_btn_rect.0,
-            3.0,
-            Stroke::new(
-                1.0_f32,
-                if map_active {
-                    Color32::WHITE
-                } else {
-                    theme::BW_LCD_CYAN
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
-        p_btn.text(
-            mod_btn_rect.0.center(),
-            Align2::CENTER_CENTER,
-            if map_active { "MAP..." } else { "⇄ MOD" },
-            fonts::semibold(9.5),
-            if map_active {
-                Color32::from_rgb(0x08, 0x0A, 0x0E)
-            } else {
-                theme::BW_LCD_CYAN
-            },
-        );
-
-        if mod_btn_rect.1
-            .on_hover_text("Interactive Modulation Assignment: Click then click any device knob (e.g. WT POS) to map")
-            .clicked()
-        {
-            is_global_mapping = !is_global_mapping;
-            state.is_mapping = is_global_mapping;
-            let mut active = mapping_mode_active().lock().unwrap();
-            if is_global_mapping {
-                *active = Some((track_idx, slot_idx));
-            } else {
-                *active = None;
-            }
-        }
-
-        // Target Selector Dropdown Menu
-        let target_label = state.target.label();
-        ui.menu_button(
-            RichText::new(format!("🎯 {target_label}"))
-                .font(fonts::semibold(9.5))
-                .color(if state.target != ModulationTarget::None {
-                    theme::BW_LCD_CYAN
-                } else {
-                    theme::TEXT_MUTED
-                }),
-            |menu_ui| {
-                menu_ui.label(
-                    RichText::new("Select Modulation Target Knob")
-                        .font(fonts::semibold(10.0))
-                        .color(theme::ACCENT_ORANGE),
-                );
-                menu_ui.separator();
-                for target in &ModulationTarget::ALL {
-                    let sel = state.target == *target;
-                    let txt = target.label();
-                    if menu_ui
-                        .selectable_label(sel, RichText::new(txt).font(fonts::regular(10.0)))
-                        .clicked()
-                    {
-                        state.target = *target;
-                        menu_ui.close_menu();
-                    }
-                }
-            },
-        );
-
-        // Preset HDP Menu button
-        ui.menu_button(
-            RichText::new("💾 HDP")
-                .font(fonts::semibold(9.0))
-                .color(theme::BW_LCD_CYAN),
-            |menu_ui| {
-                if menu_ui.button("💾 Guardar Preset (*.hdp)").clicked() {
-                    save_openmodulation_preset(&state);
-                    menu_ui.close_menu();
-                }
-                if menu_ui.button("📂 Cargar Preset (*.hdp)").clicked() {
-                    if let Some(loaded) = load_openmodulation_preset() {
-                        state = loaded;
-                    }
-                    menu_ui.close_menu();
-                }
-            },
-        );
-    });
-
-    // Save state back to map
+    // Persist updated state
     update_lfo_state(track_idx, slot_idx, |st| {
         *st = state;
     });
 }
 
+/// Renders one LFO channel panel (LFO1 or LFO2) faithfully matching Bitwig's LFO MOD layout.
+#[allow(clippy::too_many_arguments)]
+fn render_lfo_channel_panel(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    track_idx: usize,
+    slot_idx: usize,
+    channel_idx: u8,
+    label: &str,
+    ch: &mut LfoChannelState,
+    bpm: f32,
+) {
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 3.0, PANEL_BG);
+    p.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0_f32, PANEL_BORDER),
+        egui::StrokeKind::Inside,
+    );
+
+    let pad_x = 4.0;
+    let pad_y = 3.0;
+    let inner = Rect::from_min_max(
+        pos2(rect.min.x + pad_x, rect.min.y + pad_y),
+        pos2(rect.max.x - pad_x, rect.max.y - pad_y),
+    );
+
+    let bottom_h = 17.0;
+    let top_h = (inner.height() - bottom_h - 3.0).max(46.0);
+    let top_rect = Rect::from_min_size(inner.min, vec2(inner.width(), top_h));
+    let bottom_rect = Rect::from_min_size(
+        pos2(inner.min.x, inner.max.y - bottom_h),
+        vec2(inner.width(), bottom_h),
+    );
+
+    // --- ZONE A (Left): Label ("LFO1"/"LFO2") + Cyan Modulation Routing Icon ---
+    let zone_a_w = 34.0;
+    let zone_a = Rect::from_min_size(top_rect.min, vec2(zone_a_w, top_h));
+
+    p.text(
+        pos2(zone_a.center().x, zone_a.min.y + 10.0),
+        Align2::CENTER_CENTER,
+        label,
+        fonts::semibold(9.0),
+        Color32::from_rgb(0xC8, 0xCC, 0xD4),
+    );
+
+    let is_global_mapping = {
+        let active = mapping_mode_active().lock().unwrap();
+        *active == Some((track_idx, slot_idx, channel_idx))
+    };
+    let map_active = is_global_mapping || ch.is_mapping;
+    let is_assigned = ch.target != ModulationTarget::None;
+
+    let arrow_rect = Rect::from_center_size(
+        pos2(zone_a.center().x, zone_a.min.y + 28.0),
+        vec2(26.0, 16.0),
+    );
+    let arrow_resp = ui.interact(
+        arrow_rect,
+        ui.id().with(("lfo_mod_route", track_idx, slot_idx, channel_idx)),
+        Sense::click(),
+    );
+    if arrow_resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    if map_active {
+        p.rect_filled(arrow_rect, 3.0, MOD_ARROW_CYAN);
+    } else if arrow_resp.hovered() {
+        p.rect_filled(arrow_rect, 3.0, Color32::from_rgb(0x22, 0x38, 0x44));
+    }
+    paint_mod_routing_arrow(
+        &p,
+        arrow_rect.center(),
+        if map_active {
+            Color32::from_rgb(0x10, 0x14, 0x1A)
+        } else if is_assigned {
+            MOD_ARROW_CYAN
+        } else {
+            Color32::from_rgb(0x52, 0x8A, 0xA4)
+        },
+        is_assigned || map_active,
+    );
+
+    let route_tip = if map_active {
+        format!("{label}: Click any device knob to map (click again to cancel)")
+    } else if is_assigned {
+        format!(
+            "{label} → {} ({:+.0}%)\nLeft-click: Map to knob • Right-click: Select target & amount",
+            ch.target.label(),
+            ch.amount * 100.0
+        )
+    } else {
+        format!("{label}: Unassigned\nLeft-click: Map to knob • Right-click: Select target")
+    };
+
+    let arrow_resp = arrow_resp.on_hover_text(route_tip);
+    if arrow_resp.clicked() {
+        let next = !map_active;
+        ch.is_mapping = next;
+        let mut active = mapping_mode_active().lock().unwrap();
+        if next {
+            *active = Some((track_idx, slot_idx, channel_idx));
+        } else {
+            *active = None;
+        }
+    }
+    arrow_resp.context_menu(|menu_ui| {
+        menu_ui.label(
+            RichText::new(format!("{label} Modulation Target"))
+                .font(fonts::semibold(10.0))
+                .color(theme::ACCENT_ORANGE),
+        );
+        menu_ui.separator();
+        for &target in &ModulationTarget::ALL {
+            let sel = ch.target == target;
+            if menu_ui
+                .selectable_label(sel, RichText::new(target.label()).font(fonts::regular(10.0)))
+                .clicked()
+            {
+                ch.target = target;
+                menu_ui.close_menu();
+            }
+        }
+        menu_ui.separator();
+        menu_ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Amount:")
+                    .font(fonts::semibold(9.5))
+                    .color(theme::TEXT_SECONDARY),
+            );
+            ui.add(
+                egui::Slider::new(&mut ch.amount, -1.0..=1.0)
+                    .fixed_decimals(2)
+                    .show_value(true),
+            );
+        });
+    });
+
+    // --- ZONE B (Waveform Preview Box + `±` and `R` Toggles) ---
+    let zone_b_x = zone_a.max.x + 3.0;
+    let zone_b_w = 40.0;
+
+    let wf_rect = Rect::from_min_size(pos2(zone_b_x, top_rect.min.y + 1.0), vec2(zone_b_w, 22.0));
+    let wf_resp = ui
+        .interact(
+            wf_rect,
+            ui.id().with(("lfo_wf_box", track_idx, slot_idx, channel_idx)),
+            Sense::click(),
+        )
+        .on_hover_text(format!(
+            "Waveform: {} (Click to cycle, Right-click for list)",
+            ch.waveform.label()
+        ));
+    if wf_resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    p.rect_filled(wf_rect, 2.5, WELL_BG);
+    p.rect_stroke(
+        wf_rect,
+        2.5,
+        Stroke::new(
+            1.0_f32,
+            if wf_resp.hovered() {
+                LFO1_WAVE_ORANGE
+            } else {
+                WELL_BORDER
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    paint_mini_waveform(&p, wf_rect.shrink2(vec2(4.0, 4.0)), ch.waveform, LFO1_WAVE_ORANGE);
+
+    if wf_resp.clicked() {
+        let cur_idx = LfoWaveform::ALL
+            .iter()
+            .position(|&w| w == ch.waveform)
+            .unwrap_or(0);
+        ch.waveform = LfoWaveform::ALL[(cur_idx + 1) % LfoWaveform::ALL.len()];
+    }
+    wf_resp.context_menu(|menu_ui| {
+        menu_ui.label(
+            RichText::new(format!("{label} Waveform"))
+                .font(fonts::semibold(9.5))
+                .color(theme::ACCENT_ORANGE),
+        );
+        menu_ui.separator();
+        for &wf in &LfoWaveform::ALL {
+            if menu_ui
+                .selectable_label(ch.waveform == wf, wf.label())
+                .clicked()
+            {
+                ch.waveform = wf;
+                menu_ui.close_menu();
+            }
+        }
+    });
+
+    // `±` (Bipolar) and `R` (Retrigger) toggles right below waveform box
+    let toggle_y = wf_rect.max.y + 3.0;
+    let toggle_h = 17.0;
+    let toggle_w = (zone_b_w - 2.0) * 0.5;
+
+    let bip_rect = Rect::from_min_size(pos2(zone_b_x, toggle_y), vec2(toggle_w, toggle_h));
+    let bip_resp = ui
+        .interact(
+            bip_rect,
+            ui.id().with(("lfo_bip", track_idx, slot_idx, channel_idx)),
+            Sense::click(),
+        )
+        .on_hover_text(if ch.bipolar {
+            "Polarity: Bipolar (±) — Click for Unipolar (0..+1)"
+        } else {
+            "Polarity: Unipolar (+) — Click for Bipolar (±)"
+        });
+    if bip_resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    p.rect_filled(
+        bip_rect,
+        2.0,
+        if ch.bipolar {
+            BTN_ACTIVE_BG
+        } else {
+            BTN_IDLE_BG
+        },
+    );
+    p.rect_stroke(
+        bip_rect,
+        2.0,
+        Stroke::new(
+            0.8_f32,
+            if bip_resp.hovered() {
+                Color32::from_rgb(0x70, 0x74, 0x80)
+            } else {
+                PANEL_BORDER
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    p.text(
+        bip_rect.center(),
+        Align2::CENTER_CENTER,
+        if ch.bipolar { "±" } else { "+" },
+        fonts::semibold(10.0),
+        if ch.bipolar {
+            Color32::WHITE
+        } else {
+            theme::TEXT_MUTED
+        },
+    );
+    if bip_resp.clicked() {
+        ch.bipolar = !ch.bipolar;
+    }
+
+    let ret_rect = Rect::from_min_size(
+        pos2(bip_rect.max.x + 2.0, toggle_y),
+        vec2(toggle_w, toggle_h),
+    );
+    let ret_resp = ui
+        .interact(
+            ret_rect,
+            ui.id().with(("lfo_ret", track_idx, slot_idx, channel_idx)),
+            Sense::click(),
+        )
+        .on_hover_text(if ch.retrigger {
+            "Retrigger: ON (Resets phase on play)"
+        } else {
+            "Retrigger: OFF (Free-running phase)"
+        });
+    if ret_resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    p.rect_filled(
+        ret_rect,
+        2.0,
+        if ch.retrigger {
+            BTN_ACTIVE_BG
+        } else {
+            BTN_IDLE_BG
+        },
+    );
+    p.rect_stroke(
+        ret_rect,
+        2.0,
+        Stroke::new(
+            0.8_f32,
+            if ret_resp.hovered() {
+                Color32::from_rgb(0x70, 0x74, 0x80)
+            } else {
+                PANEL_BORDER
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    p.text(
+        ret_rect.center(),
+        Align2::CENTER_CENTER,
+        "R",
+        fonts::semibold(9.0),
+        if ch.retrigger {
+            Color32::WHITE
+        } else {
+            theme::TEXT_MUTED
+        },
+    );
+    if ret_resp.clicked() {
+        ch.retrigger = !ch.retrigger;
+    }
+
+    // --- ZONE C & D (Right): `Phase` Knob and `Depth` Knob ---
+    let knobs_x = zone_b_x + zone_b_w + 4.0;
+    let knobs_w = (top_rect.max.x - knobs_x).max(68.0);
+    let half_k = (knobs_w * 0.5).floor();
+    let knob_dia = 25.0;
+
+    // Phase Knob
+    let phase_cell = Rect::from_min_size(pos2(knobs_x, top_rect.min.y), vec2(half_k, top_h));
+    {
+        let mut cell_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(phase_cell)
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
+        cell_ui.spacing_mut().item_spacing.y = 1.0;
+        let (r, _) = bitwig_kit::rotary_knob(
+            &mut cell_ui,
+            knob_dia,
+            &mut ch.phase_deg,
+            0.0..=360.0,
+            0.0,
+            PHASE_ARC_SILVER,
+            false,
+        );
+        let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
+        if r.hovered() && scroll_y.abs() > 0.0 {
+            let step = if scroll_y > 0.0 { 15.0 } else { -15.0 };
+            ch.phase_deg = (ch.phase_deg + step).clamp(0.0, 360.0);
+        }
+        r.on_hover_text(format!("Phase: {:.0}°", ch.phase_deg));
+        cell_ui.label(
+            RichText::new("Phase")
+                .font(fonts::regular(8.5))
+                .color(Color32::from_rgb(0xB4, 0xB8, 0xC0)),
+        );
+    }
+
+    // Depth Knob
+    let depth_cell =
+        Rect::from_min_size(pos2(knobs_x + half_k, top_rect.min.y), vec2(half_k, top_h));
+    {
+        let mut cell_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(depth_cell)
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
+        cell_ui.spacing_mut().item_spacing.y = 1.0;
+        let (r, _) = bitwig_kit::rotary_knob(
+            &mut cell_ui,
+            knob_dia,
+            &mut ch.depth,
+            0.0..=1.0,
+            1.0,
+            theme::ACCENT_ORANGE,
+            false,
+        );
+        let scroll_y = cell_ui.input(|i| i.raw_scroll_delta.y);
+        if r.hovered() && scroll_y.abs() > 0.0 {
+            let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
+            ch.depth = (ch.depth + step).clamp(0.0, 1.0);
+        }
+        r.on_hover_text(format!("Depth: {:.0}%", ch.depth * 100.0));
+        cell_ui.label(
+            RichText::new("Depth")
+                .font(fonts::regular(8.5))
+                .color(Color32::from_rgb(0xB4, 0xB8, 0xC0)),
+        );
+    }
+
+    // --- BOTTOM ROW: Sync Mode Dropdown Pill + Draggable Orange Rate Value Bar ---
+    let sync_btn_w = 38.0;
+    let sync_rect = Rect::from_min_size(bottom_rect.min, vec2(sync_btn_w, bottom_h));
+    let is_sync = ch.sync_mode == LfoSyncMode::TempoSync;
+
+    let sync_resp = ui
+        .interact(
+            sync_rect,
+            ui.id().with(("lfo_sync_mode", track_idx, slot_idx, channel_idx)),
+            Sense::click(),
+        )
+        .on_hover_text(if is_sync {
+            "Rate Mode: Tempo Sync (Click to switch to Free Hz)"
+        } else {
+            "Rate Mode: Free Hz (Click to switch to Tempo Sync)"
+        });
+    if sync_resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    p.rect_filled(
+        sync_rect,
+        2.5,
+        if is_sync {
+            BTN_ACTIVE_BG
+        } else {
+            BTN_IDLE_BG
+        },
+    );
+    p.rect_stroke(
+        sync_rect,
+        2.5,
+        Stroke::new(
+            0.8_f32,
+            if sync_resp.hovered() {
+                Color32::from_rgb(0x70, 0x74, 0x80)
+            } else {
+                PANEL_BORDER
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+
+    // Draw small clock / sync icon on left of pill + down triangle on right
+    let icon_cx = sync_rect.min.x + 13.0;
+    let icon_cy = sync_rect.center().y;
+    let icon_col = if is_sync {
+        theme::ACCENT_ORANGE
+    } else {
+        Color32::from_rgb(0xCC, 0xD0, 0xD8)
+    };
+    if is_sync {
+        // Musical note / tempo sync glyph
+        p.circle_filled(pos2(icon_cx - 1.5, icon_cy + 2.5), 2.3, icon_col);
+        p.line_segment(
+            [pos2(icon_cx + 0.5, icon_cy + 2.5), pos2(icon_cx + 0.5, icon_cy - 4.0)],
+            Stroke::new(1.3_f32, icon_col),
+        );
+        p.line_segment(
+            [pos2(icon_cx + 0.5, icon_cy - 4.0), pos2(icon_cx + 4.0, icon_cy - 2.5)],
+            Stroke::new(1.3_f32, icon_col),
+        );
+    } else {
+        // Clock circle + hands
+        p.circle_stroke(pos2(icon_cx, icon_cy), 4.5, Stroke::new(1.1_f32, icon_col));
+        p.line_segment(
+            [pos2(icon_cx, icon_cy), pos2(icon_cx, icon_cy - 2.6)],
+            Stroke::new(1.1_f32, icon_col),
+        );
+        p.line_segment(
+            [pos2(icon_cx, icon_cy), pos2(icon_cx + 2.2, icon_cy + 0.8)],
+            Stroke::new(1.1_f32, icon_col),
+        );
+    }
+    // Small dropdown triangle on right
+    let tri_cx = sync_rect.max.x - 8.0;
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            pos2(tri_cx - 2.5, icon_cy - 1.2),
+            pos2(tri_cx + 2.5, icon_cy - 1.2),
+            pos2(tri_cx, icon_cy + 2.0),
+        ],
+        Color32::from_rgb(0x98, 0x9C, 0xA6),
+        Stroke::NONE,
+    ));
+
+    if sync_resp.clicked() {
+        if is_sync {
+            ch.sync_mode = LfoSyncMode::FreeHz;
+        } else {
+            ch.sync_mode = LfoSyncMode::TempoSync;
+            ch.sync_continuous = ch.sync_index() as f32;
+        }
+    }
+    sync_resp.context_menu(|menu_ui| {
+        if menu_ui
+            .selectable_label(ch.sync_mode == LfoSyncMode::FreeHz, "Free (Hz)")
+            .clicked()
+        {
+            ch.sync_mode = LfoSyncMode::FreeHz;
+            menu_ui.close_menu();
+        }
+        if menu_ui
+            .selectable_label(ch.sync_mode == LfoSyncMode::TempoSync, "Tempo Sync (Beats)")
+            .clicked()
+        {
+            ch.sync_mode = LfoSyncMode::TempoSync;
+            ch.sync_continuous = ch.sync_index() as f32;
+            menu_ui.close_menu();
+        }
+    });
+
+    // Rate Value Bar (Bitwig dark pill with orange tick + orange text `1.00 Hz`)
+    let rate_rect = Rect::from_min_max(
+        pos2(sync_rect.max.x + 4.0, bottom_rect.min.y),
+        bottom_rect.max,
+    );
+    let rate_resp = ui.interact(
+        rate_rect,
+        ui.id().with(("lfo_rate_bar", track_idx, slot_idx, channel_idx)),
+        Sense::click_and_drag(),
+    );
+    if rate_resp.hovered() || rate_resp.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+    }
+
+    const MIN_HZ: f32 = 0.05;
+    const MAX_HZ: f32 = 20.0;
+    let max_sync_idx = (SyncRate::ALL.len() - 1) as f32;
+
+    let hz_to_norm = |hz: f32| -> f32 {
+        let ratio = (hz / MIN_HZ).clamp(1.0, MAX_HZ / MIN_HZ);
+        ratio.ln() / (MAX_HZ / MIN_HZ).ln()
+    };
+    let norm_to_hz = |norm: f32| -> f32 { MIN_HZ * (MAX_HZ / MIN_HZ).powf(norm.clamp(0.0, 1.0)) };
+
+    // Handle drag, double-click, and mouse wheel on Rate bar
+    let drag_delta = rate_resp.drag_delta();
+    let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+    let fine = ui.input(|i| i.modifiers.shift);
+    let sens = if fine { 0.0015 } else { 0.006 };
+
+    match ch.sync_mode {
+        LfoSyncMode::FreeHz => {
+            let mut norm = hz_to_norm(ch.rate_hz);
+            let mut changed = false;
+            if rate_resp.dragged() {
+                let d = drag_delta.x - drag_delta.y;
+                if d.abs() > 0.0 {
+                    norm = (norm + d * sens).clamp(0.0, 1.0);
+                    changed = true;
+                }
+            }
+            if rate_resp.hovered() && scroll_y.abs() > 0.0 {
+                norm = (norm + if scroll_y > 0.0 { 0.025 } else { -0.025 }).clamp(0.0, 1.0);
+                changed = true;
+            }
+            if rate_resp.double_clicked() {
+                ch.rate_hz = 1.0;
+                changed = false;
+            }
+            if changed {
+                ch.rate_hz = norm_to_hz(norm);
+            }
+        }
+        LfoSyncMode::TempoSync => {
+            let cur_idx = ch.sync_index() as f32;
+            if (ch.sync_continuous - cur_idx).abs() > 1.0 {
+                ch.sync_continuous = cur_idx;
+            }
+            let mut changed = false;
+            if rate_resp.dragged() {
+                let d = drag_delta.x - drag_delta.y;
+                if d.abs() > 0.0 {
+                    ch.sync_continuous =
+                        (ch.sync_continuous + d * 0.05).clamp(0.0, max_sync_idx);
+                    changed = true;
+                }
+            }
+            if rate_resp.hovered() && scroll_y.abs() > 0.0 {
+                let step = if scroll_y > 0.0 { 1.0 } else { -1.0 };
+                ch.sync_continuous = (ch.sync_continuous + step).clamp(0.0, max_sync_idx);
+                changed = true;
+            }
+            if rate_resp.double_clicked() {
+                ch.set_sync_rate(SyncRate::Quarter);
+                changed = false;
+            }
+            if changed {
+                let idx = ch.sync_continuous.round().clamp(0.0, max_sync_idx) as usize;
+                ch.sync_rate = SyncRate::ALL[idx];
+            }
+        }
+    }
+
+    // Paint Rate bar
+    p.rect_filled(rate_rect, 2.5, WELL_BG);
+    p.rect_stroke(
+        rate_rect,
+        2.5,
+        Stroke::new(
+            1.0_f32,
+            if rate_resp.hovered() || rate_resp.dragged() {
+                LFO1_WAVE_ORANGE
+            } else {
+                WELL_BORDER
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+
+    // Orange left indicator tick (Bitwig style)
+    let tick_rect = Rect::from_min_size(
+        pos2(rate_rect.min.x + 3.0, rate_rect.min.y + 3.0),
+        vec2(2.5, rate_rect.height() - 6.0),
+    );
+    p.rect_filled(tick_rect, 1.0, LFO1_WAVE_ORANGE);
+
+    let rate_text = match ch.sync_mode {
+        LfoSyncMode::FreeHz => format!("{:.2} Hz", ch.rate_hz),
+        LfoSyncMode::TempoSync => format!("{} ({:.1} Hz)", ch.sync_rate.label(), ch.effective_hz(bpm)),
+    };
+    let display_text = match ch.sync_mode {
+        LfoSyncMode::FreeHz => format!("{:.2} Hz", ch.rate_hz),
+        LfoSyncMode::TempoSync => ch.sync_rate.label().to_string(),
+    };
+    p.text(
+        pos2(rate_rect.max.x - 6.0, rate_rect.center().y),
+        Align2::RIGHT_CENTER,
+        display_text,
+        fonts::lcd(9.5),
+        LFO1_WAVE_ORANGE,
+    );
+
+    let rate_resp = rate_resp.on_hover_text(format!(
+        "{label} Rate: {rate_text}\nDrag or scroll to adjust • Double-click to reset • Right-click for presets"
+    ));
+    rate_resp.context_menu(|menu_ui| match ch.sync_mode {
+        LfoSyncMode::TempoSync => {
+            menu_ui.label(
+                RichText::new("Tempo-Sync Division")
+                    .font(fonts::semibold(9.5))
+                    .color(theme::ACCENT_ORANGE),
+            );
+            menu_ui.separator();
+            for &rate in &SyncRate::ALL {
+                if menu_ui
+                    .selectable_label(ch.sync_rate == rate, rate.label())
+                    .clicked()
+                {
+                    ch.set_sync_rate(rate);
+                    menu_ui.close_menu();
+                }
+            }
+        }
+        LfoSyncMode::FreeHz => {
+            menu_ui.label(
+                RichText::new("Rate Presets (Hz)")
+                    .font(fonts::semibold(9.5))
+                    .color(theme::ACCENT_ORANGE),
+            );
+            menu_ui.separator();
+            for preset_hz in [0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {
+                if menu_ui
+                    .selectable_label(
+                        (ch.rate_hz - preset_hz).abs() < 0.05,
+                        format!("{preset_hz:.2} Hz"),
+                    )
+                    .clicked()
+                {
+                    ch.rate_hz = preset_hz;
+                    menu_ui.close_menu();
+                }
+            }
+        }
+    });
+}
+
+/// Renders the central Dual Oscilloscope (LFO1 orange on top, LFO2 blue on bottom).
+#[allow(clippy::too_many_arguments)]
+fn render_dual_scope(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    lfo1: &LfoChannelState,
+    phase1: f32,
+    val1: f32,
+    lfo2: &LfoChannelState,
+    phase2: f32,
+    val2: f32,
+    is_playing: bool,
+) {
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 2.5, WELL_BG);
+    p.rect_stroke(
+        rect,
+        2.5,
+        Stroke::new(1.0_f32, WELL_BORDER),
+        egui::StrokeKind::Inside,
+    );
+
+    let mid_y = rect.center().y;
+    // Horizontal split divider between LFO1 and LFO2 lanes
+    p.line_segment(
+        [pos2(rect.min.x + 1.0, mid_y), pos2(rect.max.x - 1.0, mid_y)],
+        Stroke::new(1.0_f32, Color32::from_rgb(0x28, 0x2B, 0x34)),
+    );
+
+    let lane1 = Rect::from_min_max(
+        pos2(rect.min.x + 2.0, rect.min.y + 2.0),
+        pos2(rect.max.x - 2.0, mid_y - 1.0),
+    );
+    let lane2 = Rect::from_min_max(
+        pos2(rect.min.x + 2.0, mid_y + 1.0),
+        pos2(rect.max.x - 2.0, rect.max.y - 2.0),
+    );
+
+    paint_scope_lane(&p, lane1, lfo1, phase1, val1, LFO1_WAVE_ORANGE, is_playing);
+    paint_scope_lane(&p, lane2, lfo2, phase2, val2, LFO2_WAVE_BLUE, is_playing);
+}
+
+fn paint_scope_lane(
+    p: &Painter,
+    lane: Rect,
+    ch: &LfoChannelState,
+    current_phase: f32,
+    current_val: f32,
+    color: Color32,
+    is_playing: bool,
+) {
+    let cy = lane.center().y;
+    // Subtle center baseline
+    p.line_segment(
+        [pos2(lane.min.x, cy), pos2(lane.max.x, cy)],
+        Stroke::new(0.6_f32, Color32::from_rgb(0x20, 0x23, 0x2B)),
+    );
+
+    let cycles = 2.0_f32;
+    let points_count = 72;
+    let amp_y = (lane.height() * 0.42) * ch.depth.clamp(0.05, 1.0);
+    let phase_offset = (ch.phase_deg / 360.0).rem_euclid(1.0);
+
+    let mut pts = Vec::with_capacity(points_count);
+    for i in 0..points_count {
+        let norm_x = i as f32 / (points_count - 1) as f32;
+        let x = lane.min.x + norm_x * lane.width();
+        let sample_phase = (norm_x * cycles + phase_offset).rem_euclid(1.0);
+        let sh_step = pseudo_random_step((norm_x * cycles * 4.0) as u64);
+        let raw = evaluate_waveform(ch.waveform, sample_phase, sh_step);
+        let y = if ch.bipolar {
+            cy - raw * amp_y
+        } else {
+            let uni = (raw + 1.0) * 0.5;
+            lane.max.y - 2.0 - uni * (amp_y * 2.0)
+        };
+        pts.push(pos2(x, y.clamp(lane.min.y + 1.5, lane.max.y - 1.5)));
+    }
+
+    let glow = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 45);
+    p.add(egui::epaint::PathShape::line(
+        pts.clone(),
+        Stroke::new(2.6_f32, glow),
+    ));
+    p.add(egui::epaint::PathShape::line(pts, Stroke::new(1.3_f32, color)));
+
+    // Live phase dot when playing
+    if is_playing {
+        let dot_norm_x = ((current_phase - phase_offset).rem_euclid(1.0)) / cycles;
+        let dot_x = lane.min.x + dot_norm_x * lane.width();
+        let dot_y = if ch.bipolar {
+            let norm_v = if ch.depth > 1e-4 {
+                current_val / ch.depth
+            } else {
+                0.0
+            };
+            cy - norm_v * amp_y
+        } else {
+            let norm_v = if ch.depth > 1e-4 {
+                current_val / ch.depth
+            } else {
+                0.0
+            };
+            lane.max.y - 2.0 - norm_v * (amp_y * 2.0)
+        };
+        let dot_pos = pos2(dot_x, dot_y.clamp(lane.min.y + 2.0, lane.max.y - 2.0));
+        p.circle_filled(dot_pos, 3.2, glow);
+        p.circle_filled(dot_pos, 1.8, Color32::WHITE);
+    }
+}
+
+/// Renders the right column containing the `FX` slot button and the `Mix` rotary knob.
+fn render_right_column(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    track_idx: usize,
+    slot_idx: usize,
+    state: &mut LfoModState,
+) {
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 3.0, RIGHT_COL_BG);
+    p.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0_f32, Color32::from_rgb(0x46, 0x49, 0x52)),
+        egui::StrokeKind::Inside,
+    );
+
+    // Top: FX Button
+    let fx_rect = Rect::from_min_size(
+        pos2(rect.min.x + 5.0, rect.min.y + 5.0),
+        vec2(rect.width() - 10.0, 24.0),
+    );
+    let fx_resp = ui
+        .interact(
+            fx_rect,
+            ui.id().with(("lfo_mod_fx_btn", track_idx, slot_idx)),
+            Sense::click(),
+        )
+        .on_hover_text("Toggle FX Slot");
+    if fx_resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    p.rect_filled(
+        fx_rect,
+        2.5,
+        if state.fx_open {
+            Color32::from_rgb(0x3A, 0x2C, 0x22)
+        } else if fx_resp.hovered() {
+            Color32::from_rgb(0x30, 0x33, 0x3B)
+        } else {
+            Color32::from_rgb(0x25, 0x27, 0x2D)
+        },
+    );
+    p.rect_stroke(
+        fx_rect,
+        2.5,
+        Stroke::new(
+            1.0_f32,
+            if state.fx_open {
+                theme::ACCENT_ORANGE
+            } else {
+                Color32::from_rgb(0x4A, 0x4E, 0x58)
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    p.text(
+        fx_rect.center(),
+        Align2::CENTER_CENTER,
+        "FX",
+        fonts::semibold(9.5),
+        if state.fx_open {
+            theme::ACCENT_ORANGE
+        } else {
+            Color32::from_rgb(0xD8, 0xDC, 0xE2)
+        },
+    );
+    if fx_resp.clicked() {
+        state.fx_open = !state.fx_open;
+    }
+
+    // Bottom: Mix Rotary Knob
+    let mix_area = Rect::from_min_max(
+        pos2(rect.min.x + 2.0, rect.max.y - 54.0),
+        pos2(rect.max.x - 2.0, rect.max.y - 4.0),
+    );
+    let mut mix_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(mix_area)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+    );
+    mix_ui.spacing_mut().item_spacing.y = 2.0;
+
+    let (mix_resp, _) = bitwig_kit::rotary_knob(
+        &mut mix_ui,
+        34.0,
+        &mut state.mix,
+        0.0..=1.0,
+        1.0,
+        theme::ACCENT_ORANGE,
+        false,
+    );
+    let scroll_y = mix_ui.input(|i| i.raw_scroll_delta.y);
+    if mix_resp.hovered() && scroll_y.abs() > 0.0 {
+        let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
+        state.mix = (state.mix + step).clamp(0.0, 1.0);
+    }
+    mix_resp.on_hover_text(format!("Mix: {:.0}%", state.mix * 100.0));
+    mix_ui.label(
+        RichText::new("Mix")
+            .font(fonts::regular(9.0))
+            .color(Color32::from_rgb(0xC6, 0xCA, 0xD2)),
+    );
+}
+
+/// Paints the small Bitwig cyan modulator routing icon (circle + arrow `o->`).
+fn paint_mod_routing_arrow(p: &Painter, center: Pos2, color: Color32, filled: bool) {
+    let left_x = center.x - 6.0;
+    let right_x = center.x + 6.5;
+    let y = center.y;
+
+    // Small origin circle on the left
+    if filled {
+        p.circle_filled(pos2(left_x, y), 2.5, color);
+    } else {
+        p.circle_stroke(pos2(left_x, y), 2.5, Stroke::new(1.2_f32, color));
+    }
+    // Shaft
+    p.line_segment([pos2(left_x + 2.5, y), pos2(right_x - 2.5, y)], Stroke::new(1.4_f32, color));
+    // Arrowhead on the right
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            pos2(right_x, y),
+            pos2(right_x - 4.0, y - 3.0),
+            pos2(right_x - 4.0, y + 3.0),
+        ],
+        color,
+        Stroke::NONE,
+    ));
+}
+
+/// Paints a crisp miniature vector waveform inside the waveform selector box.
+fn paint_mini_waveform(p: &Painter, rect: Rect, waveform: LfoWaveform, color: Color32) {
+    let cy = rect.center().y;
+    let amp = rect.height() * 0.44;
+    let steps = 28;
+    let mut pts = Vec::with_capacity(steps);
+    for i in 0..steps {
+        let t = i as f32 / (steps - 1) as f32;
+        let x = rect.min.x + t * rect.width();
+        let sh = pseudo_random_step((t * 4.0) as u64);
+        let v = evaluate_waveform(waveform, t * 1.25, sh);
+        pts.push(pos2(x, cy - v * amp));
+    }
+    p.add(egui::epaint::PathShape::line(pts, Stroke::new(1.3_f32, color)));
+}
+
+/// Renders the HDP Preset menu triggered from the left vertical sidebar folder icon.
+pub fn render_preset_menu(ui: &mut egui::Ui, track_idx: usize, slot_idx: usize) {
+    ui.set_min_width(170.0);
+    ui.label(
+        RichText::new("Hikaru OpenLFO MOD")
+            .font(fonts::semibold(10.0))
+            .color(theme::ACCENT_ORANGE),
+    );
+    ui.separator();
+    if ui.button("💾 Guardar Preset (*.hdp)").clicked() {
+        let state = get_lfo_state(track_idx, slot_idx);
+        save_openmodulation_preset(&state);
+        ui.close_menu();
+    }
+    if ui.button("📂 Cargar Preset (*.hdp)").clicked() {
+        if let Some(loaded) = load_openmodulation_preset() {
+            update_lfo_state(track_idx, slot_idx, |st| {
+                *st = loaded;
+            });
+        }
+        ui.close_menu();
+    }
+}
+
 pub fn save_openmodulation_preset(state: &LfoModState) {
     if let Some(path) = rfd::FileDialog::new()
-        .set_file_name("lfo_modulation.hdp")
-        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .set_file_name("openlfo_mod.hdp")
+        .add_filter(
+            hikaru_project_file::HDP_FILE_FILTER,
+            &[hikaru_project_file::HDP_EXTENSION],
+        )
         .save_file()
     {
         let slot = hikaru_project_file::DspSlot {
             id: 0,
-            name: "OpenModulation".to_string(),
+            name: "OpenLFO MOD".to_string(),
             active: true,
             wavetable_path: None,
             plugin_path: None,
@@ -1170,10 +1717,10 @@ pub fn save_openmodulation_preset(state: &LfoModState) {
             format_version: hikaru_project_file::FORMAT_VERSION,
             created_by: format!("Hikaru OpenLive {}", crate::version::VERSION),
             preset_type: hikaru_project_file::PresetType::SingleDevice,
-            name: "OpenModulation Preset".to_string(),
+            name: "OpenLFO MOD Preset".to_string(),
             author: None,
             category: Some("Modulation / LFO".to_string()),
-            description: Some("Hikaru OpenModulation preset".to_string()),
+            description: Some("Hikaru OpenLFO MOD preset".to_string()),
             slot: Some(slot),
             chain: None,
         };
@@ -1183,7 +1730,10 @@ pub fn save_openmodulation_preset(state: &LfoModState) {
 
 pub fn load_openmodulation_preset() -> Option<LfoModState> {
     if let Some(path) = rfd::FileDialog::new()
-        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .add_filter(
+            hikaru_project_file::HDP_FILE_FILTER,
+            &[hikaru_project_file::HDP_EXTENSION],
+        )
         .pick_file()
     {
         if let Ok(preset) = hikaru_project_file::parse_hdp(&path) {

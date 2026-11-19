@@ -241,11 +241,11 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 INST_YELLOW,
                 "16-pad drum machine & synthesizer with per-pad sampler and insert FX chain.",
             ),
-            "OpenModulation" => (
+            "OpenLFO MOD" | "OpenModulation" => (
                 BrowserRailTab::NoteFx,
                 Some(QuickInstrumentFilter::Modulation),
                 NOTE_BLUE,
-                "LFO & envelope modulator device for dynamic parameter automation.",
+                "Bitwig-style dual LFO modulator (LFO1 + LFO2) with phase, depth, retrigger, sync, FX slot, and mix.",
             ),
             "OpenEQ3" => (
                 BrowserRailTab::AudioFx,

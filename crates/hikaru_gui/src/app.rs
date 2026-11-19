@@ -1574,7 +1574,15 @@ impl HikaruApp {
 
         let has_active_lfo = self.state.current_tracks().iter().any(|tr| {
             tr.effects.iter().any(|slot| {
-                slot.active && matches!(slot.name.as_str(), "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD")
+                slot.active
+                    && matches!(
+                        slot.name.as_str(),
+                        "OpenLFO MOD"
+                            | "Hikaru OpenLFO MOD"
+                            | "LFO MOD"
+                            | "OpenModulation"
+                            | "Hikaru OpenModulation"
+                    )
             })
         });
 

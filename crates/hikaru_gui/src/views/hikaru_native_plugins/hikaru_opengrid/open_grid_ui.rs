@@ -253,7 +253,7 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
         p.rect_stroke(plus_r, 3.0, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
         let plus_resp = ui
             .interact(plus_r, ui.id().with(("grid_add_mod", track_idx, slot_idx)), Sense::click())
-            .on_hover_text("Add Hikaru OpenModulation device to track");
+            .on_hover_text("Add Hikaru OpenLFO MOD device to track");
         if plus_resp.hovered() {
             p.rect_filled(plus_r.shrink(1.0), 2.5, Color32::from_rgb(0x32, 0x36, 0x3E));
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -521,7 +521,7 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
             let next_id = track.effects.len();
             track.effects.push(crate::views::mixer::DspSlot::new(
                 next_id,
-                "OpenModulation".to_string(),
+                "OpenLFO MOD".to_string(),
             ));
         }
     }

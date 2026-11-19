@@ -499,7 +499,28 @@ fn default_voices() -> String {
     "Poly".to_string()
 }
 
-/// Parámetros de modulación de Hikaru OpenModulation para persistencia en `.oplf` y `.hdp`.
+fn default_open_mod_mix() -> f32 {
+    1.0
+}
+
+/// Parámetros de un canal LFO individual dentro de Hikaru OpenLFO MOD.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LfoChannelParams {
+    pub waveform: String,
+    pub sync_mode: String,
+    pub rate_hz: f32,
+    pub sync_rate: String,
+    pub depth: f32,
+    pub phase_deg: f32,
+    pub bipolar: bool,
+    #[serde(default)]
+    pub retrigger: bool,
+    pub amount: f32,
+    pub target: String,
+}
+
+/// Parámetros de modulación de Hikaru OpenLFO MOD (compatible con proyectos OpenModulation)
+/// para persistencia en `.oplf` y `.hdp`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenModulationParams {
     pub waveform: String,
@@ -511,6 +532,12 @@ pub struct OpenModulationParams {
     pub bipolar: bool,
     pub amount: f32,
     pub target: String,
+    #[serde(default)]
+    pub retrigger: bool,
+    #[serde(default)]
+    pub lfo2: Option<LfoChannelParams>,
+    #[serde(default = "default_open_mod_mix")]
+    pub mix: f32,
 }
 
 // =========================================================================

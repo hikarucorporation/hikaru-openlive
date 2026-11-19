@@ -72,8 +72,8 @@ pub const PLUGIN_CATALOG: [PluginEntry; 8] = [
     },
     PluginEntry {
         category: "Modulation",
-        name: "OpenModulation",
-        label: "Hikaru OpenModulation",
+        name: "OpenLFO MOD",
+        label: "Hikaru OpenLFO MOD",
     },
 ];
 
@@ -673,7 +673,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
                             "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH,
-                            "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => MODULATION_CARD_WIDTH,
+                            "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
                             _ => CARD_WIDTH,
                         };
                         let card_h = pill_h;
@@ -857,6 +857,91 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 if app.open_grid_editor == Some((track_idx, slot_idx)) {
                                     app.open_grid_editor = None;
                                 }
+                                slot_to_remove = Some(slot_idx);
+                            }
+                        } else if matches!(
+                            slot.name.as_str(),
+                            "OpenLFO MOD"
+                                | "Hikaru OpenLFO MOD"
+                                | "LFO MOD"
+                                | "OpenModulation"
+                                | "Hikaru OpenModulation"
+                        ) {
+                            let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let sb_out = render_bitwig_device_sidebar(
+                                ui,
+                                sb_rect,
+                                ("openlfo_mod_sb", track_idx, slot_idx),
+                                "OPENLFO MOD",
+                                slot.active,
+                                is_selected,
+                            );
+                            if sb_out.toggled_power {
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        s.active = !s.active;
+                                    }
+                                }
+                            }
+                            if sb_out.clicked_title {
+                                app.selected_slot_index = slot_idx;
+                                app.matrix_state.selected_scene = None;
+                            }
+                            let preset_popup_id =
+                                ui.id().with(("openlfo_mod_preset_popup", track_idx, slot_idx));
+                            if sb_out.clicked_folder {
+                                ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
+                            }
+                            egui::popup_below_widget(
+                                ui,
+                                preset_popup_id,
+                                &sb_out.folder_resp,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    hikaru_openmodulation::render_preset_menu(
+                                        ui, track_idx, slot_idx,
+                                    );
+                                },
+                            );
+
+                            let body_rect = Rect::from_min_max(
+                                pos2(sb_rect.max.x + 3.0, card_rect.min.y + 4.0),
+                                pos2(card_rect.max.x - 4.0, card_rect.max.y - 4.0),
+                            );
+                            let mut body_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                            hikaru_openmodulation::render_module(
+                                &mut body_ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                            );
+
+                            let close_r = Rect::from_min_size(
+                                pos2(card_rect.max.x - 15.0, card_rect.min.y + 2.0),
+                                vec2(13.0, 13.0),
+                            );
+                            let close_resp = ui.interact(
+                                close_r,
+                                ui.id().with(("dsp_close", slot_idx)),
+                                Sense::click(),
+                            );
+                            icons::paint_icon(
+                                ui.painter(),
+                                close_r.shrink(2.5),
+                                icons::X_CLOSE,
+                                if close_resp.hovered() {
+                                    Color32::WHITE
+                                } else {
+                                    theme::TEXT_MUTED
+                                },
+                                1.5,
+                            );
+                            if close_resp.on_hover_text("Remove Device (Del)").clicked() {
                                 slot_to_remove = Some(slot_idx);
                             }
                         } else if slot.name == "Hikaru OpenDMS" {

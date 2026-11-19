@@ -1,16 +1,17 @@
 // crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/mod.rs
-//! **Hikaru OpenModulation**: Moduladores nativos de Hikaru OpenLive.
+//! **Hikaru OpenLFO MOD**: Modulador Dual LFO nativo estilo Bitwig Studio.
 //!
-//! Este subsistema provee módulos de modulación interactiva Bitwig-style (LFO MOD, etc.)
-//! capaces de modular cualquier knob de dispositivos nativos o externos (como `WT POS` en Hikaru OpenWavetable).
+//! Este subsistema provee el dispositivo **Hikaru OpenLFO MOD** (LFO1 + LFO2, osciloscopio dual,
+//! Phase, Depth, Retrigger, Polaridad ±/+, Sync/Hz, slot FX y Mix) capaz de modular cualquier
+//! knob de dispositivos nativos o externos (como `INDEX` / `WT POS` en Hikaru OpenPoly).
 
 pub mod lfo_mod;
 
 pub use lfo_mod::{
     get_global_transport, get_lfo_state, get_modulation, handle_knob_mapping_click,
     is_mapping_target, on_transport_pause_or_stop, on_transport_play, render_module,
-    update_global_transport, update_lfo_state, ActiveModulation, LfoModState, LfoTransportState,
-    ModulationTarget, MODULATION_CARD_WIDTH,
+    render_preset_menu, update_global_transport, update_lfo_state, ActiveModulation,
+    LfoChannelState, LfoModState, LfoTransportState, ModulationTarget, MODULATION_CARD_WIDTH,
 };
 
 #[cfg(test)]
@@ -157,5 +158,48 @@ mod tests {
         paused_transport.is_playing = false;
         let (phase_paused, _, _) = state.compute_live_sample_from_transport(&paused_transport);
         assert_eq!(phase_paused, 0.0, "Al pausar el proyecto, el LFO debe frenar y volver al principio");
+    }
+
+    #[test]
+    fn test_dual_lfo_mod_channels_mix_and_params_roundtrip() {
+        use hikaru_dsp::effects::lfo::{LfoSyncMode, LfoWaveform, SyncRate};
+
+        let mut state = LfoModState::default();
+        state.lfo1.waveform = LfoWaveform::Triangle;
+        state.lfo1.rate_hz = 2.5;
+        state.lfo1.depth = 0.8;
+        state.lfo1.phase_deg = 90.0;
+        state.lfo1.retrigger = false;
+        state.lfo1.target = ModulationTarget::OpenPolyCutoff;
+
+        state.lfo2.waveform = LfoWaveform::Square;
+        state.lfo2.sync_mode = LfoSyncMode::TempoSync;
+        state.lfo2.set_sync_rate(SyncRate::Eighth);
+        state.lfo2.depth = 0.6;
+        state.lfo2.phase_deg = 45.0;
+        state.lfo2.bipolar = false;
+        state.lfo2.retrigger = true;
+        state.lfo2.amount = -0.75;
+        state.lfo2.target = ModulationTarget::OpenWavetableVolume;
+
+        state.mix = 0.65;
+
+        let params = state.to_params();
+        let mut restored = LfoModState::default();
+        restored.apply_params(&params);
+
+        assert_eq!(restored.lfo1.waveform, LfoWaveform::Triangle);
+        assert!((restored.lfo1.rate_hz - 2.5).abs() < 1e-4);
+        assert!(!restored.lfo1.retrigger);
+        assert_eq!(restored.lfo1.target, ModulationTarget::OpenPolyCutoff);
+
+        assert_eq!(restored.lfo2.waveform, LfoWaveform::Square);
+        assert_eq!(restored.lfo2.sync_mode, LfoSyncMode::TempoSync);
+        assert_eq!(restored.lfo2.sync_rate, SyncRate::Eighth);
+        assert!(!restored.lfo2.bipolar);
+        assert!(restored.lfo2.retrigger);
+        assert!((restored.lfo2.amount - (-0.75)).abs() < 1e-4);
+        assert_eq!(restored.lfo2.target, ModulationTarget::OpenWavetableVolume);
+        assert!((restored.mix - 0.65).abs() < 1e-4);
     }
 }

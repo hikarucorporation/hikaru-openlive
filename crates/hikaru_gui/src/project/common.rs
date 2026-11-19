@@ -98,7 +98,11 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                 };
                 let open_modulation = if matches!(
                     e.name.as_str(),
-                    "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD"
+                    "OpenLFO MOD"
+                        | "Hikaru OpenLFO MOD"
+                        | "LFO MOD"
+                        | "OpenModulation"
+                        | "Hikaru OpenModulation"
                 ) {
                     let lfo = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_lfo_state(
                         t.id,
@@ -215,10 +219,14 @@ pub fn build_track(t: &Track) -> mixer::Track {
                 }
             }
 
-            // Reconstruir estado de Hikaru OpenModulation
+            // Reconstruir estado de Hikaru OpenLFO MOD (y compatibilidad con OpenModulation)
             if matches!(
                 e.name.as_str(),
-                "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD"
+                "OpenLFO MOD"
+                    | "Hikaru OpenLFO MOD"
+                    | "LFO MOD"
+                    | "OpenModulation"
+                    | "Hikaru OpenModulation"
             ) {
                 if let Some(ref p) = e.open_modulation {
                     crate::views::hikaru_native_plugins::hikaru_openmodulation::update_lfo_state(
