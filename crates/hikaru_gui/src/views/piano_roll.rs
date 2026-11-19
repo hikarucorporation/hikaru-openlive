@@ -364,7 +364,11 @@ pub fn total_ticks_for(max_note_tick: u64, playhead_tick: u64) -> u64 {
 
 pub fn track_has_instrument(track: &Track) -> bool {
     track.effects.iter().any(|slot| {
-        slot.active && (slot.name == "OpenWavetable" || slot.name == "Hikaru OpenDMS" || slot.external.is_some())
+        slot.active
+            && (slot.is_open_poly()
+                || slot.name == "Hikaru OpenDMS"
+                || matches!(slot.name.as_str(), "Sampler" | "Hikaru Sampler")
+                || slot.external.is_some())
     })
 }
 

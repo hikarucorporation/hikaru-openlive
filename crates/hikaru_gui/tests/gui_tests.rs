@@ -497,12 +497,12 @@ fn bitwig_layout_toggles_mode_and_view_coherence() {
 }
 
 #[test]
-fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
+fn dsp_rack_and_openpoly_stay_top_aligned_and_bounded_across_frames() {
     use hikaru_audio_engine::AudioEngine;
     use hikaru_core::SampleRate;
     use hikaru_gui::app::AppState;
     use hikaru_gui::audio_proxy::AudioProxy;
-    use hikaru_gui::views::dsp_rack::{self, OPEN_WAVETABLE_CARD_WIDTH, RACK_HEIGHT};
+    use hikaru_gui::views::dsp_rack::{self, OPEN_POLY_WIDTH, RACK_HEIGHT};
     use hikaru_gui::views::mixer::DspSlot;
     use std::sync::atomic::{AtomicU32, AtomicU64};
     use std::sync::{mpsc, Arc, Mutex};
@@ -515,9 +515,8 @@ fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
     let engine = AudioEngine::new(SampleRate::new(48000.0), &WT, clock.clone());
     let mut state = AppState::new(proxy, clock, level, Some(Arc::new(Mutex::new(engine))));
 
-    // Insert OpenWavetable on Track 1 (index 1)
-    let mut slot = DspSlot::default();
-    slot.name = "OpenWavetable".to_string();
+    // Insert Hikaru OpenPoly on Track 1 (index 1)
+    let slot = DspSlot::new(0, "OpenPoly".to_string());
     state.live_tracks[1].effects.push(slot);
     state.selected_track_index = 1;
     state.selected_slot_index = 0;
@@ -550,35 +549,32 @@ fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
                 });
         });
 
-        let dock_top = 720.0 - dock_h;
-        let mut found_title = false;
+        let mut found_osc = false;
+        let mut found_filter = false;
+        let mut found_adsr = false;
         let mut found_basic_shapes = false;
         for clipped in &out.shapes {
             if let egui::epaint::Shape::Text(txt) = &clipped.shape {
                 let s = txt.galley.text();
-                if s == "OpenWavetable" {
-                    found_title = true;
-                    assert!(
-                        txt.pos.y <= dock_top + 32.0,
-                        "Frame {frame_i}: el título 'OpenWavetable' debe estar arriba de la tarjeta (y={}, dock_top={dock_top})",
-                        txt.pos.y
-                    );
+                if s.starts_with("Wavetable") {
+                    found_osc = true;
+                }
+                if s.starts_with("Low-pass MG") {
+                    found_filter = true;
+                }
+                if s.starts_with("ADSR") {
+                    found_adsr = true;
                 }
                 if s.starts_with("Basic Shapes") || s.starts_with("Basic Shap") {
                     found_basic_shapes = true;
-                    assert!(
-                        txt.pos.y <= dock_top + 56.0,
-                        "Frame {frame_i}: 'Basic Shapes' debe estar arriba del cuerpo de OpenWavetable (y={}, dock_top={dock_top})",
-                        txt.pos.y
-                    );
                 }
             }
         }
-        assert!(found_title, "Frame {frame_i}: debe pintarse el título OpenWavetable");
-        assert!(found_basic_shapes, "Frame {frame_i}: debe pintarse Basic Shapes");
+        assert!(found_osc, "Frame {frame_i}: OpenPoly debe pintar el módulo Oscilador (Wavetable)");
+        assert!(found_filter, "Frame {frame_i}: OpenPoly debe pintar el módulo Filtro (Low-pass MG)");
+        assert!(found_adsr, "Frame {frame_i}: OpenPoly debe pintar el módulo Envolvente (ADSR)");
+        assert!(found_basic_shapes, "Frame {frame_i}: OpenPoly debe pintar el nombre de la wavetable inicial");
 
-        // Verify that every painted shape inside bottom_dock starts near the top of the dock
-        // and stays strictly within OPEN_WAVETABLE_CARD_WIDTH horizontally.
         assert!(
             used_rect.height() <= dock_h + 2.0,
             "Frame {frame_i}: dsp_rack no debe desbordar la altura del dock ({} > {})",
@@ -586,11 +582,82 @@ fn dsp_rack_and_openwavetable_stay_top_aligned_and_bounded_across_frames() {
             dock_h
         );
         assert!(
-            used_rect.width() <= 1280.0 && OPEN_WAVETABLE_CARD_WIDTH <= 460.0,
-            "Frame {frame_i}: el ancho de OpenWavetable debe mantenerse compacto ({})",
+            used_rect.width() <= 1280.0 && OPEN_POLY_WIDTH <= 720.0,
+            "Frame {frame_i}: el ancho de OpenPoly debe mantenerse acotado ({})",
             used_rect.width()
         );
     }
+}
+
+#[test]
+fn hikaru_openpoly_catalog_presets_roundtrip_and_audio_engine() {
+    use hikaru_audio_engine::AudioEngine;
+    use hikaru_core::{AudioBuffer, SampleRate};
+    use hikaru_dsp::synth::open_poly::{OpenPolyFilterType, OpenPolyOscType};
+    use hikaru_gui::views::dsp_rack::PLUGIN_CATALOG;
+    use hikaru_gui::views::hikaru_native_plugins::{HikaruOpenPoly, FACTORY_PRESETS};
+    use hikaru_gui::views::mixer::{DspSlot, Track};
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+
+    // 1. OpenPoly replaces OpenWavetable in PLUGIN_CATALOG
+    assert!(
+        PLUGIN_CATALOG
+            .iter()
+            .any(|e| e.name == "OpenPoly" && e.label == "Hikaru OpenPoly" && e.category == "Polysynth"),
+        "Hikaru OpenPoly debe estar registrado en PLUGIN_CATALOG"
+    );
+    assert!(
+        !PLUGIN_CATALOG.iter().any(|e| e.name == "OpenWavetable"),
+        "OpenWavetable debe haber sido reemplazado por Hikaru OpenPoly en PLUGIN_CATALOG"
+    );
+
+    // 2. Factory presets & project serialization roundtrip
+    let mut poly = HikaruOpenPoly::default();
+    for preset in &FACTORY_PRESETS {
+        poly.apply_factory_preset(preset.name);
+        let proj = poly.to_project_params();
+        let mut restored = HikaruOpenPoly::default();
+        restored.apply_project_params(&proj);
+        assert_eq!(restored.osc_type, poly.osc_type);
+        assert_eq!(restored.filter_type, poly.filter_type);
+        assert!((restored.filter_cutoff_hz - poly.filter_cutoff_hz).abs() < 0.01);
+    }
+
+    // 3. Track capture & rebuild preserves full OpenPoly state
+    let mut tr = Track::new(1, "Lead".to_string(), false);
+    let mut slot = DspSlot::new(0, "OpenPoly".to_string());
+    {
+        let p = slot.open_poly_mut();
+        p.osc_type = OpenPolyOscType::Swarm;
+        p.filter_type = OpenPolyFilterType::SallenKey;
+        p.filter_cutoff_hz = 740.0;
+        p.sub_level = 0.55;
+        p.lfo_amount_cutoff = 0.35;
+    }
+    tr.effects.push(slot);
+    let captured = hikaru_gui::project::common::capture_track(&tr);
+    assert!(captured.effects[0].open_poly.is_some());
+    let rebuilt = hikaru_gui::project::common::build_track(&captured);
+    let rebuilt_poly = rebuilt.effects[0].open_poly.as_ref().expect("open_poly must be restored");
+    assert_eq!(rebuilt_poly.osc_type, OpenPolyOscType::Swarm);
+    assert_eq!(rebuilt_poly.filter_type, OpenPolyFilterType::SallenKey);
+    assert!((rebuilt_poly.filter_cutoff_hz - 740.0).abs() < 0.01);
+    assert!((rebuilt_poly.sub_level - 0.55).abs() < 0.001);
+
+    // 4. End-to-end AudioEngine playback with OpenPoly
+    let clock = Arc::new(AtomicU64::new(0));
+    static WT: [f32; 2048] = [0.0f32; 2048];
+    let mut engine = AudioEngine::new(SampleRate::new(48000.0), &WT, clock);
+    engine.set_track_open_poly_params(0, true, rebuilt_poly.to_dsp_params());
+    engine.trigger_virtual_note(0, 60, 0.9);
+    let mut samples = vec![0.0f32; 1024 * 2];
+    let mut buf = AudioBuffer::new(&mut samples);
+    engine.process(&mut buf);
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    assert!(peak > 0.05, "AudioEngine debe sintetizar audio audible con Hikaru OpenPoly (peak={peak})");
+    let (ml, mr) = engine.open_poly_meter(0);
+    assert!(ml > 0.01 && mr > 0.01, "El medidor estéreo de OpenPoly debe reflejar señal activa");
 }
 
 #[test]

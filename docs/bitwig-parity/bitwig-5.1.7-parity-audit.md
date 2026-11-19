@@ -170,7 +170,7 @@ labels `area:` en el repositorio, así que el mapeo a área es manual.
   instalación, catálogo de dispositivos/moduladores y comportamiento público.
 - Los 118 dispositivos y los 43 moduladores se cuentan **uno por uno** porque
   son artefactos reales del producto de referencia. Hikaru implementa
-  equivalentes funcionales parciales (p. ej. `Polymer` ≈ OpenWavetable,
+  equivalentes funcionales parciales (p. ej. `Polymer` ≈ Hikaru OpenPoly,
   `Drum Machine` ≈ OpenDMS), no binarios.
 - Una feature se marca `done` sólo si hay código y, cuando existe, test que la
   respalde. `in_progress` significa modelo/UI parcial sin flujo completo.

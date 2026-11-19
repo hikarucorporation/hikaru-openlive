@@ -61,6 +61,7 @@
 pub mod hikaru_opendms;
 pub mod hikaru_openeq3;
 pub mod hikaru_openmodulation;
+pub mod hikaru_openpoly;
 pub mod hikaru_openspectral_phaser;
 pub mod hikaru_openwavetable;
 pub mod hikaru_sampler;
@@ -73,6 +74,9 @@ pub mod hikaru_ultracomb;
 pub use hikaru_opendms::open_dms::{midi_note_name, DmsPad, OpenDms};
 pub use hikaru_opendms::open_dms_sampler::{AdsrEnvelope, DmsSampler};
 pub use hikaru_openmodulation::lfo_mod::{LfoModState, ModulationTarget};
+pub use hikaru_openpoly::{
+    HikaruOpenPoly, FACTORY_PRESETS, OPEN_POLY_CARD_WIDTH, OPEN_POLY_COMPACT_CARD_WIDTH,
+};
 pub use hikaru_openwavetable::open_wavetable::WavetableEditor;
 pub use hikaru_openwavetable::wavetable_io::Wavetable;
 pub use hikaru_sampler::{HikaruSampler, SAMPLER_CARD_WIDTH};

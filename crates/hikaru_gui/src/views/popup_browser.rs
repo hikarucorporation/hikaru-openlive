@@ -217,11 +217,11 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
 
     for entry in &PLUGIN_CATALOG {
         let (rail, quick, badge_color, desc) = match entry.name {
-            "OpenWavetable" => (
+            "OpenPoly" => (
                 BrowserRailTab::Instruments,
                 Some(QuickInstrumentFilter::Synth),
                 INST_YELLOW,
-                "Polyphonic wavetable synthesizer with 3D terrain visualizer and dual-oscillator morphing.",
+                "Hybrid modular polyphonic synthesizer (AGPL-v3): swappable oscillators, analog filters, FEG, ADSR, Sub/Noise & LFO.",
             ),
             "Sampler" => (
                 BrowserRailTab::Instruments,
@@ -542,18 +542,16 @@ fn paint_quick_filter_icon(
 
 fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
     let build_slot = |item: &BrowserItem| -> DspSlot {
-        let mut slot = DspSlot::default();
         match &item.payload {
-            BrowserPayload::Native { name } => {
-                slot.name = name.clone();
-            }
+            BrowserPayload::Native { name } => DspSlot::new(0, name.clone()),
             BrowserPayload::External(desc) => {
+                let mut slot = DspSlot::default();
                 slot.name = desc.name.clone();
                 slot.has_gui = Some(desc.has_gui);
                 slot.external = Some(desc.clone());
+                slot
             }
         }
-        slot
     };
 
     match state.popup_browser.mode {

@@ -384,7 +384,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 });
             });
 
-        // Banner contextual cuando OpenWavetable espera un WAV
+        // Banner contextual cuando Hikaru OpenPoly espera un WAV
         if state.pending_wavetable_slot.is_some() {
             egui::Frame::NONE
                 .fill(Color32::from_rgb(0x3A, 0x22, 0x08))
@@ -396,7 +396,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         let (b_r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         icons::paint_browser_badge(ui.painter(), b_r, BrowserBadgeKind::DeviceNote);
                         ui.label(
-                            RichText::new("Select WAV to load into OpenWavetable")
+                            RichText::new("Select WAV to load into Hikaru OpenPoly")
                                 .font(fonts::semibold(10.5))
                                 .color(ACCENT_ORANGE),
                         );
@@ -930,6 +930,16 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             if is_dir_click {
                 state.explorer_state.navigate_to(path);
             } else if let Some((track_idx, slot_idx)) = state.pending_wavetable_slot.take() {
+                if let Some(track) = state.current_tracks_mut().get_mut(track_idx) {
+                    if let Some(slot) = track.effects.get_mut(slot_idx) {
+                        if slot.is_open_poly() {
+                            let _ = crate::views::hikaru_native_plugins::hikaru_openpoly::load_wavetable_from_path(
+                                slot.open_poly_mut(),
+                                &path,
+                            );
+                        }
+                    }
+                }
                 crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::load_wavetable_from_path(
                     state,
                     track_idx,

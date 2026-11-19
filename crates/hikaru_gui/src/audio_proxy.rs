@@ -305,6 +305,17 @@ pub enum GuiCommand {
         track_idx: usize,
         params: hikaru_dsp::synth::sampler::SamplerDspParams,
     },
+    SetTrackOpenPolyParams {
+        track_idx: usize,
+        enabled: bool,
+        params: hikaru_dsp::synth::open_poly::OpenPolyDspParams,
+    },
+    SetTrackOpenPolyWavetable {
+        track_idx: usize,
+        samples: Vec<f32>,
+        frames: usize,
+        frame_len: usize,
+    },
     /// Carga un plugin externo (VST3/CLAP) en un slot de pista.
     /// El motor instancia el binario y lo inserta en la cadena de efectos.
     LoadExternalPlugin {

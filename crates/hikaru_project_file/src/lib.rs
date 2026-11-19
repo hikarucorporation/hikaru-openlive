@@ -157,6 +157,139 @@ pub struct DspSlot {
     /// Parámetros del sampler si el slot contiene un Hikaru Sampler.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampler: Option<SamplerParams>,
+    /// Parámetros de síntesis si el slot contiene un Hikaru OpenPoly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_poly: Option<OpenPolyParams>,
+}
+
+/// Parámetros de síntesis de Hikaru OpenPoly (versión AGPL-v3 inspirada en Polymer)
+/// para persistencia en `.oplf`, `.opsf` y `.hdp`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenPolyParams {
+    pub table_name: String,
+    pub osc_type: String,
+    pub osc_index: f32,
+    pub osc_fold: f32,
+    pub osc_ratio_num: u8,
+    pub osc_ratio_den: u8,
+    pub osc_semitones: f32,
+    pub osc_detune_hz: f32,
+    pub osc_sync: bool,
+    pub unison_voices: u8,
+    pub unison_detune: f32,
+    pub unison_spread: f32,
+
+    pub sub_level: f32,
+    pub sub_wave: String,
+    pub sub_octave: i8,
+    pub noise_level: f32,
+
+    pub filter_enabled: bool,
+    pub filter_type: String,
+    pub filter_cutoff_hz: f32,
+    pub filter_resonance: f32,
+    pub filter_drive: f32,
+    pub filter_keytrack: f32,
+    pub filter_env_amount: f32,
+    pub filter_vel_amount: f32,
+
+    pub feg_enabled: bool,
+    pub feg_attack_ms: f32,
+    pub feg_decay_ms: f32,
+    pub feg_sustain: f32,
+    pub feg_release_ms: f32,
+
+    pub amp_env_type: String,
+    pub amp_attack_ms: f32,
+    pub amp_decay_ms: f32,
+    pub amp_sustain: f32,
+    pub amp_release_ms: f32,
+
+    pub mono_mode: bool,
+    pub legato: bool,
+    pub glide_ms: f32,
+    pub global_pitch_st: f32,
+    pub velocity_sens: f32,
+
+    pub lfo_enabled: bool,
+    pub lfo_wave: String,
+    pub lfo_rate_hz: f32,
+    pub lfo_amount_cutoff: f32,
+    pub lfo_amount_index: f32,
+    pub lfo_amount_pitch: f32,
+    pub lfo_amount_amp: f32,
+
+    pub pan: f32,
+    pub output_gain: f32,
+    pub stereo_width: f32,
+    pub modulators_open: bool,
+    pub render_mode_3d: bool,
+}
+
+impl Default for OpenPolyParams {
+    fn default() -> Self {
+        Self {
+            table_name: "Basic Shapes".to_string(),
+            osc_type: "Wavetable".to_string(),
+            osc_index: 0.0,
+            osc_fold: 0.0,
+            osc_ratio_num: 1,
+            osc_ratio_den: 1,
+            osc_semitones: 0.0,
+            osc_detune_hz: 0.0,
+            osc_sync: false,
+            unison_voices: 1,
+            unison_detune: 0.18,
+            unison_spread: 0.5,
+
+            sub_level: 0.25,
+            sub_wave: "Sine".to_string(),
+            sub_octave: -1,
+            noise_level: 0.0,
+
+            filter_enabled: true,
+            filter_type: "Low-pass MG".to_string(),
+            filter_cutoff_hz: 1650.0,
+            filter_resonance: 0.22,
+            filter_drive: 0.08,
+            filter_keytrack: 0.5,
+            filter_env_amount: 0.42,
+            filter_vel_amount: 0.25,
+
+            feg_enabled: true,
+            feg_attack_ms: 4.0,
+            feg_decay_ms: 280.0,
+            feg_sustain: 0.25,
+            feg_release_ms: 220.0,
+
+            amp_env_type: "ADSR".to_string(),
+            amp_attack_ms: 5.0,
+            amp_decay_ms: 240.0,
+            amp_sustain: 0.78,
+            amp_release_ms: 180.0,
+
+            mono_mode: false,
+            legato: false,
+            glide_ms: 0.0,
+            global_pitch_st: 0.0,
+            velocity_sens: 0.65,
+
+            lfo_enabled: true,
+            lfo_wave: "Sine".to_string(),
+            lfo_rate_hz: 1.5,
+            lfo_amount_cutoff: 0.0,
+            lfo_amount_index: 0.0,
+            lfo_amount_pitch: 0.0,
+            lfo_amount_amp: 0.0,
+
+            pan: 0.0,
+            output_gain: 0.85,
+            stereo_width: 0.5,
+            modulators_open: true,
+            render_mode_3d: true,
+        }
+    }
 }
 
 /// Parámetros de Hikaru Sampler para persistencia en `.oplf`, `.opsf` y `.hdp`.
@@ -532,6 +665,7 @@ mod tests {
                 }),
                 open_modulation: None,
                 sampler: None,
+                open_poly: None,
             }),
             chain: None,
         };

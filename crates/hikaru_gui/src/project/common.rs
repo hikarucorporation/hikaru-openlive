@@ -86,6 +86,11 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                 } else {
                     None
                 };
+                let open_poly = if e.is_open_poly() {
+                    e.open_poly.as_ref().map(|p| p.to_project_params())
+                } else {
+                    None
+                };
                 let open_modulation = if matches!(
                     e.name.as_str(),
                     "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD"
@@ -103,16 +108,17 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                 } else {
                     None
                 };
+                let wavetable_path = e
+                    .open_poly
+                    .as_ref()
+                    .and_then(|p| p.table.path.as_ref())
+                    .or(e.wavetable.table.path.as_ref())
+                    .map(|p| p.to_string_lossy().to_string());
                 DspSlot {
                     id: e.id,
                     name: e.name.clone(),
                     active: e.active,
-                    wavetable_path: e
-                        .wavetable
-                        .table
-                        .path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string()),
+                    wavetable_path,
                     plugin_path: e.external.as_ref().map(|p| p.path.display().to_string()),
                     plugin_format: e.external.as_ref().map(|p| {
                         match p.format {
@@ -124,6 +130,7 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     open_wavetable,
                     open_modulation,
                     sampler,
+                    open_poly,
                 }
             })
             .collect(),
@@ -173,19 +180,25 @@ pub fn build_track(t: &Track) -> mixer::Track {
             let mut slot = mixer::DspSlot::new(e.id, e.name.clone());
             slot.active = e.active;
 
-            // Reconstruir estado de Hikaru OpenWavetable
-            if e.name == "OpenWavetable" {
+            // Reconstruir estado de Hikaru OpenPoly (y migración desde legacy Hikaru OpenWavetable)
+            if slot.is_open_poly() {
                 if let Some(path_str) = e.wavetable_path.as_ref().filter(|p| !p.is_empty()) {
                     if let Some(path) = resolve_wavetable_path(path_str) {
                         if let Ok(table) =
                             crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable::load_table_file(&path)
                         {
+                            slot.open_poly_mut().load_wavetable(table.clone());
                             slot.wavetable.load(table);
                         }
                     }
                 }
                 if let Some(ref p) = e.open_wavetable {
                     slot.wavetable.apply_params(p);
+                }
+                if let Some(ref p) = e.open_poly {
+                    slot.open_poly_mut().apply_project_params(p);
+                } else if let Some(ref p) = e.open_wavetable {
+                    slot.open_poly_mut().apply_legacy_wavetable_params(p);
                 }
             }
 

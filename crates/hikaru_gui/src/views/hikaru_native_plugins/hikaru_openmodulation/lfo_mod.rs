@@ -22,6 +22,7 @@ pub const MODULATION_CARD_WIDTH: f32 = 426.0;
 pub enum ModulationTarget {
     #[default]
     OpenWavetableWtPos,
+    OpenPolyCutoff,
     OpenWavetableDetune,
     OpenWavetablePhase,
     OpenWavetableVolume,
@@ -35,8 +36,9 @@ pub enum ModulationTarget {
 }
 
 impl ModulationTarget {
-    pub const ALL: [ModulationTarget; 11] = [
+    pub const ALL: [ModulationTarget; 12] = [
         ModulationTarget::OpenWavetableWtPos,
+        ModulationTarget::OpenPolyCutoff,
         ModulationTarget::OpenWavetableDetune,
         ModulationTarget::OpenWavetablePhase,
         ModulationTarget::OpenWavetableVolume,
@@ -51,10 +53,11 @@ impl ModulationTarget {
 
     pub fn label(&self) -> &'static str {
         match self {
-            ModulationTarget::OpenWavetableWtPos => "OpenWavetable: WT POS",
-            ModulationTarget::OpenWavetableDetune => "OpenWavetable: DETUNE",
-            ModulationTarget::OpenWavetablePhase => "OpenWavetable: PHASE",
-            ModulationTarget::OpenWavetableVolume => "OpenWavetable: VOL",
+            ModulationTarget::OpenWavetableWtPos => "OpenPoly: INDEX",
+            ModulationTarget::OpenPolyCutoff => "OpenPoly: CUTOFF",
+            ModulationTarget::OpenWavetableDetune => "OpenPoly: DETUNE",
+            ModulationTarget::OpenWavetablePhase => "OpenPoly: PHASE",
+            ModulationTarget::OpenWavetableVolume => "OpenPoly: VOL",
             ModulationTarget::SpectralPhaserOffset => "Phaser: Offset",
             ModulationTarget::SpectralPhaserSpeed => "Phaser: Speed",
             ModulationTarget::SpectralPhaserDepth => "Phaser: Depth",
@@ -68,9 +71,10 @@ impl ModulationTarget {
     pub fn device_name(&self) -> &'static str {
         match self {
             ModulationTarget::OpenWavetableWtPos
+            | ModulationTarget::OpenPolyCutoff
             | ModulationTarget::OpenWavetableDetune
             | ModulationTarget::OpenWavetablePhase
-            | ModulationTarget::OpenWavetableVolume => "OpenWavetable",
+            | ModulationTarget::OpenWavetableVolume => "OpenPoly",
             ModulationTarget::SpectralPhaserOffset
             | ModulationTarget::SpectralPhaserSpeed
             | ModulationTarget::SpectralPhaserDepth => "OpenSpectral Phaser",
@@ -83,7 +87,8 @@ impl ModulationTarget {
 
     pub fn param_name(&self) -> &'static str {
         match self {
-            ModulationTarget::OpenWavetableWtPos => "WT POS",
+            ModulationTarget::OpenWavetableWtPos => "INDEX",
+            ModulationTarget::OpenPolyCutoff => "CUTOFF",
             ModulationTarget::OpenWavetableDetune => "DETUNE",
             ModulationTarget::OpenWavetablePhase => "PHASE",
             ModulationTarget::OpenWavetableVolume => "VOL",
@@ -102,12 +107,19 @@ impl ModulationTarget {
             return false;
         }
         let dev_match = match device {
-            "OpenWavetable" | "Hikaru OpenWavetable" => self.device_name() == "OpenWavetable",
+            "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable" => {
+                self.device_name() == "OpenPoly"
+            }
             "OpenSpectral Phaser" | "OpenSpectralPhaser" => self.device_name() == "OpenSpectral Phaser",
             "OpenEQ3" => self.device_name() == "OpenEQ3",
             _ => device == self.device_name(),
         };
-        dev_match && self.param_name().eq_ignore_ascii_case(param)
+        let param_match = if *self == ModulationTarget::OpenWavetableWtPos {
+            param.eq_ignore_ascii_case("INDEX") || param.eq_ignore_ascii_case("WT POS")
+        } else {
+            self.param_name().eq_ignore_ascii_case(param)
+        };
+        dev_match && param_match
     }
 
     pub fn from_device_and_param(device: &str, param: &str) -> Option<Self> {
@@ -222,6 +234,13 @@ impl LfoModState {
             .iter()
             .find(|t| t.label().eq_ignore_ascii_case(&p.target))
             .copied()
+            .or_else(|| match p.target.as_str() {
+                "OpenWavetable: WT POS" | "OpenPoly: WT POS" => Some(ModulationTarget::OpenWavetableWtPos),
+                "OpenWavetable: DETUNE" => Some(ModulationTarget::OpenWavetableDetune),
+                "OpenWavetable: PHASE" => Some(ModulationTarget::OpenWavetablePhase),
+                "OpenWavetable: VOL" => Some(ModulationTarget::OpenWavetableVolume),
+                _ => None,
+            })
             .unwrap_or(ModulationTarget::OpenWavetableWtPos);
     }
 
@@ -1144,6 +1163,7 @@ pub fn save_openmodulation_preset(state: &LfoModState) {
             open_wavetable: None,
             open_modulation: Some(state.to_params()),
             sampler: None,
+            open_poly: None,
         };
         let preset = hikaru_project_file::HikaruDevicePreset {
             format_version: hikaru_project_file::FORMAT_VERSION,

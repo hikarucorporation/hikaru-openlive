@@ -10,13 +10,16 @@ use crate::ui::icons;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
 use crate::views::hikaru_native_plugins::hikaru_openeq3;
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATION_CARD_WIDTH};
+use crate::views::hikaru_native_plugins::hikaru_openpoly::{
+    self, OPEN_POLY_CARD_WIDTH, OPEN_POLY_COMPACT_CARD_WIDTH,
+};
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
-use crate::views::hikaru_native_plugins::hikaru_openwavetable::open_wavetable;
 use crate::views::hikaru_native_plugins::hikaru_sampler::{sampler_editor, SAMPLER_CARD_WIDTH};
 
 pub const RACK_HEIGHT: f32 = 241.0;
 pub const CARD_WIDTH: f32 = 340.0;
 pub const OPEN_WAVETABLE_CARD_WIDTH: f32 = 446.0;
+pub use crate::views::hikaru_native_plugins::hikaru_openpoly::OPEN_POLY_CARD_WIDTH as OPEN_POLY_WIDTH;
 pub const OPEN_DMS_CARD_WIDTH: f32 = 430.0;
 pub const PHASER_CARD_WIDTH: f32 = 480.0;
 pub const EXTERNAL_CARD_WIDTH: f32 = 360.0;
@@ -46,8 +49,8 @@ pub const PLUGIN_CATALOG: [PluginEntry; 7] = [
     },
     PluginEntry {
         category: "Polysynth",
-        name: "OpenWavetable",
-        label: "Hikaru OpenWavetable",
+        name: "OpenPoly",
+        label: "Hikaru OpenPoly",
     },
     PluginEntry {
         category: "Sampler",
@@ -227,7 +230,9 @@ fn paint_rotated_label(
 struct DeviceSidebarOutcome {
     toggled_power: bool,
     clicked_folder: bool,
+    folder_resp: egui::Response,
     clicked_title: bool,
+    clicked_modulators: bool,
 }
 
 fn render_bitwig_device_sidebar(
@@ -238,12 +243,6 @@ fn render_bitwig_device_sidebar(
     active: bool,
     is_selected: bool,
 ) -> DeviceSidebarOutcome {
-    let mut out = DeviceSidebarOutcome {
-        toggled_power: false,
-        clicked_folder: false,
-        clicked_title: false,
-    };
-
     let bg = if is_selected {
         Color32::from_rgb(0x36, 0x39, 0x41)
     } else {
@@ -282,13 +281,13 @@ fn render_bitwig_device_sidebar(
             Color32::from_rgb(0xB8, 0xBC, 0xC4)
         },
     );
-    if pwr_resp.on_hover_text("Device Active / Bypass").clicked() {
-        out.toggled_power = true;
-    }
+    let toggled_power = pwr_resp.on_hover_text("Device Active / Bypass").clicked();
 
     // Folder / Preset icon (debajo del power)
     let fld_r = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 32.0), vec2(13.0, 13.0));
-    let fld_resp = ui.interact(fld_r, ui.id().with((id_salt, "fld")), Sense::click());
+    let fld_resp = ui
+        .interact(fld_r, ui.id().with((id_salt, "fld")), Sense::click())
+        .on_hover_text("Presets & Wavetable (.wav / .hdp)");
     icons::paint_icon(
         ui.painter(),
         fld_r,
@@ -303,9 +302,7 @@ fn render_bitwig_device_sidebar(
     if fld_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    if fld_resp.on_hover_text("Load Sample / Preset").clicked() {
-        out.clicked_folder = true;
-    }
+    let clicked_folder = fld_resp.clicked();
 
     // Título vertical rotado (centro)
     let title_r = Rect::from_min_max(
@@ -327,21 +324,36 @@ fn render_bitwig_device_sidebar(
         9.5,
         title_col,
     );
-    if title_resp.clicked() {
-        out.clicked_title = true;
-    }
+    let clicked_title = title_resp.clicked();
 
     // Ícono moduladores / remoto (abajo)
-    let mod_r = Rect::from_center_size(pos2(rect.center().x, rect.max.y - 12.0), vec2(12.0, 12.0));
+    let mod_r = Rect::from_center_size(pos2(rect.center().x, rect.max.y - 12.0), vec2(14.0, 14.0));
+    let mod_resp = ui
+        .interact(mod_r, ui.id().with((id_salt, "mod")), Sense::click())
+        .on_hover_text("Toggle Modulators Panel");
     icons::paint_icon(
         ui.painter(),
-        mod_r,
+        mod_r.shrink(1.0),
         icons::LINK,
-        Color32::from_rgb(0x88, 0x8E, 0x98),
+        if mod_resp.hovered() {
+            theme::ACCENT_ORANGE
+        } else {
+            Color32::from_rgb(0x88, 0x8E, 0x98)
+        },
         1.4,
     );
+    if mod_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let clicked_modulators = mod_resp.clicked();
 
-    out
+    DeviceSidebarOutcome {
+        toggled_power,
+        clicked_folder,
+        folder_resp: fld_resp,
+        clicked_title,
+        clicked_modulators,
+    }
 }
 
 fn render_dms_fx_plus_slot(
@@ -423,14 +435,15 @@ fn render_dms_fx_plus_slot(
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     let track_idx = app.safe_track_index();
     let is_project_master = track_idx == 0;
-    let (track_name, track_color, has_opendms) = app
+    let (track_name, track_color, has_opendms, has_openpoly) = app
         .current_tracks()
         .get(track_idx)
         .map(|t| {
             let dms = t.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
-            (t.name.clone(), t.color, dms)
+            let poly = t.effects.iter().any(|s| s.is_open_poly());
+            (t.name.clone(), t.color, dms, poly)
         })
-        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE, false));
+        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE, false, false));
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -510,6 +523,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
             );
             let trk_label = if has_opendms {
                 "DRUM MACHINE"
+            } else if has_openpoly {
+                "OPENPOLY"
             } else {
                 "TRACK"
             };
@@ -619,7 +634,18 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
 
                         let is_selected = app.selected_slot_index == slot_idx;
                         let card_w = match slot.name.as_str() {
-                            "OpenWavetable" => OPEN_WAVETABLE_CARD_WIDTH,
+                            "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable" => {
+                                let mods_open = slot
+                                    .open_poly
+                                    .as_ref()
+                                    .map(|p| p.modulators_open)
+                                    .unwrap_or(true);
+                                if mods_open {
+                                    OPEN_POLY_CARD_WIDTH
+                                } else {
+                                    OPEN_POLY_COMPACT_CARD_WIDTH
+                                }
+                            }
                             "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
                             "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
@@ -647,7 +673,88 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             egui::StrokeKind::Inside,
                         );
 
-                        if slot.name == "Hikaru OpenDMS" {
+                        if slot.is_open_poly() {
+                            let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let sb_out = render_bitwig_device_sidebar(
+                                ui,
+                                sb_rect,
+                                ("openpoly_sb", track_idx, slot_idx),
+                                "OPENPOLY",
+                                slot.active,
+                                is_selected,
+                            );
+                            if sb_out.toggled_power {
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        s.active = !s.active;
+                                    }
+                                }
+                            }
+                            if sb_out.clicked_title {
+                                app.selected_slot_index = slot_idx;
+                                app.matrix_state.selected_scene = None;
+                            }
+                            if sb_out.clicked_modulators {
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        let poly = s.open_poly_mut();
+                                        poly.modulators_open = !poly.modulators_open;
+                                        poly.mark_params_dirty();
+                                    }
+                                }
+                            }
+                            let preset_popup_id = ui.id().with(("openpoly_preset_popup", track_idx, slot_idx));
+                            if sb_out.clicked_folder {
+                                ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
+                            }
+                            egui::popup_below_widget(
+                                ui,
+                                preset_popup_id,
+                                &sb_out.folder_resp,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    hikaru_openpoly::open_poly_ui::render_preset_menu(
+                                        ui, app, track_idx, slot_idx,
+                                    );
+                                },
+                            );
+
+                            let body_rect = Rect::from_min_max(
+                                pos2(sb_rect.max.x + 3.0, card_rect.min.y + 4.0),
+                                pos2(card_rect.max.x - 4.0, card_rect.max.y - 4.0),
+                            );
+                            let mut body_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                            hikaru_openpoly::render_module(&mut body_ui, app, track_idx, slot_idx);
+
+                            let close_r = Rect::from_min_size(
+                                pos2(card_rect.max.x - 15.0, card_rect.min.y + 2.0),
+                                vec2(13.0, 13.0),
+                            );
+                            let close_resp = ui.interact(
+                                close_r,
+                                ui.id().with(("dsp_close", slot_idx)),
+                                Sense::click(),
+                            );
+                            icons::paint_icon(
+                                ui.painter(),
+                                close_r.shrink(2.5),
+                                icons::X_CLOSE,
+                                if close_resp.hovered() {
+                                    Color32::WHITE
+                                } else {
+                                    theme::TEXT_MUTED
+                                },
+                                1.5,
+                            );
+                            if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                slot_to_remove = Some(slot_idx);
+                            }
+                        } else if slot.name == "Hikaru OpenDMS" {
                             let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
                             let sb_out = render_bitwig_device_sidebar(
                                 ui,
@@ -841,9 +948,6 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
 
                             // Cuerpo del dispositivo DSP
                             match slot.name.as_str() {
-                                "OpenWavetable" => {
-                                    open_wavetable::render_module(&mut body_ui, app, track_idx, slot_idx);
-                                }
                                 "Sampler" | "Hikaru Sampler" => {
                                     sampler_editor::render_module(&mut body_ui, app, track_idx, slot_idx);
                                 }

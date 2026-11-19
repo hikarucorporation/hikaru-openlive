@@ -447,7 +447,7 @@ fn test_tier4_s06_device_panel_and_hdp_preset_roundtrip_persistence() {
     assert_eq!(mod_params.sync_rate, "2/1");
     assert_eq!(mod_params.sync_mode, "TempoSync");
     assert_eq!(mod_params.waveform, "SawDown");
-    assert_eq!(mod_params.target, "OpenWavetable: WT POS");
+    assert_eq!(mod_params.target, "OpenPoly: INDEX");
 
     // 4. Test HDP Single Device Preset Roundtrip
     let tmp_dir = std::env::temp_dir();

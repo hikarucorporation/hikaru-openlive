@@ -9,6 +9,7 @@ use crate::audio_proxy::GuiCommand;
 use crate::theme::*;
 use crate::views::arranger_view::{self, StripTarget};
 use crate::views::hikaru_native_plugins::hikaru_opendms::OpenDms;
+use crate::views::hikaru_native_plugins::hikaru_openpoly::HikaruOpenPoly;
 use crate::views::hikaru_native_plugins::hikaru_openwavetable::WavetableEditor;
 
 pub const BOTTOM_MIXER_TRACK_WIDTH: f32 = 85.0;
@@ -62,6 +63,7 @@ pub struct DspSlot {
     pub active: bool,
     pub is_open: bool,
     pub wavetable: WavetableEditor,
+    pub open_poly: Option<HikaruOpenPoly>,
     pub dms_state: Option<OpenDms>,
     pub sampler_state: Option<crate::views::hikaru_native_plugins::HikaruSampler>,
     pub menu_open: bool,
@@ -81,13 +83,26 @@ impl Default for DspSlot {
 }
 
 impl DspSlot {
+    pub fn is_open_poly_name(name: &str) -> bool {
+        matches!(
+            name,
+            "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable"
+        )
+    }
+
     pub fn new(id: usize, name: String) -> Self {
+        let open_poly = if Self::is_open_poly_name(&name) {
+            Some(HikaruOpenPoly::default())
+        } else {
+            None
+        };
         Self {
             id,
             name,
             active: true,
             is_open: false,
             wavetable: WavetableEditor::new(),
+            open_poly,
             dms_state: None,
             sampler_state: None,
             menu_open: false,
@@ -101,11 +116,22 @@ impl DspSlot {
         }
     }
 
+    pub fn is_open_poly(&self) -> bool {
+        Self::is_open_poly_name(&self.name)
+    }
+
+    pub fn open_poly_mut(&mut self) -> &mut HikaruOpenPoly {
+        self.open_poly.get_or_insert_with(HikaruOpenPoly::default)
+    }
+
     pub fn has_editor(&self) -> bool {
         if self.external.is_some() {
             return self.external.as_ref().is_some_and(|p| p.has_gui);
         }
-        matches!(self.name.as_str(), "OpenWavetable" | "Hikaru OpenDMS" | "Sampler" | "Hikaru Sampler")
+        matches!(
+            self.name.as_str(),
+            "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenDMS" | "Sampler" | "Hikaru Sampler"
+        )
     }
 
     pub fn is_empty_slot(&self) -> bool {

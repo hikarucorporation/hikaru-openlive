@@ -480,6 +480,7 @@ pub struct AppState {
     pub open_menu: Option<usize>,
     pub synced_wavetable_fingerprints: [Option<(u64, i8, u32)>; 16],
     pub synced_sampler_revs: [Option<(u64, u64)>; 16],
+    pub synced_open_poly_revs: [Option<(u64, u64, u32, u32, u32)>; 16],
 }
 
 impl AppState {
@@ -643,9 +644,115 @@ impl AppState {
             open_menu: None,
             synced_wavetable_fingerprints: [None; 16],
             synced_sampler_revs: [None; 16],
+            synced_open_poly_revs: [None; 16],
         };
         state.audio_proxy.send(GuiCommand::SetAppMode(false));
         state
+    }
+
+    pub fn sync_open_poly_to_engine(&mut self) {
+        let is_openstudio = self.mode == AppMode::OpenStudio;
+        let tracks = if is_openstudio {
+            &mut self.studio_tracks
+        } else {
+            &mut self.live_tracks
+        };
+
+        for (tr_idx, track) in tracks.iter_mut().enumerate() {
+            let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
+            if eng_track >= 16 {
+                continue;
+            }
+
+            let poly_slot = track
+                .effects
+                .iter_mut()
+                .find(|slot| slot.active && slot.is_open_poly());
+
+            if let Some(slot) = poly_slot {
+                let poly = slot.open_poly_mut();
+                let mut dsp_params = poly.to_dsp_params();
+
+                // Apply live external OpenModulation deltas (INDEX / WT POS, CUTOFF, VOL)
+                if let Some(m) =
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        tr_idx,
+                        "OpenPoly",
+                        "INDEX",
+                    )
+                    .or_else(|| {
+                        crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                            tr_idx,
+                            "OpenWavetable",
+                            "WT POS",
+                        )
+                    })
+                {
+                    let base = poly.base_index.unwrap_or(poly.osc_index);
+                    let eff = (base + m.delta).clamp(0.0, 1.0);
+                    dsp_params.osc_index = eff;
+                    poly.osc_index = eff;
+                }
+                if let Some(m) =
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        tr_idx,
+                        "OpenPoly",
+                        "CUTOFF",
+                    )
+                {
+                    let oct = m.delta * 4.0;
+                    dsp_params.filter_cutoff_hz =
+                        (dsp_params.filter_cutoff_hz * 2.0_f32.powf(oct)).clamp(20.0, 20000.0);
+                }
+                if let Some(m) =
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        tr_idx,
+                        "OpenPoly",
+                        "VOL",
+                    )
+                    .or_else(|| {
+                        crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                            tr_idx,
+                            "OpenWavetable",
+                            "VOL",
+                        )
+                    })
+                {
+                    dsp_params.output_gain = (dsp_params.output_gain + m.delta).clamp(0.0, 2.0);
+                }
+
+                let idx_bits = dsp_params.osc_index.to_bits();
+                let cut_bits = dsp_params.filter_cutoff_hz.to_bits();
+                let vol_bits = dsp_params.output_gain.to_bits();
+                let prev = self.synced_open_poly_revs[eng_track];
+                let prev_wt = prev.map(|p| p.0);
+                let cur_key = (poly.wavetable_rev, poly.params_rev, idx_bits, cut_bits, vol_bits);
+
+                if prev_wt != Some(poly.wavetable_rev) {
+                    self.audio_proxy.send(GuiCommand::SetTrackOpenPolyWavetable {
+                        track_idx: eng_track,
+                        samples: poly.wt_data.samples.clone(),
+                        frames: poly.wt_data.frames,
+                        frame_len: poly.wt_data.frame_len,
+                    });
+                }
+                if prev != Some(cur_key) {
+                    self.audio_proxy.send(GuiCommand::SetTrackOpenPolyParams {
+                        track_idx: eng_track,
+                        enabled: true,
+                        params: dsp_params,
+                    });
+                    self.synced_open_poly_revs[eng_track] = Some(cur_key);
+                }
+            } else if self.synced_open_poly_revs[eng_track].is_some() {
+                self.audio_proxy.send(GuiCommand::SetTrackOpenPolyParams {
+                    track_idx: eng_track,
+                    enabled: false,
+                    params: hikaru_dsp::synth::open_poly::OpenPolyDspParams::default(),
+                });
+                self.synced_open_poly_revs[eng_track] = None;
+            }
+        }
     }
 
     pub fn sync_wavetables_to_engine(&mut self) {
@@ -656,70 +763,7 @@ impl AppState {
             self.transport.sample_rate.get().max(1.0),
             is_playing,
         );
-
-        let is_openstudio = self.mode == AppMode::OpenStudio;
-        let tracks = if is_openstudio {
-            &mut self.studio_tracks
-        } else {
-            &mut self.live_tracks
-        };
-
-        for (tr_idx, track) in tracks.iter_mut().enumerate() {
-            let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
-            if eng_track >= 16 { continue; }
-
-            let open_wt_slot = track.effects.iter_mut().find(|slot| slot.active && slot.name == "OpenWavetable");
-            if let Some(slot) = open_wt_slot {
-                // If WT POS is modulated by OpenModulation, apply live modulation
-                if let Some(m) = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
-                    tr_idx,
-                    "OpenWavetable",
-                    "WT POS",
-                ) {
-                    let base = slot.wavetable.base_position.unwrap_or_else(|| slot.wavetable.position());
-                    let effective = (base + m.delta).clamp(0.0, 1.0);
-                    slot.wavetable.set_position(effective);
-                }
-
-                let pitch_offset = slot.wavetable.octave * 12 + slot.wavetable.pitch;
-                let vol_mod = crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
-                    tr_idx,
-                    "OpenWavetable",
-                    "VOL",
-                );
-                let effective_vol = if let Some(m) = vol_mod {
-                    (slot.wavetable.volume + m.delta).clamp(0.0, 2.0)
-                } else {
-                    slot.wavetable.volume
-                };
-                let vol_bits = effective_vol.to_bits();
-
-                let fp: u64 = (slot.wavetable.frame as u64)
-                    ^ (((slot.wavetable.morph * 10000.0) as u64) << 16)
-                    ^ ((slot.wavetable.table.samples.len() as u64) << 32)
-                    ^ ((slot.wavetable.smooth as u64) << 48)
-                    ^ ((slot.wavetable.table.frames as u64) << 52);
-
-                if self.synced_wavetable_fingerprints[eng_track] != Some((fp, pitch_offset, vol_bits)) {
-                    let samples = slot.wavetable.current_samples();
-                    self.audio_proxy.send(GuiCommand::SetTrackWavetable {
-                        track_idx: eng_track,
-                        samples,
-                        pitch_offset,
-                        volume: effective_vol,
-                    });
-                    self.synced_wavetable_fingerprints[eng_track] = Some((fp, pitch_offset, vol_bits));
-                }
-            } else if self.synced_wavetable_fingerprints[eng_track].is_some() {
-                self.audio_proxy.send(GuiCommand::SetTrackWavetable {
-                    track_idx: eng_track,
-                    samples: Vec::new(),
-                    pitch_offset: 0,
-                    volume: 1.0,
-                });
-                self.synced_wavetable_fingerprints[eng_track] = None;
-            }
-        }
+        self.sync_open_poly_to_engine();
     }
 
     pub fn sync_samplers_to_engine(&mut self) {
