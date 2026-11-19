@@ -223,6 +223,12 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 INST_YELLOW,
                 "Hybrid modular polyphonic synthesizer (AGPL-v3): swappable oscillators, analog filters, FEG, ADSR, Sub/Noise & LFO.",
             ),
+            "OpenGrid" => (
+                BrowserRailTab::Instruments,
+                Some(QuickInstrumentFilter::Synth),
+                INST_YELLOW,
+                "Polyphonic modular patch synthesizer (AGPL-v3): 97 grid modules across 16 categories, Bezier cables, live minimap & presets.",
+            ),
             "Sampler" => (
                 BrowserRailTab::Instruments,
                 Some(QuickInstrumentFilter::Sampler),

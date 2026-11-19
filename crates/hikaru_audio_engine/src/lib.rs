@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use hikaru_core::{AudioBuffer, SampleRate};
 use hikaru_dsp::effects::filter::StateVariableFilter;
+use hikaru_dsp::synth::open_grid::{OpenGridPatch, OpenGridVoicePool};
 use hikaru_dsp::synth::open_poly::{OpenPolyDspParams, OpenPolyVoicePool, OpenPolyWavetableData};
 use hikaru_dsp::synth::sampler::{SamplerDspParams, SamplerSampleData, SamplerVoicePool};
 use hikaru_dsp::synth::wavetable::WavetableOscillator;
@@ -1716,6 +1717,8 @@ pub struct AudioEngine<'a> {
     pub track_open_poly_enabled: [bool; 16],
     pub track_open_poly_params: [OpenPolyDspParams; 16],
     pub track_open_poly_wavetables: [Option<Arc<OpenPolyWavetableData>>; 16],
+    pub open_grid_voice_pool: OpenGridVoicePool,
+    pub track_open_grid_enabled: [bool; 16],
     /// Cadena de efectos externos (VST3/CLAP) por pista.
     ///
     /// Cada pista tiene su propia cadena: los plugins se instancian en el
@@ -1795,6 +1798,8 @@ impl<'a> AudioEngine<'a> {
             track_open_poly_enabled: [false; 16],
             track_open_poly_params: std::array::from_fn(|_| OpenPolyDspParams::default()),
             track_open_poly_wavetables: std::array::from_fn(|_| None),
+            open_grid_voice_pool: OpenGridVoicePool::new(),
+            track_open_grid_enabled: [false; 16],
             track_effects: (0..16).map(|_| Vec::new()).collect(),
             effects_sample_rate: sr.get(),
             dms_scratch_l: vec![0.0; MAX_TRACK_BUF],
@@ -2580,6 +2585,7 @@ impl<'a> AudioEngine<'a> {
         self.wavetable_voice_pool.kill_all();
         self.sampler_voice_pool.kill_all();
         self.open_poly_voice_pool.kill_all();
+        self.open_grid_voice_pool.kill_all();
         for clip in self.midi_clips.iter_mut() {
             for pitch in 0..128 {
                 if clip.active_notes[pitch] {
@@ -3156,6 +3162,7 @@ impl<'a> AudioEngine<'a> {
         self.wavetable_voice_pool.kill_track_notes(track_index);
         self.sampler_voice_pool.kill_track_notes(track_index);
         self.open_poly_voice_pool.kill_track_notes(track_index);
+        self.open_grid_voice_pool.kill_track_notes(track_index);
     }
 
     // ─── OpenDMS Polyphonic Methods ──────────────────────────────
@@ -3245,6 +3252,9 @@ impl<'a> AudioEngine<'a> {
 
     pub fn trigger_virtual_note(&mut self, track_idx: usize, pitch: u8, velocity: f32) {
         let ti = track_idx.min(15);
+        if self.track_open_grid_enabled[ti] {
+            self.open_grid_voice_pool.trigger(pitch, velocity, ti);
+        }
         if self.track_open_poly_enabled[ti] {
             let params = self.track_open_poly_params[ti];
             self.open_poly_voice_pool.trigger(pitch, velocity, ti, &params);
@@ -3301,6 +3311,7 @@ impl<'a> AudioEngine<'a> {
 
     pub fn release_virtual_note(&mut self, track_idx: usize, pitch: u8) {
         let ti = track_idx.min(15);
+        self.open_grid_voice_pool.release_note(pitch, ti);
         self.open_poly_voice_pool.release_note(pitch, ti);
         let offset = self.track_wavetable_pitch_offsets[ti];
         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
@@ -3327,6 +3338,7 @@ impl<'a> AudioEngine<'a> {
 
     pub fn kill_virtual_note(&mut self, track_idx: usize, pitch: u8) {
         let ti = track_idx.min(15);
+        self.open_grid_voice_pool.kill_note(pitch, ti);
         self.open_poly_voice_pool.kill_note(pitch, ti);
         let offset = self.track_wavetable_pitch_offsets[ti];
         let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
@@ -3441,6 +3453,26 @@ impl<'a> AudioEngine<'a> {
         self.open_poly_voice_pool.track_meter(track_idx)
     }
 
+    pub fn set_track_open_grid_patch(
+        &mut self,
+        track_idx: usize,
+        enabled: bool,
+        patch: Option<OpenGridPatch>,
+    ) {
+        let ti = track_idx.min(15);
+        self.track_open_grid_enabled[ti] = enabled && patch.is_some();
+        self.open_grid_voice_pool
+            .set_track_patch(ti, if enabled { patch.map(Arc::new) } else { None });
+    }
+
+    pub fn open_grid_meter(&self, track_idx: usize) -> (f32, f32) {
+        self.open_grid_voice_pool.track_meter(track_idx)
+    }
+
+    pub fn open_grid_scope(&self, track_idx: usize) -> Vec<f32> {
+        self.open_grid_voice_pool.track_scope(track_idx)
+    }
+
     pub fn process(&mut self, out_buffer: &mut AudioBuffer<'_>) {
         let samples = out_buffer.get_samples_mut();
         let num_channels = 2;
@@ -3493,6 +3525,8 @@ impl<'a> AudioEngine<'a> {
         let open_poly_voice_pool = &mut self.open_poly_voice_pool;
         let track_open_poly_enabled = &self.track_open_poly_enabled;
         let track_open_poly_params = &self.track_open_poly_params;
+        let open_grid_voice_pool = &mut self.open_grid_voice_pool;
+        let track_open_grid_enabled = &self.track_open_grid_enabled;
         let track_midi_events = &mut self.track_midi_events;
         let midi_clips = &mut self.midi_clips;
 
@@ -3528,6 +3562,7 @@ impl<'a> AudioEngine<'a> {
                                         wavetable_voice_pool.kill_note(eff_pitch, ti);
                                         sampler_voice_pool.kill_note(pitch as u8, ti);
                                         open_poly_voice_pool.kill_note(pitch as u8, ti);
+                                        open_grid_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -3564,6 +3599,8 @@ impl<'a> AudioEngine<'a> {
                                     };
                                     if !samples_ref.is_empty() {
                                         dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
+                                    } else if track_open_grid_enabled[ti] {
+                                        open_grid_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti);
                                     } else if track_open_poly_enabled[ti] {
                                         open_poly_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti, &track_open_poly_params[ti]);
                                     } else if let Some(table) = &track_wavetables[ti] {
@@ -3594,6 +3631,7 @@ impl<'a> AudioEngine<'a> {
                                 let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                 wavetable_voice_pool.release_note(eff_pitch, ti);
                                 open_poly_voice_pool.release_note(pitch as u8, ti);
+                                open_grid_voice_pool.release_note(pitch as u8, ti);
                                             if let Some(sample) = &track_sampler_samples[ti] {
                                                 let sp = &track_sampler_params[ti];
                                                 if sp.release_trigger {
@@ -3621,6 +3659,7 @@ impl<'a> AudioEngine<'a> {
                                     let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                     wavetable_voice_pool.kill_note(eff_pitch, ti);
                                     open_poly_voice_pool.kill_note(pitch as u8, ti);
+                                        open_grid_voice_pool.kill_note(pitch as u8, ti);
                                     clip.active_notes[pitch] = false;
                                     track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                         status: 0x80 | (ti as u8 & 0x0F),
@@ -3657,6 +3696,7 @@ impl<'a> AudioEngine<'a> {
                                         wavetable_voice_pool.kill_note(eff_pitch, ti);
                                         sampler_voice_pool.kill_note(pitch as u8, ti);
                                         open_poly_voice_pool.kill_note(pitch as u8, ti);
+                                        open_grid_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -3693,7 +3733,9 @@ impl<'a> AudioEngine<'a> {
                                         };
                                         if !samples_ref.is_empty() {
                                             dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
-                                        } else if track_open_poly_enabled[ti] {
+                                        } else if track_open_grid_enabled[ti] {
+                                        open_grid_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti);
+                                    } else if track_open_poly_enabled[ti] {
                                             open_poly_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti, &track_open_poly_params[ti]);
                                         } else if let Some(table) = &track_wavetables[ti] {
                                             let wt_adsr = WavetableAdsrParams::default();
@@ -3723,6 +3765,7 @@ impl<'a> AudioEngine<'a> {
                                     let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                     wavetable_voice_pool.release_note(eff_pitch, ti);
                                 open_poly_voice_pool.release_note(pitch as u8, ti);
+                                open_grid_voice_pool.release_note(pitch as u8, ti);
                                             if let Some(sample) = &track_sampler_samples[ti] {
                                                 let sp = &track_sampler_params[ti];
                                                 if sp.release_trigger {
@@ -3752,6 +3795,7 @@ impl<'a> AudioEngine<'a> {
                                         wavetable_voice_pool.kill_note(eff_pitch, ti);
                                         sampler_voice_pool.kill_note(pitch as u8, ti);
                                         open_poly_voice_pool.kill_note(pitch as u8, ti);
+                                        open_grid_voice_pool.kill_note(pitch as u8, ti);
                                         clip.active_notes[pitch] = false;
                                         track_midi_events[ti].push(hikaru_midi::MidiEvent {
                                             status: 0x80 | (ti as u8 & 0x0F),
@@ -3814,7 +3858,9 @@ impl<'a> AudioEngine<'a> {
                                             };
                                             if !samples_ref.is_empty() {
                                                 dms_voice_pool.trigger(samples_ref, ch, key, 1.0, 0.0, (vel as f32) / 127.0, 1.0, &adsr, ti);
-                                            } else if track_open_poly_enabled[ti] {
+                                            } else if track_open_grid_enabled[ti] {
+                                        open_grid_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti);
+                                    } else if track_open_poly_enabled[ti] {
                                                 open_poly_voice_pool.trigger(note.pitch, (vel as f32) / 127.0, ti, &track_open_poly_params[ti]);
                                             } else if let Some(table) = &track_wavetables[ti] {
                                                 let wt_adsr = WavetableAdsrParams::default();
@@ -3844,6 +3890,7 @@ impl<'a> AudioEngine<'a> {
                                         let eff_pitch = (note.pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                         wavetable_voice_pool.release_note(eff_pitch, ti);
                                 open_poly_voice_pool.release_note(pitch as u8, ti);
+                                open_grid_voice_pool.release_note(pitch as u8, ti);
                                             if let Some(sample) = &track_sampler_samples[ti] {
                                                 let sp = &track_sampler_params[ti];
                                                 if sp.release_trigger {
@@ -3874,6 +3921,7 @@ impl<'a> AudioEngine<'a> {
                                             let eff_pitch = (pitch as i32 + offset as i32).clamp(0, 127) as u8;
                                             wavetable_voice_pool.release_note(eff_pitch, ti);
                                 open_poly_voice_pool.release_note(pitch as u8, ti);
+                                open_grid_voice_pool.release_note(pitch as u8, ti);
                                             if let Some(sample) = &track_sampler_samples[ti] {
                                                 let sp = &track_sampler_params[ti];
                                                 if sp.release_trigger {
@@ -3976,6 +4024,14 @@ impl<'a> AudioEngine<'a> {
                     &dms_gain_r,
                     self.sample_rate,
                 );
+                self.open_grid_voice_pool.process_all_idle(
+                    &self.track_open_grid_enabled,
+                    &mut self.dms_scratch_l[..buf_frames],
+                    &mut self.dms_scratch_r[..buf_frames],
+                    &dms_gain_l,
+                    &dms_gain_r,
+                    self.sample_rate,
+                );
             }
             for i in 0..buf_frames {
                 samples[i * 2] += self.dms_scratch_l[i];
@@ -4064,6 +4120,16 @@ impl<'a> AudioEngine<'a> {
                         t,
                         &self.track_open_poly_params[t],
                         self.track_open_poly_wavetables[t].as_deref(),
+                        &mut self.track_output_bufs[t],
+                        track_gain_l[t],
+                        track_gain_r[t],
+                        buffer_frames as usize,
+                        self.sample_rate,
+                    );
+                }
+                if self.track_open_grid_enabled[t] {
+                    self.open_grid_voice_pool.process_track(
+                        t,
                         &mut self.track_output_bufs[t],
                         track_gain_l[t],
                         track_gain_r[t],

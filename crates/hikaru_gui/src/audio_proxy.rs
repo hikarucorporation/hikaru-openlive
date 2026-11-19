@@ -316,6 +316,11 @@ pub enum GuiCommand {
         frames: usize,
         frame_len: usize,
     },
+    SetTrackOpenGridPatch {
+        track_idx: usize,
+        enabled: bool,
+        patch: Option<hikaru_dsp::synth::open_grid::OpenGridPatch>,
+    },
     /// Carga un plugin externo (VST3/CLAP) en un slot de pista.
     /// El motor instancia el binario y lo inserta en la cadena de efectos.
     LoadExternalPlugin {

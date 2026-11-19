@@ -577,6 +577,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.set_track_open_poly_wavetable(track_idx, samples, frames, frame_len);
                     }
                 }
+                GuiCommand::SetTrackOpenGridPatch { track_idx, enabled, patch } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_track_open_grid_patch(track_idx, enabled, patch);
+                    }
+                }
                 GuiCommand::LoadExternalPlugin { track_idx, slot_idx, descriptor } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         if let Err(e) = engine.load_external_plugin(track_idx, slot_idx, &descriptor) {

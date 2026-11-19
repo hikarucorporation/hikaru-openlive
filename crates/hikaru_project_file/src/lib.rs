@@ -160,6 +160,83 @@ pub struct DspSlot {
     /// Parámetros de síntesis si el slot contiene un Hikaru OpenPoly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_poly: Option<OpenPolyParams>,
+    /// Parámetros y grafo de patch si el slot contiene un Hikaru OpenGrid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_grid: Option<OpenGridParams>,
+}
+
+/// Nodo serializado de un módulo dentro de Hikaru OpenGrid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenGridNodeData {
+    pub id: u32,
+    pub kind: String,
+    pub pos: [f32; 2],
+    pub params: [f32; 6],
+    pub bypassed: bool,
+}
+
+impl Default for OpenGridNodeData {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            kind: "Wavetable".to_string(),
+            pos: [180.0, 120.0],
+            params: [0.0; 6],
+            bypassed: false,
+        }
+    }
+}
+
+/// Cable serializado entre dos puertos dentro de Hikaru OpenGrid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenGridCableData {
+    pub from_node: u32,
+    pub from_port: usize,
+    pub to_node: u32,
+    pub to_port: usize,
+}
+
+/// Parámetros de Hikaru OpenGrid (alternativa libre AGPL-v3 a Poly Grid / The Grid)
+/// para persistencia en `.oplf`, `.opsf` y `.hdp`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenGridParams {
+    pub preset_name: String,
+    pub nodes: Vec<OpenGridNodeData>,
+    pub cables: Vec<OpenGridCableData>,
+    pub global_pitch_st: f32,
+    pub glide_ms: f32,
+    pub legato: bool,
+    pub mono_mode: bool,
+    pub output_gain: f32,
+    pub lfo_enabled: bool,
+    pub lfo_rate_hz: f32,
+    pub lfo_depth: f32,
+    pub modulators_open: bool,
+    pub pan: [f32; 2],
+    pub zoom: f32,
+}
+
+impl Default for OpenGridParams {
+    fn default() -> Self {
+        Self {
+            preset_name: "Init Poly Grid".to_string(),
+            nodes: Vec::new(),
+            cables: Vec::new(),
+            global_pitch_st: 0.0,
+            glide_ms: 0.0,
+            legato: false,
+            mono_mode: false,
+            output_gain: 0.85,
+            lfo_enabled: true,
+            lfo_rate_hz: 1.5,
+            lfo_depth: 0.5,
+            modulators_open: true,
+            pan: [0.0, 0.0],
+            zoom: 1.0,
+        }
+    }
 }
 
 /// Parámetros de síntesis de Hikaru OpenPoly (versión AGPL-v3 inspirada en Polymer)
@@ -666,6 +743,7 @@ mod tests {
                 open_modulation: None,
                 sampler: None,
                 open_poly: None,
+                open_grid: None,
             }),
             chain: None,
         };

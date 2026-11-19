@@ -481,6 +481,10 @@ pub struct AppState {
     pub synced_wavetable_fingerprints: [Option<(u64, i8, u32)>; 16],
     pub synced_sampler_revs: [Option<(u64, u64)>; 16],
     pub synced_open_poly_revs: [Option<(u64, u64, u32, u32, u32)>; 16],
+    pub synced_open_grid_revs: [Option<u64>; 16],
+    /// When `Some((track_idx, slot_idx))`, displays the full interactive Hikaru OpenGrid patch editor
+    /// in the central workspace panel above the bottom DSP Rack.
+    pub open_grid_editor: Option<(usize, usize)>,
 }
 
 impl AppState {
@@ -645,9 +649,49 @@ impl AppState {
             synced_wavetable_fingerprints: [None; 16],
             synced_sampler_revs: [None; 16],
             synced_open_poly_revs: [None; 16],
+            synced_open_grid_revs: [None; 16],
+            open_grid_editor: None,
         };
         state.audio_proxy.send(GuiCommand::SetAppMode(false));
         state
+    }
+
+    pub fn sync_open_grid_to_engine(&mut self) {
+        let is_openstudio = self.mode == AppMode::OpenStudio;
+        let tracks = if is_openstudio {
+            &mut self.studio_tracks
+        } else {
+            &mut self.live_tracks
+        };
+
+        for (tr_idx, track) in tracks.iter_mut().enumerate() {
+            let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
+            if eng_track >= 16 {
+                continue;
+            }
+            let grid_slot = track
+                .effects
+                .iter_mut()
+                .find(|slot| slot.active && slot.is_open_grid());
+            if let Some(slot) = grid_slot {
+                let grid = slot.open_grid_mut();
+                if self.synced_open_grid_revs[eng_track] != Some(grid.patch_rev) {
+                    self.audio_proxy.send(GuiCommand::SetTrackOpenGridPatch {
+                        track_idx: eng_track,
+                        enabled: true,
+                        patch: Some(grid.patch.clone()),
+                    });
+                    self.synced_open_grid_revs[eng_track] = Some(grid.patch_rev);
+                }
+            } else if self.synced_open_grid_revs[eng_track].is_some() {
+                self.audio_proxy.send(GuiCommand::SetTrackOpenGridPatch {
+                    track_idx: eng_track,
+                    enabled: false,
+                    patch: None,
+                });
+                self.synced_open_grid_revs[eng_track] = None;
+            }
+        }
     }
 
     pub fn sync_open_poly_to_engine(&mut self) {
@@ -764,6 +808,7 @@ impl AppState {
             is_playing,
         );
         self.sync_open_poly_to_engine();
+        self.sync_open_grid_to_engine();
     }
 
     pub fn sync_samplers_to_engine(&mut self) {
@@ -1590,6 +1635,7 @@ impl eframe::App for HikaruApp {
                 && !wants_keyboard_input
                 && !self.state.editing_bpm
                 && !self.state.editing_sig
+                && self.state.open_grid_editor.is_none()
             {
                 if let Some(scene_idx) = self.state.matrix_state.selected_scene {
                     self.state.remove_scene_at(scene_idx);
@@ -1828,21 +1874,30 @@ impl eframe::App for HikaruApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::DAW_CANVAS_VOID))
             .show(ctx, |ui| {
-                match self.state.mode {
-                    AppMode::OpenLive => match self.state.openlive_view {
-                        OpenLiveView::SessionMatrix => matrix::render(ui, &mut self.state),
-                        OpenLiveView::ArrangerView => arranger_view::render(ui, &mut self.state),
-                        OpenLiveView::EditView => {
-                            render_edit_or_audio(ui, &mut self.state);
-                        }
-                    },
-                    AppMode::OpenStudio => match self.state.openstudio_view {
-                        OpenStudioView::Playlist => playlist::render(ui, &mut self.state),
-                        OpenStudioView::ArrangerMixer => arranger_view::render(ui, &mut self.state),
-                        OpenStudioView::EditView => {
-                            render_edit_or_audio(ui, &mut self.state);
-                        }
-                    },
+                if let Some((grid_tr, grid_sl)) = self.state.open_grid_editor {
+                    crate::views::hikaru_native_plugins::hikaru_opengrid::render_editor_panel(
+                        ui,
+                        &mut self.state,
+                        grid_tr,
+                        grid_sl,
+                    );
+                } else {
+                    match self.state.mode {
+                        AppMode::OpenLive => match self.state.openlive_view {
+                            OpenLiveView::SessionMatrix => matrix::render(ui, &mut self.state),
+                            OpenLiveView::ArrangerView => arranger_view::render(ui, &mut self.state),
+                            OpenLiveView::EditView => {
+                                render_edit_or_audio(ui, &mut self.state);
+                            }
+                        },
+                        AppMode::OpenStudio => match self.state.openstudio_view {
+                            OpenStudioView::Playlist => playlist::render(ui, &mut self.state),
+                            OpenStudioView::ArrangerMixer => arranger_view::render(ui, &mut self.state),
+                            OpenStudioView::EditView => {
+                                render_edit_or_audio(ui, &mut self.state);
+                            }
+                        },
+                    }
                 }
             });
 

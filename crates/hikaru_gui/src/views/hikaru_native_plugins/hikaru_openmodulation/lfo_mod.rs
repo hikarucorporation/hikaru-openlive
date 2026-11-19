@@ -1164,6 +1164,7 @@ pub fn save_openmodulation_preset(state: &LfoModState) {
             open_modulation: Some(state.to_params()),
             sampler: None,
             open_poly: None,
+            open_grid: None,
         };
         let preset = hikaru_project_file::HikaruDevicePreset {
             format_version: hikaru_project_file::FORMAT_VERSION,

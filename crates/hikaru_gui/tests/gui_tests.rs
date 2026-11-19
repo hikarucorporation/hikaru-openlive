@@ -661,6 +661,123 @@ fn hikaru_openpoly_catalog_presets_roundtrip_and_audio_engine() {
 }
 
 #[test]
+fn hikaru_opengrid_rack_card_editor_presets_roundtrip_and_audio_engine() {
+    use hikaru_audio_engine::AudioEngine;
+    use hikaru_core::{AudioBuffer, SampleRate};
+    use hikaru_dsp::synth::open_grid::GridModuleKind;
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::AudioProxy;
+    use hikaru_gui::views::dsp_rack::{self, PLUGIN_CATALOG, RACK_HEIGHT};
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_opengrid;
+    use hikaru_gui::views::hikaru_native_plugins::{HikaruOpenGrid, GRID_FACTORY_PRESETS};
+    use hikaru_gui::views::mixer::{DspSlot, Track};
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    // 1. OpenGrid registered in PLUGIN_CATALOG
+    assert!(
+        PLUGIN_CATALOG
+            .iter()
+            .any(|e| e.name == "OpenGrid" && e.label == "Hikaru OpenGrid"),
+        "Hikaru OpenGrid debe estar registrado en PLUGIN_CATALOG"
+    );
+
+    // 2. Render both the compact DSP Rack minimap card AND the full OpenGrid editor panel
+    let (tx, _rx) = mpsc::channel();
+    let proxy = AudioProxy::new(tx);
+    let clock = Arc::new(AtomicU64::new(0));
+    let level = Arc::new(AtomicU32::new(0));
+    static WT: [f32; 2048] = [0.0f32; 2048];
+    let engine = AudioEngine::new(SampleRate::new(48000.0), &WT, clock.clone());
+    let mut state = AppState::new(proxy, clock, level, Some(Arc::new(Mutex::new(engine))));
+
+    let slot = DspSlot::new(0, "OpenGrid".to_string());
+    state.live_tracks[1].effects.push(slot);
+    state.selected_track_index = 1;
+    state.selected_slot_index = 0;
+    state.open_grid_editor = Some((1, 0));
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+    hikaru_gui::theme::apply_theme(&ctx);
+
+    let dock_h = RACK_HEIGHT + 6.0;
+    let raw_input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0))),
+        ..Default::default()
+    };
+    let out = ctx.run(raw_input, |ctx| {
+        egui::TopBottomPanel::bottom("bottom_dock")
+            .exact_height(dock_h)
+            .show(ctx, |ui| {
+                dsp_rack::render(ui, &mut state);
+            });
+        egui::CentralPanel::default().show(ctx, |ui| {
+            hikaru_opengrid::render_editor_panel(ui, &mut state, 1, 0);
+        });
+    });
+
+    let mut found_wavetable = false;
+    let mut found_adsr = false;
+    let mut found_audio_out = false;
+    for clipped in &out.shapes {
+        if let egui::epaint::Shape::Text(txt) = &clipped.shape {
+            let s = txt.galley.text();
+            if s == "Wavetable" {
+                found_wavetable = true;
+            }
+            if s == "ADSR" {
+                found_adsr = true;
+            }
+            if s == "Audio Out" {
+                found_audio_out = true;
+            }
+        }
+    }
+    assert!(found_wavetable, "OpenGrid editor debe dibujar el módulo inicial Wavetable");
+    assert!(found_adsr, "OpenGrid editor debe dibujar el módulo inicial ADSR");
+    assert!(found_audio_out, "OpenGrid editor debe dibujar el módulo inicial Audio Out");
+
+    // 3. Factory presets + add/connect/roundtrip persistence
+    let mut g = HikaruOpenGrid::default();
+    for fp in &GRID_FACTORY_PRESETS {
+        g.apply_factory_preset(fp.name);
+        let proj = g.to_project_params();
+        let mut restored = HikaruOpenGrid::default();
+        restored.apply_project_params(&proj);
+        assert_eq!(restored.patch.nodes.len(), g.patch.nodes.len());
+        assert_eq!(restored.patch.cables.len(), g.patch.cables.len());
+    }
+
+    let mut tr = Track::new(1, "Modular".to_string(), false);
+    let mut s = DspSlot::new(0, "OpenGrid".to_string());
+    {
+        let gm = s.open_grid_mut();
+        let flt_id = gm.add_module(GridModuleKind::LowPassMG);
+        gm.connect_cable(1, 0, flt_id, 0);
+    }
+    tr.effects.push(s);
+    let captured = hikaru_gui::project::common::capture_track(&tr);
+    assert!(captured.effects[0].open_grid.is_some());
+    let rebuilt = hikaru_gui::project::common::build_track(&captured);
+    let rg = rebuilt.effects[0].open_grid.as_ref().expect("open_grid must be restored");
+    assert_eq!(rg.patch.nodes.len(), 4);
+
+    // 4. End-to-end AudioEngine synthesis via OpenGridVoicePool
+    let clock2 = Arc::new(AtomicU64::new(0));
+    let mut eng2 = AudioEngine::new(SampleRate::new(48000.0), &WT, clock2);
+    eng2.set_track_open_grid_patch(0, true, Some(rg.patch.clone()));
+    eng2.trigger_virtual_note(0, 60, 0.9);
+    let mut samples = vec![0.0f32; 2048 * 2];
+    let mut buf = AudioBuffer::new(&mut samples);
+    eng2.process(&mut buf);
+    let peak = samples.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    assert!(peak > 0.05, "AudioEngine debe sintetizar audio audible con Hikaru OpenGrid (peak={peak})");
+    let (ml, mr) = eng2.open_grid_meter(0);
+    assert!(ml > 0.01 && mr > 0.01, "El medidor estéreo de OpenGrid debe reflejar señal activa");
+}
+
+#[test]
 fn bitwig_wgpu_sdf_shader_parses_and_validates_cleanly() {
     use hikaru_gui::ui::bitwig_wgpu::BITWIG_SDF_SHADER;
     use naga::valid::{Capabilities, ValidationFlags, Validator};

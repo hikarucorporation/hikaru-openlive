@@ -642,6 +642,7 @@ pub fn save_openpoly_preset(poly: &HikaruOpenPoly) {
             open_modulation: None,
             sampler: None,
             open_poly: Some(poly.to_project_params()),
+            open_grid: None,
         };
         let preset = hikaru_project_file::HikaruDevicePreset {
             format_version: hikaru_project_file::FORMAT_VERSION,

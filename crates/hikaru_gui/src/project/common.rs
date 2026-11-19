@@ -91,6 +91,11 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                 } else {
                     None
                 };
+                let open_grid = if e.is_open_grid() {
+                    e.open_grid.as_ref().map(|g| g.to_project_params())
+                } else {
+                    None
+                };
                 let open_modulation = if matches!(
                     e.name.as_str(),
                     "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD"
@@ -131,6 +136,7 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     open_modulation,
                     sampler,
                     open_poly,
+                    open_grid,
                 }
             })
             .collect(),
@@ -199,6 +205,13 @@ pub fn build_track(t: &Track) -> mixer::Track {
                     slot.open_poly_mut().apply_project_params(p);
                 } else if let Some(ref p) = e.open_wavetable {
                     slot.open_poly_mut().apply_legacy_wavetable_params(p);
+                }
+            }
+
+            // Reconstruir estado de Hikaru OpenGrid
+            if slot.is_open_grid() {
+                if let Some(ref p) = e.open_grid {
+                    slot.open_grid_mut().apply_project_params(p);
                 }
             }
 

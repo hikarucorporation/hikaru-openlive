@@ -9,6 +9,9 @@ use crate::ui::fonts;
 use crate::ui::icons;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
 use crate::views::hikaru_native_plugins::hikaru_openeq3;
+use crate::views::hikaru_native_plugins::hikaru_opengrid::{
+    self, OPEN_GRID_CARD_WIDTH, OPEN_GRID_COMPACT_CARD_WIDTH,
+};
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATION_CARD_WIDTH};
 use crate::views::hikaru_native_plugins::hikaru_openpoly::{
     self, OPEN_POLY_CARD_WIDTH, OPEN_POLY_COMPACT_CARD_WIDTH,
@@ -31,7 +34,7 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 7] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 8] = [
     PluginEntry {
         category: "Audio FX",
         name: "OpenEQ3",
@@ -51,6 +54,11 @@ pub const PLUGIN_CATALOG: [PluginEntry; 7] = [
         category: "Polysynth",
         name: "OpenPoly",
         label: "Hikaru OpenPoly",
+    },
+    PluginEntry {
+        category: "Modular Synth",
+        name: "OpenGrid",
+        label: "Hikaru OpenGrid",
     },
     PluginEntry {
         category: "Sampler",
@@ -435,15 +443,16 @@ fn render_dms_fx_plus_slot(
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     let track_idx = app.safe_track_index();
     let is_project_master = track_idx == 0;
-    let (track_name, track_color, has_opendms, has_openpoly) = app
+    let (track_name, track_color, has_opendms, has_openpoly, has_opengrid) = app
         .current_tracks()
         .get(track_idx)
         .map(|t| {
             let dms = t.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
             let poly = t.effects.iter().any(|s| s.is_open_poly());
-            (t.name.clone(), t.color, dms, poly)
+            let grid = t.effects.iter().any(|s| s.is_open_grid());
+            (t.name.clone(), t.color, dms, poly, grid)
         })
-        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE, false, false));
+        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE, false, false, false));
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -523,6 +532,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
             );
             let trk_label = if has_opendms {
                 "DRUM MACHINE"
+            } else if has_opengrid {
+                "OPENGRID"
             } else if has_openpoly {
                 "OPENPOLY"
             } else {
@@ -646,6 +657,18 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                     OPEN_POLY_COMPACT_CARD_WIDTH
                                 }
                             }
+                            "OpenGrid" | "Hikaru OpenGrid" | "Poly Grid" => {
+                                let mods_open = slot
+                                    .open_grid
+                                    .as_ref()
+                                    .map(|g| g.modulators_open)
+                                    .unwrap_or(true);
+                                if mods_open {
+                                    OPEN_GRID_CARD_WIDTH
+                                } else {
+                                    OPEN_GRID_COMPACT_CARD_WIDTH
+                                }
+                            }
                             "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
                             "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
                             "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
@@ -752,6 +775,88 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 1.5,
                             );
                             if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                slot_to_remove = Some(slot_idx);
+                            }
+                        } else if slot.is_open_grid() {
+                            let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let sb_out = render_bitwig_device_sidebar(
+                                ui,
+                                sb_rect,
+                                ("opengrid_sb", track_idx, slot_idx),
+                                "OPENGRID",
+                                slot.active,
+                                is_selected,
+                            );
+                            if sb_out.toggled_power {
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        s.active = !s.active;
+                                    }
+                                }
+                            }
+                            if sb_out.clicked_title {
+                                app.selected_slot_index = slot_idx;
+                                app.matrix_state.selected_scene = None;
+                            }
+                            if sb_out.clicked_modulators {
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        let g = s.open_grid_mut();
+                                        g.modulators_open = !g.modulators_open;
+                                        g.mark_dirty();
+                                    }
+                                }
+                            }
+                            let preset_popup_id = ui.id().with(("opengrid_preset_popup", track_idx, slot_idx));
+                            if sb_out.clicked_folder {
+                                ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
+                            }
+                            egui::popup_below_widget(
+                                ui,
+                                preset_popup_id,
+                                &sb_out.folder_resp,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    hikaru_opengrid::render_preset_menu(ui, app, track_idx, slot_idx);
+                                },
+                            );
+
+                            let body_rect = Rect::from_min_max(
+                                pos2(sb_rect.max.x + 3.0, card_rect.min.y + 4.0),
+                                pos2(card_rect.max.x - 4.0, card_rect.max.y - 4.0),
+                            );
+                            let mut body_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                            hikaru_opengrid::render_rack_card(&mut body_ui, app, track_idx, slot_idx);
+
+                            let close_r = Rect::from_min_size(
+                                pos2(card_rect.max.x - 15.0, card_rect.min.y + 2.0),
+                                vec2(13.0, 13.0),
+                            );
+                            let close_resp = ui.interact(
+                                close_r,
+                                ui.id().with(("dsp_close", slot_idx)),
+                                Sense::click(),
+                            );
+                            icons::paint_icon(
+                                ui.painter(),
+                                close_r.shrink(2.5),
+                                icons::X_CLOSE,
+                                if close_resp.hovered() {
+                                    Color32::WHITE
+                                } else {
+                                    theme::TEXT_MUTED
+                                },
+                                1.5,
+                            );
+                            if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                if app.open_grid_editor == Some((track_idx, slot_idx)) {
+                                    app.open_grid_editor = None;
+                                }
                                 slot_to_remove = Some(slot_idx);
                             }
                         } else if slot.name == "Hikaru OpenDMS" {

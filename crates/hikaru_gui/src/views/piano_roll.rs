@@ -366,6 +366,7 @@ pub fn track_has_instrument(track: &Track) -> bool {
     track.effects.iter().any(|slot| {
         slot.active
             && (slot.is_open_poly()
+                || slot.is_open_grid()
                 || slot.name == "Hikaru OpenDMS"
                 || matches!(slot.name.as_str(), "Sampler" | "Hikaru Sampler")
                 || slot.external.is_some())

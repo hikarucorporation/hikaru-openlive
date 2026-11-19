@@ -9,6 +9,7 @@ use crate::audio_proxy::GuiCommand;
 use crate::theme::*;
 use crate::views::arranger_view::{self, StripTarget};
 use crate::views::hikaru_native_plugins::hikaru_opendms::OpenDms;
+use crate::views::hikaru_native_plugins::hikaru_opengrid::HikaruOpenGrid;
 use crate::views::hikaru_native_plugins::hikaru_openpoly::HikaruOpenPoly;
 use crate::views::hikaru_native_plugins::hikaru_openwavetable::WavetableEditor;
 
@@ -64,6 +65,7 @@ pub struct DspSlot {
     pub is_open: bool,
     pub wavetable: WavetableEditor,
     pub open_poly: Option<HikaruOpenPoly>,
+    pub open_grid: Option<HikaruOpenGrid>,
     pub dms_state: Option<OpenDms>,
     pub sampler_state: Option<crate::views::hikaru_native_plugins::HikaruSampler>,
     pub menu_open: bool,
@@ -90,9 +92,18 @@ impl DspSlot {
         )
     }
 
+    pub fn is_open_grid_name(name: &str) -> bool {
+        matches!(name, "OpenGrid" | "Hikaru OpenGrid" | "Poly Grid")
+    }
+
     pub fn new(id: usize, name: String) -> Self {
         let open_poly = if Self::is_open_poly_name(&name) {
             Some(HikaruOpenPoly::default())
+        } else {
+            None
+        };
+        let open_grid = if Self::is_open_grid_name(&name) {
+            Some(HikaruOpenGrid::default())
         } else {
             None
         };
@@ -103,6 +114,7 @@ impl DspSlot {
             is_open: false,
             wavetable: WavetableEditor::new(),
             open_poly,
+            open_grid,
             dms_state: None,
             sampler_state: None,
             menu_open: false,
@@ -124,13 +136,29 @@ impl DspSlot {
         self.open_poly.get_or_insert_with(HikaruOpenPoly::default)
     }
 
+    pub fn is_open_grid(&self) -> bool {
+        Self::is_open_grid_name(&self.name)
+    }
+
+    pub fn open_grid_mut(&mut self) -> &mut HikaruOpenGrid {
+        self.open_grid.get_or_insert_with(HikaruOpenGrid::default)
+    }
+
     pub fn has_editor(&self) -> bool {
         if self.external.is_some() {
             return self.external.as_ref().is_some_and(|p| p.has_gui);
         }
         matches!(
             self.name.as_str(),
-            "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenDMS" | "Sampler" | "Hikaru Sampler"
+            "OpenPoly"
+                | "Hikaru OpenPoly"
+                | "OpenGrid"
+                | "Hikaru OpenGrid"
+                | "Poly Grid"
+                | "OpenWavetable"
+                | "Hikaru OpenDMS"
+                | "Sampler"
+                | "Hikaru Sampler"
         )
     }
 

@@ -37,11 +37,11 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 153,
+    "done": 251,
     "in_progress": 18,
-    "planned": 445,
+    "planned": 347,
     "bugs": 1,
-    "parity_percent": 25
+    "parity_percent": 41
   },
   "areas": [
     {
@@ -1230,7 +1230,8 @@
         {
           "id": "dv-089",
           "name": "Poly Grid",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "dv-090",
@@ -1616,32 +1617,38 @@
         {
           "id": "gd-001",
           "name": "Abs",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-002",
           "name": "AD",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-003",
           "name": "Add",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-004",
           "name": "ADSR",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-005",
           "name": "All-pass",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-006",
           "name": "Amplify",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-007",
@@ -1651,12 +1658,14 @@
         {
           "id": "gd-008",
           "name": "AND",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-009",
           "name": "AR",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-010",
@@ -1666,17 +1675,20 @@
         {
           "id": "gd-011",
           "name": "Attenuate",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-012",
           "name": "Audio In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-013",
           "name": "Audio Out",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-014",
@@ -1686,7 +1698,8 @@
         {
           "id": "gd-015",
           "name": "Average",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-016",
@@ -1696,12 +1709,14 @@
         {
           "id": "gd-017",
           "name": "Bi To Uni",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-018",
           "name": "Bias",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-019",
@@ -1711,7 +1726,8 @@
         {
           "id": "gd-020",
           "name": "Blend",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-021",
@@ -1721,7 +1737,8 @@
         {
           "id": "gd-022",
           "name": "by Semitone",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-023",
@@ -1741,7 +1758,8 @@
         {
           "id": "gd-026",
           "name": "Chance",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-027",
@@ -1751,12 +1769,14 @@
         {
           "id": "gd-028",
           "name": "Chorus+",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-029",
           "name": "Clip",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-030",
@@ -1776,7 +1796,8 @@
         {
           "id": "gd-033",
           "name": "Comb",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-034",
@@ -1786,7 +1807,8 @@
         {
           "id": "gd-035",
           "name": "Constant",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-036",
@@ -1821,27 +1843,32 @@
         {
           "id": "gd-042",
           "name": "Delay",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-043",
           "name": "Dice",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-044",
           "name": "Diode",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-045",
           "name": "Distortion",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-046",
           "name": "Divide",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-047",
@@ -1866,7 +1893,8 @@
         {
           "id": "gd-051",
           "name": "Flanger+",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-052",
@@ -1876,7 +1904,8 @@
         {
           "id": "gd-053",
           "name": "Follower",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-054",
@@ -1891,12 +1920,14 @@
         {
           "id": "gd-056",
           "name": "Gain - dB",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-057",
           "name": "Gain - Vol",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-058",
@@ -1906,7 +1937,8 @@
         {
           "id": "gd-059",
           "name": "Gate In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-060",
@@ -1936,7 +1968,8 @@
         {
           "id": "gd-065",
           "name": "Hard Clip",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-066",
@@ -1946,7 +1979,8 @@
         {
           "id": "gd-067",
           "name": "High-pass",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-068",
@@ -1971,7 +2005,8 @@
         {
           "id": "gd-072",
           "name": "Invert",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-073",
@@ -1996,7 +2031,8 @@
         {
           "id": "gd-077",
           "name": "Latch",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-078",
@@ -2021,7 +2057,8 @@
         {
           "id": "gd-082",
           "name": "LFO",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-083",
@@ -2046,17 +2083,20 @@
         {
           "id": "gd-087",
           "name": "Low-pass",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-088",
           "name": "Low-pass LD",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-089",
           "name": "Low-pass MG",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-090",
@@ -2071,32 +2111,38 @@
         {
           "id": "gd-092",
           "name": "MinMax",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-093",
           "name": "Mixer",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-094",
           "name": "Mod Delay",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-095",
           "name": "Modulator Out",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-096",
           "name": "Multiply",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-097",
           "name": "NAND",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-098",
@@ -2106,22 +2152,26 @@
         {
           "id": "gd-099",
           "name": "Noise",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-100",
           "name": "NOR",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-101",
           "name": "NOT",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-102",
           "name": "Note In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-103",
@@ -2136,22 +2186,26 @@
         {
           "id": "gd-105",
           "name": "Octaver",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-106",
           "name": "OR",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-107",
           "name": "Oscilloscope",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-108",
           "name": "Pan",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-109",
@@ -2161,7 +2215,8 @@
         {
           "id": "gd-110",
           "name": "Phase Bend",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-111",
@@ -2176,7 +2231,8 @@
         {
           "id": "gd-113",
           "name": "Phase In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-114",
@@ -2191,7 +2247,8 @@
         {
           "id": "gd-116",
           "name": "Phase Pinch",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-117",
@@ -2206,7 +2263,8 @@
         {
           "id": "gd-119",
           "name": "Phase Reverse",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-120",
@@ -2221,7 +2279,8 @@
         {
           "id": "gd-122",
           "name": "Phase Shift",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-123",
@@ -2266,7 +2325,8 @@
         {
           "id": "gd-131",
           "name": "Phase-1",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-132",
@@ -2276,7 +2336,8 @@
         {
           "id": "gd-133",
           "name": "Phasor",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-134",
@@ -2286,7 +2347,8 @@
         {
           "id": "gd-135",
           "name": "Pitch",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-136",
@@ -2296,12 +2358,14 @@
         {
           "id": "gd-137",
           "name": "Pitch In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-138",
           "name": "Pitch Quantize",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-139",
@@ -2321,7 +2385,8 @@
         {
           "id": "gd-142",
           "name": "Pitches",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-143",
@@ -2341,7 +2406,8 @@
         {
           "id": "gd-146",
           "name": "Pressure In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-147",
@@ -2351,12 +2417,14 @@
         {
           "id": "gd-148",
           "name": "Product",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-149",
           "name": "Pulse",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-150",
@@ -2371,7 +2439,8 @@
         {
           "id": "gd-152",
           "name": "Quantizer",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-153",
@@ -2396,7 +2465,8 @@
         {
           "id": "gd-157",
           "name": "Rectifier",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-158",
@@ -2411,17 +2481,20 @@
         {
           "id": "gd-160",
           "name": "Round",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-161",
           "name": "Sallen-Key",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-162",
           "name": "Sample / Hold",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-163",
@@ -2431,12 +2504,14 @@
         {
           "id": "gd-164",
           "name": "Saturator",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-165",
           "name": "Sawtooth",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-166",
@@ -2466,7 +2541,8 @@
         {
           "id": "gd-171",
           "name": "Sine",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-172",
@@ -2501,12 +2577,14 @@
         {
           "id": "gd-178",
           "name": "S/H LFO",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-179",
           "name": "Steps",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-180",
@@ -2516,37 +2594,44 @@
         {
           "id": "gd-181",
           "name": "Stereo Split",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-182",
           "name": "Stereo Width",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-183",
           "name": "Sub",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-184",
           "name": "Subtract",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-185",
           "name": "Sum",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-186",
           "name": "SVF",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-187",
           "name": "Swarm",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-188",
@@ -2586,12 +2671,14 @@
         {
           "id": "gd-195",
           "name": "Transpose",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-196",
           "name": "Triangle",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-197",
@@ -2601,12 +2688,14 @@
         {
           "id": "gd-198",
           "name": "Triggers",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-199",
           "name": "Uni To Bi",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-200",
@@ -2616,12 +2705,14 @@
         {
           "id": "gd-201",
           "name": "Value",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-202",
           "name": "Value Readout",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-203",
@@ -2636,7 +2727,8 @@
         {
           "id": "gd-205",
           "name": "Velocity In",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-206",
@@ -2661,22 +2753,26 @@
         {
           "id": "gd-210",
           "name": "VU Meter",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-211",
           "name": "Wavefolder",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-212",
           "name": "Wavetable",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-213",
           "name": "Wavetable LFO",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-214",
@@ -2686,12 +2782,14 @@
         {
           "id": "gd-215",
           "name": "XOR",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-216",
           "name": "XP",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs"
         },
         {
           "id": "gd-217",
