@@ -488,69 +488,58 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 // 1. Cápsula independiente [FILE ◢]
                 let file_popup_id = ui.make_persistent_id("bw_file_popup");
-                let file_resp = capsule_text_button(
-                    ui,
-                    vec2(38.0, CAPSULE_H),
-                    "FILE",
-                    11.0,
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Standalone,
-                    true,
-                );
+                let file_menu_open = crate::ui::file_menu::is_open(ui.ctx(), file_popup_id);
+                let file_resp = if file_menu_open {
+                    let (rect, response) = ui.allocate_exact_size(vec2(38.0, CAPSULE_H), Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let mut flags = crate::ui::bitwig_wgpu::FLAG_CORNER_NOTCH;
+                        if response.hovered() {
+                            flags |= FLAG_HOVERED;
+                        }
+                        paint_capsule(
+                            ui.painter(),
+                            rect,
+                            3.0,
+                            Color32::from_rgb(44, 45, 49),
+                            BW_ACCENT_ORANGE,
+                            flags,
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "FILE",
+                            fonts::semibold(11.0),
+                            BW_ACCENT_ORANGE,
+                        );
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    response
+                } else {
+                    capsule_text_button(
+                        ui,
+                        vec2(38.0, CAPSULE_H),
+                        "FILE",
+                        11.0,
+                        false,
+                        BW_ACCENT_ORANGE,
+                        JoinSide::Standalone,
+                        true,
+                    )
+                };
                 if file_resp.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(file_popup_id));
+                    crate::ui::file_menu::toggle(
+                        ui.ctx(),
+                        file_popup_id,
+                        pos2(file_resp.rect.min.x, file_resp.rect.max.y + 2.0),
+                    );
                 }
-                egui::popup_below_widget(
-                    ui,
-                    file_popup_id,
-                    &file_resp,
-                    PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(170.0);
-                        if ui.button("New Project").clicked() {
-                            project::reset(state);
-                            state.project_path = None;
-                            state.project_dirty = false;
-                            ui.close_menu();
-                        }
-                        if ui.button("Open Project...").clicked() {
-                            let cur = state.project_path.clone();
-                            if let Some(p) = project::ask_open_path(cur.as_deref()) {
-                                if project::load(state, &p).is_ok() {
-                                    state.project_path = Some(p);
-                                    state.project_dirty = false;
-                                }
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Save Project").clicked() {
-                            save_project_action(state);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Audio Engine Settings...").clicked() {
-                            state.audio_settings_state.is_open = true;
-                            ui.close_menu();
-                        }
-                        if ui.button("VST3 / CLAP Plugins...").clicked() {
-                            state.plugin_settings_state.is_open = true;
-                            ui.close_menu();
-                        }
-                        if ui.button("MCP Server Settings...").clicked() {
-                            state.mcp_port_settings_state.open();
-                            ui.close_menu();
-                        }
-                        if ui.button("About Hikaru OpenLive").clicked() {
-                            state.show_about = true;
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Exit").clicked() {
-                            std::process::exit(0);
-                        }
-                    },
-                );
+                if let Some(action) =
+                    crate::ui::file_menu::show(ui.ctx(), file_popup_id, file_resp.rect)
+                {
+                    crate::ui::file_menu::execute_action(ui.ctx(), state, action);
+                }
 
                 ui.add_space(5.0);
 

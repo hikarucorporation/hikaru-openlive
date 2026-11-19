@@ -4,6 +4,7 @@
 pub mod arranger_context_menu;
 pub mod bitwig_kit;
 pub mod bitwig_wgpu;
+pub mod file_menu;
 pub mod fonts;
 pub mod icons;
 pub mod meters;

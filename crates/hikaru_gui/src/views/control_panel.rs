@@ -126,7 +126,10 @@ fn discover_workspace_projects() -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if ext == project::OPENLIVE_EXTENSION || ext == project::OPENSTUDIO_EXTENSION {
+                if ext == project::OPENLIVE_EXTENSION
+                    || ext == project::OPENSTUDIO_EXTENSION
+                    || ext.eq_ignore_ascii_case(project::DAWPROJECT_EXTENSION)
+                {
                     found.push(path);
                 }
             }

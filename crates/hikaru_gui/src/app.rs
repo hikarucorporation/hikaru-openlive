@@ -1482,6 +1482,7 @@ impl eframe::App for HikaruApp {
         self.sync_frame(ctx);
 
         // Global Keyboard shortcuts
+        let mut pending_file_action: Option<crate::ui::file_menu::FileMenuAction> = None;
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Space) {
                 self.state.toggle_play();
@@ -1510,6 +1511,26 @@ impl eframe::App for HikaruApp {
                 }
             }
             let cmd = i.modifiers.ctrl || i.modifiers.command;
+            if cmd && !ctx.wants_keyboard_input() {
+                use crate::ui::file_menu::FileMenuAction;
+                if i.modifiers.shift && i.key_pressed(egui::Key::S) {
+                    pending_file_action = Some(FileMenuAction::SaveAs);
+                } else if i.modifiers.shift && i.key_pressed(egui::Key::B) {
+                    pending_file_action = Some(FileMenuAction::ExportAudio);
+                } else if !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::N) {
+                    pending_file_action = Some(FileMenuAction::NewProject);
+                } else if !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::O) {
+                    pending_file_action = Some(FileMenuAction::Open);
+                } else if !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::S) {
+                    pending_file_action = Some(FileMenuAction::Save);
+                } else if !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::W) {
+                    pending_file_action = Some(FileMenuAction::Close);
+                } else if !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::Comma) {
+                    pending_file_action = Some(FileMenuAction::Settings);
+                } else if !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::Q) {
+                    pending_file_action = Some(FileMenuAction::Quit);
+                }
+            }
             if cmd
                 && i.modifiers.alt
                 && !ctx.wants_keyboard_input()
@@ -1548,6 +1569,9 @@ impl eframe::App for HikaruApp {
                 }
             }
         });
+        if let Some(action) = pending_file_action {
+            crate::ui::file_menu::execute_action(ctx, &mut self.state, action);
+        }
 
         // 1. TOP PANEL: Unified Bitwig 5.1.7 Transport & Application Header
         egui::TopBottomPanel::top("top_panel")

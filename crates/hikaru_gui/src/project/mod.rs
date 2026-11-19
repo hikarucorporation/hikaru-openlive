@@ -67,6 +67,7 @@ use std::path::{Path, PathBuf};
 use crate::app::{AppMode, AppState};
 
 pub mod common;
+pub mod dawproject;
 pub mod openlive;
 pub mod openstudio;
 
@@ -81,6 +82,9 @@ pub const OPENLIVE_EXTENSION: &str = hikaru_openlive_file::EXTENSION;
 
 /// Extensión del formato OpenStudio (timeline lineal, arreglos).
 pub const OPENSTUDIO_EXTENSION: &str = hikaru_openstudio_file::EXTENSION;
+
+/// Extensión del formato abierto DAWproject (intercambio multi-DAW).
+pub const DAWPROJECT_EXTENSION: &str = dawproject::EXTENSION;
 
 /// Etiqueta del filtro `rfd` de OpenLive.
 ///
@@ -191,10 +195,17 @@ pub fn save_as(state: &AppState, mode: AppMode, path: &Path) -> Result<PathBuf, 
 
 /// Lee un proyecto y lo aplica sobre el estado vivo.
 ///
-/// El formato se saca de la EXTENSIÓN del archivo, así que se puede abrir un
-/// `.opsf` estando en Modo OpenLive: la app cambia sola al modo que corresponde
-/// al contenido (ver [`openlive::apply`] / [`openstudio::apply`]).
+/// Soporta `.oplf` (OpenLive), `.opsf` (OpenStudio) y `.dawproject` (formato
+/// abierto de intercambio).
 pub fn load(state: &mut AppState, path: &Path) -> Result<(), ProjectError> {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(DAWPROJECT_EXTENSION))
+    {
+        return dawproject::load(state, path);
+    }
+
     let base_dir = path.parent().map(|p| p.to_path_buf());
     match format_of(path) {
         Some(AppMode::OpenLive) => {
@@ -274,13 +285,17 @@ pub fn ask_save_path(mode: AppMode, current: Option<&Path>) -> Option<PathBuf> {
 
 /// Diálogo "abrir". `None` si el usuario cancela.
 ///
-/// Ofrece LOS DOS formatos: un `.oplf` y un `.opsf` son ambos proyectos
-/// válidos, y sólo el contenido del archivo dice cuál es cuál.
+/// Ofrece proyectos nativos (`.oplf`, `.opsf`) y archivos abiertos `.dawproject`.
 pub fn ask_open_path(current: Option<&Path>) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title("Abrir proyecto Hikaru")
+        .add_filter(
+            "Proyectos Hikaru / DAWproject (*.oplf, *.opsf, *.dawproject)",
+            &[OPENLIVE_EXTENSION, OPENSTUDIO_EXTENSION, DAWPROJECT_EXTENSION],
+        )
         .add_filter(OPENLIVE_FILTER, OPENLIVE_EXTS)
-        .add_filter(OPENSTUDIO_FILTER, OPENSTUDIO_EXTS);
+        .add_filter(OPENSTUDIO_FILTER, OPENSTUDIO_EXTS)
+        .add_filter(dawproject::FILE_FILTER, &[DAWPROJECT_EXTENSION]);
     if let Some(current) = current.and_then(|p| p.parent()) {
         dialog = dialog.set_directory(current);
     }

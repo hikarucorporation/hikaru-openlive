@@ -44,6 +44,8 @@ hikaru_openstudio_file = { path = "../hikaru_openstudio_file" }
 # Los tests de round-trip necesitan leer el JSON crudo para verificar la PUREZA
 # formato (que no se colen campos del otro modo).
 serde_json = "1"
+flate2 = "1.1"
+quick-xml = "0.41"
 raw-window-handle = "0.6.2"
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 
