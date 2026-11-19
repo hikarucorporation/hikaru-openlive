@@ -145,9 +145,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
 | Build & Platform | 16 | 10 | 2 | 4 | 1 |
-| **Total** | **398** | **153** | **18** | **227** | **1** |
+| **Total** | **616** | **153** | **18** | **445** | **1** |
 
-Paridad global: **153 / 398 = 38 %**.
+Paridad global: **153 / 616 = 25 %**.
 
 ### Bugs abiertos
 

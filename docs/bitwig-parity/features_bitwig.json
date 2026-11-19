@@ -35,13 +35,13 @@
     ]
   },
   "summary": {
-    "areas": 12,
-    "features": 398,
+    "areas": 13,
+    "features": 616,
     "done": 153,
     "in_progress": 18,
-    "planned": 227,
+    "planned": 445,
     "bugs": 1,
-    "parity_percent": 38
+    "parity_percent": 25
   },
   "areas": [
     {
@@ -1603,6 +1603,1104 @@
         {
           "id": "md-043",
           "name": "XY",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "grid-devices",
+      "name": "Grid Devices",
+      "bitwig_reference": "218 native Grid modules (.bwmodule) from Bitwig Studio 5.1.7 (Poly Grid / FX Grid / Note Grid).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "gd-001",
+          "name": "Abs",
+          "status": "planned"
+        },
+        {
+          "id": "gd-002",
+          "name": "AD",
+          "status": "planned"
+        },
+        {
+          "id": "gd-003",
+          "name": "Add",
+          "status": "planned"
+        },
+        {
+          "id": "gd-004",
+          "name": "ADSR",
+          "status": "planned"
+        },
+        {
+          "id": "gd-005",
+          "name": "All-pass",
+          "status": "planned"
+        },
+        {
+          "id": "gd-006",
+          "name": "Amplify",
+          "status": "planned"
+        },
+        {
+          "id": "gd-007",
+          "name": "AM/RM",
+          "status": "planned"
+        },
+        {
+          "id": "gd-008",
+          "name": "AND",
+          "status": "planned"
+        },
+        {
+          "id": "gd-009",
+          "name": "AR",
+          "status": "planned"
+        },
+        {
+          "id": "gd-010",
+          "name": "Array",
+          "status": "planned"
+        },
+        {
+          "id": "gd-011",
+          "name": "Attenuate",
+          "status": "planned"
+        },
+        {
+          "id": "gd-012",
+          "name": "Audio In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-013",
+          "name": "Audio Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-014",
+          "name": "Audio Sidechain",
+          "status": "planned"
+        },
+        {
+          "id": "gd-015",
+          "name": "Average",
+          "status": "planned"
+        },
+        {
+          "id": "gd-016",
+          "name": "Bend",
+          "status": "planned"
+        },
+        {
+          "id": "gd-017",
+          "name": "Bi To Uni",
+          "status": "planned"
+        },
+        {
+          "id": "gd-018",
+          "name": "Bias",
+          "status": "planned"
+        },
+        {
+          "id": "gd-019",
+          "name": "Bite",
+          "status": "planned"
+        },
+        {
+          "id": "gd-020",
+          "name": "Blend",
+          "status": "planned"
+        },
+        {
+          "id": "gd-021",
+          "name": "Button",
+          "status": "planned"
+        },
+        {
+          "id": "gd-022",
+          "name": "by Semitone",
+          "status": "planned"
+        },
+        {
+          "id": "gd-023",
+          "name": "CC In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-024",
+          "name": "CC Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-025",
+          "name": "Ceil",
+          "status": "planned"
+        },
+        {
+          "id": "gd-026",
+          "name": "Chance",
+          "status": "planned"
+        },
+        {
+          "id": "gd-027",
+          "name": "Chebyshev",
+          "status": "planned"
+        },
+        {
+          "id": "gd-028",
+          "name": "Chorus+",
+          "status": "planned"
+        },
+        {
+          "id": "gd-029",
+          "name": "Clip",
+          "status": "planned"
+        },
+        {
+          "id": "gd-030",
+          "name": "Clock",
+          "status": "planned"
+        },
+        {
+          "id": "gd-031",
+          "name": "Clock Divide",
+          "status": "planned"
+        },
+        {
+          "id": "gd-032",
+          "name": "Clock Quantize",
+          "status": "planned"
+        },
+        {
+          "id": "gd-033",
+          "name": "Comb",
+          "status": "planned"
+        },
+        {
+          "id": "gd-034",
+          "name": "Comment",
+          "status": "planned"
+        },
+        {
+          "id": "gd-035",
+          "name": "Constant",
+          "status": "planned"
+        },
+        {
+          "id": "gd-036",
+          "name": "Curve",
+          "status": "planned"
+        },
+        {
+          "id": "gd-037",
+          "name": "Curves",
+          "status": "planned"
+        },
+        {
+          "id": "gd-038",
+          "name": "CV In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-039",
+          "name": "CV Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-040",
+          "name": "CV Pitch Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-041",
+          "name": "dB To Lin",
+          "status": "planned"
+        },
+        {
+          "id": "gd-042",
+          "name": "Delay",
+          "status": "planned"
+        },
+        {
+          "id": "gd-043",
+          "name": "Dice",
+          "status": "planned"
+        },
+        {
+          "id": "gd-044",
+          "name": "Diode",
+          "status": "planned"
+        },
+        {
+          "id": "gd-045",
+          "name": "Distortion",
+          "status": "planned"
+        },
+        {
+          "id": "gd-046",
+          "name": "Divide",
+          "status": "planned"
+        },
+        {
+          "id": "gd-047",
+          "name": "=",
+          "status": "planned"
+        },
+        {
+          "id": "gd-048",
+          "name": "Exp",
+          "status": "planned"
+        },
+        {
+          "id": "gd-049",
+          "name": "Exponents",
+          "status": "planned"
+        },
+        {
+          "id": "gd-050",
+          "name": "Fizz",
+          "status": "planned"
+        },
+        {
+          "id": "gd-051",
+          "name": "Flanger+",
+          "status": "planned"
+        },
+        {
+          "id": "gd-052",
+          "name": "Floor",
+          "status": "planned"
+        },
+        {
+          "id": "gd-053",
+          "name": "Follower",
+          "status": "planned"
+        },
+        {
+          "id": "gd-054",
+          "name": "Follower RF",
+          "status": "planned"
+        },
+        {
+          "id": "gd-055",
+          "name": "Freq To Pitch",
+          "status": "planned"
+        },
+        {
+          "id": "gd-056",
+          "name": "Gain - dB",
+          "status": "planned"
+        },
+        {
+          "id": "gd-057",
+          "name": "Gain - Vol",
+          "status": "planned"
+        },
+        {
+          "id": "gd-058",
+          "name": "Gain In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-059",
+          "name": "Gate In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-060",
+          "name": "Gate Length",
+          "status": "planned"
+        },
+        {
+          "id": "gd-061",
+          "name": "Gate Repeat",
+          "status": "planned"
+        },
+        {
+          "id": "gd-062",
+          "name": "Gates",
+          "status": "planned"
+        },
+        {
+          "id": "gd-063",
+          "name": "≥",
+          "status": "planned"
+        },
+        {
+          "id": "gd-064",
+          "name": ">",
+          "status": "planned"
+        },
+        {
+          "id": "gd-065",
+          "name": "Hard Clip",
+          "status": "planned"
+        },
+        {
+          "id": "gd-066",
+          "name": "Heat",
+          "status": "planned"
+        },
+        {
+          "id": "gd-067",
+          "name": "High-pass",
+          "status": "planned"
+        },
+        {
+          "id": "gd-068",
+          "name": "Hold",
+          "status": "planned"
+        },
+        {
+          "id": "gd-069",
+          "name": "Howl",
+          "status": "planned"
+        },
+        {
+          "id": "gd-070",
+          "name": "HW In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-071",
+          "name": "HW Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-072",
+          "name": "Invert",
+          "status": "planned"
+        },
+        {
+          "id": "gd-073",
+          "name": "Key On",
+          "status": "planned"
+        },
+        {
+          "id": "gd-074",
+          "name": "Keys Held",
+          "status": "planned"
+        },
+        {
+          "id": "gd-075",
+          "name": "Label",
+          "status": "planned"
+        },
+        {
+          "id": "gd-076",
+          "name": "Lag",
+          "status": "planned"
+        },
+        {
+          "id": "gd-077",
+          "name": "Latch",
+          "status": "planned"
+        },
+        {
+          "id": "gd-078",
+          "name": "≤",
+          "status": "planned"
+        },
+        {
+          "id": "gd-079",
+          "name": "<",
+          "status": "planned"
+        },
+        {
+          "id": "gd-080",
+          "name": "Level",
+          "status": "planned"
+        },
+        {
+          "id": "gd-081",
+          "name": "Level Scaler",
+          "status": "planned"
+        },
+        {
+          "id": "gd-082",
+          "name": "LFO",
+          "status": "planned"
+        },
+        {
+          "id": "gd-083",
+          "name": "Lin To dB",
+          "status": "planned"
+        },
+        {
+          "id": "gd-084",
+          "name": "Log",
+          "status": "planned"
+        },
+        {
+          "id": "gd-085",
+          "name": "Logic Delay",
+          "status": "planned"
+        },
+        {
+          "id": "gd-086",
+          "name": "Long Delay",
+          "status": "planned"
+        },
+        {
+          "id": "gd-087",
+          "name": "Low-pass",
+          "status": "planned"
+        },
+        {
+          "id": "gd-088",
+          "name": "Low-pass LD",
+          "status": "planned"
+        },
+        {
+          "id": "gd-089",
+          "name": "Low-pass MG",
+          "status": "planned"
+        },
+        {
+          "id": "gd-090",
+          "name": "LR Gain",
+          "status": "planned"
+        },
+        {
+          "id": "gd-091",
+          "name": "Merge",
+          "status": "planned"
+        },
+        {
+          "id": "gd-092",
+          "name": "MinMax",
+          "status": "planned"
+        },
+        {
+          "id": "gd-093",
+          "name": "Mixer",
+          "status": "planned"
+        },
+        {
+          "id": "gd-094",
+          "name": "Mod Delay",
+          "status": "planned"
+        },
+        {
+          "id": "gd-095",
+          "name": "Modulator Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-096",
+          "name": "Multiply",
+          "status": "planned"
+        },
+        {
+          "id": "gd-097",
+          "name": "NAND",
+          "status": "planned"
+        },
+        {
+          "id": "gd-098",
+          "name": "N-Latch",
+          "status": "planned"
+        },
+        {
+          "id": "gd-099",
+          "name": "Noise",
+          "status": "planned"
+        },
+        {
+          "id": "gd-100",
+          "name": "NOR",
+          "status": "planned"
+        },
+        {
+          "id": "gd-101",
+          "name": "NOT",
+          "status": "planned"
+        },
+        {
+          "id": "gd-102",
+          "name": "Note In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-103",
+          "name": "Note Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-104",
+          "name": "≠",
+          "status": "planned"
+        },
+        {
+          "id": "gd-105",
+          "name": "Octaver",
+          "status": "planned"
+        },
+        {
+          "id": "gd-106",
+          "name": "OR",
+          "status": "planned"
+        },
+        {
+          "id": "gd-107",
+          "name": "Oscilloscope",
+          "status": "planned"
+        },
+        {
+          "id": "gd-108",
+          "name": "Pan",
+          "status": "planned"
+        },
+        {
+          "id": "gd-109",
+          "name": "Pan In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-110",
+          "name": "Phase Bend",
+          "status": "planned"
+        },
+        {
+          "id": "gd-111",
+          "name": "Phase Counter",
+          "status": "planned"
+        },
+        {
+          "id": "gd-112",
+          "name": "Phase Formant",
+          "status": "planned"
+        },
+        {
+          "id": "gd-113",
+          "name": "Phase In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-114",
+          "name": "Phase Lag",
+          "status": "planned"
+        },
+        {
+          "id": "gd-115",
+          "name": "Phase Mirror",
+          "status": "planned"
+        },
+        {
+          "id": "gd-116",
+          "name": "Phase Pinch",
+          "status": "planned"
+        },
+        {
+          "id": "gd-117",
+          "name": "Phase Pulse",
+          "status": "planned"
+        },
+        {
+          "id": "gd-118",
+          "name": "Phase Reset",
+          "status": "planned"
+        },
+        {
+          "id": "gd-119",
+          "name": "Phase Reverse",
+          "status": "planned"
+        },
+        {
+          "id": "gd-120",
+          "name": "Phase Saw",
+          "status": "planned"
+        },
+        {
+          "id": "gd-121",
+          "name": "Phase Scaler",
+          "status": "planned"
+        },
+        {
+          "id": "gd-122",
+          "name": "Phase Shift",
+          "status": "planned"
+        },
+        {
+          "id": "gd-123",
+          "name": "Phase Sine",
+          "status": "planned"
+        },
+        {
+          "id": "gd-124",
+          "name": "Phase Sinemod",
+          "status": "planned"
+        },
+        {
+          "id": "gd-125",
+          "name": "Phase Skew",
+          "status": "planned"
+        },
+        {
+          "id": "gd-126",
+          "name": "Phase Split",
+          "status": "planned"
+        },
+        {
+          "id": "gd-127",
+          "name": "Phase Sync",
+          "status": "planned"
+        },
+        {
+          "id": "gd-128",
+          "name": "Phase Triangle",
+          "status": "planned"
+        },
+        {
+          "id": "gd-129",
+          "name": "Phase Window",
+          "status": "planned"
+        },
+        {
+          "id": "gd-130",
+          "name": "Phase Wrap",
+          "status": "planned"
+        },
+        {
+          "id": "gd-131",
+          "name": "Phase-1",
+          "status": "planned"
+        },
+        {
+          "id": "gd-132",
+          "name": "Phaser+",
+          "status": "planned"
+        },
+        {
+          "id": "gd-133",
+          "name": "Phasor",
+          "status": "planned"
+        },
+        {
+          "id": "gd-134",
+          "name": "Pinch",
+          "status": "planned"
+        },
+        {
+          "id": "gd-135",
+          "name": "Pitch",
+          "status": "planned"
+        },
+        {
+          "id": "gd-136",
+          "name": "Pitch Buss",
+          "status": "planned"
+        },
+        {
+          "id": "gd-137",
+          "name": "Pitch In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-138",
+          "name": "Pitch Quantize",
+          "status": "planned"
+        },
+        {
+          "id": "gd-139",
+          "name": "Pitch Scaler",
+          "status": "planned"
+        },
+        {
+          "id": "gd-140",
+          "name": "Pitch To Freq",
+          "status": "planned"
+        },
+        {
+          "id": "gd-141",
+          "name": "Pitch To Phase",
+          "status": "planned"
+        },
+        {
+          "id": "gd-142",
+          "name": "Pitches",
+          "status": "planned"
+        },
+        {
+          "id": "gd-143",
+          "name": "Pluck",
+          "status": "planned"
+        },
+        {
+          "id": "gd-144",
+          "name": "Poly To Mono",
+          "status": "planned"
+        },
+        {
+          "id": "gd-145",
+          "name": "Power",
+          "status": "planned"
+        },
+        {
+          "id": "gd-146",
+          "name": "Pressure In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-147",
+          "name": "Probabilities",
+          "status": "planned"
+        },
+        {
+          "id": "gd-148",
+          "name": "Product",
+          "status": "planned"
+        },
+        {
+          "id": "gd-149",
+          "name": "Pulse",
+          "status": "planned"
+        },
+        {
+          "id": "gd-150",
+          "name": "Push",
+          "status": "planned"
+        },
+        {
+          "id": "gd-151",
+          "name": "Quantize",
+          "status": "planned"
+        },
+        {
+          "id": "gd-152",
+          "name": "Quantizer",
+          "status": "planned"
+        },
+        {
+          "id": "gd-153",
+          "name": "Rasp",
+          "status": "planned"
+        },
+        {
+          "id": "gd-154",
+          "name": "Ratio",
+          "status": "planned"
+        },
+        {
+          "id": "gd-155",
+          "name": "Reciprocal",
+          "status": "planned"
+        },
+        {
+          "id": "gd-156",
+          "name": "Recorder",
+          "status": "planned"
+        },
+        {
+          "id": "gd-157",
+          "name": "Rectifier",
+          "status": "planned"
+        },
+        {
+          "id": "gd-158",
+          "name": "Ripple",
+          "status": "planned"
+        },
+        {
+          "id": "gd-159",
+          "name": "Roots",
+          "status": "planned"
+        },
+        {
+          "id": "gd-160",
+          "name": "Round",
+          "status": "planned"
+        },
+        {
+          "id": "gd-161",
+          "name": "Sallen-Key",
+          "status": "planned"
+        },
+        {
+          "id": "gd-162",
+          "name": "Sample / Hold",
+          "status": "planned"
+        },
+        {
+          "id": "gd-163",
+          "name": "Sampler",
+          "status": "planned"
+        },
+        {
+          "id": "gd-164",
+          "name": "Saturator",
+          "status": "planned"
+        },
+        {
+          "id": "gd-165",
+          "name": "Sawtooth",
+          "status": "planned"
+        },
+        {
+          "id": "gd-166",
+          "name": "Scrawl",
+          "status": "planned"
+        },
+        {
+          "id": "gd-167",
+          "name": "Segments",
+          "status": "planned"
+        },
+        {
+          "id": "gd-168",
+          "name": "Select In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-169",
+          "name": "Select Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-170",
+          "name": "Shred",
+          "status": "planned"
+        },
+        {
+          "id": "gd-171",
+          "name": "Sine",
+          "status": "planned"
+        },
+        {
+          "id": "gd-172",
+          "name": "Slope ↗",
+          "status": "planned"
+        },
+        {
+          "id": "gd-173",
+          "name": "Slope ↘",
+          "status": "planned"
+        },
+        {
+          "id": "gd-174",
+          "name": "Slopes",
+          "status": "planned"
+        },
+        {
+          "id": "gd-175",
+          "name": "Soar",
+          "status": "planned"
+        },
+        {
+          "id": "gd-176",
+          "name": "Spectrum",
+          "status": "planned"
+        },
+        {
+          "id": "gd-177",
+          "name": "Split",
+          "status": "planned"
+        },
+        {
+          "id": "gd-178",
+          "name": "S/H LFO",
+          "status": "planned"
+        },
+        {
+          "id": "gd-179",
+          "name": "Steps",
+          "status": "planned"
+        },
+        {
+          "id": "gd-180",
+          "name": "Stereo Merge",
+          "status": "planned"
+        },
+        {
+          "id": "gd-181",
+          "name": "Stereo Split",
+          "status": "planned"
+        },
+        {
+          "id": "gd-182",
+          "name": "Stereo Width",
+          "status": "planned"
+        },
+        {
+          "id": "gd-183",
+          "name": "Sub",
+          "status": "planned"
+        },
+        {
+          "id": "gd-184",
+          "name": "Subtract",
+          "status": "planned"
+        },
+        {
+          "id": "gd-185",
+          "name": "Sum",
+          "status": "planned"
+        },
+        {
+          "id": "gd-186",
+          "name": "SVF",
+          "status": "planned"
+        },
+        {
+          "id": "gd-187",
+          "name": "Swarm",
+          "status": "planned"
+        },
+        {
+          "id": "gd-188",
+          "name": "Timbre In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-189",
+          "name": "Toggle",
+          "status": "planned"
+        },
+        {
+          "id": "gd-190",
+          "name": "Toggle In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-191",
+          "name": "Toggle Out",
+          "status": "planned"
+        },
+        {
+          "id": "gd-192",
+          "name": "Transfer",
+          "status": "planned"
+        },
+        {
+          "id": "gd-193",
+          "name": "Transport",
+          "status": "planned"
+        },
+        {
+          "id": "gd-194",
+          "name": "Transport Playing",
+          "status": "planned"
+        },
+        {
+          "id": "gd-195",
+          "name": "Transpose",
+          "status": "planned"
+        },
+        {
+          "id": "gd-196",
+          "name": "Triangle",
+          "status": "planned"
+        },
+        {
+          "id": "gd-197",
+          "name": "Trigger",
+          "status": "planned"
+        },
+        {
+          "id": "gd-198",
+          "name": "Triggers",
+          "status": "planned"
+        },
+        {
+          "id": "gd-199",
+          "name": "Uni To Bi",
+          "status": "planned"
+        },
+        {
+          "id": "gd-200",
+          "name": "Union",
+          "status": "planned"
+        },
+        {
+          "id": "gd-201",
+          "name": "Value",
+          "status": "planned"
+        },
+        {
+          "id": "gd-202",
+          "name": "Value Readout",
+          "status": "planned"
+        },
+        {
+          "id": "gd-203",
+          "name": "Value Scaler",
+          "status": "planned"
+        },
+        {
+          "id": "gd-204",
+          "name": "Velo Mult",
+          "status": "planned"
+        },
+        {
+          "id": "gd-205",
+          "name": "Velocity In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-206",
+          "name": "Voice Stack Info",
+          "status": "planned"
+        },
+        {
+          "id": "gd-207",
+          "name": "Voice Stack Mix",
+          "status": "planned"
+        },
+        {
+          "id": "gd-208",
+          "name": "Voice Stack Tog",
+          "status": "planned"
+        },
+        {
+          "id": "gd-209",
+          "name": "Vowels",
+          "status": "planned"
+        },
+        {
+          "id": "gd-210",
+          "name": "VU Meter",
+          "status": "planned"
+        },
+        {
+          "id": "gd-211",
+          "name": "Wavefolder",
+          "status": "planned"
+        },
+        {
+          "id": "gd-212",
+          "name": "Wavetable",
+          "status": "planned"
+        },
+        {
+          "id": "gd-213",
+          "name": "Wavetable LFO",
+          "status": "planned"
+        },
+        {
+          "id": "gd-214",
+          "name": "XNOR",
+          "status": "planned"
+        },
+        {
+          "id": "gd-215",
+          "name": "XOR",
+          "status": "planned"
+        },
+        {
+          "id": "gd-216",
+          "name": "XP",
+          "status": "planned"
+        },
+        {
+          "id": "gd-217",
+          "name": "XY",
+          "status": "planned"
+        },
+        {
+          "id": "gd-218",
+          "name": "Zero Crossings",
           "status": "planned"
         }
       ]
