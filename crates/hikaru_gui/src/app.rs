@@ -386,6 +386,7 @@ pub struct AppState {
     pub is_looping: bool,
     pub metronome_enabled: bool,
     pub play_menu: crate::ui::play_menu::PlayMenuState,
+    pub edit_history: crate::ui::edit_menu::EditHistory,
     pub punch_in: bool,
     pub punch_out: bool,
     pub tap_tempo: TapTempoDetector,
@@ -587,6 +588,7 @@ impl AppState {
             control_panel_state: control_panel::ControlPanelState::default(),
             modal_drags: modal::ModalDrags::default(),
             playlist_state: playlist::PlaylistState::default(),
+            edit_history: crate::ui::edit_menu::EditHistory::default(),
             clip_editor: clip_editor::ClipEditorState::default(),
             matrix_state,
             matrix_clipboard: matrix::MatrixClipboard::default(),
@@ -1550,10 +1552,10 @@ impl eframe::App for HikaruApp {
                 } else if self.state.show_dsp_rack {
                     dsp_rack::handle_delete_key(&mut self.state);
                 } else if !self.state.playlist_state.selected_clips.is_empty() {
-                    let selected = self.state.playlist_state.selected_clips.clone();
-                    self.state.playlist_state.clips.retain(|(_, c)| !selected.contains(&c.id));
-                    self.state.playlist_state.selected_clips.clear();
-                    self.state.playlist_state.needs_full_sync = true;
+                    crate::ui::edit_menu::execute_action(
+                        &mut self.state,
+                        crate::ui::edit_menu::EditMenuAction::Delete,
+                    );
                 } else if let Some(fx_idx) = self.state.selected_fx_index {
                     self.state.delete_fx_track(fx_idx);
                 } else if self.state.selected_track_index > 0 {
@@ -1616,28 +1618,32 @@ impl eframe::App for HikaruApp {
                     }
                 }
             }
+            if cmd && !wants_keyboard_input {
+                use crate::ui::edit_menu::EditMenuAction;
+                if i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::Z) {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::Redo);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::Z) {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::Undo);
+                } else if i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::A) {
+                    crate::ui::edit_menu::execute_action(
+                        &mut self.state,
+                        EditMenuAction::DeselectAll,
+                    );
+                }
+            }
             if cmd && !wants_keyboard_input && self.state.panel_layout.show_arranger && self.state.matrix_state.selected_scene.is_none() {
-                if i.key_pressed(egui::Key::C) && !self.state.playlist_state.selected_clips.is_empty() {
-                    playlist::copy_selected_clips(&mut self.state.playlist_state);
-                } else if i.key_pressed(egui::Key::X) && !self.state.playlist_state.selected_clips.is_empty() {
-                    playlist::cut_selected_clips(&mut self.state.playlist_state);
-                } else if i.key_pressed(egui::Key::V) && !self.state.playlist_state.clipboard.is_empty() {
-                    let target_tick = self.state.playlist_state.paste_tick();
-                    playlist::paste_clips(
-                        &mut self.state.playlist_state,
-                        target_tick,
-                        self.state.selected_track_index.max(1),
-                    );
-                } else if i.key_pressed(egui::Key::D) && !self.state.playlist_state.selected_clips.is_empty() {
-                    let (step, _, _) = playlist::adaptive_grid_step(
-                        self.state.playlist_state.ppqn,
-                        self.state.transport.beats_per_bar,
-                        self.state.playlist_state.zoom_x,
-                    );
-                    playlist::duplicate_selected_clips(&mut self.state.playlist_state, step);
-                } else if i.key_pressed(egui::Key::A) {
-                    playlist::select_all_clips(&mut self.state.playlist_state);
-                } else if i.key_pressed(egui::Key::E) && !self.state.playlist_state.selected_clips.is_empty() {
+                use crate::ui::edit_menu::EditMenuAction;
+                if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::C) && !self.state.playlist_state.selected_clips.is_empty() {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::Copy);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::X) && !self.state.playlist_state.selected_clips.is_empty() {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::Cut);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::V) && !self.state.playlist_state.clipboard.is_empty() {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::Paste);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::D) && !self.state.playlist_state.selected_clips.is_empty() {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::Duplicate);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::A) {
+                    crate::ui::edit_menu::execute_action(&mut self.state, EditMenuAction::SelectAll);
+                } else if !i.modifiers.shift && !i.modifiers.alt && i.key_pressed(egui::Key::E) && !self.state.playlist_state.selected_clips.is_empty() {
                     let split_tick = self.state.playlist_state.playhead_tick;
                     playlist::split_selected_clips_at(&mut self.state.playlist_state, split_tick);
                 }

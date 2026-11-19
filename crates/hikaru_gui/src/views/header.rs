@@ -1367,105 +1367,144 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 ui.add_space(5.0);
 
-                // 6. Grupo unido de 5 segmentos: [EDIT ◢ | Undo | Redo | Dup | Delete]
+                // 6. Grupo unido estilo Bitwig 5.x: [EDIT ◢ | acciones ancladas]
+                //    Por defecto: [EDIT ◢ | Undo | Redo | Duplicate | Delete]
                 let edit_popup_id = ui.make_persistent_id("bw_edit_popup");
-                let edit_resp = capsule_text_button(
-                    ui,
-                    vec2(38.0, CAPSULE_H),
-                    "EDIT",
-                    11.0,
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Left,
-                    true,
-                );
+                let edit_menu_open = crate::ui::edit_menu::is_open(ui.ctx(), edit_popup_id);
+                let pinned_edit_actions =
+                    crate::ui::edit_menu::pinned_actions(ui.ctx(), edit_popup_id);
+                let edit_join = if pinned_edit_actions.is_empty() {
+                    JoinSide::Standalone
+                } else {
+                    JoinSide::Left
+                };
+                let edit_resp = if edit_menu_open {
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(38.0, CAPSULE_H), Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let mut flags = edit_join.to_flags()
+                            | crate::ui::bitwig_wgpu::FLAG_CORNER_NOTCH;
+                        if response.hovered() {
+                            flags |= FLAG_HOVERED;
+                        }
+                        paint_capsule(
+                            ui.painter(),
+                            rect,
+                            3.0,
+                            Color32::from_rgb(44, 45, 49),
+                            BW_ACCENT_ORANGE,
+                            flags,
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "EDIT",
+                            fonts::semibold(11.0),
+                            BW_ACCENT_ORANGE,
+                        );
+                        let tri = vec![
+                            pos2(rect.max.x - 1.5, rect.max.y - 6.5),
+                            pos2(rect.max.x - 1.5, rect.max.y - 1.5),
+                            pos2(rect.max.x - 6.5, rect.max.y - 1.5),
+                        ];
+                        ui.painter().add(egui::Shape::convex_polygon(
+                            tri,
+                            BW_ACCENT_ORANGE,
+                            Stroke::NONE,
+                        ));
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    response
+                } else {
+                    capsule_text_button(
+                        ui,
+                        vec2(38.0, CAPSULE_H),
+                        "EDIT",
+                        11.0,
+                        false,
+                        BW_ACCENT_ORANGE,
+                        edit_join,
+                        true,
+                    )
+                };
                 if edit_resp.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(edit_popup_id));
-                }
-                egui::popup_below_widget(
-                    ui,
-                    edit_popup_id,
-                    &edit_resp,
-                    PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(155.0);
-                        if ui.button("Cut Selected Clip").clicked() {
-                            crate::views::playlist::cut_selected_clips(&mut state.playlist_state);
-                            ui.close_menu();
-                        }
-                        if ui.button("Copy Selected Clip").clicked() {
-                            crate::views::playlist::copy_selected_clips(&mut state.playlist_state);
-                            ui.close_menu();
-                        }
-                        if ui.button("Paste Clip").clicked() {
-                            let target_tick = state.playlist_state.paste_tick();
-                            crate::views::playlist::paste_clips(
-                                &mut state.playlist_state,
-                                target_tick,
-                                state.selected_track_index,
-                            );
-                            ui.close_menu();
-                        }
-                    },
-                );
-
-                let _ = capsule_icon_button(
-                    ui,
-                    vec2(32.0, CAPSULE_H),
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Middle,
-                    |p, r, fg| icons::paint_icon(p, r, icons::UNDO, fg, 1.4),
-                )
-                .on_hover_text("Undo");
-
-                let _ = capsule_icon_button(
-                    ui,
-                    vec2(32.0, CAPSULE_H),
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Middle,
-                    |p, r, fg| icons::paint_icon(p, r, icons::REDO, fg, 1.4),
-                )
-                .on_hover_text("Redo");
-
-                if capsule_icon_button(
-                    ui,
-                    vec2(32.0, CAPSULE_H),
-                    false,
-                    BW_ACCENT_ORANGE,
-                    JoinSide::Middle,
-                    |p, r, fg| icons::paint_icon(p, r, icons::DUPLICATE_PLUS, fg, 1.35),
-                )
-                .on_hover_text("Duplicate Selected Clip")
-                .clicked()
-                {
-                    crate::views::playlist::copy_selected_clips(&mut state.playlist_state);
-                    let target_tick = state.playlist_state.paste_tick();
-                    crate::views::playlist::paste_clips(
-                        &mut state.playlist_state,
-                        target_tick,
-                        state.selected_track_index,
+                    crate::ui::edit_menu::toggle(
+                        ui.ctx(),
+                        edit_popup_id,
+                        pos2(edit_resp.rect.min.x, edit_resp.rect.max.y + 2.0),
                     );
                 }
 
-                if capsule_icon_button(
-                    ui,
-                    vec2(32.0, CAPSULE_H),
-                    false,
-                    REC_RED,
-                    JoinSide::Right,
-                    |p, r, fg| icons::paint_icon(p, r, icons::CIRCLE_X, fg, 1.35),
-                )
-                .on_hover_text("Delete Selected Clip")
-                .clicked()
+                let pinned_count = pinned_edit_actions.len();
+                let mut pending_edit_action: Option<crate::ui::edit_menu::EditMenuAction> = None;
+                for (idx, action) in pinned_edit_actions.into_iter().enumerate() {
+                    let join = if idx + 1 == pinned_count {
+                        JoinSide::Right
+                    } else {
+                        JoinSide::Middle
+                    };
+                    let enabled = crate::ui::edit_menu::action_enabled(state, action);
+                    let icon = crate::ui::edit_menu::action_icon(action);
+                    let label = crate::ui::edit_menu::action_label(state, action);
+                    let shortcut = crate::ui::edit_menu::action_shortcut(action);
+                    let tooltip = if shortcut.is_empty() {
+                        label
+                    } else {
+                        format!("{label} ({shortcut})")
+                    };
+
+                    let btn_resp = if enabled {
+                        let accent = if action == crate::ui::edit_menu::EditMenuAction::Delete {
+                            REC_RED
+                        } else {
+                            BW_ACCENT_ORANGE
+                        };
+                        capsule_icon_button(
+                            ui,
+                            vec2(32.0, CAPSULE_H),
+                            false,
+                            accent,
+                            join,
+                            |p, r, fg| icons::paint_icon(p, r, icon, fg, 1.35),
+                        )
+                    } else {
+                        let (rect, response) =
+                            ui.allocate_exact_size(vec2(32.0, CAPSULE_H), Sense::hover());
+                        if ui.is_rect_visible(rect) {
+                            paint_capsule(
+                                ui.painter(),
+                                rect,
+                                3.0,
+                                crate::ui::bitwig_kit::BW_CAPSULE_IDLE,
+                                BW_ACCENT_ORANGE,
+                                join.to_flags(),
+                            );
+                            let pad = (32.0_f32.min(CAPSULE_H) * 0.22).clamp(3.0, 6.5);
+                            icons::paint_icon(
+                                ui.painter(),
+                                rect.shrink(pad),
+                                icon,
+                                Color32::from_rgb(108, 110, 116),
+                                1.35,
+                            );
+                        }
+                        response
+                    };
+
+                    if btn_resp.on_hover_text(tooltip).clicked() && enabled {
+                        pending_edit_action = Some(action);
+                    }
+                }
+
+                if let Some(action) =
+                    crate::ui::edit_menu::show(ui.ctx(), edit_popup_id, edit_resp.rect, state)
                 {
-                    let selected = state.playlist_state.selected_clips.clone();
-                    state
-                        .playlist_state
-                        .clips
-                        .retain(|(_, c)| !selected.contains(&c.id));
-                    state.playlist_state.selected_clips.clear();
+                    pending_edit_action = Some(action);
+                }
+                if let Some(action) = pending_edit_action {
+                    crate::ui::edit_menu::execute_action(state, action);
                 }
 
                 ui.add_space(5.0);

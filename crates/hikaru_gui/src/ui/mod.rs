@@ -5,6 +5,7 @@ pub mod add_menu;
 pub mod arranger_context_menu;
 pub mod bitwig_kit;
 pub mod bitwig_wgpu;
+pub mod edit_menu;
 pub mod file_menu;
 pub mod fonts;
 pub mod icons;
