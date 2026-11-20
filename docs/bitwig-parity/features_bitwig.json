@@ -35,7 +35,7 @@
     ]
   },
   "summary": {
-    "areas": 13,
+    "areas": 14,
     "features": 616,
     "done": 297,
     "in_progress": 17,
@@ -181,11 +181,6 @@
           "evidence": "crates/hikaru_sequencer/src/clip.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/src/views/matrix.rs, crates/hikaru_gui/src/views/audio_detail_editor.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
-          "id": "cl-23",
-          "name": "Clip automation envelopes",
-          "status": "planned"
-        },
-        {
           "id": "cl-24",
           "name": "Scene rename / reorder / color",
           "status": "done",
@@ -294,13 +289,6 @@
           "evidence": "crates/hikaru_gui/src/views/waveform.rs"
         },
         {
-          "id": "ar-15",
-          "name": "Automation lane display/editing",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/src/app.rs",
-          "note": "A show_automation flag and automation persistence exist; there is no full editing lane yet."
-        },
-        {
           "id": "ar-16",
           "name": "Arrangement markers",
           "status": "in_progress",
@@ -313,13 +301,6 @@
           "status": "in_progress",
           "evidence": "crates/hikaru_gui/src/views/playlist.rs",
           "note": "Fade handles are not exposed in the arranger."
-        },
-        {
-          "id": "ar-18",
-          "name": "Tempo / time-signature lane",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/src/views/playlist.rs",
-          "note": "Global tempo and signature exist; arrangement automation is not implemented."
         },
         {
           "id": "ar-19",
@@ -477,11 +458,6 @@
         {
           "id": "ts-17",
           "name": "Count-in",
-          "status": "planned"
-        },
-        {
-          "id": "ts-18",
-          "name": "Tempo automation",
           "status": "planned"
         }
       ]
@@ -3511,6 +3487,38 @@
         {
           "id": "bp-16",
           "name": "Sandboxed plugin hosting",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "automation",
+      "name": "Automation",
+      "bitwig_reference": "Automation lanes, envelopes, write modes (touch/latch/write), clip automation and tempo automation (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "at-01",
+          "name": "Automation lane display/editing",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/app.rs",
+          "note": "A show_automation flag and automation persistence exist; there is no full editing lane yet."
+        },
+        {
+          "id": "at-02",
+          "name": "Tempo / time-signature lane",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs",
+          "note": "Global tempo and signature exist; arrangement automation is not implemented."
+        },
+        {
+          "id": "at-03",
+          "name": "Clip automation envelopes",
+          "status": "planned"
+        },
+        {
+          "id": "at-04",
+          "name": "Tempo automation",
           "status": "planned"
         }
       ]

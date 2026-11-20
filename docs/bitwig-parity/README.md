@@ -9,20 +9,20 @@ de la auditoría.
 
 | Archivo | Qué es |
 |---|---|
-| [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 12 áreas y 398 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
+| [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 14 áreas y 616 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
 | [`generate_status.py`](generate_status.py) | Generador autocontenido (sólo stdlib de Python). Lee el JSON y produce `status.svg` y `parity-detail.svg`; refresca el `summary` del JSON y la tabla de paridad de la auditoría para que nunca se desincronicen. |
 | [`status.svg`](status.svg) | Squarified treemap oscuro de 680×480, con leyenda, porcentaje global, barras de estado y badges de bugs. Es el archivo que muestra el `README.md` raíz. |
-| [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 398 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
+| [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 616 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
 | [`bitwig-5.1.7-parity-audit.md`](bitwig-5.1.7-parity-audit.md) | Auditoría completa: instalación local de Bitwig, catálogo de 118 dispositivos y 43 moduladores, crates de Hikaru y metodología. |
 | `README.md` | Este índice. |
 
 ## Estado actual
 
-- **153 / 398** features `done` → **38 % de paridad**.
-- **18** en `in_progress`.
-- **227** `planned`.
+- **297 / 616** features `done` → **48 % de paridad**.
+- **17** en `in_progress`.
+- **302** `planned`.
 - **1** bug abierto ([issue #1](https://github.com/hikarucorporation/hikaru-openlive/issues/1), mapeado a `Build & Platform`).
-- El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 398 chips con nombre, estado y evidencia.
+- El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 616 chips con nombre, estado y evidencia.
 
 ## Regenerar
 
@@ -104,7 +104,10 @@ el generador, valida el resultado y commitea `status.svg`, `parity-detail.svg`,
 ## Criterio de medición
 
 El porcentaje es `done / total` sobre las features rastreadas, y el área de
-cada tile es proporcional a la cantidad de features del área. Los 118
+cada tile es proporcional a la cantidad de features del área. Para que las
+áreas chicas (como `Automation`, con 4 features) se puedan leer, el treemap
+aplica un piso de legibilidad de 22 features por tile; ese piso sólo cambia el
+tamaño dibujado, nunca los conteos ni el porcentaje. Los 118
 dispositivos y los 43 moduladores de Bitwig se cuentan uno por uno; las
 equivalencias con dispositivos de Hikaru son funcionales, no binarias. En el
 póster, cada chip lleva el nombre completo y la ruta de `evidence` en su

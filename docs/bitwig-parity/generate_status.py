@@ -4,9 +4,11 @@
 Two figures are produced from the same database:
 
 * ``status.svg`` — squarified treemap: one tile per area, its area proportional
-  to the number of tracked features, filled from the left by the share already
-  done. A six-pixel status bar at the bottom of every tile carries Done (green)
-  and In progress (orange); the red badge counts the area's open bugs.
+  to the number of tracked features (with a small legibility floor so tiny
+  areas can still show their name and percentage), filled from the left by the
+  share already done. A six-pixel status bar at the bottom of every tile
+  carries Done (green) and In progress (orange); the red badge counts the
+  area's open bugs.
 * ``parity-detail.svg`` — a tall poster that names every tracked feature,
   grouped by area and ordered In progress, Done, Planned, so the list itself
   answers "what do I already have and what is missing".
@@ -57,6 +59,12 @@ FONT_FAMILY = (
 )
 
 STATUSES = ("done", "in_progress", "planned")
+
+# Legibility floor for the treemap. Tile area is proportional to the number of
+# tracked features, except that small areas count as at least this many so
+# their name and percentage stay readable. It only affects ``status.svg``:
+# every percentage, count and the audit table still come from the real data.
+LEGIBILITY_FLOOR = 22
 
 
 # --------------------------------------------------------------------------- #
@@ -254,6 +262,7 @@ def sync_audit_markdown(text: str, document: dict) -> str:
     summary = summary_of(document)
     areas = document.get("areas", [])
 
+    missing_rows = []
     for area in areas:
         name = area.get("name", area.get("id", ""))
         counts = area_counts(area)
@@ -262,7 +271,27 @@ def sync_audit_markdown(text: str, document: dict) -> str:
             f"{counts['in_progress']} | {counts['planned']} | {counts['bugs']} |"
         )
         pattern = re.compile(rf"^\| {re.escape(name)} \|.*$", re.MULTILINE)
-        text = pattern.sub(lambda _match, row=row: row, text, count=1)
+        text, replaced = pattern.subn(lambda _match, row=row: row, text, count=1)
+        if not replaced:
+            missing_rows.append(row)
+
+    # A brand new area has no row to overwrite yet: insert it just before the
+    # total so the document and the JSON never drift apart.
+    if missing_rows:
+        text = re.sub(
+            r"^(\| \*\*Total\*\* \|.*)$",
+            lambda match: "\n".join(missing_rows + [match.group(1)]),
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    text = re.sub(
+        r"contiene \d+ áreas y \d+ features",
+        f"contiene {summary['areas']} áreas y {summary['features']} features",
+        text,
+        count=1,
+    )
 
     total_row = (
         f"| **Total** | **{summary['features']}** | **{summary['done']}** | "
@@ -298,7 +327,12 @@ def render(document: dict) -> str:
     for area in areas:
         count = len(area.get("features", []))
         if count:
-            area_totals.append((area.get("id", area.get("name", "")), float(count)))
+            area_totals.append(
+                (
+                    area.get("id", area.get("name", "")),
+                    float(max(count, LEGIBILITY_FLOOR)),
+                )
+            )
 
     rects = squarify(
         area_totals,

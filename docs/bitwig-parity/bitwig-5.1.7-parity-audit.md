@@ -81,6 +81,9 @@ Observadas en la arquitectura de la instalación y en el modelo de producto
   multiband splits y los tres Grids (Poly/FX/Note).
 - **Modulación**: 43 moduladores, macros, modulación por voz, audio-rate,
   sidechain, CV y MPE.
+- **Automatización**: lanes por parámetro en el arranger, envelopes de clip,
+  modos de escritura touch/latch/write, automatización de tempo y compás, y
+  curvas entre puntos.
 - **Browser**: navegador emergente, filtros por metadata, colecciones,
   presets, packs, favoritos y drag-and-drop.
 - **Mixer/I/O**: channel strips, sends, sidechain, VCA, latency compensation,
@@ -127,15 +130,15 @@ Método: lectura estática de todos los crates, sus módulos, tests y documentos
 
 ## 3. Base de datos de paridad
 
-`features_bitwig.json` contiene 13 áreas y 616 features. Cada feature tiene
+`features_bitwig.json` contiene 14 áreas y 616 features. Cada feature tiene
 `id`, `name` y `status` (`done`, `in_progress`, `planned`); las features
 implementadas o parciales incluyen `evidence` con la ruta del código.
 
 | Área | Features | Done | In progress | Planned | Bugs |
 |---|---:|---:|---:|---:|---:|
-| Clip Launcher | 26 | 21 | 0 | 5 | 0 |
-| Arranger | 28 | 15 | 4 | 9 | 0 |
-| Transport & Sync | 18 | 12 | 1 | 5 | 0 |
+| Clip Launcher | 25 | 21 | 0 | 4 | 0 |
+| Arranger | 26 | 15 | 2 | 9 | 0 |
+| Transport & Sync | 17 | 12 | 1 | 4 | 0 |
 | Group Tracks & Routing | 22 | 14 | 2 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
 | Built-in Devices & FX | 118 | 9 | 3 | 106 | 0 |
@@ -146,6 +149,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
 | Build & Platform | 16 | 10 | 2 | 4 | 1 |
+| Automation | 4 | 0 | 2 | 2 | 0 |
 | **Total** | **616** | **297** | **17** | **302** | **1** |
 
 Paridad global: **297 / 616 = 48 %**.
