@@ -322,17 +322,22 @@ def render(document: dict) -> str:
     ref = f"{ref_name} {ref_version}".strip()
     product = document.get("product", "Hikaru OpenLive")
 
+    # Project-format tiles placed as a row directly underneath Grid Devices.
+    under_grid_ids = ("dawproject", "bwproject", "bwtemplate")
+    under_grid_set = set(under_grid_ids)
+
     areas = document.get("areas", [])
     area_totals = []
+    present_under_grid = []
     for area in areas:
         count = len(area.get("features", []))
-        if count:
-            area_totals.append(
-                (
-                    area.get("id", area.get("name", "")),
-                    float(max(count, LEGIBILITY_FLOOR)),
-                )
-            )
+        if not count:
+            continue
+        area_id = area.get("id", area.get("name", ""))
+        if area_id in under_grid_set:
+            present_under_grid.append(area_id)
+            continue
+        area_totals.append((area_id, float(max(count, LEGIBILITY_FLOOR))))
 
     rects = squarify(
         area_totals,
@@ -341,6 +346,15 @@ def render(document: dict) -> str:
         float(WIDTH),
         CONTENT_BOTTOM - CONTENT_TOP,
     )
+
+    if present_under_grid and "grid-devices" in rects:
+        gx, gy, gw, gh = rects["grid-devices"]
+        strip_h = 92.0
+        rects["grid-devices"] = (gx, gy, gw, gh - strip_h)
+        ordered_sub = [k for k in under_grid_ids if k in present_under_grid]
+        tile_w = gw / len(ordered_sub)
+        for idx, sub_id in enumerate(ordered_sub):
+            rects[sub_id] = (gx + idx * tile_w, gy + gh - strip_h, tile_w, strip_h)
 
     out: list[str] = []
     add = out.append
@@ -452,18 +466,19 @@ def render(document: dict) -> str:
         badge_x = right - 8.0 - badge_w
         badge_y = bottom - 26.0
 
-        # Title: 13 px normally, 12 px in narrow tiles, wrapped to the width.
-        title_size = 13 if w >= 110 else 12
+        # Title: 13 px normally, 12 px in narrow tiles, 10 px in compact tiles.
+        title_size = 13 if w >= 110 else (12 if w >= 78 else 10)
+        pad_x = 8.0 if w >= 78 else 6.0
         line_height = title_size + 2
-        title_x = x + 8.0
-        title_y = y + 21.0
+        title_x = x + pad_x
+        title_y = y + (21.0 if w >= 78 else 19.0)
         max_lines = max(1, int((h - 14.0) / line_height))
 
         # First lay the title out at full width. Pick the largest stacked
         # percentage + count layout that fits above the bottom bar (and above
         # the bug badge, if any). Only fall back to a compact top-right
         # percentage when the tile is too short for stacked metrics.
-        full_width = max(10.0, w - 16.0)
+        full_width = max(10.0, w - 2.0 * pad_x)
         title_lines = fit_lines(name, full_width, title_size, max_lines)
         title_bottom = title_y + (len(title_lines) - 1) * line_height
         pct_text = f"{percent}%"

@@ -35,13 +35,13 @@
     ]
   },
   "summary": {
-    "areas": 15,
-    "features": 625,
-    "done": 300,
+    "areas": 18,
+    "features": 645,
+    "done": 306,
     "in_progress": 19,
-    "planned": 306,
+    "planned": 320,
     "bugs": 1,
-    "parity_percent": 48
+    "parity_percent": 47
   },
   "areas": [
     {
@@ -3577,6 +3577,136 @@
         {
           "id": "at-04",
           "name": "Tempo automation",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "dawproject",
+      "name": ".DAWproject",
+      "bitwig_reference": "Open DAWproject (.dawproject) interchange format: ZIP container, transport, tracks, audio/MIDI clips, automation, devices and scenes (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "dp-01",
+          "name": "ZIP container import/export (STORE & DEFLATE)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
+        },
+        {
+          "id": "dp-02",
+          "name": "Transport (tempo & time signature)",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
+        },
+        {
+          "id": "dp-03",
+          "name": "Track structure, color, volume, pan & mute",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
+        },
+        {
+          "id": "dp-04",
+          "name": "Audio clips & embedded media extraction",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
+        },
+        {
+          "id": "dp-05",
+          "name": "MIDI clips & note events",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
+        },
+        {
+          "id": "dp-06",
+          "name": "File menu open / export integration",
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/ui/file_menu.rs"
+        },
+        {
+          "id": "dp-07",
+          "name": "Automation lanes & envelopes",
+          "status": "planned"
+        },
+        {
+          "id": "dp-08",
+          "name": "Device & VST3/CLAP plugin state",
+          "status": "planned"
+        },
+        {
+          "id": "dp-09",
+          "name": "Clip Launcher scenes & slots",
+          "status": "planned"
+        },
+        {
+          "id": "dp-10",
+          "name": "Markers & arranger cue points",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwproject",
+      "name": ".bwproject",
+      "bitwig_reference": "Native Bitwig Studio project file (.bwproject) import/compatibility (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bw-01",
+          "name": "Binary container parser (.bwproject)",
+          "status": "planned"
+        },
+        {
+          "id": "bw-02",
+          "name": "Tracks, groups & mixer routing",
+          "status": "planned"
+        },
+        {
+          "id": "bw-03",
+          "name": "Arranger & Clip Launcher clips",
+          "status": "planned"
+        },
+        {
+          "id": "bw-04",
+          "name": "Native Bitwig devices & Grid mapping",
+          "status": "planned"
+        },
+        {
+          "id": "bw-05",
+          "name": "Automation & modulator state",
+          "status": "planned"
+        },
+        {
+          "id": "bw-06",
+          "name": "Embedded audio & VST3/CLAP state",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwtemplate",
+      "name": ".bwtemplate",
+      "bitwig_reference": "Native Bitwig Studio project template (.bwtemplate) import/compatibility (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bt-01",
+          "name": "Template file parser (.bwtemplate)",
+          "status": "planned"
+        },
+        {
+          "id": "bt-02",
+          "name": "Default tracks, routing & sends",
+          "status": "planned"
+        },
+        {
+          "id": "bt-03",
+          "name": "Preloaded devices & channel strips",
+          "status": "planned"
+        },
+        {
+          "id": "bt-04",
+          "name": "New project from template workflow",
           "status": "planned"
         }
       ]
