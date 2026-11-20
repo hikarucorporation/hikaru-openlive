@@ -11,9 +11,9 @@ pub mod lfo_mod;
 
 pub use bay::{
     add_bay_modulator, bay_width_for_slot, capture_bay_params, clear_bay_for_slot, get_bay_state,
-    notify_bay_note_off, notify_bay_note_on, remove_bay_modulator, restore_bay_params,
-    update_bay_state, DeviceModulatorBay, MathOp, ModulatorCategory, ModulatorKind, ModulatorMeta,
-    ModulatorSlotState, MODULATOR_CATALOG,
+    notify_bay_audio_level, notify_bay_note_off, notify_bay_note_on, remove_bay_modulator,
+    restore_bay_params, update_bay_state, DeviceModulatorBay, MathOp, ModulatorCategory,
+    ModulatorKind, ModulatorMeta, ModulatorSlotState, MODULATOR_CATALOG,
 };
 pub use bay_ui::render_device_modulator_bay;
 pub use lfo_mod::{
@@ -665,5 +665,93 @@ mod tests {
         assert_eq!(restored.slots.len(), 14);
         let r_p12 = restored.slots.iter().find(|s| s.kind == ModulatorKind::Pitch12).unwrap();
         assert_eq!(r_p12.key_note, 69);
+    }
+
+    #[test]
+    fn test_block4_modulators_audio_wt_ch16_globals_cv_and_full_catalog() {
+        // 42 Device Bay modulators + OpenLFO MOD device = 43/43 (100% Bitwig 5.1.7 Modulators)
+        assert_eq!(MODULATOR_CATALOG.len(), 42);
+
+        let mut bay = DeviceModulatorBay::empty();
+        let wt_id = bay.add_modulator(ModulatorKind::WavetableLfo);
+        let ch16_id = bay.add_modulator(ModulatorKind::Channel16);
+        let glob_id = bay.add_modulator(ModulatorKind::Globals);
+        let ef_id = bay.add_modulator(ModulatorKind::EnvelopeFollower);
+        let asc_id = bay.add_modulator(ModulatorKind::AudioSidechain);
+        let ar_id = bay.add_modulator(ModulatorKind::AudioRate);
+        let cv_id = bay.add_modulator(ModulatorKind::HwCvIn);
+
+        let transport = LfoTransportState {
+            bpm: 140.0,
+            sample_count: 22050,
+            sample_rate: 44100.0,
+            is_playing: true,
+            playback_start_sample: 0,
+        };
+
+        // 1. Wavetable LFO: frame 0 (wt_index=0.0) is Sine -> at 1Hz, t=0.25s => +1.0
+        let wt = bay.slots.iter_mut().find(|s| s.id == wt_id).unwrap();
+        wt.lfo_rate_hz = 1.0;
+        wt.wt_index = 0.0;
+        wt.lfo_depth = 1.0;
+        wt.lfo_bipolar = true;
+        assert!((wt.evaluate(&transport, 0.25)[0] - 1.0).abs() < 1e-3);
+
+        // 2. Channel-16: exclusive channel 11 (index 10)
+        let ch = bay.slots.iter_mut().find(|s| s.id == ch16_id).unwrap();
+        ch.ch16_active = 10;
+        ch.ch16_levels[10] = 0.77;
+        ch.ch16_exclusive = true;
+        let ch_outs = ch.evaluate(&transport, 0.0);
+        assert!((ch_outs[10] - 0.77).abs() < 1e-4);
+        assert_eq!(ch_outs[0], 0.0);
+
+        // 3. Globals: BPM=140 -> (140-40)/200 = 0.5, PLAY=1.0
+        let gl = bay.slots.iter_mut().find(|s| s.id == glob_id).unwrap();
+        let gl_outs = gl.evaluate(&transport, 0.0);
+        assert!((gl_outs[0] - 0.5).abs() < 1e-4);
+        assert_eq!(gl_outs[3], 1.0);
+
+        // 4. Envelope Follower: tracks audio_input_level
+        let ef = bay.slots.iter_mut().find(|s| s.id == ef_id).unwrap();
+        ef.audio_gain = 1.0;
+        ef.env_attack = 0.01;
+        ef.audio_input_level = 0.8;
+        let ef_out = ef.evaluate(&transport, 0.0)[0];
+        assert!(ef_out > 0.5, "Envelope Follower should rise toward 0.8, got {ef_out}");
+
+        // 5. Audio Sidechain: inverted ducking produces negative output
+        let asc = bay.slots.iter_mut().find(|s| s.id == asc_id).unwrap();
+        asc.audio_gain = 1.5;
+        asc.audio_threshold = 0.2;
+        asc.env_attack = 0.01;
+        asc.audio_sc_invert = true;
+        asc.audio_input_level = 0.8;
+        assert!(asc.evaluate(&transport, 0.0)[0] < -0.5);
+
+        // 6. Audio Rate: rectified output is non-negative
+        let ar = bay.slots.iter_mut().find(|s| s.id == ar_id).unwrap();
+        ar.ar_freq_hz = 100.0;
+        ar.ar_rectify = true;
+        let ar_out = ar.evaluate(&transport, 0.0075)[0];
+        assert!((0.0..=1.0).contains(&ar_out));
+
+        // 7. HW CV In: gain * level + offset
+        let cv = bay.slots.iter_mut().find(|s| s.id == cv_id).unwrap();
+        cv.cv_channel = 3;
+        cv.cv_level = 0.5;
+        cv.audio_gain = 1.0;
+        cv.cv_offset = 0.25;
+        cv.cv_bipolar = true;
+        assert!((cv.evaluate(&transport, 0.0)[0] - 0.75).abs() < 1e-4);
+
+        // Roundtrip persistence
+        let saved = bay.to_project_params(true);
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved);
+        assert_eq!(restored.slots.len(), 7);
+        let r_cv = restored.slots.iter().find(|s| s.kind == ModulatorKind::HwCvIn).unwrap();
+        assert_eq!(r_cv.cv_channel, 3);
+        assert!((r_cv.cv_offset - 0.25).abs() < 1e-4);
     }
 }

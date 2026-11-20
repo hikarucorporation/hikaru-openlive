@@ -128,6 +128,7 @@ pub enum ModulatorKind {
     Random,
     SampleAndHold,
     Vibrato,
+    WavetableLfo,
     Macro,
     Macro4,
     Button,
@@ -135,6 +136,7 @@ pub enum ModulatorKind {
     Xy,
     Vector4,
     Vector8,
+    Globals,
     Math,
     Mix,
     Quantize,
@@ -154,10 +156,15 @@ pub enum ModulatorKind {
     KeytrackPlus,
     RelativeKeytrack,
     Pitch12,
+    Channel16,
     NoteCounter,
     NoteSidechain,
     VoiceControl,
     StackSpread,
+    EnvelopeFollower,
+    AudioSidechain,
+    AudioRate,
+    HwCvIn,
 }
 
 impl ModulatorKind {
@@ -178,6 +185,7 @@ impl ModulatorKind {
                 Some(Self::SampleAndHold)
             }
             "vibrato" => Some(Self::Vibrato),
+            "wavetable lfo" | "wavetablelfo" | "wt lfo" => Some(Self::WavetableLfo),
             "macro" => Some(Self::Macro),
             "macro-4" | "macro4" | "macro 4" => Some(Self::Macro4),
             "button" => Some(Self::Button),
@@ -185,6 +193,7 @@ impl ModulatorKind {
             "xy" | "x-y" | "xy pad" => Some(Self::Xy),
             "vector-4" | "vector4" | "vector 4" => Some(Self::Vector4),
             "vector-8" | "vector8" | "vector 8" => Some(Self::Vector8),
+            "globals" => Some(Self::Globals),
             "math" => Some(Self::Math),
             "mix" => Some(Self::Mix),
             "quantize" => Some(Self::Quantize),
@@ -204,10 +213,15 @@ impl ModulatorKind {
             "keytrack+" | "keytrack plus" | "keytrackplus" => Some(Self::KeytrackPlus),
             "relative keytrack" | "relativekeytrack" => Some(Self::RelativeKeytrack),
             "pitch-12" | "pitch12" | "pitch 12" => Some(Self::Pitch12),
+            "channel-16" | "channel16" | "channel 16" => Some(Self::Channel16),
             "note counter" | "notecounter" => Some(Self::NoteCounter),
             "note sidechain" | "notesidechain" => Some(Self::NoteSidechain),
             "voice control" | "voicecontrol" => Some(Self::VoiceControl),
             "stack spread" | "stackspread" => Some(Self::StackSpread),
+            "envelope follower" | "envelopefollower" => Some(Self::EnvelopeFollower),
+            "audio sidechain" | "audiosidechain" => Some(Self::AudioSidechain),
+            "audio rate" | "audiorate" => Some(Self::AudioRate),
+            "hw cv in" | "hwcvin" | "cv in" => Some(Self::HwCvIn),
             _ => None,
         }
     }
@@ -505,6 +519,62 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         description: "Distributes modulation spread across stacked voices with Linear, Center, or Harmonic curves.",
         outputs: &["OUT"],
     },
+    ModulatorMeta {
+        kind: ModulatorKind::WavetableLfo,
+        name: "Wavetable LFO",
+        short_name: "WT LFO",
+        category: ModulatorCategory::Lfo,
+        description: "Morphable wavetable LFO scanning continuously across harmonic frames with Free Hz / Tempo Sync.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Channel16,
+        name: "Channel-16",
+        short_name: "Ch-16",
+        category: ModulatorCategory::NoteDriven,
+        description: "16-channel MIDI routing modulator exposing independent modulation outputs for channels 1..16.",
+        outputs: &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Globals,
+        name: "Globals",
+        short_name: "Globals",
+        category: ModulatorCategory::Interface,
+        description: "Global transport modulator outputting normalized Tempo (BPM), Bar phase, Beat phase, and Play state.",
+        outputs: &["BPM", "BAR", "BET", "PLY"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::EnvelopeFollower,
+        name: "Envelope Follower",
+        short_name: "EnvFol",
+        category: ModulatorCategory::AudioDriven,
+        description: "Audio-driven amplitude envelope follower with Gain, Attack, and Release smoothing.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::AudioSidechain,
+        name: "Audio Sidechain",
+        short_name: "AudSC",
+        category: ModulatorCategory::AudioDriven,
+        description: "Sidechain audio envelope follower with source track selector, Threshold, Gain, and Duck/Invert mode.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::AudioRate,
+        name: "Audio Rate",
+        short_name: "AudRate",
+        category: ModulatorCategory::AudioDriven,
+        description: "High-frequency audio-rate modulation source with selectable waveform, frequency, gain, and rectify.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::HwCvIn,
+        name: "HW CV In",
+        short_name: "CV In",
+        category: ModulatorCategory::AudioDriven,
+        description: "Hardware DC-coupled CV input modulator with Channel selector, Gain, Offset, and Bipolar/Unipolar range.",
+        outputs: &["OUT"],
+    },
 ];
 
 /// Ruta de modulación desde una salida del modulador hacia un parámetro de dispositivo.
@@ -684,6 +754,29 @@ pub struct ModulatorSlotState {
     pub spread_amount: f32,
     pub spread_mode: u8, // 0=Linear, 1=Center, 2=Harmonic
 
+    // Wavetable LFO
+    pub wt_index: f32,
+
+    // Channel-16
+    pub ch16_levels: [f32; 16],
+    pub ch16_active: u8,
+    pub ch16_exclusive: bool,
+
+    // Audio-driven (Envelope Follower, Audio Sidechain, Audio Rate, HW CV In)
+    pub audio_input_level: f32,
+    pub audio_env_current: f32,
+    pub audio_gain: f32,
+    pub audio_threshold: f32,
+    pub audio_sc_track: u8,
+    pub audio_sc_invert: bool,
+    pub ar_freq_hz: f32,
+    pub ar_wave: u8, // 0=Sine, 1=Tri, 2=Saw, 3=AudioLive
+    pub ar_rectify: bool,
+    pub cv_channel: u8,
+    pub cv_offset: f32,
+    pub cv_level: f32,
+    pub cv_bipolar: bool,
+
     // Rutas de modulación
     pub routes: Vec<BayModRoute>,
     pub last_outputs: [f32; 16],
@@ -822,9 +915,45 @@ impl ModulatorSlotState {
             voice_age_secs: 0.0,
             spread_amount: 1.0,
             spread_mode: 0,
+            wt_index: 0.35,
+            ch16_levels: {
+                let mut arr = [0.0_f32; 16];
+                arr[0] = 1.0;
+                arr
+            },
+            ch16_active: 0,
+            ch16_exclusive: true,
+            audio_input_level: 0.0,
+            audio_env_current: 0.0,
+            audio_gain: 1.0,
+            audio_threshold: 0.0,
+            audio_sc_track: 0,
+            audio_sc_invert: false,
+            ar_freq_hz: 110.0,
+            ar_wave: 0,
+            ar_rectify: false,
+            cv_channel: 1,
+            cv_offset: 0.0,
+            cv_level: 0.0,
+            cv_bipolar: true,
             routes: Vec::new(),
             last_outputs: [0.0; 16],
         }
+    }
+
+    /// Evalúa una tabla de ondas morfeable de 4 frames (Sine -> Formant -> Saw -> Fold).
+    pub fn eval_wavetable_lfo(phase: f32, wt_index: f32) -> f32 {
+        let p = phase.rem_euclid(1.0);
+        let a = p * std::f32::consts::TAU;
+        let f0 = a.sin();
+        let f1 = (a.sin() + 0.5 * (2.0 * a).sin() + 0.25 * (3.0 * a).sin()) / 1.5;
+        let f2 = 2.0 * p - 1.0;
+        let f3 = (a.sin() * 2.2).sin();
+        let frames = [f0, f1, f2, f3];
+        let pos = wt_index.clamp(0.0, 1.0) * 3.0;
+        let i0 = (pos.floor() as usize).min(2);
+        let frac = (pos - i0 as f32).clamp(0.0, 1.0);
+        (frames[i0] * (1.0 - frac) + frames[i0 + 1] * frac).clamp(-1.0, 1.0)
     }
 
     pub fn trigger_gate(&mut self, on: bool, time_secs: f32) {
@@ -1371,6 +1500,88 @@ impl ModulatorSlotState {
                 };
                 outs[0] = (base * self.spread_amount.clamp(-1.0, 1.0)).clamp(-1.0, 1.0);
             }
+            ModulatorKind::WavetableLfo => {
+                let (_cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
+                self.lfo_last_phase = phase;
+                let raw = Self::eval_wavetable_lfo(phase, self.wt_index);
+                let shaped = if self.lfo_bipolar {
+                    raw
+                } else {
+                    (raw + 1.0) * 0.5
+                };
+                outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::Channel16 => {
+                if self.ch16_exclusive {
+                    let ch = (self.ch16_active as usize).min(15);
+                    outs[ch] = self.ch16_levels[ch].clamp(0.0, 1.0);
+                } else {
+                    for i in 0..16 {
+                        outs[i] = self.ch16_levels[i].clamp(0.0, 1.0);
+                    }
+                }
+            }
+            ModulatorKind::Globals => {
+                let bpm_norm = ((transport.bpm - 40.0) / 200.0).clamp(0.0, 1.0);
+                let beats = if transport.is_playing {
+                    let elapsed = transport
+                        .sample_count
+                        .saturating_sub(transport.playback_start_sample);
+                    let secs = elapsed as f64 / transport.sample_rate.max(1.0) as f64;
+                    secs * (transport.bpm.max(20.0) as f64 / 60.0)
+                } else {
+                    time_secs as f64 * (transport.bpm.max(20.0) as f64 / 60.0)
+                };
+                let beat_phase = (beats.fract() as f32).rem_euclid(1.0);
+                let bar_phase = ((beats / 4.0).fract() as f32).rem_euclid(1.0);
+                outs[0] = bpm_norm;
+                outs[1] = bar_phase;
+                outs[2] = beat_phase;
+                outs[3] = if transport.is_playing { 1.0 } else { 0.0 };
+            }
+            ModulatorKind::EnvelopeFollower => {
+                let target = (self.audio_input_level * self.audio_gain).clamp(0.0, 1.0);
+                let coeff = if target > self.audio_env_current {
+                    (0.02 / self.env_attack.max(0.002)).clamp(0.05, 1.0)
+                } else {
+                    (0.02 / self.env_release.max(0.002)).clamp(0.02, 1.0)
+                };
+                self.audio_env_current += (target - self.audio_env_current) * coeff;
+                outs[0] = self.audio_env_current.clamp(0.0, 1.0);
+            }
+            ModulatorKind::AudioSidechain => {
+                let above = (self.audio_input_level - self.audio_threshold).max(0.0);
+                let target = (above * self.audio_gain).clamp(0.0, 1.0);
+                let coeff = if target > self.audio_env_current {
+                    (0.02 / self.env_attack.max(0.002)).clamp(0.05, 1.0)
+                } else {
+                    (0.02 / self.env_release.max(0.002)).clamp(0.02, 1.0)
+                };
+                self.audio_env_current += (target - self.audio_env_current) * coeff;
+                let env = self.audio_env_current.clamp(0.0, 1.0);
+                outs[0] = if self.audio_sc_invert { -env } else { env };
+            }
+            ModulatorKind::AudioRate => {
+                let hz = self.ar_freq_hz.clamp(20.0, 2000.0);
+                let phase = (time_secs * hz).fract();
+                self.lfo_last_phase = phase;
+                let raw = match self.ar_wave {
+                    1 => evaluate_waveform(LfoWaveform::Triangle, phase, 0.0),
+                    2 => evaluate_waveform(LfoWaveform::SawUp, phase, 0.0),
+                    3 => self.audio_input_level * (phase * std::f32::consts::TAU).sin(),
+                    _ => (phase * std::f32::consts::TAU).sin(),
+                };
+                let gained = (raw * self.audio_gain).clamp(-1.0, 1.0);
+                outs[0] = if self.ar_rectify { gained.abs() } else { gained };
+            }
+            ModulatorKind::HwCvIn => {
+                let raw = self.cv_level * self.audio_gain + self.cv_offset;
+                outs[0] = if self.cv_bipolar {
+                    raw.clamp(-1.0, 1.0)
+                } else {
+                    raw.clamp(0.0, 1.0)
+                };
+            }
         }
         self.last_outputs = outs;
         outs
@@ -1674,6 +1885,52 @@ impl ModulatorSlotState {
                 ],
                 vec![],
                 self.spread_mode,
+            ),
+            ModulatorKind::WavetableLfo => {
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(4) as f32;
+                (
+                    vec![self.lfo_rate_hz, self.lfo_depth, self.wt_index, sync_idx],
+                    vec![
+                        self.lfo_sync_mode == LfoSyncMode::TempoSync,
+                        self.lfo_bipolar,
+                    ],
+                    0,
+                )
+            }
+            ModulatorKind::Channel16 => (
+                self.ch16_levels.to_vec(),
+                vec![self.ch16_exclusive],
+                self.ch16_active,
+            ),
+            ModulatorKind::Globals => (vec![], vec![], 0),
+            ModulatorKind::EnvelopeFollower => (
+                vec![self.audio_gain, self.env_attack, self.env_release, self.audio_input_level],
+                vec![],
+                0,
+            ),
+            ModulatorKind::AudioSidechain => (
+                vec![
+                    self.audio_gain,
+                    self.audio_threshold,
+                    self.env_attack,
+                    self.env_release,
+                    self.audio_input_level,
+                ],
+                vec![self.audio_sc_invert],
+                self.audio_sc_track,
+            ),
+            ModulatorKind::AudioRate => (
+                vec![self.ar_freq_hz, self.audio_gain],
+                vec![self.ar_rectify],
+                self.ar_wave,
+            ),
+            ModulatorKind::HwCvIn => (
+                vec![self.audio_gain, self.cv_offset, self.cv_level],
+                vec![self.cv_bipolar],
+                self.cv_channel,
             ),
         };
         let routes = self
@@ -2252,6 +2509,107 @@ impl ModulatorSlotState {
                     st.voice_count = (vc.round() as i32).clamp(1, 16) as u8;
                 }
             }
+            ModulatorKind::WavetableLfo => {
+                if let Some(&hz) = p.params.first() {
+                    st.lfo_rate_hz = hz.clamp(0.02, 30.0);
+                }
+                if let Some(&d) = p.params.get(1) {
+                    st.lfo_depth = d.clamp(0.0, 1.0);
+                }
+                if let Some(&wt) = p.params.get(2) {
+                    st.wt_index = wt.clamp(0.0, 1.0);
+                }
+                if let Some(&sr) = p.params.get(3) {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Quarter);
+                }
+                if let Some(&sync) = p.bool_flags.first() {
+                    st.lfo_sync_mode = if sync {
+                        LfoSyncMode::TempoSync
+                    } else {
+                        LfoSyncMode::FreeHz
+                    };
+                }
+                if let Some(&bip) = p.bool_flags.get(1) {
+                    st.lfo_bipolar = bip;
+                }
+            }
+            ModulatorKind::Channel16 => {
+                st.ch16_active = p.mode_idx.min(15);
+                for i in 0..16 {
+                    if let Some(&v) = p.params.get(i) {
+                        st.ch16_levels[i] = v.clamp(0.0, 1.0);
+                    }
+                }
+                if let Some(&ex) = p.bool_flags.first() {
+                    st.ch16_exclusive = ex;
+                }
+            }
+            ModulatorKind::Globals => {}
+            ModulatorKind::EnvelopeFollower => {
+                if let Some(&g) = p.params.first() {
+                    st.audio_gain = g.clamp(0.0, 4.0);
+                }
+                if let Some(&a) = p.params.get(1) {
+                    st.env_attack = a.clamp(0.002, 2.0);
+                }
+                if let Some(&r) = p.params.get(2) {
+                    st.env_release = r.clamp(0.002, 3.0);
+                }
+                if let Some(&lv) = p.params.get(3) {
+                    st.audio_input_level = lv.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::AudioSidechain => {
+                st.audio_sc_track = p.mode_idx;
+                if let Some(&g) = p.params.first() {
+                    st.audio_gain = g.clamp(0.0, 4.0);
+                }
+                if let Some(&th) = p.params.get(1) {
+                    st.audio_threshold = th.clamp(0.0, 1.0);
+                }
+                if let Some(&a) = p.params.get(2) {
+                    st.env_attack = a.clamp(0.002, 2.0);
+                }
+                if let Some(&r) = p.params.get(3) {
+                    st.env_release = r.clamp(0.002, 3.0);
+                }
+                if let Some(&lv) = p.params.get(4) {
+                    st.audio_input_level = lv.clamp(0.0, 1.0);
+                }
+                if let Some(&inv) = p.bool_flags.first() {
+                    st.audio_sc_invert = inv;
+                }
+            }
+            ModulatorKind::AudioRate => {
+                st.ar_wave = p.mode_idx.min(3);
+                if let Some(&hz) = p.params.first() {
+                    st.ar_freq_hz = hz.clamp(20.0, 2000.0);
+                }
+                if let Some(&g) = p.params.get(1) {
+                    st.audio_gain = g.clamp(0.0, 4.0);
+                }
+                if let Some(&rec) = p.bool_flags.first() {
+                    st.ar_rectify = rec;
+                }
+            }
+            ModulatorKind::HwCvIn => {
+                st.cv_channel = p.mode_idx.clamp(1, 8);
+                if let Some(&g) = p.params.first() {
+                    st.audio_gain = g.clamp(0.0, 4.0);
+                }
+                if let Some(&off) = p.params.get(1) {
+                    st.cv_offset = off.clamp(-1.0, 1.0);
+                }
+                if let Some(&lv) = p.params.get(2) {
+                    st.cv_level = lv.clamp(-1.0, 1.0);
+                }
+                if let Some(&bip) = p.bool_flags.first() {
+                    st.cv_bipolar = bip;
+                }
+            }
         }
         st.routes.clear();
         for r in &p.routes {
@@ -2518,6 +2876,26 @@ pub fn notify_bay_note_off(track_idx: usize, _note: u8, release_vel: f32) {
                 }
                 ModulatorKind::Expressions => {
                     m.expr_rel = rvel;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Alimenta el nivel de audio en vivo (peak/rms) de un track hacia los moduladores
+/// `Envelope Follower`, `Audio Sidechain` y `Audio Rate`.
+pub fn notify_bay_audio_level(track_idx: usize, peak: f32, rms: f32) {
+    let lvl = peak.max(rms).clamp(0.0, 1.0);
+    let mut map = bay_state_map().lock().unwrap();
+    for (&(tr, _slot), bay) in map.iter_mut() {
+        for m in &mut bay.slots {
+            match m.kind {
+                ModulatorKind::EnvelopeFollower | ModulatorKind::AudioRate if tr == track_idx => {
+                    m.audio_input_level = lvl;
+                }
+                ModulatorKind::AudioSidechain if m.audio_sc_track as usize == track_idx => {
+                    m.audio_input_level = lvl;
                 }
                 _ => {}
             }

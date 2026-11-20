@@ -37,11 +37,11 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 290,
+    "done": 297,
     "in_progress": 17,
-    "planned": 309,
+    "planned": 302,
     "bugs": 1,
-    "parity_percent": 47
+    "parity_percent": 48
   },
   "areas": [
     {
@@ -1415,12 +1415,12 @@
         {
           "id": "md-005",
           "name": "Audio Rate",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-006",
           "name": "Audio Sidechain",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-007",
@@ -1441,7 +1441,7 @@
         {
           "id": "md-010",
           "name": "Channel-16",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-011",
@@ -1457,7 +1457,7 @@
         {
           "id": "md-013",
           "name": "Envelope Follower",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-014",
@@ -1467,12 +1467,12 @@
         {
           "id": "md-015",
           "name": "Globals",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-016",
           "name": "HW CV In",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-017",
@@ -1604,7 +1604,7 @@
         {
           "id": "md-042",
           "name": "Wavetable LFO",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-043",
