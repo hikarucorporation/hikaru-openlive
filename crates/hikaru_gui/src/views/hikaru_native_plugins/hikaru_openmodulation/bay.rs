@@ -127,6 +127,7 @@ pub enum ModulatorKind {
     BeatLfo,
     Random,
     SampleAndHold,
+    Vibrato,
     Macro,
     Macro4,
     Button,
@@ -144,6 +145,19 @@ pub enum ModulatorKind {
     Curves,
     Ramp,
     Segments,
+    Adsr,
+    Ahdsr,
+    FourStage,
+    AhdOnRelease,
+    Expressions,
+    Midi,
+    KeytrackPlus,
+    RelativeKeytrack,
+    Pitch12,
+    NoteCounter,
+    NoteSidechain,
+    VoiceControl,
+    StackSpread,
 }
 
 impl ModulatorKind {
@@ -163,6 +177,7 @@ impl ModulatorKind {
             "sample and hold" | "sample & hold" | "s&h" | "sampleandhold" => {
                 Some(Self::SampleAndHold)
             }
+            "vibrato" => Some(Self::Vibrato),
             "macro" => Some(Self::Macro),
             "macro-4" | "macro4" | "macro 4" => Some(Self::Macro4),
             "button" => Some(Self::Button),
@@ -180,6 +195,19 @@ impl ModulatorKind {
             "curves" => Some(Self::Curves),
             "ramp" => Some(Self::Ramp),
             "segments" => Some(Self::Segments),
+            "adsr" => Some(Self::Adsr),
+            "ahdsr" => Some(Self::Ahdsr),
+            "4-stage" | "4stage" | "four-stage" => Some(Self::FourStage),
+            "ahd on release" | "ahdonrelease" => Some(Self::AhdOnRelease),
+            "expressions" => Some(Self::Expressions),
+            "midi" => Some(Self::Midi),
+            "keytrack+" | "keytrack plus" | "keytrackplus" => Some(Self::KeytrackPlus),
+            "relative keytrack" | "relativekeytrack" => Some(Self::RelativeKeytrack),
+            "pitch-12" | "pitch12" | "pitch 12" => Some(Self::Pitch12),
+            "note counter" | "notecounter" => Some(Self::NoteCounter),
+            "note sidechain" | "notesidechain" => Some(Self::NoteSidechain),
+            "voice control" | "voicecontrol" => Some(Self::VoiceControl),
+            "stack spread" | "stackspread" => Some(Self::StackSpread),
             _ => None,
         }
     }
@@ -227,6 +255,14 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         short_name: "S&H",
         category: ModulatorCategory::Lfo,
         description: "Clocked Sample & Hold modulator sampling Noise, Sine, Triangle, or Saw with optional slew smoothing.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Vibrato,
+        name: "Vibrato",
+        short_name: "Vibrato",
+        category: ModulatorCategory::Lfo,
+        description: "Expressive vibrato LFO with Rate, Depth, Fade-in delay on note-on, and Mod Wheel scaling.",
         outputs: &["OUT"],
     },
     ModulatorMeta {
@@ -365,6 +401,110 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         description: "Multi-segment breakpoint envelope (MSEG) with 6 editable nodes, curve tension, and loop/one-shot mode.",
         outputs: &["OUT"],
     },
+    ModulatorMeta {
+        kind: ModulatorKind::Adsr,
+        name: "ADSR",
+        short_name: "ADSR",
+        category: ModulatorCategory::Envelope,
+        description: "Classic Attack-Decay-Sustain-Release envelope triggered by note events or manual gate.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Ahdsr,
+        name: "AHDSR",
+        short_name: "AHDSR",
+        category: ModulatorCategory::Envelope,
+        description: "Attack-Hold-Decay-Sustain-Release envelope with peak hold stage.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::FourStage,
+        name: "4-Stage",
+        short_name: "4-Stage",
+        category: ModulatorCategory::Envelope,
+        description: "Flexible 4-stage time/level envelope with optional looping and sustain stage.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::AhdOnRelease,
+        name: "AHD on Release",
+        short_name: "AHD Rel",
+        category: ModulatorCategory::Envelope,
+        description: "Attack-Hold-Decay envelope that fires upon Note-Off / release events.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Expressions,
+        name: "Expressions",
+        short_name: "Expr",
+        category: ModulatorCategory::NoteDriven,
+        description: "Per-note expression outputs for Velocity (VEL), Timbre (TIMB), Release Velocity (REL), and Pressure (PRES).",
+        outputs: &["VEL", "TMB", "REL", "PRS"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Midi,
+        name: "MIDI",
+        short_name: "MIDI",
+        category: ModulatorCategory::NoteDriven,
+        description: "Maps MIDI CC, Mod Wheel, Pitch Bend, and Channel Aftertouch to four independent modulation outputs.",
+        outputs: &["CC", "MW", "PB", "AT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::KeytrackPlus,
+        name: "Keytrack+",
+        short_name: "Keytrk+",
+        category: ModulatorCategory::NoteDriven,
+        description: "Curved keyboard pitch tracking around a configurable root note and semitone spread.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::RelativeKeytrack,
+        name: "Relative Keytrack",
+        short_name: "RelKey",
+        category: ModulatorCategory::NoteDriven,
+        description: "Outputs the relative semitone interval between the current note and the previous note.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Pitch12,
+        name: "Pitch-12",
+        short_name: "Pitch12",
+        category: ModulatorCategory::NoteDriven,
+        description: "12-output pitch-class modulator routing each chromatic note (C..B) to its own modulation output.",
+        outputs: &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::NoteCounter,
+        name: "Note Counter",
+        short_name: "NoteCnt",
+        category: ModulatorCategory::NoteDriven,
+        description: "Steps through N values on every incoming note-on event (Up, Down, or Ping-Pong).",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::NoteSidechain,
+        name: "Note Sidechain",
+        short_name: "NoteSC",
+        category: ModulatorCategory::NoteDriven,
+        description: "Attack/Release sidechain envelope triggered by note events within an optional pitch range.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::VoiceControl,
+        name: "Voice Control",
+        short_name: "Voice",
+        category: ModulatorCategory::VoiceStacking,
+        description: "Exposes polyphonic voice Index, Active Count, Age, and Velocity as 4 independent outputs.",
+        outputs: &["IDX", "CNT", "AGE", "VEL"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::StackSpread,
+        name: "Stack Spread",
+        short_name: "Spread",
+        category: ModulatorCategory::VoiceStacking,
+        description: "Distributes modulation spread across stacked voices with Linear, Center, or Harmonic curves.",
+        outputs: &["OUT"],
+    },
 ];
 
 /// Ruta de modulación desde una salida del modulador hacia un parámetro de dispositivo.
@@ -488,9 +628,65 @@ pub struct ModulatorSlotState {
     // Vector-8 Z axis (reuses xy_x, xy_y for X/Y)
     pub vec8_z: f32,
 
+    // Envelopes (ADSR, AHDSR, 4-Stage, AHD on Release, Note Sidechain)
+    pub env_attack: f32,
+    pub env_hold: f32,
+    pub env_decay: f32,
+    pub env_sustain: f32,
+    pub env_release: f32,
+    pub env_gate: bool,
+    pub env_gate_on_time: f32,
+    pub env_gate_off_time: f32,
+    pub env_release_level: f32,
+    pub env_loop: bool,
+    pub env_4stage_times: [f32; 4],
+    pub env_4stage_levels: [f32; 4],
+
+    // Expressions (VEL, TIMB, REL, PRES)
+    pub expr_vel: f32,
+    pub expr_timbre: f32,
+    pub expr_rel: f32,
+    pub expr_pres: f32,
+
+    // MIDI (CC, MW, PB, AT)
+    pub midi_cc_num: u8,
+    pub midi_cc_val: f32,
+    pub midi_mw: f32,
+    pub midi_pb: f32,
+    pub midi_at: f32,
+
+    // Keytrack+ / Relative Keytrack / Pitch-12
+    pub key_note: u8,
+    pub key_prev_note: u8,
+    pub key_root: u8,
+    pub key_spread_semi: f32,
+    pub key_curve: f32,
+
+    // Note Counter
+    pub nc_steps: u8,
+    pub nc_count: u32,
+    pub nc_mode: u8, // 0=Up, 1=Down, 2=PingPong
+
+    // Note Sidechain
+    pub nsc_min_note: u8,
+    pub nsc_max_note: u8,
+
+    // Vibrato
+    pub vib_rate_hz: f32,
+    pub vib_depth: f32,
+    pub vib_fade_secs: f32,
+    pub vib_mw_scale: f32,
+
+    // Voice Control & Stack Spread
+    pub voice_index: u8,
+    pub voice_count: u8,
+    pub voice_age_secs: f32,
+    pub spread_amount: f32,
+    pub spread_mode: u8, // 0=Linear, 1=Center, 2=Harmonic
+
     // Rutas de modulación
     pub routes: Vec<BayModRoute>,
-    pub last_outputs: [f32; 8],
+    pub last_outputs: [f32; 16],
 }
 
 impl ModulatorSlotState {
@@ -586,8 +782,153 @@ impl ModulatorSlotState {
             seg_start_time: 0.0,
             seg_bipolar: false,
             vec8_z: 0.5,
+            env_attack: 0.05,
+            env_hold: 0.10,
+            env_decay: 0.35,
+            env_sustain: 0.65,
+            env_release: 0.40,
+            env_gate: false,
+            env_gate_on_time: -10.0,
+            env_gate_off_time: -10.0,
+            env_release_level: 0.0,
+            env_loop: false,
+            env_4stage_times: [0.10, 0.25, 0.35, 0.40],
+            env_4stage_levels: [1.0, 0.55, 0.80, 0.0],
+            expr_vel: 0.8,
+            expr_timbre: 0.5,
+            expr_rel: 0.0,
+            expr_pres: 0.0,
+            midi_cc_num: 74,
+            midi_cc_val: 0.5,
+            midi_mw: 0.5,
+            midi_pb: 0.0,
+            midi_at: 0.0,
+            key_note: 60,
+            key_prev_note: 60,
+            key_root: 60,
+            key_spread_semi: 24.0,
+            key_curve: 0.0,
+            nc_steps: 8,
+            nc_count: 0,
+            nc_mode: 0,
+            nsc_min_note: 0,
+            nsc_max_note: 127,
+            vib_rate_hz: 5.5,
+            vib_depth: 0.75,
+            vib_fade_secs: 0.30,
+            vib_mw_scale: 1.0,
+            voice_index: 0,
+            voice_count: 4,
+            voice_age_secs: 0.0,
+            spread_amount: 1.0,
+            spread_mode: 0,
             routes: Vec::new(),
-            last_outputs: [0.0; 8],
+            last_outputs: [0.0; 16],
+        }
+    }
+
+    pub fn trigger_gate(&mut self, on: bool, time_secs: f32) {
+        if on {
+            self.env_gate = true;
+            self.env_gate_on_time = time_secs;
+            if self.kind == ModulatorKind::NoteCounter {
+                self.nc_count = self.nc_count.wrapping_add(1);
+            }
+        } else if self.env_gate {
+            let cur = self.last_outputs[0].clamp(0.0, 1.0);
+            self.env_release_level = cur;
+            self.env_gate = false;
+            self.env_gate_off_time = time_secs;
+        }
+    }
+
+    pub fn eval_adsr_like(&self, time_secs: f32, with_hold: bool) -> f32 {
+        let a = self.env_attack.max(0.002);
+        let h = if with_hold { self.env_hold.max(0.0) } else { 0.0 };
+        let d = self.env_decay.max(0.002);
+        let s = self.env_sustain.clamp(0.0, 1.0);
+        let r = self.env_release.max(0.002);
+        if self.env_gate {
+            let dt = (time_secs - self.env_gate_on_time).max(0.0);
+            if dt < a {
+                (dt / a).clamp(0.0, 1.0)
+            } else if dt < a + h {
+                1.0
+            } else if dt < a + h + d {
+                let fd = ((dt - a - h) / d).clamp(0.0, 1.0);
+                1.0 - (1.0 - s) * fd
+            } else {
+                s
+            }
+        } else {
+            let dt = (time_secs - self.env_gate_off_time).max(0.0);
+            if dt >= r {
+                0.0
+            } else {
+                (self.env_release_level * (1.0 - dt / r)).clamp(0.0, 1.0)
+            }
+        }
+    }
+
+    pub fn eval_four_stage(&self, time_secs: f32) -> f32 {
+        let t0 = self.env_4stage_times[0].max(0.005);
+        let t1 = self.env_4stage_times[1].max(0.005);
+        let t2 = self.env_4stage_times[2].max(0.005);
+        let t3 = self.env_4stage_times[3].max(0.005);
+        let total = t0 + t1 + t2 + t3;
+        let dt_raw = (time_secs - self.env_gate_on_time).max(0.0);
+        if !self.env_gate && !self.env_loop {
+            let dt_off = (time_secs - self.env_gate_off_time).max(0.0);
+            if dt_off >= t3 {
+                return self.env_4stage_levels[3].clamp(0.0, 1.0);
+            }
+            let f = (dt_off / t3).clamp(0.0, 1.0);
+            return (self.env_release_level
+                + (self.env_4stage_levels[3] - self.env_release_level) * f)
+                .clamp(0.0, 1.0);
+        }
+        let dt = if self.env_loop {
+            dt_raw % total
+        } else {
+            dt_raw.min(t0 + t1 + t2)
+        };
+        if dt < t0 {
+            let f = dt / t0;
+            (self.env_4stage_levels[0] * f).clamp(0.0, 1.0)
+        } else if dt < t0 + t1 {
+            let f = (dt - t0) / t1;
+            (self.env_4stage_levels[0]
+                + (self.env_4stage_levels[1] - self.env_4stage_levels[0]) * f)
+                .clamp(0.0, 1.0)
+        } else if dt < t0 + t1 + t2 {
+            let f = (dt - t0 - t1) / t2;
+            (self.env_4stage_levels[1]
+                + (self.env_4stage_levels[2] - self.env_4stage_levels[1]) * f)
+                .clamp(0.0, 1.0)
+        } else {
+            let f = ((dt - t0 - t1 - t2) / t3).clamp(0.0, 1.0);
+            (self.env_4stage_levels[2]
+                + (self.env_4stage_levels[3] - self.env_4stage_levels[2]) * f)
+                .clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn eval_ahd_release(&self, time_secs: f32) -> f32 {
+        if self.env_gate || self.env_gate_off_time < 0.0 {
+            return 0.0;
+        }
+        let a = self.env_attack.max(0.002);
+        let h = self.env_hold.max(0.0);
+        let d = self.env_decay.max(0.002);
+        let dt = (time_secs - self.env_gate_off_time).max(0.0);
+        if dt < a {
+            (dt / a).clamp(0.0, 1.0)
+        } else if dt < a + h {
+            1.0
+        } else if dt < a + h + d {
+            (1.0 - (dt - a - h) / d).clamp(0.0, 1.0)
+        } else {
+            0.0
         }
     }
 
@@ -694,12 +1035,12 @@ impl ModulatorSlotState {
     }
 
     /// Evalúa las salidas en vivo del modulador (rango normalizado -1.0..+1.0 o 0.0..1.0).
-    pub fn evaluate(&mut self, transport: &LfoTransportState, time_secs: f32) -> [f32; 8] {
+    pub fn evaluate(&mut self, transport: &LfoTransportState, time_secs: f32) -> [f32; 16] {
         if !self.enabled {
-            self.last_outputs = [0.0; 8];
+            self.last_outputs = [0.0; 16];
             return self.last_outputs;
         }
-        let mut outs = [0.0_f32; 8];
+        let mut outs = [0.0_f32; 16];
         match self.kind {
             ModulatorKind::ClassicLfo => {
                 let (cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
@@ -934,6 +1275,102 @@ impl ModulatorSlotState {
                 let v = self.eval_segments_at(t);
                 outs[0] = if self.seg_bipolar { v * 2.0 - 1.0 } else { v };
             }
+            ModulatorKind::Adsr => {
+                outs[0] = self.eval_adsr_like(time_secs, false);
+            }
+            ModulatorKind::Ahdsr => {
+                outs[0] = self.eval_adsr_like(time_secs, true);
+            }
+            ModulatorKind::FourStage => {
+                outs[0] = self.eval_four_stage(time_secs);
+            }
+            ModulatorKind::AhdOnRelease => {
+                outs[0] = self.eval_ahd_release(time_secs);
+            }
+            ModulatorKind::Expressions => {
+                outs[0] = self.expr_vel.clamp(0.0, 1.0);
+                outs[1] = self.expr_timbre.clamp(0.0, 1.0);
+                outs[2] = self.expr_rel.clamp(0.0, 1.0);
+                outs[3] = self.expr_pres.clamp(0.0, 1.0);
+            }
+            ModulatorKind::Midi => {
+                outs[0] = self.midi_cc_val.clamp(0.0, 1.0);
+                outs[1] = self.midi_mw.clamp(0.0, 1.0);
+                outs[2] = self.midi_pb.clamp(-1.0, 1.0);
+                outs[3] = self.midi_at.clamp(0.0, 1.0);
+            }
+            ModulatorKind::KeytrackPlus => {
+                let spread = self.key_spread_semi.max(1.0);
+                let raw = ((self.key_note as f32 - self.key_root as f32) / spread).clamp(-1.0, 1.0);
+                let exp = 2.0_f32.powf(-self.key_curve.clamp(-1.0, 1.0) * 1.5);
+                outs[0] = raw.signum() * raw.abs().powf(exp);
+            }
+            ModulatorKind::RelativeKeytrack => {
+                let spread = self.key_spread_semi.max(1.0);
+                let diff = self.key_note as f32 - self.key_prev_note as f32;
+                outs[0] = (diff / spread).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::Pitch12 => {
+                let pc = (self.key_note % 12) as usize;
+                outs[pc] = 1.0;
+            }
+            ModulatorKind::NoteCounter => {
+                let steps = self.nc_steps.clamp(2, 16) as u32;
+                let raw_step = match self.nc_mode {
+                    1 => (steps - 1) - (self.nc_count % steps),
+                    2 => {
+                        let period = (steps - 1) * 2;
+                        let p = self.nc_count % period.max(1);
+                        if p < steps {
+                            p
+                        } else {
+                            period - p
+                        }
+                    }
+                    _ => self.nc_count % steps,
+                };
+                outs[0] = raw_step as f32 / (steps - 1).max(1) as f32;
+            }
+            ModulatorKind::NoteSidechain => {
+                if self.key_note >= self.nsc_min_note && self.key_note <= self.nsc_max_note {
+                    outs[0] = self.eval_adsr_like(time_secs, false);
+                } else {
+                    outs[0] = 0.0;
+                }
+            }
+            ModulatorKind::Vibrato => {
+                let hz = self.vib_rate_hz.clamp(0.1, 20.0);
+                let phase = (time_secs * hz).fract();
+                self.lfo_last_phase = phase;
+                let sine = (phase * std::f32::consts::TAU).sin();
+                let fade = if self.vib_fade_secs > 0.005 && self.env_gate_on_time >= 0.0 {
+                    ((time_secs - self.env_gate_on_time).max(0.0) / self.vib_fade_secs)
+                        .clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let scale = self.vib_depth.clamp(0.0, 1.0) * fade * self.vib_mw_scale.clamp(0.0, 1.0);
+                outs[0] = (sine * scale).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::VoiceControl => {
+                let cnt = self.voice_count.clamp(1, 16) as f32;
+                let idx = (self.voice_index as f32).min(cnt - 1.0);
+                outs[0] = if cnt > 1.0 { idx / (cnt - 1.0) } else { 0.0 };
+                outs[1] = (cnt / 16.0).clamp(0.0, 1.0);
+                outs[2] = (self.voice_age_secs / 4.0).clamp(0.0, 1.0);
+                outs[3] = self.expr_vel.clamp(0.0, 1.0);
+            }
+            ModulatorKind::StackSpread => {
+                let cnt = self.voice_count.clamp(1, 16) as f32;
+                let idx = (self.voice_index as f32).min(cnt - 1.0);
+                let norm = if cnt > 1.0 { idx / (cnt - 1.0) } else { 0.5 };
+                let base = match self.spread_mode {
+                    1 => 1.0 - (norm * 2.0 - 1.0).abs(), // Center peak
+                    2 => ((idx + 1.0) / cnt).clamp(0.0, 1.0), // Harmonic
+                    _ => norm * 2.0 - 1.0, // Linear bipolar -1..+1
+                };
+                outs[0] = (base * self.spread_amount.clamp(-1.0, 1.0)).clamp(-1.0, 1.0);
+            }
         }
         self.last_outputs = outs;
         outs
@@ -1147,6 +1584,97 @@ impl ModulatorSlotState {
                 params.extend_from_slice(&self.seg_levels);
                 (params, vec![self.seg_loop, self.seg_bipolar], 0)
             }
+            ModulatorKind::Adsr => (
+                vec![self.env_attack, self.env_decay, self.env_sustain, self.env_release],
+                vec![self.env_gate],
+                0,
+            ),
+            ModulatorKind::Ahdsr => (
+                vec![
+                    self.env_attack,
+                    self.env_hold,
+                    self.env_decay,
+                    self.env_sustain,
+                    self.env_release,
+                ],
+                vec![self.env_gate],
+                0,
+            ),
+            ModulatorKind::FourStage => {
+                let mut params = self.env_4stage_times.to_vec();
+                params.extend_from_slice(&self.env_4stage_levels);
+                (params, vec![self.env_loop, self.env_gate], 0)
+            }
+            ModulatorKind::AhdOnRelease => (
+                vec![self.env_attack, self.env_hold, self.env_decay],
+                vec![],
+                0,
+            ),
+            ModulatorKind::Expressions => (
+                vec![self.expr_vel, self.expr_timbre, self.expr_rel, self.expr_pres],
+                vec![],
+                0,
+            ),
+            ModulatorKind::Midi => (
+                vec![self.midi_cc_val, self.midi_mw, self.midi_pb, self.midi_at],
+                vec![],
+                self.midi_cc_num,
+            ),
+            ModulatorKind::KeytrackPlus => (
+                vec![self.key_spread_semi, self.key_curve, self.key_note as f32],
+                vec![],
+                self.key_root,
+            ),
+            ModulatorKind::RelativeKeytrack => (
+                vec![self.key_spread_semi, self.key_note as f32, self.key_prev_note as f32],
+                vec![],
+                0,
+            ),
+            ModulatorKind::Pitch12 => (vec![], vec![], self.key_note),
+            ModulatorKind::NoteCounter => (
+                vec![self.nc_count as f32],
+                vec![],
+                (self.nc_steps.clamp(2, 16) << 2) | (self.nc_mode & 0x03),
+            ),
+            ModulatorKind::NoteSidechain => (
+                vec![
+                    self.env_attack,
+                    self.env_release,
+                    self.nsc_min_note as f32,
+                    self.nsc_max_note as f32,
+                ],
+                vec![],
+                0,
+            ),
+            ModulatorKind::Vibrato => (
+                vec![
+                    self.vib_rate_hz,
+                    self.vib_depth,
+                    self.vib_fade_secs,
+                    self.vib_mw_scale,
+                ],
+                vec![],
+                0,
+            ),
+            ModulatorKind::VoiceControl => (
+                vec![
+                    self.voice_index as f32,
+                    self.voice_count as f32,
+                    self.voice_age_secs,
+                    self.expr_vel,
+                ],
+                vec![],
+                0,
+            ),
+            ModulatorKind::StackSpread => (
+                vec![
+                    self.spread_amount,
+                    self.voice_index as f32,
+                    self.voice_count as f32,
+                ],
+                vec![],
+                self.spread_mode,
+            ),
         };
         let routes = self
             .routes
@@ -1544,6 +2072,186 @@ impl ModulatorSlotState {
                     st.seg_bipolar = bip;
                 }
             }
+            ModulatorKind::Adsr => {
+                if let Some(&a) = p.params.first() {
+                    st.env_attack = a.clamp(0.002, 10.0);
+                }
+                if let Some(&d) = p.params.get(1) {
+                    st.env_decay = d.clamp(0.002, 10.0);
+                }
+                if let Some(&s) = p.params.get(2) {
+                    st.env_sustain = s.clamp(0.0, 1.0);
+                }
+                if let Some(&r) = p.params.get(3) {
+                    st.env_release = r.clamp(0.002, 10.0);
+                }
+                if let Some(&g) = p.bool_flags.first() {
+                    st.env_gate = g;
+                }
+            }
+            ModulatorKind::Ahdsr => {
+                if let Some(&a) = p.params.first() {
+                    st.env_attack = a.clamp(0.002, 10.0);
+                }
+                if let Some(&h) = p.params.get(1) {
+                    st.env_hold = h.clamp(0.0, 5.0);
+                }
+                if let Some(&d) = p.params.get(2) {
+                    st.env_decay = d.clamp(0.002, 10.0);
+                }
+                if let Some(&s) = p.params.get(3) {
+                    st.env_sustain = s.clamp(0.0, 1.0);
+                }
+                if let Some(&r) = p.params.get(4) {
+                    st.env_release = r.clamp(0.002, 10.0);
+                }
+                if let Some(&g) = p.bool_flags.first() {
+                    st.env_gate = g;
+                }
+            }
+            ModulatorKind::FourStage => {
+                for i in 0..4 {
+                    if let Some(&t) = p.params.get(i) {
+                        st.env_4stage_times[i] = t.clamp(0.005, 10.0);
+                    }
+                    if let Some(&l) = p.params.get(4 + i) {
+                        st.env_4stage_levels[i] = l.clamp(0.0, 1.0);
+                    }
+                }
+                if let Some(&lp) = p.bool_flags.first() {
+                    st.env_loop = lp;
+                }
+                if let Some(&g) = p.bool_flags.get(1) {
+                    st.env_gate = g;
+                }
+            }
+            ModulatorKind::AhdOnRelease => {
+                if let Some(&a) = p.params.first() {
+                    st.env_attack = a.clamp(0.002, 10.0);
+                }
+                if let Some(&h) = p.params.get(1) {
+                    st.env_hold = h.clamp(0.0, 5.0);
+                }
+                if let Some(&d) = p.params.get(2) {
+                    st.env_decay = d.clamp(0.002, 10.0);
+                }
+            }
+            ModulatorKind::Expressions => {
+                if let Some(&v) = p.params.first() {
+                    st.expr_vel = v.clamp(0.0, 1.0);
+                }
+                if let Some(&t) = p.params.get(1) {
+                    st.expr_timbre = t.clamp(0.0, 1.0);
+                }
+                if let Some(&r) = p.params.get(2) {
+                    st.expr_rel = r.clamp(0.0, 1.0);
+                }
+                if let Some(&pr) = p.params.get(3) {
+                    st.expr_pres = pr.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::Midi => {
+                st.midi_cc_num = p.mode_idx.min(127);
+                if let Some(&v) = p.params.first() {
+                    st.midi_cc_val = v.clamp(0.0, 1.0);
+                }
+                if let Some(&mw) = p.params.get(1) {
+                    st.midi_mw = mw.clamp(0.0, 1.0);
+                }
+                if let Some(&pb) = p.params.get(2) {
+                    st.midi_pb = pb.clamp(-1.0, 1.0);
+                }
+                if let Some(&at) = p.params.get(3) {
+                    st.midi_at = at.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::KeytrackPlus => {
+                st.key_root = p.mode_idx.min(127);
+                if let Some(&sp) = p.params.first() {
+                    st.key_spread_semi = sp.clamp(1.0, 64.0);
+                }
+                if let Some(&cv) = p.params.get(1) {
+                    st.key_curve = cv.clamp(-1.0, 1.0);
+                }
+                if let Some(&kn) = p.params.get(2) {
+                    st.key_note = (kn.round() as i32).clamp(0, 127) as u8;
+                }
+            }
+            ModulatorKind::RelativeKeytrack => {
+                if let Some(&sp) = p.params.first() {
+                    st.key_spread_semi = sp.clamp(1.0, 64.0);
+                }
+                if let Some(&kn) = p.params.get(1) {
+                    st.key_note = (kn.round() as i32).clamp(0, 127) as u8;
+                }
+                if let Some(&kp) = p.params.get(2) {
+                    st.key_prev_note = (kp.round() as i32).clamp(0, 127) as u8;
+                }
+            }
+            ModulatorKind::Pitch12 => {
+                st.key_note = p.mode_idx.min(127);
+            }
+            ModulatorKind::NoteCounter => {
+                st.nc_steps = (p.mode_idx >> 2).clamp(2, 16);
+                st.nc_mode = p.mode_idx & 0x03;
+                if let Some(&c) = p.params.first() {
+                    st.nc_count = c.max(0.0) as u32;
+                }
+            }
+            ModulatorKind::NoteSidechain => {
+                if let Some(&a) = p.params.first() {
+                    st.env_attack = a.clamp(0.002, 5.0);
+                }
+                if let Some(&r) = p.params.get(1) {
+                    st.env_release = r.clamp(0.002, 5.0);
+                }
+                if let Some(&mn) = p.params.get(2) {
+                    st.nsc_min_note = (mn.round() as i32).clamp(0, 127) as u8;
+                }
+                if let Some(&mx) = p.params.get(3) {
+                    st.nsc_max_note = (mx.round() as i32).clamp(0, 127) as u8;
+                }
+            }
+            ModulatorKind::Vibrato => {
+                if let Some(&hz) = p.params.first() {
+                    st.vib_rate_hz = hz.clamp(0.1, 20.0);
+                }
+                if let Some(&d) = p.params.get(1) {
+                    st.vib_depth = d.clamp(0.0, 1.0);
+                }
+                if let Some(&fd) = p.params.get(2) {
+                    st.vib_fade_secs = fd.clamp(0.0, 5.0);
+                }
+                if let Some(&mw) = p.params.get(3) {
+                    st.vib_mw_scale = mw.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::VoiceControl => {
+                if let Some(&vi) = p.params.first() {
+                    st.voice_index = (vi.round() as i32).clamp(0, 15) as u8;
+                }
+                if let Some(&vc) = p.params.get(1) {
+                    st.voice_count = (vc.round() as i32).clamp(1, 16) as u8;
+                }
+                if let Some(&va) = p.params.get(2) {
+                    st.voice_age_secs = va.max(0.0);
+                }
+                if let Some(&vl) = p.params.get(3) {
+                    st.expr_vel = vl.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::StackSpread => {
+                st.spread_mode = p.mode_idx.min(2);
+                if let Some(&amt) = p.params.first() {
+                    st.spread_amount = amt.clamp(-1.0, 1.0);
+                }
+                if let Some(&vi) = p.params.get(1) {
+                    st.voice_index = (vi.round() as i32).clamp(0, 15) as u8;
+                }
+                if let Some(&vc) = p.params.get(2) {
+                    st.voice_count = (vc.round() as i32).clamp(1, 16) as u8;
+                }
+            }
         }
         st.routes.clear();
         for r in &p.routes {
@@ -1743,6 +2451,80 @@ pub fn restore_bay_params(track_idx: usize, slot_idx: usize, params: &DeviceModu
     entry.apply_project_params(params);
 }
 
+/// Notifica a todos los moduladores sensibles a notas en `track_idx` sobre un Note-On.
+pub fn notify_bay_note_on(track_idx: usize, note: u8, velocity: f32) {
+    let now = clock_time_secs();
+    let vel = velocity.clamp(0.0, 1.0);
+    let mut map = bay_state_map().lock().unwrap();
+    for (&(tr, _slot), bay) in map.iter_mut() {
+        if tr != track_idx {
+            continue;
+        }
+        for m in &mut bay.slots {
+            match m.kind {
+                ModulatorKind::Adsr
+                | ModulatorKind::Ahdsr
+                | ModulatorKind::FourStage
+                | ModulatorKind::AhdOnRelease
+                | ModulatorKind::Vibrato => {
+                    m.trigger_gate(true, now);
+                }
+                ModulatorKind::NoteSidechain => {
+                    m.key_note = note;
+                    if note >= m.nsc_min_note && note <= m.nsc_max_note {
+                        m.trigger_gate(true, now);
+                    }
+                }
+                ModulatorKind::Expressions => {
+                    m.expr_vel = vel;
+                }
+                ModulatorKind::KeytrackPlus | ModulatorKind::Pitch12 => {
+                    m.key_note = note;
+                }
+                ModulatorKind::RelativeKeytrack => {
+                    m.key_prev_note = m.key_note;
+                    m.key_note = note;
+                }
+                ModulatorKind::NoteCounter => {
+                    m.nc_count = m.nc_count.wrapping_add(1);
+                }
+                ModulatorKind::VoiceControl => {
+                    m.expr_vel = vel;
+                    m.voice_age_secs = 0.0;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Notifica a todos los moduladores sensibles a notas en `track_idx` sobre un Note-Off.
+pub fn notify_bay_note_off(track_idx: usize, _note: u8, release_vel: f32) {
+    let now = clock_time_secs();
+    let rvel = release_vel.clamp(0.0, 1.0);
+    let mut map = bay_state_map().lock().unwrap();
+    for (&(tr, _slot), bay) in map.iter_mut() {
+        if tr != track_idx {
+            continue;
+        }
+        for m in &mut bay.slots {
+            match m.kind {
+                ModulatorKind::Adsr
+                | ModulatorKind::Ahdsr
+                | ModulatorKind::FourStage
+                | ModulatorKind::AhdOnRelease
+                | ModulatorKind::NoteSidechain => {
+                    m.trigger_gate(false, now);
+                }
+                ModulatorKind::Expressions => {
+                    m.expr_rel = rvel;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Suma las contribuciones de todos los moduladores de bay activos en `track_idx`
 /// para un parámetro `(device, param)`. Devuelve `(matched, sum_raw, sum_delta, sum_amount, last_phase)`.
 pub fn evaluate_bay_modulation_for_track(
@@ -1792,6 +2574,7 @@ pub fn evaluate_bay_modulation_for_track(
                             | ModulatorKind::BeatLfo
                             | ModulatorKind::Random
                             | ModulatorKind::SampleAndHold
+                            | ModulatorKind::Vibrato
                             | ModulatorKind::Steps
                             | ModulatorKind::ParSeq8
                             | ModulatorKind::Curves

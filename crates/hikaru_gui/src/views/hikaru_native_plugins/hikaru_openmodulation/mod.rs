@@ -11,8 +11,9 @@ pub mod lfo_mod;
 
 pub use bay::{
     add_bay_modulator, bay_width_for_slot, capture_bay_params, clear_bay_for_slot, get_bay_state,
-    remove_bay_modulator, restore_bay_params, update_bay_state, DeviceModulatorBay, MathOp,
-    ModulatorCategory, ModulatorKind, ModulatorMeta, ModulatorSlotState, MODULATOR_CATALOG,
+    notify_bay_note_off, notify_bay_note_on, remove_bay_modulator, restore_bay_params,
+    update_bay_state, DeviceModulatorBay, MathOp, ModulatorCategory, ModulatorKind, ModulatorMeta,
+    ModulatorSlotState, MODULATOR_CATALOG,
 };
 pub use bay_ui::render_device_modulator_bay;
 pub use lfo_mod::{
@@ -521,7 +522,7 @@ mod tests {
         v8.xy_y = 0.5;
         v8.vec8_z = 0.25;
         let v8_outs = v8.evaluate(&transport, 0.0);
-        let sum8: f32 = v8_outs.iter().sum();
+        let sum8: f32 = v8_outs[..8].iter().sum();
         assert!((sum8 - 1.0).abs() < 1e-4);
         assert!((v8_outs[0] - 0.1875).abs() < 1e-4); // 0.25 * 0.75
         assert!((v8_outs[4] - 0.0625).abs() < 1e-4); // 0.25 * 0.25
@@ -535,5 +536,134 @@ mod tests {
         assert!((r_v8.vec8_z - 0.25).abs() < 1e-4);
         let r_ps = restored.slots.iter().find(|s| s.kind == ModulatorKind::ParSeq8).unwrap();
         assert!((r_ps.parseq_steps[5] - 0.88).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_block3_modulators_envelopes_note_midi_voice() {
+        let mut bay = DeviceModulatorBay::empty();
+        let adsr_id = bay.add_modulator(ModulatorKind::Adsr);
+        let ahdsr_id = bay.add_modulator(ModulatorKind::Ahdsr);
+        let s4_id = bay.add_modulator(ModulatorKind::FourStage);
+        let ahd_rel_id = bay.add_modulator(ModulatorKind::AhdOnRelease);
+        let expr_id = bay.add_modulator(ModulatorKind::Expressions);
+        let midi_id = bay.add_modulator(ModulatorKind::Midi);
+        let kt_id = bay.add_modulator(ModulatorKind::KeytrackPlus);
+        let rkt_id = bay.add_modulator(ModulatorKind::RelativeKeytrack);
+        let p12_id = bay.add_modulator(ModulatorKind::Pitch12);
+        let nc_id = bay.add_modulator(ModulatorKind::NoteCounter);
+        let nsc_id = bay.add_modulator(ModulatorKind::NoteSidechain);
+        let vib_id = bay.add_modulator(ModulatorKind::Vibrato);
+        let vc_id = bay.add_modulator(ModulatorKind::VoiceControl);
+        let sp_id = bay.add_modulator(ModulatorKind::StackSpread);
+        let transport = LfoTransportState::default();
+
+        // ADSR: Attack 0.1s -> at t=0.05s => 0.5; after decay => sustain 0.6
+        let adsr = bay.slots.iter_mut().find(|s| s.id == adsr_id).unwrap();
+        adsr.env_attack = 0.1;
+        adsr.env_decay = 0.2;
+        adsr.env_sustain = 0.6;
+        adsr.trigger_gate(true, 1.0);
+        assert!((adsr.evaluate(&transport, 1.05)[0] - 0.5).abs() < 1e-3);
+        assert!((adsr.evaluate(&transport, 1.50)[0] - 0.6).abs() < 1e-3);
+
+        // AHDSR: Attack 0.1s + Hold 0.2s -> at t=1.2s still 1.0
+        let ahdsr = bay.slots.iter_mut().find(|s| s.id == ahdsr_id).unwrap();
+        ahdsr.env_attack = 0.1;
+        ahdsr.env_hold = 0.2;
+        ahdsr.env_decay = 0.2;
+        ahdsr.trigger_gate(true, 1.0);
+        assert!((ahdsr.evaluate(&transport, 1.2)[0] - 1.0).abs() < 1e-3);
+
+        // 4-Stage
+        let s4 = bay.slots.iter_mut().find(|s| s.id == s4_id).unwrap();
+        s4.env_4stage_times = [0.1, 0.1, 0.1, 0.1];
+        s4.env_4stage_levels = [0.8, 0.4, 0.9, 0.0];
+        s4.trigger_gate(true, 0.0);
+        assert!((s4.evaluate(&transport, 0.1)[0] - 0.8).abs() < 1e-3);
+
+        // AHD on Release: fires when gate turns off
+        let ahdr = bay.slots.iter_mut().find(|s| s.id == ahd_rel_id).unwrap();
+        ahdr.env_attack = 0.1;
+        ahdr.env_hold = 0.1;
+        ahdr.env_decay = 0.2;
+        ahdr.trigger_gate(true, 0.0);
+        assert_eq!(ahdr.evaluate(&transport, 0.5)[0], 0.0);
+        ahdr.trigger_gate(false, 1.0);
+        assert!((ahdr.evaluate(&transport, 1.15)[0] - 1.0).abs() < 1e-3);
+
+        // Expressions & MIDI 4-output
+        let expr = bay.slots.iter_mut().find(|s| s.id == expr_id).unwrap();
+        expr.expr_vel = 0.9;
+        expr.expr_timbre = 0.4;
+        assert!((expr.evaluate(&transport, 0.0)[0] - 0.9).abs() < 1e-4);
+        assert!((expr.evaluate(&transport, 0.0)[1] - 0.4).abs() < 1e-4);
+
+        let midi = bay.slots.iter_mut().find(|s| s.id == midi_id).unwrap();
+        midi.midi_pb = -0.5;
+        assert!((midi.evaluate(&transport, 0.0)[2] - (-0.5)).abs() < 1e-4);
+
+        // Keytrack+ & Relative Keytrack & Pitch-12
+        let kt = bay.slots.iter_mut().find(|s| s.id == kt_id).unwrap();
+        kt.key_root = 60;
+        kt.key_spread_semi = 24.0;
+        kt.key_curve = 0.0;
+        kt.key_note = 72; // +12 semi => +0.5
+        assert!((kt.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+
+        let rkt = bay.slots.iter_mut().find(|s| s.id == rkt_id).unwrap();
+        rkt.key_prev_note = 60;
+        rkt.key_note = 48; // -12 / 24 => -0.5
+        rkt.key_spread_semi = 24.0;
+        assert!((rkt.evaluate(&transport, 0.0)[0] - (-0.5)).abs() < 1e-4);
+
+        let p12 = bay.slots.iter_mut().find(|s| s.id == p12_id).unwrap();
+        p12.key_note = 69; // A4 -> pitch class 9
+        let p12_outs = p12.evaluate(&transport, 0.0);
+        assert_eq!(p12_outs[9], 1.0);
+        assert_eq!(p12_outs[0], 0.0);
+
+        // Note Counter (5 steps: count=2 => 2/4 = 0.5)
+        let nc = bay.slots.iter_mut().find(|s| s.id == nc_id).unwrap();
+        nc.nc_steps = 5;
+        nc.nc_mode = 0;
+        nc.nc_count = 2;
+        assert!((nc.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+
+        // Note Sidechain & Vibrato
+        let nsc = bay.slots.iter_mut().find(|s| s.id == nsc_id).unwrap();
+        nsc.nsc_min_note = 36;
+        nsc.nsc_max_note = 48;
+        nsc.key_note = 40;
+        nsc.env_attack = 0.05;
+        nsc.trigger_gate(true, 0.0);
+        assert!(nsc.evaluate(&transport, 0.05)[0] > 0.9);
+
+        let vib = bay.slots.iter_mut().find(|s| s.id == vib_id).unwrap();
+        vib.vib_rate_hz = 4.0;
+        vib.vib_depth = 1.0;
+        vib.vib_fade_secs = 0.0;
+        vib.vib_mw_scale = 1.0;
+        assert!((vib.evaluate(&transport, 0.0625)[0] - 1.0).abs() < 1e-3);
+
+        // Voice Control & Stack Spread
+        let vc = bay.slots.iter_mut().find(|s| s.id == vc_id).unwrap();
+        vc.voice_index = 2;
+        vc.voice_count = 5;
+        assert!((vc.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+
+        let sp = bay.slots.iter_mut().find(|s| s.id == sp_id).unwrap();
+        sp.voice_index = 4;
+        sp.voice_count = 5;
+        sp.spread_mode = 0;
+        sp.spread_amount = 0.8;
+        assert!((sp.evaluate(&transport, 0.0)[0] - 0.8).abs() < 1e-4);
+
+        // Persistence roundtrip for all 14
+        let saved = bay.to_project_params(true);
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved);
+        assert_eq!(restored.slots.len(), 14);
+        let r_p12 = restored.slots.iter().find(|s| s.kind == ModulatorKind::Pitch12).unwrap();
+        assert_eq!(r_p12.key_note, 69);
     }
 }

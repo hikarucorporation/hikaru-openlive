@@ -94,18 +94,24 @@ pub fn render_device_modulator_bay(
                     | ModulatorKind::BeatLfo
                     | ModulatorKind::Random
                     | ModulatorKind::SampleAndHold
+                    | ModulatorKind::Vibrato
                     | ModulatorKind::Steps
                     | ModulatorKind::ParSeq8
                     | ModulatorKind::Curves
                     | ModulatorKind::Ramp
                     | ModulatorKind::Segments
+                    | ModulatorKind::Adsr
+                    | ModulatorKind::Ahdsr
+                    | ModulatorKind::FourStage
+                    | ModulatorKind::AhdOnRelease
+                    | ModulatorKind::NoteSidechain
             )
         {
             any_lfo_active = true;
         }
         let mod_id = m.id;
         let out_labels = m.kind.meta().outputs;
-        let num_outs = out_labels.len().clamp(1, 8);
+        let num_outs = out_labels.len().clamp(1, 16);
         let any_map_active = (0..num_outs as u8)
             .any(|o| is_bay_mapping_active(track_idx, slot_idx, mod_id, o));
 
@@ -316,7 +322,7 @@ fn render_output_arrow_strip(
     p: &Painter,
     strip_r: Rect,
     m: &mut ModulatorSlotState,
-    outs: [f32; 8],
+    outs: [f32; 16],
     out_labels: &[&str],
     track_idx: usize,
     slot_idx: usize,
@@ -324,10 +330,23 @@ fn render_output_arrow_strip(
     remove_id: &mut Option<u32>,
 ) {
     let mod_id = m.id;
-    let num_outs = out_labels.len().clamp(1, 8);
-    let rows = if num_outs > 4 { 2 } else { 1 };
-    let cols = if num_outs > 4 { 4 } else { num_outs };
-    let gap_x = if cols > 1 { 1.5 } else { 0.0 };
+    let num_outs = out_labels.len().clamp(1, 16);
+    let (rows, cols) = if num_outs <= 4 {
+        (1, num_outs)
+    } else if num_outs <= 8 {
+        (2, 4)
+    } else if num_outs <= 12 {
+        (2, 6)
+    } else {
+        (2, 8)
+    };
+    let gap_x = if cols > 6 {
+        0.8
+    } else if cols > 1 {
+        1.5
+    } else {
+        0.0
+    };
     let gap_y = if rows > 1 { 1.5 } else { 0.0 };
     let cell_w = (strip_r.width() - gap_x * (cols as f32 - 1.0)) / cols as f32;
     let cell_h = (strip_r.height() - gap_y * (rows as f32 - 1.0)) / rows as f32;
@@ -404,21 +423,32 @@ fn render_output_arrow_strip(
                 Stroke::NONE,
             ));
         } else {
-            // 4 or 8 outputs: compact labeled/numbered mapping cell with active dot
-            let short_tag = if out_label.len() <= 2 {
+            // 4..16 outputs: compact labeled/numbered mapping cell with active dot
+            let short_tag = if num_outs <= 4 && out_label.len() <= 3 {
+                out_label.to_string()
+            } else if out_label.len() <= 2 {
                 out_label.to_string()
             } else {
                 (out_i + 1).to_string()
+            };
+            let font_sz = if num_outs > 8 {
+                6.0
+            } else if num_outs > 4 {
+                7.0
+            } else if short_tag.len() >= 3 {
+                6.2
+            } else {
+                8.0
             };
             p.text(
                 arrow_r.center(),
                 Align2::CENTER_CENTER,
                 short_tag,
-                fonts::semibold(if num_outs > 4 { 7.0 } else { 8.0 }),
+                fonts::semibold(font_sz),
                 fg,
             );
             if is_assigned && !map_active {
-                p.circle_filled(pos2(arrow_r.max.x - 2.0, arrow_r.min.y + 2.0), 1.3, MOD_ARROW_CYAN);
+                p.circle_filled(pos2(arrow_r.max.x - 1.8, arrow_r.min.y + 1.8), 1.2, MOD_ARROW_CYAN);
             }
         }
 
@@ -1564,6 +1594,451 @@ fn render_slot_body(
                 if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED },
             );
         }
+        ModulatorKind::Adsr | ModulatorKind::Ahdsr | ModulatorKind::NoteSidechain => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_env", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "{} — Hold mouse to trigger Gate (Out: {:.0}%)",
+                    m.kind.meta().name,
+                    live_out * 100.0
+                ));
+            let held = resp.is_pointer_button_down_on();
+            if held && !m.env_gate {
+                m.trigger_gate(true, time_secs);
+                *dirty = true;
+            } else if !held && m.env_gate && resp.drag_stopped() {
+                m.trigger_gate(false, time_secs);
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let x0 = rect.min.x + 2.0;
+            let w = rect.width() - 4.0;
+            let y_bot = rect.max.y - 2.5;
+            let h = rect.height() - 5.0;
+            let has_hold = m.kind == ModulatorKind::Ahdsr;
+            let ax = x0 + w * 0.22;
+            let hx = if has_hold { x0 + w * 0.34 } else { ax };
+            let dx = x0 + w * 0.56;
+            let sx = x0 + w * 0.78;
+            let rx = x0 + w;
+            let sy = y_bot - m.env_sustain.clamp(0.0, 1.0) * h;
+            let mut pts = vec![pos2(x0, y_bot), pos2(ax, y_bot - h)];
+            if has_hold {
+                pts.push(pos2(hx, y_bot - h));
+            }
+            pts.push(pos2(dx, sy));
+            pts.push(pos2(sx, sy));
+            pts.push(pos2(rx, y_bot));
+            let col = if !m.enabled {
+                theme::TEXT_MUTED
+            } else if m.env_gate {
+                MOD_ARROW_CYAN
+            } else {
+                MOD_ORANGE
+            };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, col)));
+            // Live output level bar on right edge
+            let lvl_h = live_out.clamp(0.0, 1.0) * h;
+            p.rect_filled(
+                Rect::from_min_max(pos2(rect.max.x - 4.0, y_bot - lvl_h), pos2(rect.max.x - 1.5, y_bot)),
+                1.0,
+                MOD_ARROW_CYAN,
+            );
+        }
+        ModulatorKind::FourStage => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_4stage", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text("4-Stage Envelope — Hold to gate / trigger");
+            let held = resp.is_pointer_button_down_on();
+            if held && !m.env_gate {
+                m.trigger_gate(true, time_secs);
+                *dirty = true;
+            } else if !held && m.env_gate && resp.drag_stopped() {
+                m.trigger_gate(false, time_secs);
+                *dirty = true;
+            }
+            let x0 = rect.min.x + 2.0;
+            let w = rect.width() - 4.0;
+            let y_bot = rect.max.y - 2.5;
+            let h = rect.height() - 5.0;
+            let pts = vec![
+                pos2(x0, y_bot),
+                pos2(x0 + w * 0.25, y_bot - m.env_4stage_levels[0] * h),
+                pos2(x0 + w * 0.50, y_bot - m.env_4stage_levels[1] * h),
+                pos2(x0 + w * 0.75, y_bot - m.env_4stage_levels[2] * h),
+                pos2(x0 + w, y_bot - m.env_4stage_levels[3] * h),
+            ];
+            let col = if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, col)));
+            let lvl_h = live_out.clamp(0.0, 1.0) * h;
+            p.rect_filled(
+                Rect::from_min_max(pos2(rect.max.x - 4.0, y_bot - lvl_h), pos2(rect.max.x - 1.5, y_bot)),
+                1.0,
+                MOD_ARROW_CYAN,
+            );
+        }
+        ModulatorKind::AhdOnRelease => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_ahd_rel", track_idx, slot_idx, m.id)),
+                    Sense::click(),
+                )
+                .on_hover_text("AHD on Release — Click to fire release envelope");
+            if resp.clicked() {
+                m.env_gate = false;
+                m.env_gate_off_time = time_secs;
+                *dirty = true;
+            }
+            let x0 = rect.min.x + 2.0;
+            let w = rect.width() - 4.0;
+            let y_bot = rect.max.y - 2.5;
+            let h = rect.height() - 5.0;
+            let pts = vec![
+                pos2(x0, y_bot),
+                pos2(x0 + w * 0.25, y_bot - h),
+                pos2(x0 + w * 0.50, y_bot - h),
+                pos2(x0 + w, y_bot),
+            ];
+            p.add(egui::Shape::line(
+                pts,
+                Stroke::new(1.25_f32, if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED }),
+            ));
+            let lvl_h = live_out.clamp(0.0, 1.0) * h;
+            p.rect_filled(
+                Rect::from_min_max(pos2(rect.max.x - 4.0, y_bot - lvl_h), pos2(rect.max.x - 1.5, y_bot)),
+                1.0,
+                MOD_ORANGE,
+            );
+        }
+        ModulatorKind::Expressions => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_expr", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text("Expressions (VEL / TMB / REL / PRS) — Drag bars to audition");
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let tx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 0.999);
+                    let ty = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    match (tx * 4.0) as usize {
+                        0 => m.expr_vel = ty,
+                        1 => m.expr_timbre = ty,
+                        2 => m.expr_rel = ty,
+                        _ => m.expr_pres = ty,
+                    }
+                    *dirty = true;
+                }
+            }
+            let vals = [m.expr_vel, m.expr_timbre, m.expr_rel, m.expr_pres];
+            let pad = 2.0;
+            let gap = 2.0;
+            let bw = (rect.width() - pad * 2.0 - gap * 3.0) / 4.0;
+            for (i, &v) in vals.iter().enumerate() {
+                let x0 = rect.min.x + pad + i as f32 * (bw + gap);
+                let bh = v.clamp(0.06, 1.0) * (rect.height() - pad * 2.0);
+                p.rect_filled(
+                    Rect::from_min_max(pos2(x0, rect.max.y - pad - bh), pos2(x0 + bw, rect.max.y - pad)),
+                    1.0,
+                    if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED },
+                );
+            }
+        }
+        ModulatorKind::Midi => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_midi", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "MIDI (CC{}, MW, PB, AT) — Drag bars to audition",
+                    m.midi_cc_num
+                ));
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let tx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 0.999);
+                    let ty = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    match (tx * 4.0) as usize {
+                        0 => m.midi_cc_val = ty,
+                        1 => m.midi_mw = ty,
+                        2 => m.midi_pb = ty * 2.0 - 1.0,
+                        _ => m.midi_at = ty,
+                    }
+                    *dirty = true;
+                }
+            }
+            let vals = [m.midi_cc_val, m.midi_mw, (m.midi_pb + 1.0) * 0.5, m.midi_at];
+            let pad = 2.0;
+            let gap = 2.0;
+            let bw = (rect.width() - pad * 2.0 - gap * 3.0) / 4.0;
+            for (i, &v) in vals.iter().enumerate() {
+                let x0 = rect.min.x + pad + i as f32 * (bw + gap);
+                let bh = v.clamp(0.06, 1.0) * (rect.height() - pad * 2.0);
+                p.rect_filled(
+                    Rect::from_min_max(pos2(x0, rect.max.y - pad - bh), pos2(x0 + bw, rect.max.y - pad)),
+                    1.0,
+                    if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED },
+                );
+            }
+        }
+        ModulatorKind::KeytrackPlus => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_keytrk", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Keytrack+ (Note {}, Root {}) — Drag horizontal to audition note",
+                    m.key_note, m.key_root
+                ));
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let t = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    m.key_note = (24.0 + t * 72.0).round() as u8;
+                    *dirty = true;
+                }
+            }
+            let cy = rect.center().y;
+            let exp = 2.0_f32.powf(-m.key_curve.clamp(-1.0, 1.0) * 1.5);
+            let mut pts = Vec::with_capacity(21);
+            for i in 0..=20 {
+                let t = i as f32 / 20.0;
+                let raw = t * 2.0 - 1.0;
+                let yv = raw.signum() * raw.abs().powf(exp);
+                pts.push(pos2(
+                    rect.min.x + 2.0 + t * (rect.width() - 4.0),
+                    cy - yv * (rect.height() * 0.40),
+                ));
+            }
+            p.add(egui::Shape::line(
+                pts,
+                Stroke::new(1.2_f32, if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED }),
+            ));
+            let dot_t = ((live_out + 1.0) * 0.5).clamp(0.0, 1.0);
+            p.circle_filled(
+                pos2(rect.min.x + 2.0 + dot_t * (rect.width() - 4.0), cy - live_out * (rect.height() * 0.40)),
+                2.2,
+                Color32::WHITE,
+            );
+        }
+        ModulatorKind::RelativeKeytrack => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let diff = m.key_note as i32 - m.key_prev_note as i32;
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_relkey", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!("Relative Keytrack ({:+} st) — Drag horizontal to audition", diff));
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let t = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    m.key_note = (m.key_prev_note as i32 + ((t * 2.0 - 1.0) * m.key_spread_semi).round() as i32).clamp(0, 127) as u8;
+                    *dirty = true;
+                }
+            }
+            let cx = rect.center().x;
+            p.line_segment([pos2(cx, rect.min.y + 2.0), pos2(cx, rect.max.y - 2.0)], Stroke::new(0.8_f32, CELL_BORDER));
+            let bar_x = cx + live_out.clamp(-1.0, 1.0) * (rect.width() * 0.44);
+            let bar_r = Rect::from_min_max(
+                pos2(cx.min(bar_x), rect.center().y - 4.0),
+                pos2(cx.max(bar_x), rect.center().y + 4.0),
+            );
+            p.rect_filled(bar_r, 1.5, if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED });
+            p.text(
+                pos2(rect.center().x, rect.min.y + 1.5),
+                Align2::CENTER_TOP,
+                format!("{:+}st", diff),
+                fonts::semibold(7.0),
+                KNOB_WHITE,
+            );
+        }
+        ModulatorKind::Pitch12 => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_pitch12", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text("Pitch-12 — Click/drag chromatic strip to select pitch class");
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let t = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 0.999);
+                    let pc = (t * 12.0) as u8;
+                    m.key_note = 60 + pc;
+                    *dirty = true;
+                }
+            }
+            let active_pc = (m.key_note % 12) as usize;
+            let bw = (rect.width() - 4.0) / 12.0;
+            for i in 0..12 {
+                let is_black = matches!(i, 1 | 3 | 6 | 8 | 10);
+                let x0 = rect.min.x + 2.0 + i as f32 * bw;
+                let kr = Rect::from_min_max(
+                    pos2(x0, rect.min.y + 2.0),
+                    pos2(x0 + bw - 0.5, if is_black { rect.center().y + 2.0 } else { rect.max.y - 2.0 }),
+                );
+                let col = if i == active_pc && m.enabled {
+                    MOD_ARROW_CYAN
+                } else if is_black {
+                    Color32::from_rgb(0x28, 0x2B, 0x32)
+                } else {
+                    Color32::from_rgb(0x52, 0x56, 0x62)
+                };
+                p.rect_filled(kr, 0.8, col);
+            }
+        }
+        ModulatorKind::NoteCounter => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_nc", track_idx, slot_idx, m.id)),
+                    Sense::click(),
+                )
+                .on_hover_text("Note Counter — Click to advance step manually");
+            if resp.clicked() {
+                m.nc_count = m.nc_count.wrapping_add(1);
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let steps = m.nc_steps.clamp(2, 16) as u32;
+            let cur = (m.nc_count % steps) + 1;
+            p.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                format!("{cur}/{steps}"),
+                fonts::semibold(10.0),
+                if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED },
+            );
+        }
+        ModulatorKind::Vibrato => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_vib", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Vibrato ({:.1} Hz, Depth {:.0}%) — Drag vertical: depth • Click: retrigger fade",
+                    m.vib_rate_hz,
+                    m.vib_depth * 100.0
+                ));
+            if resp.clicked() {
+                m.env_gate_on_time = time_secs;
+                *dirty = true;
+            } else if resp.dragged() {
+                m.vib_depth = (m.vib_depth - resp.drag_delta().y * 0.01).clamp(0.0, 1.0);
+                *dirty = true;
+            }
+            let cy = rect.center().y;
+            let mut pts = Vec::with_capacity(25);
+            for i in 0..=24 {
+                let t = i as f32 / 24.0;
+                let fade = (t * 2.5).min(1.0);
+                let yv = (t * std::f32::consts::TAU * 3.0).sin() * fade * m.vib_depth;
+                pts.push(pos2(
+                    rect.min.x + 2.0 + t * (rect.width() - 4.0),
+                    cy - yv * (rect.height() * 0.38),
+                ));
+            }
+            p.add(egui::Shape::line(
+                pts,
+                Stroke::new(1.2_f32, if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED }),
+            ));
+            p.circle_filled(
+                pos2(rect.max.x - 4.0, cy - live_out * (rect.height() * 0.38)),
+                2.2,
+                Color32::WHITE,
+            );
+        }
+        ModulatorKind::VoiceControl => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let cnt = m.voice_count.clamp(1, 16) as f32;
+            let idx = (m.voice_index as f32).min(cnt - 1.0);
+            let vals = [
+                if cnt > 1.0 { idx / (cnt - 1.0) } else { 0.0 },
+                (cnt / 16.0).clamp(0.0, 1.0),
+                (m.voice_age_secs / 4.0).clamp(0.0, 1.0),
+                m.expr_vel,
+            ];
+            let pad = 2.0;
+            let gap = 2.0;
+            let bw = (rect.width() - pad * 2.0 - gap * 3.0) / 4.0;
+            for (i, &v) in vals.iter().enumerate() {
+                let x0 = rect.min.x + pad + i as f32 * (bw + gap);
+                let bh = v.clamp(0.08, 1.0) * (rect.height() - pad * 2.0);
+                p.rect_filled(
+                    Rect::from_min_max(pos2(x0, rect.max.y - pad - bh), pos2(x0 + bw, rect.max.y - pad)),
+                    1.0,
+                    if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED },
+                );
+            }
+        }
+        ModulatorKind::StackSpread => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_spread", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Stack Spread ({:+.0}%) — Drag horizontal to adjust spread",
+                    m.spread_amount * 100.0
+                ));
+            if resp.dragged() {
+                m.spread_amount = (m.spread_amount + resp.drag_delta().x * 0.02).clamp(-1.0, 1.0);
+                *dirty = true;
+            }
+            let cx = rect.center().x;
+            let n = m.voice_count.clamp(2, 8) as usize;
+            let cy = rect.center().y;
+            for i in 0..n {
+                let norm = i as f32 / (n - 1) as f32;
+                let off = (norm * 2.0 - 1.0) * m.spread_amount * (rect.width() * 0.42);
+                let is_sel = i == m.voice_index as usize;
+                p.line_segment(
+                    [pos2(cx + off, rect.min.y + 3.0), pos2(cx + off, rect.max.y - 3.0)],
+                    Stroke::new(
+                        if is_sel { 2.0_f32 } else { 1.1_f32 },
+                        if !m.enabled {
+                            theme::TEXT_MUTED
+                        } else if is_sel {
+                            MOD_ARROW_CYAN
+                        } else {
+                            MOD_ORANGE
+                        },
+                    ),
+                );
+            }
+            p.circle_filled(pos2(cx, cy), 1.5, CELL_BORDER);
+        }
     }
 }
 
@@ -2213,6 +2688,141 @@ fn render_modulator_inspector(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &m
                 m.vec8_z = 0.5;
                 *dirty = true;
             }
+        }
+        ModulatorKind::Adsr => {
+            if ui.add(egui::Slider::new(&mut m.env_attack, 0.002..=5.0).logarithmic(true).suffix(" s").text("Attack")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_decay, 0.002..=5.0).logarithmic(true).suffix(" s").text("Decay")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_sustain, 0.0..=1.0).text("Sustain")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_release, 0.002..=5.0).logarithmic(true).suffix(" s").text("Release")).changed() { *dirty = true; }
+            if ui.button(if m.env_gate { "Release Gate" } else { "Trigger Gate" }).clicked() {
+                m.trigger_gate(!m.env_gate, clock_time_secs());
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Ahdsr => {
+            if ui.add(egui::Slider::new(&mut m.env_attack, 0.002..=5.0).logarithmic(true).suffix(" s").text("Attack")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_hold, 0.0..=2.0).suffix(" s").text("Hold")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_decay, 0.002..=5.0).logarithmic(true).suffix(" s").text("Decay")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_sustain, 0.0..=1.0).text("Sustain")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_release, 0.002..=5.0).logarithmic(true).suffix(" s").text("Release")).changed() { *dirty = true; }
+            if ui.button(if m.env_gate { "Release Gate" } else { "Trigger Gate" }).clicked() {
+                m.trigger_gate(!m.env_gate, clock_time_secs());
+                *dirty = true;
+            }
+        }
+        ModulatorKind::FourStage => {
+            for i in 0..4 {
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Slider::new(&mut m.env_4stage_times[i], 0.01..=4.0).suffix("s").text(format!("T{}", i + 1))).changed() { *dirty = true; }
+                    if ui.add(egui::Slider::new(&mut m.env_4stage_levels[i], 0.0..=1.0).text(format!("L{}", i + 1))).changed() { *dirty = true; }
+                });
+            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut m.env_loop, "Loop").changed() { *dirty = true; }
+                if ui.button(if m.env_gate { "Release" } else { "Trigger" }).clicked() {
+                    m.trigger_gate(!m.env_gate, clock_time_secs());
+                    *dirty = true;
+                }
+            });
+        }
+        ModulatorKind::AhdOnRelease => {
+            if ui.add(egui::Slider::new(&mut m.env_attack, 0.002..=5.0).logarithmic(true).suffix(" s").text("Attack")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_hold, 0.0..=2.0).suffix(" s").text("Hold")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_decay, 0.002..=5.0).logarithmic(true).suffix(" s").text("Decay")).changed() { *dirty = true; }
+            if ui.button("Fire Release").clicked() {
+                m.env_gate = false;
+                m.env_gate_off_time = clock_time_secs();
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Expressions => {
+            if ui.add(egui::Slider::new(&mut m.expr_vel, 0.0..=1.0).text("Velocity")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.expr_timbre, 0.0..=1.0).text("Timbre")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.expr_rel, 0.0..=1.0).text("Release Vel")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.expr_pres, 0.0..=1.0).text("Pressure")).changed() { *dirty = true; }
+        }
+        ModulatorKind::Midi => {
+            if ui.add(egui::Slider::new(&mut m.midi_cc_num, 0..=127).text("CC #")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.midi_cc_val, 0.0..=1.0).text("CC Value")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.midi_mw, 0.0..=1.0).text("Mod Wheel")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.midi_pb, -1.0..=1.0).text("Pitch Bend")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.midi_at, 0.0..=1.0).text("Aftertouch")).changed() { *dirty = true; }
+        }
+        ModulatorKind::KeytrackPlus => {
+            if ui.add(egui::Slider::new(&mut m.key_note, 0..=127).text("Note")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.key_root, 0..=127).text("Root Note")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.key_spread_semi, 1.0..=60.0).suffix(" st").text("Spread")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.key_curve, -1.0..=1.0).text("Curve")).changed() { *dirty = true; }
+        }
+        ModulatorKind::RelativeKeytrack => {
+            if ui.add(egui::Slider::new(&mut m.key_note, 0..=127).text("Current Note")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.key_prev_note, 0..=127).text("Prev Note")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.key_spread_semi, 1.0..=48.0).suffix(" st").text("Range")).changed() { *dirty = true; }
+        }
+        ModulatorKind::Pitch12 => {
+            if ui.add(egui::Slider::new(&mut m.key_note, 0..=127).text("Note")).changed() { *dirty = true; }
+            let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            ui.label(
+                RichText::new(format!("Active Pitch Class: {}", names[(m.key_note % 12) as usize]))
+                    .font(fonts::semibold(9.5))
+                    .color(MOD_ARROW_CYAN),
+            );
+        }
+        ModulatorKind::NoteCounter => {
+            if ui.add(egui::Slider::new(&mut m.nc_steps, 2..=16).text("Steps")).changed() { *dirty = true; }
+            ui.horizontal(|ui| {
+                for (i, lbl) in ["Up", "Down", "Ping-Pong"].iter().enumerate() {
+                    if ui.selectable_label(m.nc_mode == i as u8, *lbl).clicked() {
+                        m.nc_mode = i as u8;
+                        *dirty = true;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Step +1").clicked() {
+                    m.nc_count = m.nc_count.wrapping_add(1);
+                    *dirty = true;
+                }
+                if ui.button("Reset").clicked() {
+                    m.nc_count = 0;
+                    *dirty = true;
+                }
+            });
+        }
+        ModulatorKind::NoteSidechain => {
+            if ui.add(egui::Slider::new(&mut m.env_attack, 0.002..=2.0).logarithmic(true).suffix(" s").text("Attack")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.env_release, 0.002..=3.0).logarithmic(true).suffix(" s").text("Release")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.nsc_min_note, 0..=127).text("Min Note")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.nsc_max_note, 0..=127).text("Max Note")).changed() { *dirty = true; }
+            if ui.button(if m.env_gate { "Release" } else { "Trigger" }).clicked() {
+                m.trigger_gate(!m.env_gate, clock_time_secs());
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Vibrato => {
+            if ui.add(egui::Slider::new(&mut m.vib_rate_hz, 0.2..=16.0).suffix(" Hz").text("Rate")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.vib_depth, 0.0..=1.0).text("Depth")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.vib_fade_secs, 0.0..=3.0).suffix(" s").text("Fade-In")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.vib_mw_scale, 0.0..=1.0).text("MW Scale")).changed() { *dirty = true; }
+        }
+        ModulatorKind::VoiceControl => {
+            if ui.add(egui::Slider::new(&mut m.voice_index, 0..=15).text("Voice Index")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.voice_count, 1..=16).text("Voice Count")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.voice_age_secs, 0.0..=4.0).suffix(" s").text("Voice Age")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.expr_vel, 0.0..=1.0).text("Velocity")).changed() { *dirty = true; }
+        }
+        ModulatorKind::StackSpread => {
+            if ui.add(egui::Slider::new(&mut m.spread_amount, -1.0..=1.0).text("Spread")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.voice_index, 0..=15).text("Voice Idx")).changed() { *dirty = true; }
+            if ui.add(egui::Slider::new(&mut m.voice_count, 1..=16).text("Stack Size")).changed() { *dirty = true; }
+            ui.horizontal(|ui| {
+                for (i, lbl) in ["Linear", "Center", "Harmonic"].iter().enumerate() {
+                    if ui.selectable_label(m.spread_mode == i as u8, *lbl).clicked() {
+                        m.spread_mode = i as u8;
+                        *dirty = true;
+                    }
+                }
+            });
         }
     }
 }

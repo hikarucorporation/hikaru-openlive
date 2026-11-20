@@ -37,11 +37,11 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 276,
+    "done": 290,
     "in_progress": 17,
-    "planned": 323,
+    "planned": 309,
     "bugs": 1,
-    "parity_percent": 45
+    "parity_percent": 47
   },
   "areas": [
     {
@@ -1395,22 +1395,22 @@
         {
           "id": "md-001",
           "name": "4-Stage",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-002",
           "name": "ADSR",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-003",
           "name": "AHD on Release",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-004",
           "name": "AHDSR",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-005",
@@ -1462,7 +1462,7 @@
         {
           "id": "md-014",
           "name": "Expressions",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-015",
@@ -1477,7 +1477,7 @@
         {
           "id": "md-017",
           "name": "Keytrack+",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-018",
@@ -1488,7 +1488,7 @@
         {
           "id": "md-019",
           "name": "MIDI",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-020",
@@ -1514,12 +1514,12 @@
         {
           "id": "md-024",
           "name": "Note Counter",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-025",
           "name": "Note Sidechain",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-026",
@@ -1529,7 +1529,7 @@
         {
           "id": "md-027",
           "name": "Pitch-12",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-028",
@@ -1554,7 +1554,7 @@
         {
           "id": "md-032",
           "name": "Relative Keytrack",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-033",
@@ -1574,7 +1574,7 @@
         {
           "id": "md-036",
           "name": "Stack Spread",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-037",
@@ -1594,12 +1594,12 @@
         {
           "id": "md-040",
           "name": "Vibrato",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-041",
           "name": "Voice Control",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-042",
