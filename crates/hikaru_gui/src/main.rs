@@ -469,6 +469,21 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.set_clip_legato(track_idx, scene_idx, legato);
                     }
                 }
+                GuiCommand::SetClipLaunchMode { track_idx, scene_idx, mode } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_clip_launch_mode(track_idx, scene_idx, mode);
+                    }
+                }
+                GuiCommand::ReleaseClip { track_idx, scene_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.release_clip(track_idx, scene_idx);
+                    }
+                }
+                GuiCommand::SetClipGain { track_idx, scene_idx, gain } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_clip_gain(track_idx, scene_idx, gain);
+                    }
+                }
                 GuiCommand::SetGlobalLaunchQuantization { grid } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_global_launch_quantization(grid);

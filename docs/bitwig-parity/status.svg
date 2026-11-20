@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" height="480" viewBox="0 0 680 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.1.7: 252 of 616 features done">
-<title>Hikaru OpenLive vs Bitwig Studio 5.1.7: 252 of 616 features done</title>
-<desc>Feature parity of Hikaru OpenLive against Bitwig Studio 5.1.7. 252 of 616 tracked features are done; 1 open bug.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="480" viewBox="0 0 680 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.1.7: 254 of 616 features done">
+<title>Hikaru OpenLive vs Bitwig Studio 5.1.7: 254 of 616 features done</title>
+<desc>Feature parity of Hikaru OpenLive against Bitwig Studio 5.1.7. 254 of 616 tracked features are done; 1 open bug.</desc>
 <rect width="680" height="480" fill="#0d1117"/>
-<text x="678.0" y="20.0" font-size="12" font-weight="600" text-anchor="end" fill="#F1EFE8">41% · 252 of 616 done</text>
+<text x="678.0" y="20.0" font-size="12" font-weight="600" text-anchor="end" fill="#F1EFE8">41% · 254 of 616 done</text>
 <rect x="2.0" y="11" width="10" height="10" rx="2" fill="#1D9E75"/>
 <text x="17.0" y="20.0" font-size="12" fill="#B4B2A9">Done</text>
 <rect x="64.0" y="11" width="10" height="10" rx="2" fill="#EF9F27"/>
@@ -11,16 +11,16 @@
 <text x="174.8" y="20.0" font-size="12" fill="#B4B2A9">Planned</text>
 <rect x="238.4" y="11" width="10" height="10" rx="2" fill="#E24B4A"/>
 <text x="253.4" y="20.0" font-size="12" fill="#B4B2A9">Open bugs</text>
-<g><title>Clip Launcher: 19 done, 0 in progress, 7 planned</title>
+<g><title>Clip Launcher: 21 done, 0 in progress, 5 planned</title>
 <clipPath id="b0"><rect x="349.7" y="351.2" width="95.3" height="127.3" rx="6"/></clipPath>
 <g clip-path="url(#b0)">
 <rect x="349.7" y="351.2" width="95.3" height="127.3" fill="#2C2C2A"/>
-<rect x="349.7" y="351.2" width="69.6" height="127.3" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="349.7" y="472.5" width="69.6" height="6" fill="#1D9E75"/>
+<rect x="349.7" y="351.2" width="76.9" height="127.3" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="349.7" y="472.5" width="76.9" height="6" fill="#1D9E75"/>
 </g>
 <text x="357.7" y="372.2" font-size="12" font-weight="600" fill="#F1EFE8">Clip Launcher</text>
-<text x="357.7" y="405.5" font-size="28" font-weight="600" fill="#F1EFE8">73%</text>
-<text x="357.7" y="420.5" font-size="11" fill="#B4B2A9">19 of 26 done</text>
+<text x="357.7" y="405.5" font-size="28" font-weight="600" fill="#F1EFE8">81%</text>
+<text x="357.7" y="420.5" font-size="11" fill="#B4B2A9">21 of 26 done</text>
 </g>
 <g><title>Arranger: 14 done, 4 in progress, 10 planned</title>
 <clipPath id="b1"><rect x="242.1" y="353.3" width="104.5" height="125.2" rx="6"/></clipPath>

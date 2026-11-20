@@ -165,6 +165,20 @@ pub enum GuiCommand {
         scene_idx: usize,
         legato: bool,
     },
+    SetClipLaunchMode {
+        track_idx: usize,
+        scene_idx: usize,
+        mode: hikaru_sequencer::ClipLaunchMode,
+    },
+    ReleaseClip {
+        track_idx: usize,
+        scene_idx: usize,
+    },
+    SetClipGain {
+        track_idx: usize,
+        scene_idx: usize,
+        gain: f32,
+    },
     SetGlobalLaunchQuantization {
         grid: hikaru_sequencer::QuantizationGrid,
     },

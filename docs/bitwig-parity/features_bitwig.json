@@ -37,9 +37,9 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 252,
+    "done": 254,
     "in_progress": 18,
-    "planned": 346,
+    "planned": 344,
     "bugs": 1,
     "parity_percent": 41
   },
@@ -171,12 +171,14 @@
         {
           "id": "cl-21",
           "name": "Launch modes (Trigger / Gate / Toggle)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs, crates/hikaru_sequencer/src/matrix.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/src/views/matrix.rs, crates/hikaru_gui/src/views/audio_detail_editor.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-22",
           "name": "Clip gain handle",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_sequencer/src/clip.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/src/views/matrix.rs, crates/hikaru_gui/src/views/audio_detail_editor.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-23",

@@ -671,6 +671,41 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 }
             });
 
+            // Selector de Launch Mode (Trigger / Gate / Toggle)
+            let cur_mode = app.matrix_state.clip_launch_mode(track, slot);
+            tui.horizontal(|ui| {
+                let mw = (w - 8.0) / 3.0;
+                for mode in hikaru_sequencer::ClipLaunchMode::ALL {
+                    if tool_btn(ui, mode.label(), cur_mode == mode, mw, 18.0, 9.5)
+                        .on_hover_text(format!("Launch mode: {}", mode.label()))
+                        .clicked()
+                    {
+                        app.matrix_state
+                            .set_clip_launch_mode(track, slot, mode, &app.audio_proxy);
+                    }
+                }
+            });
+
+            // Clip Gain Handle (-60 dB .. +6 dB)
+            let mut cur_gain_db = app.matrix_state.clip_gain_db(track, slot);
+            tui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Gain ").size(9.5).color(theme::TEXT_SECONDARY));
+                let dv = ui.add(
+                    egui::DragValue::new(&mut cur_gain_db)
+                        .speed(0.2)
+                        .range(-60.0..=6.0)
+                        .suffix(" dB")
+                        .fixed_decimals(1),
+                );
+                if dv.double_clicked() {
+                    app.matrix_state
+                        .set_clip_gain_db(track, slot, 0.0, &app.audio_proxy);
+                } else if dv.changed() {
+                    app.matrix_state
+                        .set_clip_gain_db(track, slot, cur_gain_db, &app.audio_proxy);
+                }
+            });
+
             let mut edited_loop = false;
             tui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Start").size(9.5).color(theme::TEXT_SECONDARY));

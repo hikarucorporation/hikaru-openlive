@@ -380,6 +380,8 @@ pub struct SessionMatrixState {
     pub clip_drag: Option<MatrixClipDrag>,
     pub renaming_scene: Option<(usize, String)>,
     pub scene_drag: Option<usize>,
+    pub clip_launch_modes: std::collections::HashMap<(usize, usize), hikaru_sequencer::ClipLaunchMode>,
+    pub clip_gains: std::collections::HashMap<(usize, usize), f32>,
 }
 
 impl Default for SessionMatrixState {
@@ -429,6 +431,8 @@ impl Default for SessionMatrixState {
             clip_drag: None,
             renaming_scene: None,
             scene_drag: None,
+            clip_launch_modes: std::collections::HashMap::new(),
+            clip_gains: std::collections::HashMap::new(),
         }
     }
 }
@@ -776,6 +780,116 @@ impl SessionMatrixState {
             legato,
         });
         true
+    }
+
+    pub fn clip_launch_mode(
+        &self,
+        track_idx: usize,
+        scene_idx: usize,
+    ) -> hikaru_sequencer::ClipLaunchMode {
+        self.clip_launch_modes
+            .get(&(track_idx, scene_idx))
+            .copied()
+            .unwrap_or(hikaru_sequencer::ClipLaunchMode::Trigger)
+    }
+
+    pub fn set_clip_launch_mode(
+        &mut self,
+        track_idx: usize,
+        scene_idx: usize,
+        mode: hikaru_sequencer::ClipLaunchMode,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        if self.slot(track_idx, scene_idx).and_then(|s| s.clip.as_ref()).is_none() {
+            return false;
+        }
+        self.clip_launch_modes.insert((track_idx, scene_idx), mode);
+        audio_proxy.send(GuiCommand::SetClipLaunchMode {
+            track_idx,
+            scene_idx,
+            mode,
+        });
+        true
+    }
+
+    pub fn release_pad(
+        &mut self,
+        audio_proxy: &AudioProxy,
+        track_idx: usize,
+        scene_idx: usize,
+    ) -> bool {
+        if self.clip_launch_mode(track_idx, scene_idx) != hikaru_sequencer::ClipLaunchMode::Gate {
+            return false;
+        }
+        let Some(slot) = self.slot_mut(track_idx, scene_idx) else {
+            return false;
+        };
+        if slot.clip.is_none() {
+            return false;
+        }
+        slot.state = SlotState::Stopped;
+        audio_proxy.send(GuiCommand::ReleaseClip {
+            track_idx,
+            scene_idx,
+        });
+        true
+    }
+
+    pub fn clip_gain(&self, track_idx: usize, scene_idx: usize) -> f32 {
+        self.clip_gains
+            .get(&(track_idx, scene_idx))
+            .copied()
+            .unwrap_or(1.0)
+    }
+
+    pub fn clip_gain_db(&self, track_idx: usize, scene_idx: usize) -> f32 {
+        let g = self.clip_gain(track_idx, scene_idx);
+        if g <= 1e-4 {
+            -60.0
+        } else {
+            (20.0 * g.log10()).clamp(-60.0, 6.0)
+        }
+    }
+
+    pub fn set_clip_gain(
+        &mut self,
+        track_idx: usize,
+        scene_idx: usize,
+        gain: f32,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        if !gain.is_finite()
+            || self.slot(track_idx, scene_idx).and_then(|s| s.clip.as_ref()).is_none()
+        {
+            return false;
+        }
+        let clamped = gain.clamp(0.0, 2.0);
+        self.clip_gains.insert((track_idx, scene_idx), clamped);
+        audio_proxy.send(GuiCommand::SetClipGain {
+            track_idx,
+            scene_idx,
+            gain: clamped,
+        });
+        true
+    }
+
+    pub fn set_clip_gain_db(
+        &mut self,
+        track_idx: usize,
+        scene_idx: usize,
+        db: f32,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        if !db.is_finite() {
+            return false;
+        }
+        let clamped = db.clamp(-60.0, 6.0);
+        let lin = if clamped <= -59.5 {
+            0.0
+        } else {
+            10.0_f32.powf(clamped / 20.0).clamp(0.0, 2.0)
+        };
+        self.set_clip_gain(track_idx, scene_idx, lin, audio_proxy)
     }
 
     pub fn copy_slot(&self, track_idx: usize, scene_idx: usize, clipboard: &mut MatrixClipboard) {

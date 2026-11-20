@@ -483,3 +483,71 @@ fn cl24_scene_rename_reorder_and_color_syncs_state_and_engine() {
     assert!(!state.move_scene(1, 1));
     assert!(!state.move_scene(0, 999));
 }
+
+#[test]
+fn cl21_and_cl22_launch_modes_and_clip_gain_handle_sync_engine() {
+    use hikaru_sequencer::ClipLaunchMode;
+
+    let (mut state, rx) = make_app_state();
+    matrix::create_empty_midi_clip(&mut state.matrix_state, &state.audio_proxy, 0, 0);
+    while rx.try_recv().is_ok() {}
+
+    // cl-21: Default Trigger -> cambiar a Gate y Toggle
+    assert_eq!(state.matrix_state.clip_launch_mode(0, 0), ClipLaunchMode::Trigger);
+    assert!(state.matrix_state.set_clip_launch_mode(
+        0,
+        0,
+        ClipLaunchMode::Gate,
+        &state.audio_proxy
+    ));
+    assert_eq!(state.matrix_state.clip_launch_mode(0, 0), ClipLaunchMode::Gate);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(GuiCommand::SetClipLaunchMode {
+            track_idx: 0,
+            scene_idx: 0,
+            mode: ClipLaunchMode::Gate,
+        })
+    ));
+
+    // En modo Gate, release_pad detiene y envía ReleaseClip
+    assert!(state.matrix_state.release_pad(&state.audio_proxy, 0, 0));
+    assert_eq!(state.matrix_state.slot(0, 0).unwrap().state, SlotState::Stopped);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(GuiCommand::ReleaseClip {
+            track_idx: 0,
+            scene_idx: 0,
+        })
+    ));
+
+    // Cambiar a Toggle -> release_pad ya no detiene
+    assert!(state.matrix_state.set_clip_launch_mode(
+        0,
+        0,
+        ClipLaunchMode::Toggle,
+        &state.audio_proxy
+    ));
+    while rx.try_recv().is_ok() {}
+    assert!(!state.matrix_state.release_pad(&state.audio_proxy, 0, 0));
+
+    // cl-22: Clip gain handle (lineal y en dB, clamping + NaN rechazado)
+    assert!((state.matrix_state.clip_gain(0, 0) - 1.0).abs() < 1e-6);
+    assert!(!state
+        .matrix_state
+        .set_clip_gain(0, 0, f32::NAN, &state.audio_proxy));
+    assert!(state
+        .matrix_state
+        .set_clip_gain_db(0, 0, -6.0, &state.audio_proxy));
+    assert!((state.matrix_state.clip_gain_db(0, 0) - (-6.0)).abs() < 0.05);
+    match rx.try_recv() {
+        Ok(GuiCommand::SetClipGain {
+            track_idx: 0,
+            scene_idx: 0,
+            gain,
+        }) => {
+            assert!((gain - 0.501187).abs() < 0.01);
+        }
+        _ => panic!("Se esperaba GuiCommand::SetClipGain"),
+    }
+}

@@ -2,7 +2,7 @@
 
 use hikaru_transport::TransportPosition;
 
-use crate::clip::{Clip, ClipState, VoiceState};
+use crate::clip::{Clip, ClipLaunchMode, ClipState, VoiceState};
 use crate::quantizer::{QuantizationEngine, QuantizationGrid};
 
 pub const MAX_TRACKS: usize = 16;
@@ -190,14 +190,20 @@ impl TrackMatrix {
             .min()
     }
 
-    /// Dispara un clip individual respetando su modo Legato y deteniendo el
-    /// resto de los slots de esa misma pista.
+    /// Dispara un clip individual respetando su `launch_mode` (`Trigger`/`Gate`/`Toggle`)
+    /// y su modo Legato, deteniendo el resto de los slots de esa misma pista.
     pub fn trigger_clip(&mut self, track_idx: usize, scene_idx: usize, now_sample: u64) -> bool {
         if track_idx >= MAX_TRACKS || scene_idx >= MAX_SCENES {
             return false;
         }
-        if self.slots[track_idx][scene_idx].is_none() {
+        let Some(existing) = &self.slots[track_idx][scene_idx] else {
             return false;
+        };
+        if existing.launch_mode == ClipLaunchMode::Toggle
+            && existing.get_state() == ClipState::Playing
+        {
+            existing.set_state(ClipState::Stopped);
+            return true;
         }
         let legato_ref = self.legato_reference_start(Some(track_idx));
         for s in 0..MAX_SCENES {
@@ -211,6 +217,49 @@ impl TrackMatrix {
         }
         if let Some(clip) = &mut self.slots[track_idx][scene_idx] {
             clip.launch(now_sample, legato_ref);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Al soltar un pad/botón en modo `Gate`, detiene el clip si está sonando.
+    pub fn release_clip(&mut self, track_idx: usize, scene_idx: usize) -> bool {
+        if track_idx >= MAX_TRACKS || scene_idx >= MAX_SCENES {
+            return false;
+        }
+        if let Some(clip) = &self.slots[track_idx][scene_idx] {
+            if clip.launch_mode == ClipLaunchMode::Gate && clip.get_state() == ClipState::Playing {
+                clip.set_state(ClipState::Stopped);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn set_clip_launch_mode(
+        &mut self,
+        track_idx: usize,
+        scene_idx: usize,
+        mode: ClipLaunchMode,
+    ) -> bool {
+        if track_idx >= MAX_TRACKS || scene_idx >= MAX_SCENES {
+            return false;
+        }
+        if let Some(clip) = &mut self.slots[track_idx][scene_idx] {
+            clip.set_launch_mode(mode);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_clip_gain(&mut self, track_idx: usize, scene_idx: usize, gain: f32) -> bool {
+        if track_idx >= MAX_TRACKS || scene_idx >= MAX_SCENES {
+            return false;
+        }
+        if let Some(clip) = &mut self.slots[track_idx][scene_idx] {
+            clip.set_gain(gain);
             true
         } else {
             false
@@ -472,5 +521,34 @@ mod tests {
         // Casos inválidos / no-op
         assert!(!matrix.move_scene(1, 1));
         assert!(!matrix.move_scene(0, MAX_SCENES));
+    }
+
+    #[test]
+    fn clip_launch_modes_trigger_gate_toggle_and_gain() {
+        let mut matrix = TrackMatrix::new();
+        let mut c0 = Clip::new(1, 1);
+        c0.set_launch_mode(ClipLaunchMode::Toggle);
+        c0.set_gain_db(-6.0);
+        assert!((c0.gain - 0.501187).abs() < 0.01);
+
+        let mut c1 = Clip::new(2, 2);
+        c1.set_launch_mode(ClipLaunchMode::Gate);
+
+        matrix.slots[0][0] = Some(c0);
+        matrix.slots[0][1] = Some(c1);
+
+        // Toggle: primer trigger arranca, segundo detiene
+        assert!(matrix.trigger_clip(0, 0, 100));
+        assert_eq!(matrix.slots[0][0].as_ref().unwrap().get_state(), ClipState::Playing);
+        assert!(matrix.trigger_clip(0, 0, 200));
+        assert_eq!(matrix.slots[0][0].as_ref().unwrap().get_state(), ClipState::Stopped);
+
+        // Gate: trigger arranca, release detiene
+        assert!(matrix.trigger_clip(0, 1, 300));
+        assert_eq!(matrix.slots[0][1].as_ref().unwrap().get_state(), ClipState::Playing);
+        assert!(matrix.release_clip(0, 1));
+        assert_eq!(matrix.slots[0][1].as_ref().unwrap().get_state(), ClipState::Stopped);
+        // Release en modo no-Gate o ya detenido devuelve false
+        assert!(!matrix.release_clip(0, 1));
     }
 }

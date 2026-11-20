@@ -16,7 +16,7 @@ use hikaru_dsp::synth::open_poly::{OpenPolyDspParams, OpenPolyVoicePool, OpenPol
 use hikaru_dsp::synth::sampler::{SamplerDspParams, SamplerSampleData, SamplerVoicePool};
 use hikaru_dsp::synth::wavetable::WavetableOscillator;
 use hikaru_sequencer::TrackMatrix;
-pub use hikaru_sequencer::{QuantizationEngine, QuantizationGrid};
+pub use hikaru_sequencer::{ClipLaunchMode, QuantizationEngine, QuantizationGrid};
 use hikaru_transport::{TransportPlaybackState, TransportPosition};
 use hikaru_plugin_host::{PluginDescriptor, PluginFormat, PluginInstance};
 
@@ -43,6 +43,7 @@ pub struct MidiClipInstance {
     /// legato al cambiar pad, reinicio en 0 al cambiar escena; `Some(true)` =
     /// siempre legato; `Some(false)` = siempre reinicia en 0).
     pub legato_launch: Option<bool>,
+    pub launch_mode: ClipLaunchMode,
     pub active_notes: [bool; 128],
 }
 
@@ -62,6 +63,7 @@ impl Default for MidiClipInstance {
             clip_loop_end_ticks: 960 * 4,
             is_matrix_clip: true,
             legato_launch: None,
+            launch_mode: ClipLaunchMode::Trigger,
             active_notes: [false; 128],
         }
     }
@@ -85,6 +87,7 @@ impl MidiClipInstance {
             clip_loop_end_ticks: duration_ticks,
             is_matrix_clip: true,
             legato_launch: None,
+            launch_mode: ClipLaunchMode::Trigger,
             active_notes: [false; 128],
         }
     }
@@ -605,6 +608,9 @@ pub struct AudioClipInstance {
     /// Override explícito de lanzamiento Legato (`None` = default del motor,
     /// `Some(true)` = hereda fase en pad y escena, `Some(false)` = reinicia en 0).
     pub legato_launch: Option<bool>,
+    pub launch_mode: ClipLaunchMode,
+    /// Ganancia lineal del clip (`0.0..=2.0`, default `1.0` = 0 dB).
+    pub gain: f32,
     pub prev_frame: usize,
     pub xfade_remaining: u32,
     pub xfade_len: u32,
@@ -2374,6 +2380,8 @@ impl<'a> AudioEngine<'a> {
             clip_loop_end: default_loop_end,
             is_matrix_clip,
             legato_launch: None,
+            launch_mode: ClipLaunchMode::Trigger,
+            gain: 1.0,
             prev_frame: usize::MAX,
             xfade_remaining: 0,
             xfade_len: 0,
@@ -2611,6 +2619,69 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    /// Configura el modo de lanzamiento (`Trigger` / `Gate` / `Toggle`) de un clip.
+    pub fn set_clip_launch_mode(
+        &mut self,
+        track_index: usize,
+        scene_index: usize,
+        mode: ClipLaunchMode,
+    ) {
+        for clip in self.clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.launch_mode = mode;
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.launch_mode = mode;
+            }
+        }
+        let _ = self.matrix.set_clip_launch_mode(track_index, scene_index, mode);
+    }
+
+    /// Configura la ganancia lineal (`0.0..=2.0`) de un clip de audio.
+    pub fn set_clip_gain(&mut self, track_index: usize, scene_index: usize, gain: f32) {
+        if !gain.is_finite() {
+            return;
+        }
+        let clamped = gain.clamp(0.0, 2.0);
+        for clip in self.clips.iter_mut() {
+            if clip.track_index == track_index && clip.scene_index == scene_index {
+                clip.gain = clamped;
+            }
+        }
+        let _ = self.matrix.set_clip_gain(track_index, scene_index, clamped);
+    }
+
+    /// Libera (detiene) un clip en modo `Gate` al soltar el pad/botón.
+    pub fn release_clip(&mut self, track_index: usize, scene_index: usize) {
+        for clip in self.clips.iter_mut() {
+            if clip.track_index == track_index
+                && clip.scene_index == scene_index
+                && clip.launch_mode == ClipLaunchMode::Gate
+            {
+                clip.is_playing = false;
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.track_index == track_index
+                && clip.scene_index == scene_index
+                && clip.launch_mode == ClipLaunchMode::Gate
+                && clip.is_playing
+            {
+                clip.is_playing = false;
+                for pitch in 0..128 {
+                    if clip.active_notes[pitch] {
+                        self.dms_voice_pool
+                            .kill_pad(dms_pad_key(clip.track_index, pitch));
+                        clip.active_notes[pitch] = false;
+                    }
+                }
+            }
+        }
+        let _ = self.matrix.release_clip(track_index, scene_index);
+    }
+
     /// Configura la cuantización global de lanzamiento de escenas.
     pub fn set_global_launch_quantization(&mut self, grid: QuantizationGrid) {
         self.global_launch_quantization = grid;
@@ -2824,7 +2895,10 @@ impl<'a> AudioEngine<'a> {
         };
         for clip in self.clips.iter_mut().filter(|c| c.track_index == track_index) {
             if clip.scene_index == scene_index {
-                clip.is_playing = !target_was_playing;
+                clip.is_playing = match clip.launch_mode {
+                    ClipLaunchMode::Toggle => !target_was_playing,
+                    ClipLaunchMode::Trigger | ClipLaunchMode::Gate => true,
+                };
                 if clip.is_playing {
                     let use_legato = clip.legato_launch.unwrap_or(true);
                     if use_legato {
@@ -2849,7 +2923,10 @@ impl<'a> AudioEngine<'a> {
         }
         for clip in self.midi_clips.iter_mut().filter(|c| c.track_index == track_index) {
             if clip.scene_index == scene_index {
-                clip.is_playing = !target_was_playing;
+                clip.is_playing = match clip.launch_mode {
+                    ClipLaunchMode::Toggle => !target_was_playing,
+                    ClipLaunchMode::Trigger | ClipLaunchMode::Gate => true,
+                };
                 if clip.is_playing {
                     let use_legato = clip.legato_launch.unwrap_or(true);
                     if use_legato {
@@ -4187,8 +4264,8 @@ impl<'a> AudioEngine<'a> {
 
             for clip in self.clips.iter_mut() {
                 let ti = clip.track_index.min(15);
-                let gl = track_gain_l[ti];
-                let gr = track_gain_r[ti];
+                let gl = track_gain_l[ti] * clip.gain;
+                let gr = track_gain_r[ti] * clip.gain;
                 if gl == 0.0 && gr == 0.0 {
                     continue;
                 }
@@ -5591,6 +5668,56 @@ mod tests {
         assert_eq!(engine.clips.iter().find(|c| c.id == 3).unwrap().scene_index, 2);
         assert_eq!(engine.scene_quantization_overrides[0], Some(QuantizationGrid::Eighth));
         assert_eq!(engine.scene_quantization_overrides[2], Some(QuantizationGrid::Bar));
+    }
+
+    #[test]
+    fn clip_launch_modes_and_gain_handle_in_engine() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, vec![0.8f32; 4096 * 2], 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, vec![0.8f32; 4096 * 2], 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(3, 0, 2, vec![0.8f32; 4096 * 2], 0.0, 0.0, 0.0, 2, true);
+
+        engine.set_clip_launch_mode(0, 0, ClipLaunchMode::Trigger);
+        engine.set_clip_launch_mode(0, 1, ClipLaunchMode::Toggle);
+        engine.set_clip_launch_mode(0, 2, ClipLaunchMode::Gate);
+
+        // Trigger: dos triggers consecutivos mantienen is_playing=true
+        engine.trigger_clip(0, 0);
+        assert!(engine.clips.iter().find(|c| c.id == 1).unwrap().is_playing);
+        engine.trigger_clip(0, 0);
+        assert!(engine.clips.iter().find(|c| c.id == 1).unwrap().is_playing);
+
+        // Toggle: primer trigger arranca, segundo detiene
+        engine.trigger_clip(0, 1);
+        assert!(engine.clips.iter().find(|c| c.id == 2).unwrap().is_playing);
+        engine.trigger_clip(0, 1);
+        assert!(!engine.clips.iter().find(|c| c.id == 2).unwrap().is_playing);
+
+        // Gate: trigger arranca, release_clip detiene
+        engine.trigger_clip(0, 2);
+        assert!(engine.clips.iter().find(|c| c.id == 3).unwrap().is_playing);
+        engine.release_clip(0, 2);
+        assert!(!engine.clips.iter().find(|c| c.id == 3).unwrap().is_playing);
+
+        // Clip gain: comparar amplitud con gain=1.0 vs gain=0.25
+        engine.play();
+        engine.trigger_clip(0, 0);
+        engine.set_clip_gain(0, 0, 1.0);
+        let mut out_full = vec![0.0f32; 256 * 2];
+        engine.process(&mut AudioBuffer::new(&mut out_full));
+        let peak_full = out_full.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+
+        engine.set_clip_gain(0, 0, 0.25);
+        let mut out_quarter = vec![0.0f32; 256 * 2];
+        engine.process(&mut AudioBuffer::new(&mut out_quarter));
+        let peak_quarter = out_quarter.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+
+        assert!(peak_full > 0.1, "debe emitir audio con gain=1.0");
+        assert!(
+            (peak_quarter - peak_full * 0.25).abs() < 0.05,
+            "gain=0.25 debe escalar salida (~25%): full={peak_full}, quarter={peak_quarter}"
+        );
     }
 
     #[test]

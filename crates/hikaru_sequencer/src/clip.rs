@@ -48,6 +48,51 @@ pub enum TriggerMode {
     Legato,  // Cambia entre clips manteniendo la posición de transporte
 }
 
+/// Modo de lanzamiento por clip (ortogonal al flag `Legato`, estilo Bitwig Studio):
+/// - `Trigger`: cada clic dispara/reinicia el clip.
+/// - `Gate`: suena mientras se mantiene presionado; al soltar se detiene.
+/// - `Toggle`: un clic inicia el clip y un segundo clic lo detiene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClipLaunchMode {
+    #[default]
+    Trigger,
+    Gate,
+    Toggle,
+}
+
+impl ClipLaunchMode {
+    pub const ALL: [ClipLaunchMode; 3] = [
+        ClipLaunchMode::Trigger,
+        ClipLaunchMode::Gate,
+        ClipLaunchMode::Toggle,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ClipLaunchMode::Trigger => "Trigger",
+            ClipLaunchMode::Gate => "Gate",
+            ClipLaunchMode::Toggle => "Toggle",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClipLaunchMode::Trigger => "trigger",
+            ClipLaunchMode::Gate => "gate",
+            ClipLaunchMode::Toggle => "toggle",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "trigger" => Some(ClipLaunchMode::Trigger),
+            "gate" => Some(ClipLaunchMode::Gate),
+            "toggle" => Some(ClipLaunchMode::Toggle),
+            _ => None,
+        }
+    }
+}
+
 /// Un evento de audio dentro de un clip (región no destructiva).
 ///
 /// Cada evento referencia un buffer fuente (`source_id`) con un offset y
@@ -382,6 +427,9 @@ pub struct Clip {
     pub content_type: ClipContentType,
     pub state: AtomicU8,
     pub trigger_mode: TriggerMode,
+    pub launch_mode: ClipLaunchMode,
+    /// Ganancia lineal del clip (`0.0..=2.0`, default `1.0` = 0 dB).
+    pub gain: f32,
     pub start_sample: u64,    // Cuándo empezó a sonar realmente
     pub loop_enabled: bool,
     /// Punto de loop inicial del clip individual (en samples).
@@ -405,6 +453,8 @@ impl Clip {
             content_type: ClipContentType::Audio,
             state: AtomicU8::new(ClipState::Stopped as u8),
             trigger_mode: TriggerMode::Trigger,
+            launch_mode: ClipLaunchMode::Trigger,
+            gain: 1.0,
             start_sample: 0,
             // NOTA: `loop_enabled` arranca en true por defecto para que el
             // botón 🔁 Loop del Clip Editor ya venga activado. Con región
@@ -425,6 +475,8 @@ impl Clip {
             content_type: ClipContentType::Midi(timeline),
             state: AtomicU8::new(ClipState::Stopped as u8),
             trigger_mode: TriggerMode::Trigger,
+            launch_mode: ClipLaunchMode::Trigger,
+            gain: 1.0,
             start_sample: 0,
             loop_enabled: true,
             loop_start: 0,
@@ -439,6 +491,36 @@ impl Clip {
 
     pub fn is_audio(&self) -> bool {
         matches!(self.content_type, ClipContentType::Audio)
+    }
+
+    pub fn set_launch_mode(&mut self, mode: ClipLaunchMode) {
+        self.launch_mode = mode;
+    }
+
+    pub fn set_gain(&mut self, gain: f32) {
+        if gain.is_finite() {
+            self.gain = gain.clamp(0.0, 2.0);
+        }
+    }
+
+    pub fn gain_db(&self) -> f32 {
+        if self.gain <= 1e-4 {
+            -60.0
+        } else {
+            (20.0 * self.gain.log10()).clamp(-60.0, 6.0)
+        }
+    }
+
+    pub fn set_gain_db(&mut self, db: f32) {
+        if !db.is_finite() {
+            return;
+        }
+        let clamped = db.clamp(-60.0, 6.0);
+        self.gain = if clamped <= -59.5 {
+            0.0
+        } else {
+            10.0_f32.powf(clamped / 20.0).clamp(0.0, 2.0)
+        };
     }
 
     pub fn midi_timeline(&self) -> Option<&ClipMidiTimeline> {
