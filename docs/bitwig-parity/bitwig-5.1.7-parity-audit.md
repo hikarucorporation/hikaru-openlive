@@ -130,7 +130,7 @@ Método: lectura estática de todos los crates, sus módulos, tests y documentos
 
 ## 3. Base de datos de paridad
 
-`features_bitwig.json` contiene 14 áreas y 616 features. Cada feature tiene
+`features_bitwig.json` contiene 15 áreas y 625 features. Cada feature tiene
 `id`, `name` y `status` (`done`, `in_progress`, `planned`); las features
 implementadas o parciales incluyen `evidence` con la ruta del código.
 
@@ -148,11 +148,12 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Browser & Files | 24 | 15 | 2 | 7 | 0 |
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
-| Build & Platform | 16 | 10 | 2 | 4 | 1 |
+| Build & Platform | 13 | 8 | 2 | 3 | 1 |
 | Automation | 4 | 0 | 2 | 2 | 0 |
-| **Total** | **616** | **297** | **17** | **302** | **1** |
+| VST3 & CLAP | 12 | 5 | 2 | 5 | 0 |
+| **Total** | **625** | **300** | **19** | **306** | **1** |
 
-Paridad global: **297 / 616 = 48 %**.
+Paridad global: **300 / 625 = 48 %**.
 
 ### Bugs abiertos
 

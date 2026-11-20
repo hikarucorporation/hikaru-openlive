@@ -35,11 +35,11 @@
     ]
   },
   "summary": {
-    "areas": 14,
-    "features": 616,
-    "done": 297,
-    "in_progress": 17,
-    "planned": 302,
+    "areas": 15,
+    "features": 625,
+    "done": 300,
+    "in_progress": 19,
+    "planned": 306,
     "bugs": 1,
     "parity_percent": 48
   },
@@ -3434,18 +3434,6 @@
           "evidence": "crates/hikaru_project_file/src/lib.rs"
         },
         {
-          "id": "bp-07",
-          "name": "VST3 host",
-          "status": "done",
-          "evidence": "crates/hikaru_plugin_host/src/vst3"
-        },
-        {
-          "id": "bp-08",
-          "name": "CLAP host",
-          "status": "done",
-          "evidence": "crates/hikaru_plugin_host/src/clap"
-        },
-        {
           "id": "bp-09",
           "name": "Windows cross-compile documentation",
           "status": "done",
@@ -3483,10 +3471,80 @@
           "id": "bp-15",
           "name": "Code signing and release artifacts",
           "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "plugins-vst3-clap",
+      "name": "VST3 & CLAP",
+      "bitwig_reference": "VST3 and CLAP plugin hosting: scanning, audio/MIDI processing, native editor embedding, parameter automation, polyphonic modulation, sidechain routing and sandboxing (Bitwig Studio 5.1.7).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "pl-01",
+          "name": "VST3 audio & MIDI hosting",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/vst3/hikaru_vst3_launcher.rs"
         },
         {
-          "id": "bp-16",
-          "name": "Sandboxed plugin hosting",
+          "id": "pl-02",
+          "name": "CLAP audio & MIDI hosting",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/clap/hikaru_clap_launcher.rs"
+        },
+        {
+          "id": "pl-03",
+          "name": "VST3 / CLAP scanning & registry",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/registry.rs"
+        },
+        {
+          "id": "pl-04",
+          "name": "Native editor window wrapper (X11/XWayland)",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/hikaru-wrapper/wrapper.rs"
+        },
+        {
+          "id": "pl-05",
+          "name": "Normalized parameter control & rack knobs",
+          "status": "done",
+          "evidence": "crates/hikaru_plugin_host/src/lib.rs"
+        },
+        {
+          "id": "pl-06",
+          "name": "Plugin state save / recall",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_plugin_host/src/lib.rs"
+        },
+        {
+          "id": "pl-07",
+          "name": "Plugin latency compensation (PDC)",
+          "status": "in_progress",
+          "evidence": "crates/hikaru_plugin_host/src/lib.rs"
+        },
+        {
+          "id": "pl-08",
+          "name": "CLAP polyphonic modulation",
+          "status": "planned"
+        },
+        {
+          "id": "pl-09",
+          "name": "VST3 / CLAP note expressions & MPE",
+          "status": "planned"
+        },
+        {
+          "id": "pl-10",
+          "name": "Sidechain & multi-bus audio routing",
+          "status": "planned"
+        },
+        {
+          "id": "pl-11",
+          "name": "Sandboxed out-of-process plugin hosting",
+          "status": "planned"
+        },
+        {
+          "id": "pl-12",
+          "name": "Wayland native editor embedding",
           "status": "planned"
         }
       ]
