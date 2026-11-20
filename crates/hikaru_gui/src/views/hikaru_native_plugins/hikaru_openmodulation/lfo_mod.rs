@@ -4,7 +4,7 @@
 // drag-to-assign modulation, phase, depth, retrigger, polarity, dual oscilloscope,
 // FX slot, and Mix control.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, OnceLock};
 
@@ -21,6 +21,7 @@ use crate::ui::bitwig_wgpu::paint_rotary_knob;
 use crate::ui::fonts;
 
 pub const MODULATION_CARD_WIDTH: f32 = 272.0;
+const SCOPE_HISTORY_LEN: usize = 120; // ~2.0 seconds of 60Hz rolling oscilloscope history
 
 const LFO1_WAVE_ORANGE: Color32 = Color32::from_rgb(0xE8, 0x7A, 0x24);
 const LFO2_WAVE_BLUE: Color32 = Color32::from_rgb(0x38, 0xA8, 0xE8);
@@ -281,6 +282,8 @@ pub struct LfoChannelState {
     pub is_mapping: bool,
     last_cycle_index: u64,
     current_sh_val: f32,
+    scope_history: VecDeque<f32>,
+    last_scope_tick: f32,
 }
 
 impl Default for LfoChannelState {
@@ -301,6 +304,8 @@ impl Default for LfoChannelState {
             is_mapping: false,
             last_cycle_index: 0,
             current_sh_val: 0.0,
+            scope_history: VecDeque::with_capacity(SCOPE_HISTORY_LEN),
+            last_scope_tick: 0.0,
         }
     }
 }
@@ -543,6 +548,63 @@ impl LfoChannelState {
         };
         let delta = normalized * self.amount;
         (frac_phase, normalized, delta)
+    }
+
+    /// Evaluates continuous live LFO output like Bitwig's LFO MOD:
+    /// - When DAW transport is playing, locks sample-accurately to host transport & BPM.
+    /// - When DAW transport is stopped, continues oscillating smoothly via wall clock so the
+    ///   rolling oscilloscope and target knob modulation rings stay alive at 60 FPS.
+    pub fn compute_live_sample_continuous(
+        &mut self,
+        transport: &LfoTransportState,
+    ) -> (f32, f32, f32) {
+        if transport.is_playing {
+            self.compute_live_sample_from_transport(transport)
+        } else {
+            self.compute_live_sample(clock_time_secs(), transport.bpm)
+        }
+    }
+
+    /// Advances the real-time rolling oscilloscope history buffer (60Hz fixed-step scrolling
+    /// right-to-left, just like Bitwig Studio's LFO MOD dual scope).
+    pub fn push_rolling_scope_samples(&mut self, transport: &LfoTransportState) -> f32 {
+        const STEP_SECS: f32 = 1.0 / 60.0;
+        let now = clock_time_secs();
+
+        // Pre-populate full history on first render so the scope never starts empty
+        if self.scope_history.is_empty() {
+            for i in 0..SCOPE_HISTORY_LEN {
+                let back = (SCOPE_HISTORY_LEN - 1 - i) as f32 * STEP_SECS;
+                let t = (now - back).max(0.0);
+                let (_, val, _) = self.compute_live_sample(t, transport.bpm);
+                self.scope_history.push_back(val);
+            }
+            self.last_scope_tick = now;
+            return self.scope_history.back().copied().unwrap_or(0.0);
+        }
+
+        let elapsed = (now - self.last_scope_tick).max(0.0);
+        let steps = ((elapsed / STEP_SECS).floor() as usize).min(6);
+        if steps > 0 {
+            let (_, live_val, _) = self.compute_live_sample_continuous(transport);
+            let prev_val = self.scope_history.back().copied().unwrap_or(live_val);
+            for s in 1..=steps {
+                let alpha = s as f32 / steps as f32;
+                let interp = prev_val + (live_val - prev_val) * alpha;
+                if self.scope_history.len() >= SCOPE_HISTORY_LEN {
+                    self.scope_history.pop_front();
+                }
+                self.scope_history.push_back(interp);
+            }
+            self.last_scope_tick = now;
+            live_val
+        } else {
+            let (_, live_val, _) = self.compute_live_sample_continuous(transport);
+            if let Some(last) = self.scope_history.back_mut() {
+                *last = live_val;
+            }
+            live_val
+        }
     }
 }
 
@@ -806,7 +868,7 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
         let mix = state.mix.clamp(0.0, 1.0);
 
         if let Some(amt1) = state.lfo1.route_amount_for_param(device, param) {
-            let (phase, raw, _) = state.lfo1.compute_live_sample_from_transport(&transport);
+            let (phase, raw, _) = state.lfo1.compute_live_sample_continuous(&transport);
             matched = true;
             total_raw += raw * mix;
             total_delta += raw * amt1 * mix;
@@ -814,7 +876,7 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
             last_phase = phase;
         }
         if let Some(amt2) = state.lfo2.route_amount_for_param(device, param) {
-            let (phase, raw, _) = state.lfo2.compute_live_sample_from_transport(&transport);
+            let (phase, raw, _) = state.lfo2.compute_live_sample_continuous(&transport);
             matched = true;
             total_raw += raw * mix;
             total_delta += raw * amt2 * mix;
@@ -1053,6 +1115,11 @@ pub fn modulatable_rotary_knob(
 
         if response.dragged() {
             ui.ctx().set_cursor_icon(CursorIcon::None);
+            paint_drag_value_pill(
+                ui.ctx(),
+                rect.center_top(),
+                &format!("{:+.1} %", route_amt * 100.0),
+            );
         } else if response.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
         }
@@ -1128,8 +1195,8 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     let transport = get_global_transport();
 
     let mut state = get_lfo_state(track_idx, slot_idx);
-    let (phase1, val1, _delta1) = state.lfo1.compute_live_sample_from_transport(&transport);
-    let (phase2, val2, _delta2) = state.lfo2.compute_live_sample_from_transport(&transport);
+    let val1 = state.lfo1.push_rolling_scope_samples(&transport);
+    let val2 = state.lfo2.push_rolling_scope_samples(&transport);
 
     let full_rect = ui.available_rect_before_wrap();
     let body_h = full_rect.height().max(210.0);
@@ -1168,20 +1235,11 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         0,
         "LFO1",
         &mut state.lfo1,
+        val1,
         transport.bpm,
     );
 
-    render_dual_scope(
-        ui,
-        scope_rect,
-        &state.lfo1,
-        phase1,
-        val1,
-        &state.lfo2,
-        phase2,
-        val2,
-        transport.is_playing,
-    );
+    render_dual_scope(ui, scope_rect, &state.lfo1, val1, &state.lfo2, val2);
 
     render_lfo_channel_panel(
         ui,
@@ -1191,6 +1249,7 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         1,
         "LFO2",
         &mut state.lfo2,
+        val2,
         transport.bpm,
     );
 
@@ -1215,6 +1274,7 @@ fn render_lfo_channel_panel(
     channel_idx: u8,
     label: &str,
     ch: &mut LfoChannelState,
+    live_val: f32,
     bpm: f32,
 ) {
     let p = ui.painter_at(rect);
@@ -1277,6 +1337,14 @@ fn render_lfo_channel_panel(
 
     if map_active {
         p.rect_filled(arrow_rect, 3.0, MOD_ARROW_CYAN);
+    } else if is_assigned {
+        // Subtle live breathing glow on the routing arrow in rhythm with the LFO output
+        let pulse = (live_val.abs().clamp(0.0, 1.0) * 55.0) as u8;
+        p.rect_filled(
+            arrow_rect,
+            3.0,
+            Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 18 + pulse),
+        );
     } else if arrow_resp.hovered() {
         p.rect_filled(arrow_rect, 3.0, Color32::from_rgb(0x22, 0x38, 0x44));
     }
@@ -1580,6 +1648,13 @@ fn render_lfo_channel_panel(
             let step = if scroll_y > 0.0 { 15.0 } else { -15.0 };
             ch.phase_deg = (ch.phase_deg + step).clamp(0.0, 360.0);
         }
+        if r.dragged() {
+            paint_drag_value_pill(
+                ui.ctx(),
+                r.rect.center_top(),
+                &format!("{:.1}°", ch.phase_deg),
+            );
+        }
         r.on_hover_text(format!("Phase: {:.0}°", ch.phase_deg));
         cell_ui.label(
             RichText::new("Phase")
@@ -1611,6 +1686,13 @@ fn render_lfo_channel_panel(
         if r.hovered() && scroll_y.abs() > 0.0 {
             let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
             ch.depth = (ch.depth + step).clamp(0.0, 1.0);
+        }
+        if r.dragged() {
+            paint_drag_value_pill(
+                ui.ctx(),
+                r.rect.center_top(),
+                &format!("{:.1} %", ch.depth * 100.0),
+            );
         }
         r.on_hover_text(format!("Depth: {:.0}%", ch.depth * 100.0));
         cell_ui.label(
@@ -1891,18 +1973,15 @@ fn render_lfo_channel_panel(
     });
 }
 
-/// Renders the central Dual Oscilloscope (LFO1 orange on top, LFO2 blue on bottom).
-#[allow(clippy::too_many_arguments)]
+/// Renders the central Dual Oscilloscope (LFO1 orange on top, LFO2 blue on bottom)
+/// with live right-to-left scrolling history just like Bitwig Studio's LFO MOD.
 fn render_dual_scope(
     ui: &mut egui::Ui,
     rect: Rect,
     lfo1: &LfoChannelState,
-    phase1: f32,
     val1: f32,
     lfo2: &LfoChannelState,
-    phase2: f32,
     val2: f32,
-    is_playing: bool,
 ) {
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 2.5, WELL_BG);
@@ -1928,18 +2007,16 @@ fn render_dual_scope(
         pos2(rect.max.x - 2.0, rect.max.y - 2.0),
     );
 
-    paint_scope_lane(&p, lane1, lfo1, phase1, val1, LFO1_WAVE_ORANGE, is_playing);
-    paint_scope_lane(&p, lane2, lfo2, phase2, val2, LFO2_WAVE_BLUE, is_playing);
+    paint_scope_lane(&p, lane1, lfo1, val1, LFO1_WAVE_ORANGE);
+    paint_scope_lane(&p, lane2, lfo2, val2, LFO2_WAVE_BLUE);
 }
 
 fn paint_scope_lane(
     p: &Painter,
     lane: Rect,
     ch: &LfoChannelState,
-    current_phase: f32,
-    current_val: f32,
+    live_val: f32,
     color: Color32,
-    is_playing: bool,
 ) {
     let cy = lane.center().y;
     p.line_segment(
@@ -1947,56 +2024,80 @@ fn paint_scope_lane(
         Stroke::new(0.6_f32, Color32::from_rgb(0x20, 0x23, 0x2B)),
     );
 
-    let cycles = 2.0_f32;
-    let points_count = 72;
-    let amp_y = (lane.height() * 0.42) * ch.depth.clamp(0.05, 1.0);
-    let phase_offset = (ch.phase_deg / 360.0).rem_euclid(1.0);
-
-    let mut pts = Vec::with_capacity(points_count);
-    for i in 0..points_count {
-        let norm_x = i as f32 / (points_count - 1) as f32;
-        let x = lane.min.x + norm_x * lane.width();
-        let sample_phase = (norm_x * cycles + phase_offset).rem_euclid(1.0);
-        let sh_step = pseudo_random_step((norm_x * cycles * 4.0) as u64);
-        let raw = evaluate_waveform(ch.waveform, sample_phase, sh_step);
-        let y = if ch.bipolar {
-            cy - raw * amp_y
-        } else {
-            let uni = (raw + 1.0) * 0.5;
-            lane.max.y - 2.0 - uni * (amp_y * 2.0)
-        };
-        pts.push(pos2(x, y.clamp(lane.min.y + 1.5, lane.max.y - 1.5)));
+    let n = ch.scope_history.len();
+    if n < 2 {
+        return;
     }
 
-    let glow = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 45);
+    let amp_y = lane.height() * 0.43;
+    let base_y = if ch.bipolar { cy } else { lane.max.y - 2.0 };
+    let val_to_y = |v: f32| -> f32 {
+        let y = if ch.bipolar {
+            cy - v.clamp(-1.0, 1.0) * amp_y
+        } else {
+            (lane.max.y - 2.0) - v.clamp(0.0, 1.0) * (amp_y * 2.0)
+        };
+        y.clamp(lane.min.y + 1.5, lane.max.y - 1.5)
+    };
+
+    let mut pts = Vec::with_capacity(n);
+    for (i, &sample) in ch.scope_history.iter().enumerate() {
+        let norm_x = i as f32 / (n - 1) as f32;
+        let x = lane.min.x + norm_x * (lane.width() - 2.0);
+        pts.push(pos2(x, val_to_y(sample)));
+    }
+
+    // Subtle translucent area fill under the rolling curve
+    let fill_col = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 22);
+    for pair in pts.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+        p.add(egui::Shape::convex_polygon(
+            vec![a, b, pos2(b.x, base_y), pos2(a.x, base_y)],
+            fill_col,
+            Stroke::NONE,
+        ));
+    }
+
+    // Soft outer glow + crisp Bitwig trace
+    let glow = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 52);
     p.add(egui::epaint::PathShape::line(
         pts.clone(),
-        Stroke::new(2.6_f32, glow),
+        Stroke::new(2.8_f32, glow),
     ));
-    p.add(egui::epaint::PathShape::line(pts, Stroke::new(1.3_f32, color)));
+    p.add(egui::epaint::PathShape::line(
+        pts,
+        Stroke::new(1.35_f32, color),
+    ));
 
-    if is_playing {
-        let dot_norm_x = ((current_phase - phase_offset).rem_euclid(1.0)) / cycles;
-        let dot_x = lane.min.x + dot_norm_x * lane.width();
-        let dot_y = if ch.bipolar {
-            let norm_v = if ch.depth > 1e-4 {
-                current_val / ch.depth
-            } else {
-                0.0
-            };
-            cy - norm_v * amp_y
-        } else {
-            let norm_v = if ch.depth > 1e-4 {
-                current_val / ch.depth
-            } else {
-                0.0
-            };
-            lane.max.y - 2.0 - norm_v * (amp_y * 2.0)
-        };
-        let dot_pos = pos2(dot_x, dot_y.clamp(lane.min.y + 2.0, lane.max.y - 2.0));
-        p.circle_filled(dot_pos, 3.2, glow);
-        p.circle_filled(dot_pos, 1.8, Color32::WHITE);
-    }
+    // Bright leading live head dot on the right edge
+    let head_pos = pos2(lane.max.x - 2.0, val_to_y(live_val));
+    p.circle_filled(head_pos, 3.2, glow);
+    p.circle_filled(head_pos, 1.6, Color32::WHITE);
+}
+
+/// Paints a Bitwig-style floating numeric value pill above a knob while dragging.
+fn paint_drag_value_pill(ctx: &egui::Context, anchor_top: Pos2, text: &str) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("openlfo_drag_pill"),
+    ));
+    let pill_size = vec2((text.len() as f32 * 5.8 + 12.0).max(40.0), 17.0);
+    let pill_rect = Rect::from_center_size(pos2(anchor_top.x, anchor_top.y - 12.0), pill_size);
+    painter.rect_filled(pill_rect, 3.0, Color32::from_rgb(0x16, 0x18, 0x1E));
+    painter.rect_stroke(
+        pill_rect,
+        3.0,
+        Stroke::new(1.0_f32, Color32::from_rgb(0x4E, 0x52, 0x5E)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        pill_rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        fonts::lcd(9.5),
+        Color32::WHITE,
+    );
 }
 
 /// Renders the right column containing the `FX` slot button and the `Mix` rotary knob.
@@ -2095,6 +2196,13 @@ fn render_right_column(
     if mix_resp.hovered() && scroll_y.abs() > 0.0 {
         let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
         state.mix = (state.mix + step).clamp(0.0, 1.0);
+    }
+    if mix_resp.dragged() {
+        paint_drag_value_pill(
+            ui.ctx(),
+            mix_resp.rect.center_top(),
+            &format!("{:.1} %", state.mix * 100.0),
+        );
     }
     mix_resp.on_hover_text(format!("Mix: {:.0}%", state.mix * 100.0));
     mix_ui.label(
