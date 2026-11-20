@@ -65,7 +65,10 @@ impl ModulatorCategory {
 pub enum ModulatorKind {
     ClassicLfo,
     Macro,
+    Macro4,
     Button,
+    Buttons,
+    Xy,
 }
 
 impl ModulatorKind {
@@ -81,7 +84,10 @@ impl ModulatorKind {
         match lower.as_str() {
             "classic lfo" | "classiclfo" | "lfo" => Some(Self::ClassicLfo),
             "macro" => Some(Self::Macro),
+            "macro-4" | "macro4" | "macro 4" => Some(Self::Macro4),
             "button" => Some(Self::Button),
+            "buttons" | "buttons-4" | "buttons4" => Some(Self::Buttons),
+            "xy" | "x-y" | "xy pad" => Some(Self::Xy),
             _ => None,
         }
     }
@@ -116,12 +122,36 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         outputs: &["OUT"],
     },
     ModulatorMeta {
+        kind: ModulatorKind::Macro4,
+        name: "Macro-4",
+        short_name: "Macro-4",
+        category: ModulatorCategory::Interface,
+        description: "Four independent macro knobs with individual bipolar/unipolar polarity and modulation outputs.",
+        outputs: &["M1", "M2", "M3", "M4"],
+    },
+    ModulatorMeta {
         kind: ModulatorKind::Button,
         name: "Button",
         short_name: "Button",
         category: ModulatorCategory::Interface,
         description: "Toggle or momentary on/off switch modulator with optional smoothing.",
         outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Buttons,
+        name: "Buttons",
+        short_name: "Buttons",
+        category: ModulatorCategory::Interface,
+        description: "Four independent toggle or momentary on/off switch modulators in a single slot.",
+        outputs: &["B1", "B2", "B3", "B4"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Xy,
+        name: "XY",
+        short_name: "XY",
+        category: ModulatorCategory::Interface,
+        description: "2D XY pad modulator with independent X and Y modulation outputs.",
+        outputs: &["X", "Y"],
     },
 ];
 
@@ -158,9 +188,22 @@ pub struct ModulatorSlotState {
     pub macro_value: f32,
     pub macro_bipolar: bool,
 
+    // Macro-4
+    pub macro4_values: [f32; 4],
+    pub macro4_bipolar: [bool; 4],
+
     // Button
     pub button_on: bool,
     pub button_momentary: bool,
+
+    // Buttons (4 pads)
+    pub buttons_on: [bool; 4],
+    pub buttons_momentary: [bool; 4],
+
+    // XY Pad
+    pub xy_x: f32,
+    pub xy_y: f32,
+    pub xy_bipolar: bool,
 
     // Rutas de modulación
     pub routes: Vec<BayModRoute>,
@@ -187,8 +230,15 @@ impl ModulatorSlotState {
             lfo_last_sh_val: 0.0,
             macro_value: 0.5,
             macro_bipolar: false,
+            macro4_values: [0.5; 4],
+            macro4_bipolar: [false; 4],
             button_on: false,
             button_momentary: false,
+            buttons_on: [false; 4],
+            buttons_momentary: [false; 4],
+            xy_x: 0.5,
+            xy_y: 0.5,
+            xy_bipolar: false,
             routes: Vec::new(),
             last_outputs: [0.0; 4],
         }
@@ -252,8 +302,25 @@ impl ModulatorSlotState {
                 let v = self.macro_value.clamp(0.0, 1.0);
                 outs[0] = if self.macro_bipolar { v * 2.0 - 1.0 } else { v };
             }
+            ModulatorKind::Macro4 => {
+                for i in 0..4 {
+                    let v = self.macro4_values[i].clamp(0.0, 1.0);
+                    outs[i] = if self.macro4_bipolar[i] { v * 2.0 - 1.0 } else { v };
+                }
+            }
             ModulatorKind::Button => {
                 outs[0] = if self.button_on { 1.0 } else { 0.0 };
+            }
+            ModulatorKind::Buttons => {
+                for i in 0..4 {
+                    outs[i] = if self.buttons_on[i] { 1.0 } else { 0.0 };
+                }
+            }
+            ModulatorKind::Xy => {
+                let x = self.xy_x.clamp(0.0, 1.0);
+                let y = self.xy_y.clamp(0.0, 1.0);
+                outs[0] = if self.xy_bipolar { x * 2.0 - 1.0 } else { x };
+                outs[1] = if self.xy_bipolar { y * 2.0 - 1.0 } else { y };
             }
         }
         self.last_outputs = outs;
@@ -304,6 +371,10 @@ impl ModulatorSlotState {
         self.routes.clear();
     }
 
+    pub fn clear_routes_for_output(&mut self, out_idx: u8) {
+        self.routes.retain(|r| r.out_idx != out_idx);
+    }
+
     pub fn to_project_params(&self) -> ModulatorSlotParams {
         let (params, bool_flags, mode_idx) = match self.kind {
             ModulatorKind::ClassicLfo => {
@@ -327,7 +398,19 @@ impl ModulatorSlotState {
                 )
             }
             ModulatorKind::Macro => (vec![self.macro_value], vec![self.macro_bipolar], 0),
+            ModulatorKind::Macro4 => (
+                self.macro4_values.to_vec(),
+                self.macro4_bipolar.to_vec(),
+                0,
+            ),
             ModulatorKind::Button => (vec![], vec![self.button_on, self.button_momentary], 0),
+            ModulatorKind::Buttons => {
+                let mut flags = Vec::with_capacity(8);
+                flags.extend_from_slice(&self.buttons_on);
+                flags.extend_from_slice(&self.buttons_momentary);
+                (vec![], flags, 0)
+            }
+            ModulatorKind::Xy => (vec![self.xy_x, self.xy_y], vec![self.xy_bipolar], 0),
         };
         let routes = self
             .routes
@@ -400,12 +483,43 @@ impl ModulatorSlotState {
                     st.macro_bipolar = bip;
                 }
             }
+            ModulatorKind::Macro4 => {
+                for i in 0..4 {
+                    if let Some(&v) = p.params.get(i) {
+                        st.macro4_values[i] = v.clamp(0.0, 1.0);
+                    }
+                    if let Some(&bip) = p.bool_flags.get(i) {
+                        st.macro4_bipolar[i] = bip;
+                    }
+                }
+            }
             ModulatorKind::Button => {
                 if let Some(&on) = p.bool_flags.first() {
                     st.button_on = on;
                 }
                 if let Some(&mom) = p.bool_flags.get(1) {
                     st.button_momentary = mom;
+                }
+            }
+            ModulatorKind::Buttons => {
+                for i in 0..4 {
+                    if let Some(&on) = p.bool_flags.get(i) {
+                        st.buttons_on[i] = on;
+                    }
+                    if let Some(&mom) = p.bool_flags.get(4 + i) {
+                        st.buttons_momentary[i] = mom;
+                    }
+                }
+            }
+            ModulatorKind::Xy => {
+                if let Some(&x) = p.params.first() {
+                    st.xy_x = x.clamp(0.0, 1.0);
+                }
+                if let Some(&y) = p.params.get(1) {
+                    st.xy_y = y.clamp(0.0, 1.0);
+                }
+                if let Some(&bip) = p.bool_flags.first() {
+                    st.xy_bipolar = bip;
                 }
             }
         }

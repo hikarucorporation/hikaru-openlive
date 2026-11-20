@@ -37,9 +37,9 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 258,
+    "done": 261,
     "in_progress": 17,
-    "planned": 341,
+    "planned": 338,
     "bugs": 1,
     "parity_percent": 42
   },
@@ -1436,7 +1436,7 @@
         {
           "id": "md-009",
           "name": "Buttons",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-010",
@@ -1499,7 +1499,7 @@
         {
           "id": "md-021",
           "name": "Macro-4",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-022",
@@ -1609,7 +1609,7 @@
         {
           "id": "md-043",
           "name": "XY",
-          "status": "planned"
+          "status": "done"
         }
       ]
     },

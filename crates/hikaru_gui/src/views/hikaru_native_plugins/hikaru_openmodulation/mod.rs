@@ -242,6 +242,7 @@ mod tests {
         assert!((mac.evaluate(&transport, 0.0)[0] - 0.75).abs() < 1e-4);
         mac.macro_bipolar = true;
         assert!((mac.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+        mac.set_route(0, ModulationTarget::OpenPolyCutoff, 0.42);
 
         // Button OFF -> 0.0, ON -> 1.0
         let btn = bay.slots.iter_mut().find(|s| s.id == btn_id).unwrap();
@@ -251,7 +252,6 @@ mod tests {
         assert_eq!(btn.evaluate(&transport, 0.0)[0], 1.0);
 
         // Project params roundtrip
-        mac.set_route(0, ModulationTarget::OpenPolyCutoff, 0.42);
         let saved = bay.to_project_params(true);
         let mut restored = DeviceModulatorBay::empty();
         restored.apply_project_params(&saved);
@@ -285,5 +285,63 @@ mod tests {
         assert!((m.delta - 0.4).abs() < 1e-3, "0.8 * 0.5 expected 0.4, got {}", m.delta);
 
         clear_bay_for_slot(track_idx, slot_idx);
+    }
+
+    #[test]
+    fn test_multi_output_modulators_macro4_buttons_xy() {
+        let mut bay = DeviceModulatorBay::empty();
+        let m4_id = bay.add_modulator(ModulatorKind::Macro4);
+        let btns_id = bay.add_modulator(ModulatorKind::Buttons);
+        let xy_id = bay.add_modulator(ModulatorKind::Xy);
+        let transport = LfoTransportState::default();
+
+        // Macro-4: 4 independent outputs (unipolar + bipolar)
+        let m4 = bay.slots.iter_mut().find(|s| s.id == m4_id).unwrap();
+        m4.macro4_values = [0.25, 0.5, 0.75, 1.0];
+        m4.macro4_bipolar = [false, true, true, false];
+        let m4_outs = m4.evaluate(&transport, 0.0);
+        assert!((m4_outs[0] - 0.25).abs() < 1e-4);
+        assert!(m4_outs[1].abs() < 1e-4); // 0.5 bipolar -> 0.0
+        assert!((m4_outs[2] - 0.5).abs() < 1e-4); // 0.75 bipolar -> +0.5
+        assert!((m4_outs[3] - 1.0).abs() < 1e-4);
+        m4.set_route(2, ModulationTarget::OpenPolyCutoff, 0.6);
+
+        // Buttons: 4 independent ON/OFF pads
+        let btns = bay.slots.iter_mut().find(|s| s.id == btns_id).unwrap();
+        btns.buttons_on = [true, false, true, false];
+        btns.buttons_momentary = [false, true, false, true];
+        let b_outs = btns.evaluate(&transport, 0.0);
+        assert_eq!(b_outs, [1.0, 0.0, 1.0, 0.0]);
+
+        // XY: 2 independent outputs (X=0, Y=1)
+        let xy = bay.slots.iter_mut().find(|s| s.id == xy_id).unwrap();
+        xy.xy_x = 0.25;
+        xy.xy_y = 0.75;
+        xy.xy_bipolar = true;
+        let xy_outs = xy.evaluate(&transport, 0.0);
+        assert!((xy_outs[0] - (-0.5)).abs() < 1e-4);
+        assert!((xy_outs[1] - 0.5).abs() < 1e-4);
+        xy.set_route(0, ModulationTarget::OpenPolyReso, 0.5);
+        xy.set_route(1, ModulationTarget::OpenPolyCutoff, -0.4);
+
+        // Roundtrip persistence
+        let saved = bay.to_project_params(true);
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved);
+        assert_eq!(restored.slots.len(), 3);
+        let r_m4 = restored.slots.iter().find(|s| s.kind == ModulatorKind::Macro4).unwrap();
+        assert!((r_m4.macro4_values[2] - 0.75).abs() < 1e-4);
+        assert!(r_m4.macro4_bipolar[2]);
+        assert!((r_m4.route_amount(2, ModulationTarget::OpenPolyCutoff) - 0.6).abs() < 1e-4);
+
+        let r_btns = restored.slots.iter().find(|s| s.kind == ModulatorKind::Buttons).unwrap();
+        assert_eq!(r_btns.buttons_on, [true, false, true, false]);
+        assert_eq!(r_btns.buttons_momentary, [false, true, false, true]);
+
+        let r_xy = restored.slots.iter().find(|s| s.kind == ModulatorKind::Xy).unwrap();
+        assert!((r_xy.xy_x - 0.25).abs() < 1e-4);
+        assert!((r_xy.xy_y - 0.75).abs() < 1e-4);
+        assert!(r_xy.xy_bipolar);
+        assert!((r_xy.route_amount(1, ModulationTarget::OpenPolyCutoff) - (-0.4)).abs() < 1e-4);
     }
 }

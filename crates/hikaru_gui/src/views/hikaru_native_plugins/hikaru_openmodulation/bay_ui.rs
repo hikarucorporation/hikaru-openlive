@@ -91,9 +91,12 @@ pub fn render_device_modulator_bay(
             any_lfo_active = true;
         }
         let mod_id = m.id;
-        let map_active = is_bay_mapping_active(track_idx, slot_idx, mod_id, 0);
+        let out_labels = m.kind.meta().outputs;
+        let num_outs = out_labels.len().clamp(1, 4);
+        let any_map_active = (0..num_outs as u8)
+            .any(|o| is_bay_mapping_active(track_idx, slot_idx, mod_id, o));
 
-        let border = if map_active {
+        let border = if any_map_active {
             MOD_ARROW_CYAN
         } else if m.enabled {
             CELL_BORDER_ACTIVE
@@ -154,7 +157,7 @@ pub fn render_device_modulator_bay(
             );
         }
         if del_resp.clicked() {
-            if map_active {
+            if any_map_active {
                 clear_mapping_mode();
             }
             remove_id = Some(mod_id);
@@ -205,139 +208,23 @@ pub fn render_device_modulator_bay(
         );
         render_slot_body(ui, body_r, m, outs[0], track_idx, slot_idx, &mut dirty);
 
-        // --- Bottom Cyan Mapping Arrow (`●→`) ---
-        let arrow_r = Rect::from_min_max(
+        // --- Bottom Cyan Mapping Arrow Strip (`●→`, supports 1..4 outputs) ---
+        let arrow_strip_r = Rect::from_min_max(
             pos2(cell_rect.min.x + 4.0, cell_rect.max.y - arrow_h - 1.0),
             pos2(cell_rect.max.x - 4.0, cell_rect.max.y - 2.0),
         );
-        let arrow_resp = ui.interact(
-            arrow_r,
-            ui.id().with(("bay_map", track_idx, slot_idx, mod_id)),
-            Sense::click(),
-        );
-        if arrow_resp.hovered() {
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        }
-        let is_assigned = m.has_routes_for_output(0);
-        if map_active {
-            p.rect_filled(arrow_r, 2.5, MOD_ARROW_CYAN);
-        } else if is_assigned {
-            let pulse = (outs[0].abs().clamp(0.0, 1.0) * 45.0) as u8;
-            p.rect_filled(
-                arrow_r,
-                2.5,
-                Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 22 + pulse),
-            );
-        } else if arrow_resp.hovered() {
-            p.rect_filled(arrow_r, 2.5, Color32::from_rgb(0x22, 0x38, 0x44));
-        } else {
-            p.rect_filled(arrow_r, 2.5, Color32::from_rgb(0x1C, 0x1E, 0x23));
-        }
-
-        paint_bay_arrow(
+        render_output_arrow_strip(
+            ui,
             &p,
-            arrow_r.center(),
-            if map_active {
-                Color32::from_rgb(0x10, 0x14, 0x1A)
-            } else if is_assigned {
-                MOD_ARROW_CYAN
-            } else {
-                Color32::from_rgb(0x52, 0x8A, 0xA4)
-            },
-            is_assigned || map_active,
+            arrow_strip_r,
+            m,
+            outs,
+            out_labels,
+            track_idx,
+            slot_idx,
+            &mut dirty,
+            &mut remove_id,
         );
-
-        let tip = if map_active {
-            format!(
-                "{}: Mapping active — Drag any cyan knob up/down • Click again or Esc to finish",
-                m.kind.meta().name
-            )
-        } else if is_assigned {
-            let summary: Vec<String> = m
-                .routes
-                .iter()
-                .map(|r| format!("{} ({:+.0}%)", r.target.label(), r.amount * 100.0))
-                .collect();
-            format!(
-                "{} → {}\nLeft-click: Map knobs • Right-click: Manage routes",
-                m.kind.meta().name,
-                summary.join(", ")
-            )
-        } else {
-            format!(
-                "{}: Click ●→ then drag any knob to modulate • Right-click: Target list",
-                m.kind.meta().name
-            )
-        };
-        let arrow_resp = arrow_resp.on_hover_text(tip);
-        if arrow_resp.clicked() {
-            toggle_bay_mapping_mode(track_idx, slot_idx, mod_id, 0);
-        }
-        arrow_resp.context_menu(|menu_ui| {
-            menu_ui.label(
-                RichText::new(format!("{} Routes", m.kind.meta().name))
-                    .font(fonts::semibold(10.0))
-                    .color(theme::ACCENT_ORANGE),
-            );
-            menu_ui.separator();
-            if m.routes.is_empty() {
-                menu_ui.label(
-                    RichText::new("Not mapped (click ●→ then drag any cyan knob)")
-                        .font(fonts::regular(9.0))
-                        .color(theme::TEXT_MUTED),
-                );
-            } else {
-                let snap = m.routes.clone();
-                for r in snap {
-                    let mut amt = r.amount;
-                    menu_ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(r.target.label())
-                                .font(fonts::regular(9.0))
-                                .color(MOD_ARROW_CYAN),
-                        );
-                        if ui
-                            .add(egui::Slider::new(&mut amt, -1.0..=1.0).fixed_decimals(2))
-                            .changed()
-                        {
-                            m.set_route(r.out_idx, r.target, amt);
-                            dirty = true;
-                        }
-                        if ui.small_button("×").clicked() {
-                            m.set_route(r.out_idx, r.target, 0.0);
-                            dirty = true;
-                        }
-                    });
-                }
-                menu_ui.separator();
-                if menu_ui.button("Clear All Routes").clicked() {
-                    m.clear_routes();
-                    dirty = true;
-                    menu_ui.close_menu();
-                }
-            }
-            menu_ui.separator();
-            menu_ui.menu_button("Add Target...", |sub_ui| {
-                for &target in &ModulationTarget::ALL {
-                    if target == ModulationTarget::None {
-                        continue;
-                    }
-                    if sub_ui
-                        .selectable_label(m.route_amount(0, target).abs() > 0.004, target.label())
-                        .clicked()
-                    {
-                        m.set_route(0, target, 0.5);
-                        dirty = true;
-                        sub_ui.close_menu();
-                    }
-                }
-            });
-            menu_ui.separator();
-            if menu_ui.button("Remove Modulator").clicked() {
-                remove_id = Some(mod_id);
-                menu_ui.close_menu();
-            }
-        });
     }
 
     // --- '+' Add Modulator Cell ---
@@ -408,6 +295,210 @@ pub fn render_device_modulator_bay(
     }
 
     consumed_w
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_output_arrow_strip(
+    ui: &mut Ui,
+    p: &Painter,
+    strip_r: Rect,
+    m: &mut ModulatorSlotState,
+    outs: [f32; 4],
+    out_labels: &[&str],
+    track_idx: usize,
+    slot_idx: usize,
+    dirty: &mut bool,
+    remove_id: &mut Option<u32>,
+) {
+    let mod_id = m.id;
+    let num_outs = out_labels.len().clamp(1, 4);
+    let gap = if num_outs > 1 { 1.5 } else { 0.0 };
+    let cell_w = (strip_r.width() - gap * (num_outs as f32 - 1.0)) / num_outs as f32;
+
+    for out_i in 0..num_outs {
+        let out_u8 = out_i as u8;
+        let out_label = out_labels[out_i];
+        let x0 = strip_r.min.x + out_i as f32 * (cell_w + gap);
+        let arrow_r = Rect::from_min_size(pos2(x0, strip_r.min.y), vec2(cell_w, strip_r.height()));
+
+        let arrow_resp = ui.interact(
+            arrow_r,
+            ui.id().with(("bay_map", track_idx, slot_idx, mod_id, out_u8)),
+            Sense::click(),
+        );
+        if arrow_resp.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+
+        let map_active = is_bay_mapping_active(track_idx, slot_idx, mod_id, out_u8);
+        let is_assigned = m.has_routes_for_output(out_u8);
+        let live_val = outs.get(out_i).copied().unwrap_or(0.0);
+
+        if map_active {
+            p.rect_filled(arrow_r, 2.5, MOD_ARROW_CYAN);
+        } else if is_assigned {
+            let pulse = (live_val.abs().clamp(0.0, 1.0) * 45.0) as u8;
+            p.rect_filled(
+                arrow_r,
+                2.5,
+                Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 22 + pulse),
+            );
+        } else if arrow_resp.hovered() {
+            p.rect_filled(arrow_r, 2.5, Color32::from_rgb(0x22, 0x38, 0x44));
+        } else {
+            p.rect_filled(arrow_r, 2.5, Color32::from_rgb(0x1C, 0x1E, 0x23));
+        }
+
+        let fg = if map_active {
+            Color32::from_rgb(0x10, 0x14, 0x1A)
+        } else if is_assigned {
+            MOD_ARROW_CYAN
+        } else {
+            Color32::from_rgb(0x52, 0x8A, 0xA4)
+        };
+
+        if num_outs == 1 {
+            paint_bay_arrow(p, arrow_r.center(), fg, is_assigned || map_active);
+        } else if num_outs == 2 {
+            // Compact label + mini arrow (e.g. X →, Y →)
+            let c = arrow_r.center();
+            p.text(
+                pos2(c.x - 5.0, c.y),
+                Align2::CENTER_CENTER,
+                out_label,
+                fonts::semibold(8.0),
+                fg,
+            );
+            let tip_x = c.x + 8.0;
+            p.line_segment(
+                [pos2(c.x + 0.5, c.y), pos2(tip_x - 1.2, c.y)],
+                Stroke::new(1.1_f32, fg),
+            );
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    pos2(tip_x, c.y),
+                    pos2(tip_x - 3.0, c.y - 2.2),
+                    pos2(tip_x - 3.0, c.y + 2.2),
+                ],
+                fg,
+                Stroke::NONE,
+            ));
+        } else {
+            // 4 outputs: compact numbered mapping cell (1..4) with active dot
+            let short_tag = (out_i + 1).to_string();
+            p.text(
+                arrow_r.center(),
+                Align2::CENTER_CENTER,
+                short_tag,
+                fonts::semibold(8.0),
+                fg,
+            );
+            if is_assigned && !map_active {
+                p.circle_filled(pos2(arrow_r.max.x - 2.5, arrow_r.min.y + 2.5), 1.4, MOD_ARROW_CYAN);
+            }
+        }
+
+        let out_title = if num_outs == 1 {
+            m.kind.meta().name.to_string()
+        } else {
+            format!("{} [{}]", m.kind.meta().name, out_label)
+        };
+
+        let tip = if map_active {
+            format!(
+                "{out_title}: Mapping active — Drag any cyan knob up/down • Click again or Esc to finish"
+            )
+        } else if is_assigned {
+            let summary: Vec<String> = m
+                .routes
+                .iter()
+                .filter(|r| r.out_idx == out_u8)
+                .map(|r| format!("{} ({:+.0}%)", r.target.label(), r.amount * 100.0))
+                .collect();
+            format!(
+                "{out_title} → {}\nLeft-click: Map knobs • Right-click: Manage routes",
+                summary.join(", ")
+            )
+        } else {
+            format!(
+                "{out_title}: Click to map any knob • Right-click: Target list"
+            )
+        };
+        let arrow_resp = arrow_resp.on_hover_text(tip);
+        if arrow_resp.clicked() {
+            toggle_bay_mapping_mode(track_idx, slot_idx, mod_id, out_u8);
+        }
+        arrow_resp.context_menu(|menu_ui| {
+            menu_ui.label(
+                RichText::new(format!("{out_title} Routes"))
+                    .font(fonts::semibold(10.0))
+                    .color(theme::ACCENT_ORANGE),
+            );
+            menu_ui.separator();
+            let out_routes: Vec<_> = m
+                .routes
+                .iter()
+                .filter(|r| r.out_idx == out_u8)
+                .cloned()
+                .collect();
+            if out_routes.is_empty() {
+                menu_ui.label(
+                    RichText::new("Not mapped (click ●→ then drag any cyan knob)")
+                        .font(fonts::regular(9.0))
+                        .color(theme::TEXT_MUTED),
+                );
+            } else {
+                for r in out_routes {
+                    let mut amt = r.amount;
+                    menu_ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(r.target.label())
+                                .font(fonts::regular(9.0))
+                                .color(MOD_ARROW_CYAN),
+                        );
+                        if ui
+                            .add(egui::Slider::new(&mut amt, -1.0..=1.0).fixed_decimals(2))
+                            .changed()
+                        {
+                            m.set_route(out_u8, r.target, amt);
+                            *dirty = true;
+                        }
+                        if ui.small_button("×").clicked() {
+                            m.set_route(out_u8, r.target, 0.0);
+                            *dirty = true;
+                        }
+                    });
+                }
+                menu_ui.separator();
+                if menu_ui.button("Clear Output Routes").clicked() {
+                    m.clear_routes_for_output(out_u8);
+                    *dirty = true;
+                    menu_ui.close_menu();
+                }
+            }
+            menu_ui.separator();
+            menu_ui.menu_button("Add Target...", |sub_ui| {
+                for &target in &ModulationTarget::ALL {
+                    if target == ModulationTarget::None {
+                        continue;
+                    }
+                    if sub_ui
+                        .selectable_label(m.route_amount(out_u8, target).abs() > 0.004, target.label())
+                        .clicked()
+                    {
+                        m.set_route(out_u8, target, 0.5);
+                        *dirty = true;
+                        sub_ui.close_menu();
+                    }
+                }
+            });
+            menu_ui.separator();
+            if menu_ui.button("Remove Modulator").clicked() {
+                *remove_id = Some(mod_id);
+                menu_ui.close_menu();
+            }
+        });
+    }
 }
 
 fn render_slot_body(
@@ -498,6 +589,40 @@ fn render_slot_body(
                 *dirty = true;
             }
         }
+        ModulatorKind::Macro4 => {
+            let gap = 2.0;
+            let cw = (rect.width() - gap) * 0.5;
+            let ch = (rect.height() - gap) * 0.5;
+            let knob_d = cw.min(ch).clamp(11.0, 16.0);
+            let col = if m.enabled {
+                MOD_ARROW_CYAN
+            } else {
+                theme::TEXT_MUTED
+            };
+            for i in 0..4 {
+                let gx = (i % 2) as f32;
+                let gy = (i / 2) as f32;
+                let sub = Rect::from_min_size(
+                    pos2(rect.min.x + gx * (cw + gap), rect.min.y + gy * (ch + gap)),
+                    vec2(cw, ch),
+                );
+                let knob_r = Rect::from_center_size(sub.center(), vec2(knob_d, knob_d));
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(knob_r));
+                let (resp, changed) = bitwig_kit::rotary_knob(
+                    &mut child,
+                    knob_d,
+                    &mut m.macro4_values[i],
+                    0.0..=1.0,
+                    0.5,
+                    col,
+                    m.macro4_bipolar[i],
+                );
+                resp.on_hover_text(format!("M{}: {:.0}%", i + 1, m.macro4_values[i] * 100.0));
+                if changed {
+                    *dirty = true;
+                }
+            }
+        }
         ModulatorKind::Button => {
             let btn_r = rect.shrink2(vec2(4.0, 3.0));
             let resp = ui
@@ -554,6 +679,136 @@ fn render_slot_body(
                     theme::TEXT_SECONDARY
                 },
             );
+        }
+        ModulatorKind::Buttons => {
+            let gap = 2.0;
+            let cw = (rect.width() - gap) * 0.5;
+            let ch = (rect.height() - gap) * 0.5;
+            for i in 0..4 {
+                let gx = (i % 2) as f32;
+                let gy = (i / 2) as f32;
+                let btn_r = Rect::from_min_size(
+                    pos2(rect.min.x + gx * (cw + gap), rect.min.y + gy * (ch + gap)),
+                    vec2(cw, ch),
+                );
+                let resp = ui
+                    .interact(
+                        btn_r,
+                        ui.id().with(("bay_btns", track_idx, slot_idx, m.id, i)),
+                        Sense::click_and_drag(),
+                    )
+                    .on_hover_text(format!(
+                        "Button {} ({})",
+                        i + 1,
+                        if m.buttons_momentary[i] { "Momentary" } else { "Toggle" }
+                    ));
+                if m.buttons_momentary[i] {
+                    let next = resp.is_pointer_button_down_on();
+                    if next != m.buttons_on[i] {
+                        m.buttons_on[i] = next;
+                        *dirty = true;
+                    }
+                } else if resp.clicked() {
+                    m.buttons_on[i] = !m.buttons_on[i];
+                    *dirty = true;
+                }
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                let on = m.buttons_on[i];
+                let bg = if on && m.enabled {
+                    MOD_ARROW_CYAN
+                } else {
+                    CELL_WELL_BG
+                };
+                p.rect_filled(btn_r, 2.0, bg);
+                p.rect_stroke(
+                    btn_r,
+                    2.0,
+                    Stroke::new(1.0_f32, if on { Color32::WHITE } else { CELL_BORDER }),
+                    egui::StrokeKind::Inside,
+                );
+                p.text(
+                    btn_r.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{}", i + 1),
+                    fonts::semibold(7.5),
+                    if on && m.enabled {
+                        Color32::from_rgb(0x10, 0x14, 0x1A)
+                    } else {
+                        theme::TEXT_SECONDARY
+                    },
+                );
+            }
+        }
+        ModulatorKind::Xy => {
+            p.rect_filled(rect, 2.5, CELL_WELL_BG);
+            p.rect_stroke(
+                rect,
+                2.5,
+                Stroke::new(0.8_f32, CELL_BORDER),
+                egui::StrokeKind::Inside,
+            );
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_xy", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "XY Pad (X: {:.0}%, Y: {:.0}%) — Drag to move • Double-click to center",
+                    m.xy_x * 100.0,
+                    m.xy_y * 100.0
+                ));
+            if resp.double_clicked() {
+                m.xy_x = 0.5;
+                m.xy_y = 0.5;
+                *dirty = true;
+            } else if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let nx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    let ny = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    m.xy_x = nx;
+                    m.xy_y = ny;
+                    *dirty = true;
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            }
+
+            // Subtle center crosshairs
+            let c = rect.center();
+            let grid_col = Color32::from_rgb(0x2D, 0x31, 0x3A);
+            p.line_segment(
+                [pos2(rect.min.x + 2.0, c.y), pos2(rect.max.x - 2.0, c.y)],
+                Stroke::new(0.7_f32, grid_col),
+            );
+            p.line_segment(
+                [pos2(c.x, rect.min.y + 2.0), pos2(c.x, rect.max.y - 2.0)],
+                Stroke::new(0.7_f32, grid_col),
+            );
+
+            // Draggable puck
+            let pad = 3.0;
+            let px = rect.min.x + pad + m.xy_x.clamp(0.0, 1.0) * (rect.width() - pad * 2.0).max(1.0);
+            let py = rect.min.y + pad + (1.0 - m.xy_y.clamp(0.0, 1.0)) * (rect.height() - pad * 2.0).max(1.0);
+            let puck = pos2(px, py);
+            let puck_col = if m.enabled {
+                MOD_ARROW_CYAN
+            } else {
+                theme::TEXT_MUTED
+            };
+            p.line_segment(
+                [pos2(rect.min.x + 1.0, py), pos2(rect.max.x - 1.0, py)],
+                Stroke::new(0.6_f32, Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 60)),
+            );
+            p.line_segment(
+                [pos2(px, rect.min.y + 1.0), pos2(px, rect.max.y - 1.0)],
+                Stroke::new(0.6_f32, Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 60)),
+            );
+            p.circle_filled(puck, 3.2, puck_col);
+            p.circle_stroke(puck, 3.2, Stroke::new(0.9_f32, Color32::WHITE));
         }
     }
 }
@@ -687,6 +942,29 @@ fn render_modulator_inspector(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &m
                 *dirty = true;
             }
         }
+        ModulatorKind::Macro4 => {
+            for i in 0..4 {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut m.macro4_values[i], 0.0..=1.0)
+                                .text(format!("M{}", i + 1)),
+                        )
+                        .changed()
+                    {
+                        *dirty = true;
+                    }
+                    if ui
+                        .selectable_label(m.macro4_bipolar[i], "±")
+                        .on_hover_text("Toggle Bipolar (±)")
+                        .clicked()
+                    {
+                        m.macro4_bipolar[i] = !m.macro4_bipolar[i];
+                        *dirty = true;
+                    }
+                });
+            }
+        }
         ModulatorKind::Button => {
             if ui.checkbox(&mut m.button_on, "Engaged (ON)").changed() {
                 *dirty = true;
@@ -697,6 +975,48 @@ fn render_modulator_inspector(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &m
             {
                 *dirty = true;
             }
+        }
+        ModulatorKind::Buttons => {
+            for i in 0..4 {
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(&mut m.buttons_on[i], format!("B{} ON", i + 1))
+                        .changed()
+                    {
+                        *dirty = true;
+                    }
+                    if ui
+                        .checkbox(&mut m.buttons_momentary[i], "Momentary")
+                        .changed()
+                    {
+                        *dirty = true;
+                    }
+                });
+            }
+        }
+        ModulatorKind::Xy => {
+            if ui
+                .add(egui::Slider::new(&mut m.xy_x, 0.0..=1.0).text("X"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.xy_y, 0.0..=1.0).text("Y"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut m.xy_bipolar, "Bipolar (±)").changed() {
+                    *dirty = true;
+                }
+                if ui.button("Center").clicked() {
+                    m.xy_x = 0.5;
+                    m.xy_y = 0.5;
+                    *dirty = true;
+                }
+            });
         }
     }
 }
