@@ -492,7 +492,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         Color32::from_rgb(0xDA, 0xDC, 0xE2),
                     );
                     if stop_all_resp.on_hover_text("Stop All Clips").clicked() {
-                        state.matrix_state.stop_all_clips(&state.audio_proxy);
+                        state.stop_all_clip_tracks();
                     }
                 }
 
@@ -1399,13 +1399,20 @@ fn render_channel_strip(
                             );
                             if arm {
                                 icons::paint_record_circle(ui.painter(), icon_r, REC_RED, false);
-                            } else {
-                                // El cuadradito del pad vacío en Bitwig es gris
-                                // medio (#535353), no casi negro.
+                            } else if has_stop_btn_here {
+                                // El cuadradito del pad vacío en Bitwig se ilumina al pasar el cursor.
+                                let icon_hovered = pointer_pos.is_some_and(|p| icon_r.expand(2.0).contains(p));
+                                let stop_col = if icon_hovered {
+                                    Color32::from_rgb(0xEE, 0xF0, 0xF4)
+                                } else if slot_resp.hovered() {
+                                    Color32::from_rgb(0x9A, 0x9C, 0xA2)
+                                } else {
+                                    Color32::from_rgb(0x53, 0x53, 0x53)
+                                };
                                 icons::paint_stop_square(
                                     ui.painter(),
                                     icon_r,
-                                    Color32::from_rgb(0x53, 0x53, 0x53),
+                                    stop_col,
                                 );
                             }
                         }
@@ -1438,21 +1445,7 @@ fn render_channel_strip(
                             if has_clip_here {
                                 actions.trigger_slot = Some((matrix_idx, scene_idx));
                             } else if has_stop_btn_here {
-                                let track_active = state
-                                    .matrix_state
-                                    .grid
-                                    .get(matrix_idx)
-                                    .is_some_and(|row| {
-                                        row.iter().any(|s| {
-                                            matches!(
-                                                s.state,
-                                                SlotState::Playing | SlotState::QueuedToPlay
-                                            )
-                                        })
-                                    });
-                                if track_active {
-                                    actions.stop_track = Some(matrix_idx);
-                                }
+                                actions.stop_track = Some(matrix_idx);
                             }
                             actions.selected_track_idx = idx;
                         }

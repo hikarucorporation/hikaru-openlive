@@ -2276,7 +2276,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         };
     }
     if stop_all_clicked {
-        state.matrix_state.stop_all_clips(&state.audio_proxy);
+        state.stop_all_clip_tracks();
     }
 
     // =========================================================================
@@ -3274,12 +3274,19 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     if is_armed {
                         icons::paint_record_circle(&lg_painter, ic_rect, REC_RED, false);
                     } else if has_stop_btn {
-                        // Mismo gris medio que usa Bitwig para el cuadradito
-                        // del slot vacío.
+                        // Mismo gris medio que usa Bitwig, iluminado en hover.
+                        let icon_hovered = pointer_pos.is_some_and(|p| ic_rect.expand(2.0).contains(p));
+                        let stop_col = if icon_hovered {
+                            Color32::from_rgb(0xEE, 0xF0, 0xF4)
+                        } else if cell_hovered {
+                            Color32::from_rgb(0x9A, 0x9C, 0xA2)
+                        } else {
+                            Color32::from_rgb(0x53, 0x53, 0x53)
+                        };
                         icons::paint_stop_square(
                             &lg_painter,
                             ic_rect,
-                            Color32::from_rgb(0x53, 0x53, 0x53),
+                            stop_col,
                         );
                     }
                 }
@@ -3348,19 +3355,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 select_slot_action = Some((track_idx, scene_idx));
                             } else {
                                 let has_stop_btn = slot.map(|s| s.has_stop_button).unwrap_or(true);
-                                let track_active = state
-                                    .matrix_state
-                                    .grid
-                                    .get(track_idx)
-                                    .is_some_and(|row| {
-                                        row.iter().any(|s| {
-                                            matches!(
-                                                s.state,
-                                                SlotState::Playing | SlotState::QueuedToPlay
-                                            )
-                                        })
-                                    });
-                                if has_stop_btn && track_active {
+                                if has_stop_btn {
                                     stop_track_action = Some(track_idx);
                                 }
                                 select_slot_action = Some((track_idx, scene_idx));

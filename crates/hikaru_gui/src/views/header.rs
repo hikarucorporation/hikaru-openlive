@@ -672,7 +672,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 .on_hover_text("Stop All Clip Launcher Tracks")
                 .clicked()
                 {
-                    state.matrix_state.stop_all_clips(&state.audio_proxy);
+                    state.stop_all_clip_tracks();
                 }
 
                 ui.add_space(6.0);

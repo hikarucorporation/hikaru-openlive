@@ -1464,6 +1464,13 @@ impl AppState {
         }
     }
 
+    pub fn stop_all_clip_tracks(&mut self) {
+        let count = self.matrix_state.tracks.len();
+        for track_idx in 0..count {
+            self.stop_clip_track(track_idx);
+        }
+    }
+
     pub fn reconcile_queued_stops(&mut self) {
         let mask = self.pending_stop_tracks_mask.load(Ordering::Relaxed);
         let playing = self.is_playing();
