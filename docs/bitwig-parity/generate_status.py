@@ -444,6 +444,14 @@ def render(document: dict) -> str:
             )
         add("</g>")
 
+        # Open-bug badge geometry (bottom right), computed up front so text
+        # placement can stay clear of it when a tile is tight.
+        show_badge = bugs > 0 and w >= 36 and h >= 32
+        badge_w = 22.0 if bugs < 10 else (24.0 if bugs < 100 else 30.0)
+        badge_h = 16.0
+        badge_x = right - 8.0 - badge_w
+        badge_y = bottom - 26.0
+
         # Title: 13 px normally, 12 px in narrow tiles, wrapped to the width.
         title_size = 13 if w >= 110 else 12
         line_height = title_size + 2
@@ -451,14 +459,44 @@ def render(document: dict) -> str:
         title_y = y + 21.0
         max_lines = max(1, int((h - 14.0) / line_height))
 
-        # First lay the title out at full width. If the tile cannot fit the big
-        # percentage, a small percentage is placed at the top right and the
-        # title is re-wrapped to keep clear of it.
+        # First lay the title out at full width. Pick the largest stacked
+        # percentage + count layout that fits above the bottom bar (and above
+        # the bug badge, if any). Only fall back to a compact top-right
+        # percentage when the tile is too short for stacked metrics.
         full_width = max(10.0, w - 16.0)
         title_lines = fit_lines(name, full_width, title_size, max_lines)
         title_bottom = title_y + (len(title_lines) - 1) * line_height
-        show_big = w >= 92 and h >= 96 and title_bottom + 47.0 <= bar_y - 6.0
-        show_small = not show_big and w >= 110 and h >= 40
+        pct_text = f"{percent}%"
+        done_label = f"{area_done} of {area_total} done"
+        short_label = f"{area_done}/{area_total} done"
+
+        def choose_sub_label(size: float) -> str:
+            if text_width(done_label, size) <= full_width:
+                return done_label
+            if text_width(short_label, size) <= full_width:
+                return short_label
+            return f"{area_done}/{area_total}"
+
+        metric_layout = None
+        for min_w, pct_size, pct_gap, sub_size, sub_gap in (
+            (92.0, 28, 33.3, 11.0, 48.3),
+            (78.0, 22, 27.0, 10.0, 41.0),
+            (60.0, 18, 22.0, 9.5, 34.5),
+        ):
+            if w < min_w or text_width(pct_text, pct_size) > full_width:
+                continue
+            sub_text = choose_sub_label(sub_size)
+            pct_y = title_bottom + pct_gap
+            sub_y = title_bottom + sub_gap
+            if sub_y > bar_y - 6.0:
+                continue
+            if show_badge and sub_y > badge_y - 3.0:
+                if title_x + text_width(sub_text, sub_size) > badge_x - 4.0:
+                    continue
+            metric_layout = (pct_size, pct_y, sub_size, sub_y, sub_text)
+            break
+
+        show_small = metric_layout is None and w >= 72 and h >= 36
         if show_small:
             inner_width = max(10.0, w - 16.0 - 42.0) * 0.92
             title_lines = fit_lines(name, inner_width, title_size, max_lines)
@@ -471,28 +509,37 @@ def render(document: dict) -> str:
                 f"{escape(line)}</text>"
             )
 
-        if show_big:
+        if metric_layout is not None:
+            pct_size, pct_y, sub_size, sub_y, sub_text = metric_layout
             add(
-                f'<text x="{round1(title_x)}" y="{round1(title_bottom + 33.3)}" '
-                f'font-size="28" font-weight="600" fill="{TEXT}">{percent}%</text>'
+                f'<text x="{round1(title_x)}" y="{round1(pct_y)}" '
+                f'font-size="{pct_size}" font-weight="600" fill="{TEXT}">{pct_text}</text>'
             )
             add(
-                f'<text x="{round1(title_x)}" y="{round1(title_bottom + 48.3)}" '
-                f'font-size="11" fill="{MUTED}">{area_done} of {area_total} done</text>'
+                f'<text x="{round1(title_x)}" y="{round1(sub_y)}" '
+                f'font-size="{sub_size:g}" fill="{MUTED}">{escape(sub_text)}</text>'
             )
         elif show_small:
             add(
                 f'<text x="{round1(right - 8)}" y="{round1(y + 21.0)}" '
                 f'font-size="13" font-weight="600" text-anchor="end" fill="{TEXT}">'
-                f"{percent}%</text>"
+                f"{pct_text}</text>"
             )
+            sub_y = title_bottom + 15.0
+            if sub_y <= bar_y - 4.0:
+                sub_text = choose_sub_label(10.0)
+                if not (
+                    show_badge
+                    and sub_y > badge_y - 3.0
+                    and title_x + text_width(sub_text, 10.0) > badge_x - 4.0
+                ):
+                    add(
+                        f'<text x="{round1(title_x)}" y="{round1(sub_y)}" '
+                        f'font-size="10" fill="{MUTED}">{escape(sub_text)}</text>'
+                    )
 
         # Open-bug badge, bottom right.
-        if bugs > 0 and w >= 36 and h >= 32:
-            badge_w = 22.0 if bugs < 10 else (24.0 if bugs < 100 else 30.0)
-            badge_h = 16.0
-            badge_x = right - 8.0 - badge_w
-            badge_y = bottom - 26.0
+        if show_badge:
             add(
                 f'<rect x="{round1(badge_x)}" y="{round1(badge_y)}" '
                 f'width="{badge_w}" height="{badge_h}" rx="4" fill="{BUG}"/>'

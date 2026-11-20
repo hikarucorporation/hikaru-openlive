@@ -20,6 +20,8 @@
 </g>
 <text x="597.0" y="151.7" font-size="12" font-weight="600" fill="#F1EFE8">Clip</text>
 <text x="597.0" y="165.7" font-size="12" font-weight="600" fill="#F1EFE8">Launcher</text>
+<text x="597.0" y="192.7" font-size="22" font-weight="600" fill="#F1EFE8">84%</text>
+<text x="597.0" y="206.7" font-size="10" fill="#B4B2A9">21 of 25 done</text>
 </g>
 <g><title>Arranger: 15 done, 2 in progress, 9 planned</title>
 <clipPath id="b1"><rect x="400.4" y="130.7" width="93.1" height="124.0" rx="6"/></clipPath>
@@ -43,6 +45,8 @@
 </g>
 <text x="597.2" y="390.6" font-size="12" font-weight="600" fill="#F1EFE8">Transport &amp;</text>
 <text x="597.2" y="404.6" font-size="12" font-weight="600" fill="#F1EFE8">Sync</text>
+<text x="597.2" y="431.6" font-size="22" font-weight="600" fill="#F1EFE8">71%</text>
+<text x="597.2" y="445.6" font-size="10" fill="#B4B2A9">12 of 17 done</text>
 </g>
 <g><title>Group Tracks &amp; Routing: 14 done, 2 in progress, 6 planned</title>
 <clipPath id="b3"><rect x="589.2" y="257.7" width="89.3" height="108.9" rx="6"/></clipPath>
@@ -54,6 +58,8 @@
 </g>
 <text x="597.2" y="278.7" font-size="12" font-weight="600" fill="#F1EFE8">Group Tracks</text>
 <text x="597.2" y="292.7" font-size="12" font-weight="600" fill="#F1EFE8">&amp; Routing</text>
+<text x="597.2" y="319.7" font-size="22" font-weight="600" fill="#F1EFE8">64%</text>
+<text x="597.2" y="333.7" font-size="10" fill="#B4B2A9">14 of 22 done</text>
 </g>
 <g><title>Time-stretching &amp; Audio: 14 done, 2 in progress, 9 planned</title>
 <clipPath id="b4"><rect x="496.6" y="130.7" width="89.5" height="124.0" rx="6"/></clipPath>
@@ -65,6 +71,8 @@
 </g>
 <text x="504.6" y="151.7" font-size="12" font-weight="600" fill="#F1EFE8">Time-stretch</text>
 <text x="504.6" y="165.7" font-size="12" font-weight="600" fill="#F1EFE8">ing &amp; Audio</text>
+<text x="504.6" y="192.7" font-size="22" font-weight="600" fill="#F1EFE8">56%</text>
+<text x="504.6" y="206.7" font-size="10" fill="#B4B2A9">14 of 25 done</text>
 </g>
 <g><title>Built-in Devices &amp; FX: 9 done, 3 in progress, 106 planned</title>
 <clipPath id="b5"><rect x="231.0" y="35.5" width="166.5" height="323.9" rx="6"/></clipPath>
@@ -108,9 +116,9 @@
 <rect x="548.4" y="121.7" width="86.8" height="6" fill="#1D9E75"/>
 <rect x="635.1" y="121.7" width="4.8" height="6" fill="#EF9F27"/>
 </g>
-<text x="556.4" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Mixer &amp;</text>
-<text x="556.4" y="71.5" font-size="13" font-weight="600" fill="#F1EFE8">I/O</text>
-<text x="670.5" y="56.5" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">67%</text>
+<text x="556.4" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Mixer &amp; I/O</text>
+<text x="556.4" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">67%</text>
+<text x="556.4" y="104.8" font-size="11" fill="#B4B2A9">18 of 27 done</text>
 </g>
 <g><title>Browser &amp; Files: 15 done, 2 in progress, 7 planned</title>
 <clipPath id="b9"><rect x="400.4" y="257.7" width="93.5" height="113.8" rx="6"/></clipPath>
@@ -134,6 +142,8 @@
 </g>
 <text x="504.9" y="390.6" font-size="12" font-weight="600" fill="#F1EFE8">MIDI &amp;</text>
 <text x="504.9" y="404.6" font-size="12" font-weight="600" fill="#F1EFE8">Controllers</text>
+<text x="504.9" y="431.6" font-size="22" font-weight="600" fill="#F1EFE8">43%</text>
+<text x="504.9" y="445.6" font-size="10" fill="#B4B2A9">9 of 21 done</text>
 </g>
 <g><title>UI &amp; Workflow: 20 done, 0 in progress, 10 planned</title>
 <clipPath id="b11"><rect x="400.4" y="35.5" width="144.9" height="92.2" rx="6"/></clipPath>
@@ -142,9 +152,9 @@
 <rect x="400.4" y="35.5" width="96.6" height="92.2" fill="#1D9E75" fill-opacity="0.25"/>
 <rect x="400.4" y="121.7" width="96.6" height="6" fill="#1D9E75"/>
 </g>
-<text x="408.4" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">UI &amp;</text>
-<text x="408.4" y="71.5" font-size="13" font-weight="600" fill="#F1EFE8">Workflow</text>
-<text x="537.4" y="56.5" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">67%</text>
+<text x="408.4" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">UI &amp; Workflow</text>
+<text x="408.4" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">67%</text>
+<text x="408.4" y="104.8" font-size="11" fill="#B4B2A9">20 of 30 done</text>
 </g>
 <g><title>Build &amp; Platform: 10 done, 2 in progress, 4 planned, 1 open bugs</title>
 <clipPath id="b12"><rect x="496.9" y="257.7" width="89.3" height="108.9" rx="6"/></clipPath>
@@ -156,6 +166,8 @@
 </g>
 <text x="504.9" y="278.7" font-size="12" font-weight="600" fill="#F1EFE8">Build &amp;</text>
 <text x="504.9" y="292.7" font-size="12" font-weight="600" fill="#F1EFE8">Platform</text>
+<text x="504.9" y="319.7" font-size="22" font-weight="600" fill="#F1EFE8">62%</text>
+<text x="504.9" y="333.7" font-size="10" fill="#B4B2A9">10 of 16 done</text>
 <rect x="556.2" y="340.6" width="22.0" height="16.0" rx="4" fill="#E24B4A"/>
 <text x="567.2" y="352.6" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">1</text>
 </g>
