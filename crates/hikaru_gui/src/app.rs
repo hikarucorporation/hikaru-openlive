@@ -717,60 +717,134 @@ impl AppState {
                 let poly = slot.open_poly_mut();
                 let mut dsp_params = poly.to_dsp_params();
 
-                // Apply live external OpenModulation deltas (INDEX / WT POS, CUTOFF, VOL)
-                if let Some(m) =
+                // Apply live external Hikaru OpenLFO MOD deltas to DSP params (never mutating base UI values!)
+                let get_mod = |p: &str| {
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
+                        tr_idx, "OpenPoly", p,
+                    )
+                };
+                if let Some(m) = get_mod("INDEX").or_else(|| {
                     crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
                         tr_idx,
-                        "OpenPoly",
-                        "INDEX",
+                        "OpenWavetable",
+                        "WT POS",
                     )
-                    .or_else(|| {
-                        crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
-                            tr_idx,
-                            "OpenWavetable",
-                            "WT POS",
-                        )
-                    })
-                {
-                    let base = poly.base_index.unwrap_or(poly.osc_index);
-                    let eff = (base + m.delta).clamp(0.0, 1.0);
-                    dsp_params.osc_index = eff;
-                    poly.osc_index = eff;
+                }) {
+                    dsp_params.osc_index = (dsp_params.osc_index + m.delta).clamp(0.0, 1.0);
                 }
-                if let Some(m) =
-                    crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
-                        tr_idx,
-                        "OpenPoly",
-                        "CUTOFF",
-                    )
-                {
+                if let Some(m) = get_mod("FOLD") {
+                    dsp_params.osc_fold = (dsp_params.osc_fold + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("SUB") {
+                    dsp_params.sub_level = (dsp_params.sub_level + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("NOISE") {
+                    dsp_params.noise_level = (dsp_params.noise_level + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("DRV") {
+                    dsp_params.filter_drive = (dsp_params.filter_drive + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("KTR") {
+                    dsp_params.filter_keytrack =
+                        (dsp_params.filter_keytrack + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("ENV") {
+                    dsp_params.filter_env_amount =
+                        (dsp_params.filter_env_amount + m.delta * 2.0).clamp(-1.0, 1.0);
+                }
+                if let Some(m) = get_mod("CUTOFF") {
                     let oct = m.delta * 4.0;
                     dsp_params.filter_cutoff_hz =
                         (dsp_params.filter_cutoff_hz * 2.0_f32.powf(oct)).clamp(20.0, 20000.0);
                 }
-                if let Some(m) =
+                if let Some(m) = get_mod("RESO") {
+                    dsp_params.filter_resonance =
+                        (dsp_params.filter_resonance + m.delta * 0.98).clamp(0.0, 0.98);
+                }
+                if let Some(m) = get_mod("AMP_A") {
+                    dsp_params.amp_attack_ms =
+                        (dsp_params.amp_attack_ms * 2.0_f32.powf(m.delta * 4.0)).clamp(0.5, 5000.0);
+                }
+                if let Some(m) = get_mod("AMP_D") {
+                    dsp_params.amp_decay_ms =
+                        (dsp_params.amp_decay_ms * 2.0_f32.powf(m.delta * 4.0)).clamp(1.0, 8000.0);
+                }
+                if let Some(m) = get_mod("AMP_S") {
+                    dsp_params.amp_sustain = (dsp_params.amp_sustain + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("AMP_R") {
+                    dsp_params.amp_release_ms =
+                        (dsp_params.amp_release_ms * 2.0_f32.powf(m.delta * 4.0)).clamp(1.0, 8000.0);
+                }
+                if let Some(m) = get_mod("FEG_A") {
+                    dsp_params.feg_attack_ms =
+                        (dsp_params.feg_attack_ms * 2.0_f32.powf(m.delta * 4.0)).clamp(0.5, 5000.0);
+                }
+                if let Some(m) = get_mod("FEG_D") {
+                    dsp_params.feg_decay_ms =
+                        (dsp_params.feg_decay_ms * 2.0_f32.powf(m.delta * 4.0)).clamp(1.0, 8000.0);
+                }
+                if let Some(m) = get_mod("FEG_S") {
+                    dsp_params.feg_sustain = (dsp_params.feg_sustain + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("FEG_R") {
+                    dsp_params.feg_release_ms =
+                        (dsp_params.feg_release_ms * 2.0_f32.powf(m.delta * 4.0)).clamp(1.0, 8000.0);
+                }
+                if let Some(m) = get_mod("VEL") {
+                    dsp_params.velocity_sens = (dsp_params.velocity_sens + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("PITCH") {
+                    dsp_params.global_pitch_st =
+                        (dsp_params.global_pitch_st + m.delta * 24.0).clamp(-24.0, 24.0);
+                }
+                if let Some(m) = get_mod("GLIDE") {
+                    dsp_params.glide_ms =
+                        (dsp_params.glide_ms + m.delta * 1500.0).clamp(0.0, 2000.0);
+                }
+                if let Some(m) = get_mod("PAN") {
+                    dsp_params.pan = (dsp_params.pan + m.delta * 2.0).clamp(-1.0, 1.0);
+                }
+                if let Some(m) = get_mod("DETUNE") {
+                    dsp_params.unison_detune = (dsp_params.unison_detune + m.delta).clamp(0.0, 1.0);
+                }
+                if let Some(m) = get_mod("VOL").or_else(|| {
                     crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
                         tr_idx,
-                        "OpenPoly",
+                        "OpenWavetable",
                         "VOL",
                     )
-                    .or_else(|| {
-                        crate::views::hikaru_native_plugins::hikaru_openmodulation::get_modulation(
-                            tr_idx,
-                            "OpenWavetable",
-                            "VOL",
-                        )
-                    })
-                {
-                    dsp_params.output_gain = (dsp_params.output_gain + m.delta).clamp(0.0, 2.0);
+                }) {
+                    dsp_params.output_gain =
+                        (dsp_params.output_gain + m.delta * 2.0).clamp(0.0, 2.0);
                 }
 
-                let idx_bits = dsp_params.osc_index.to_bits();
-                let cut_bits = dsp_params.filter_cutoff_hz.to_bits();
-                let vol_bits = dsp_params.output_gain.to_bits();
+                let osc_hash = dsp_params.osc_index.to_bits()
+                    ^ dsp_params.osc_fold.to_bits().rotate_left(7)
+                    ^ dsp_params.sub_level.to_bits().rotate_left(13)
+                    ^ dsp_params.noise_level.to_bits().rotate_left(19);
+                let flt_hash = dsp_params.filter_cutoff_hz.to_bits()
+                    ^ dsp_params.filter_resonance.to_bits().rotate_left(5)
+                    ^ dsp_params.filter_drive.to_bits().rotate_left(11)
+                    ^ dsp_params.filter_keytrack.to_bits().rotate_left(17)
+                    ^ dsp_params.filter_env_amount.to_bits().rotate_left(23);
+                let env_out_hash = dsp_params.output_gain.to_bits()
+                    ^ dsp_params.pan.to_bits().rotate_left(3)
+                    ^ dsp_params.unison_detune.to_bits().rotate_left(9)
+                    ^ dsp_params.global_pitch_st.to_bits().rotate_left(15)
+                    ^ dsp_params.glide_ms.to_bits().rotate_left(21)
+                    ^ dsp_params.amp_attack_ms.to_bits().rotate_left(2)
+                    ^ dsp_params.amp_sustain.to_bits().rotate_left(8)
+                    ^ dsp_params.feg_attack_ms.to_bits().rotate_left(14);
                 let prev = self.synced_open_poly_revs[eng_track];
                 let prev_wt = prev.map(|p| p.0);
-                let cur_key = (poly.wavetable_rev, poly.params_rev, idx_bits, cut_bits, vol_bits);
+                let cur_key = (
+                    poly.wavetable_rev,
+                    poly.params_rev,
+                    osc_hash,
+                    flt_hash,
+                    env_out_hash,
+                );
 
                 if prev_wt != Some(poly.wavetable_rev) {
                     self.audio_proxy.send(GuiCommand::SetTrackOpenPolyWavetable {

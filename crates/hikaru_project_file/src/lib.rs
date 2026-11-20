@@ -517,6 +517,8 @@ pub struct LfoChannelParams {
     pub retrigger: bool,
     pub amount: f32,
     pub target: String,
+    #[serde(default)]
+    pub routes: Vec<(String, f32)>,
 }
 
 /// Parámetros de modulación de Hikaru OpenLFO MOD (compatible con proyectos OpenModulation)
@@ -534,6 +536,8 @@ pub struct OpenModulationParams {
     pub target: String,
     #[serde(default)]
     pub retrigger: bool,
+    #[serde(default)]
+    pub routes: Vec<(String, f32)>,
     #[serde(default)]
     pub lfo2: Option<LfoChannelParams>,
     #[serde(default = "default_open_mod_mix")]

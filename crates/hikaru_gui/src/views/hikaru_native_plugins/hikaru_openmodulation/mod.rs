@@ -8,10 +8,12 @@
 pub mod lfo_mod;
 
 pub use lfo_mod::{
-    get_global_transport, get_lfo_state, get_modulation, handle_knob_mapping_click,
-    is_mapping_target, on_transport_pause_or_stop, on_transport_play, render_module,
-    render_preset_menu, update_global_transport, update_lfo_state, ActiveModulation,
-    LfoChannelState, LfoModState, LfoTransportState, ModulationTarget, MODULATION_CARD_WIDTH,
+    active_mapping_for_track, clear_mapping_mode, get_channel_route_amount, get_global_transport,
+    get_lfo_state, get_modulation, handle_knob_mapping_click, is_mapping_target,
+    modulatable_rotary_knob, on_transport_pause_or_stop, on_transport_play, render_module,
+    render_preset_menu, set_channel_route_amount, update_global_transport, update_lfo_state,
+    ActiveModulation, LfoChannelState, LfoModState, LfoTransportState, ModulationTarget,
+    MODULATION_CARD_WIDTH, MOD_ARROW_CYAN,
 };
 
 #[cfg(test)]

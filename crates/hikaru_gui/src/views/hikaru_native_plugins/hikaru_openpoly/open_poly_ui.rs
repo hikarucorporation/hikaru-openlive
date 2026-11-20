@@ -214,7 +214,7 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
                 ui.id().with(("openpoly_add_mod", track_idx, slot_idx)),
                 Sense::click(),
             )
-            .on_hover_text("Add Hikaru OpenModulation LFO to track");
+            .on_hover_text("Add Hikaru OpenLFO MOD to track");
         if plus_resp.hovered() {
             ui.painter()
                 .rect_filled(plus_rect.shrink(1.0), 2.5, Color32::from_rgb(0x32, 0x35, 0x3D));
@@ -260,8 +260,8 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
         &mut dirty,
         &mut request_wav_browser,
     );
-    render_sub_section(ui, sub_rect, &mut poly, &mut dirty, slot_idx);
-    render_noise_section(ui, noise_rect, &mut poly, &mut dirty, slot_idx);
+    render_sub_section(ui, sub_rect, &mut poly, &mut dirty, track_idx, slot_idx);
+    render_noise_section(ui, noise_rect, &mut poly, &mut dirty, track_idx, slot_idx);
     cursor_x += osc_w + gap;
 
     // =========================================================================
@@ -280,7 +280,7 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
         slot_idx,
         &mut dirty,
     );
-    render_feg_section(ui, feg_rect, &mut poly, &mut dirty, slot_idx);
+    render_feg_section(ui, feg_rect, &mut poly, &mut dirty, track_idx, slot_idx);
     cursor_x += flt_w + gap;
 
     // =========================================================================
@@ -290,8 +290,8 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
     let env_rect = Rect::from_min_size(pos2(cursor_x, y0), vec2(env_w, top_h));
     let voice_rect = Rect::from_min_size(pos2(cursor_x, y0 + top_h + gap), vec2(env_w, bot_h));
 
-    render_amp_env_section(ui, env_rect, &mut poly, &mut dirty, slot_idx);
-    render_voice_section(ui, voice_rect, &mut poly, &mut dirty, slot_idx);
+    render_amp_env_section(ui, env_rect, &mut poly, &mut dirty, track_idx, slot_idx);
+    render_voice_section(ui, voice_rect, &mut poly, &mut dirty, track_idx, slot_idx);
     cursor_x += env_w + gap;
 
     // =========================================================================
@@ -334,7 +334,7 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
             let next_id = track.effects.len();
             track.effects.push(crate::views::mixer::DspSlot::new(
                 next_id,
-                "OpenModulation".to_string(),
+                "OpenLFO MOD".to_string(),
             ));
         }
     }
@@ -732,27 +732,30 @@ fn render_oscillator_section(
     let knob_col_x = wave_r.max.x + 32.0;
     let index_rect = Rect::from_center_size(pos2(knob_col_x, wave_r.min.y + 24.0), vec2(36.0, 36.0));
     let mut index_ui = ui.new_child(egui::UiBuilder::new().max_rect(index_rect));
-    let (idx_resp, idx_chg) = rotary_knob(
+    let _ = mod_index_delta;
+    let (idx_resp, idx_chg) = hikaru_openmodulation::modulatable_rotary_knob(
         &mut index_ui,
         36.0,
         &mut poly.osc_index,
         0.0..=1.0,
         0.0,
-        if mod_index_delta.is_some() { MOD_ORANGE } else { KNOB_WHITE },
+        KNOB_WHITE,
         false,
+        track_idx,
+        "OpenPoly",
+        "INDEX",
     );
     if idx_chg {
         poly.base_index = Some(poly.osc_index);
         *dirty = true;
     }
-    if idx_resp.clicked() {
-        let _ = hikaru_openmodulation::handle_knob_mapping_click(track_idx, "OpenPoly", "INDEX");
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = idx_resp.on_hover_text(format!(
+            "{}: {:.0}% (Shift=fine, double-click=reset)",
+            poly.osc_type.index_param_label(),
+            poly.osc_index * 100.0
+        ));
     }
-    let _ = idx_resp.on_hover_text(format!(
-        "{}: {:.0}% (Shift=fine, double-click=reset)",
-        poly.osc_type.index_param_label(),
-        poly.osc_index * 100.0
-    ));
     p.text(
         pos2(knob_col_x, index_rect.max.y + 6.0),
         Align2::CENTER_CENTER,
@@ -764,7 +767,7 @@ fn render_oscillator_section(
     // Fold / Morph mini knob below Index label
     let fold_rect = Rect::from_center_size(pos2(knob_col_x, wave_r.max.y + 5.0), vec2(20.0, 20.0));
     let mut fold_ui = ui.new_child(egui::UiBuilder::new().max_rect(fold_rect));
-    let (fold_resp, fold_chg) = rotary_knob(
+    let (fold_resp, fold_chg) = hikaru_openmodulation::modulatable_rotary_knob(
         &mut fold_ui,
         20.0,
         &mut poly.osc_fold,
@@ -772,11 +775,16 @@ fn render_oscillator_section(
         0.0,
         OSC_AMBER,
         false,
+        track_idx,
+        "OpenPoly",
+        "FOLD",
     );
     if fold_chg {
         *dirty = true;
     }
-    let _ = fold_resp.on_hover_text(format!("Wavefold / Bend: {:.0}%", poly.osc_fold * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = fold_resp.on_hover_text(format!("Wavefold / Bend: {:.0}%", poly.osc_fold * 100.0));
+    }
 
     // Bottom pitch bar: Ratio (1:1) | Semitones (0.0 st) | Detune (±0.0 Hz) | SYNC
     let bot_y = rect.max.y - 24.0;
@@ -966,6 +974,7 @@ fn render_sub_section(
     rect: Rect,
     poly: &mut HikaruOpenPoly,
     dirty: &mut bool,
+    track_idx: usize,
     slot_idx: usize,
 ) {
     paint_panel(ui, rect, PANEL_BORDER);
@@ -974,11 +983,24 @@ fn render_sub_section(
     // Sub knob (left)
     let knob_r = Rect::from_center_size(pos2(rect.min.x + 24.0, rect.min.y + 30.0), vec2(30.0, 30.0));
     let mut k_ui = ui.new_child(egui::UiBuilder::new().max_rect(knob_r));
-    let (resp, chg) = rotary_knob(&mut k_ui, 30.0, &mut poly.sub_level, 0.0..=1.0, 0.25, SUB_PURPLE, false);
+    let (resp, chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut k_ui,
+        30.0,
+        &mut poly.sub_level,
+        0.0..=1.0,
+        0.25,
+        SUB_PURPLE,
+        false,
+        track_idx,
+        "OpenPoly",
+        "SUB",
+    );
     if chg {
         *dirty = true;
     }
-    let _ = resp.on_hover_text(format!("Sub Oscillator Level: {:.0}%", poly.sub_level * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = resp.on_hover_text(format!("Sub Oscillator Level: {:.0}%", poly.sub_level * 100.0));
+    }
     p.text(
         pos2(knob_r.center().x, rect.max.y - 12.0),
         Align2::CENTER_CENTER,
@@ -1078,16 +1100,30 @@ fn render_noise_section(
     rect: Rect,
     poly: &mut HikaruOpenPoly,
     dirty: &mut bool,
+    track_idx: usize,
     _slot_idx: usize,
 ) {
     paint_panel(ui, rect, PANEL_BORDER);
     let knob_r = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 30.0), vec2(30.0, 30.0));
     let mut k_ui = ui.new_child(egui::UiBuilder::new().max_rect(knob_r));
-    let (resp, chg) = rotary_knob(&mut k_ui, 30.0, &mut poly.noise_level, 0.0..=1.0, 0.0, KNOB_WHITE, false);
+    let (resp, chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut k_ui,
+        30.0,
+        &mut poly.noise_level,
+        0.0..=1.0,
+        0.0,
+        KNOB_WHITE,
+        false,
+        track_idx,
+        "OpenPoly",
+        "NOISE",
+    );
     if chg {
         *dirty = true;
     }
-    let _ = resp.on_hover_text(format!("White Noise Level: {:.0}%", poly.noise_level * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = resp.on_hover_text(format!("White Noise Level: {:.0}%", poly.noise_level * 100.0));
+    }
     ui.painter().text(
         pos2(rect.center().x, rect.max.y - 12.0),
         Align2::CENTER_CENTER,
@@ -1189,19 +1225,27 @@ fn render_filter_section(
         let kr = Rect::from_center_size(pos2(mini_x + 8.0, *cy), vec2(22.0, 22.0));
         let mut kui = ui.new_child(egui::UiBuilder::new().max_rect(kr));
         let (resp, chg) = match i {
-            0 => rotary_knob(&mut kui, 22.0, &mut poly.filter_drive, 0.0..=1.0, 0.08, *col, *bipolar),
-            1 => rotary_knob(&mut kui, 22.0, &mut poly.filter_keytrack, 0.0..=1.0, 0.5, *col, *bipolar),
-            _ => rotary_knob(&mut kui, 22.0, &mut poly.filter_env_amount, -1.0..=1.0, 0.42, *col, *bipolar),
+            0 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 22.0, &mut poly.filter_drive, 0.0..=1.0, 0.08, *col, *bipolar, track_idx, "OpenPoly", "DRV",
+            ),
+            1 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 22.0, &mut poly.filter_keytrack, 0.0..=1.0, 0.5, *col, *bipolar, track_idx, "OpenPoly", "KTR",
+            ),
+            _ => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 22.0, &mut poly.filter_env_amount, -1.0..=1.0, 0.42, *col, *bipolar, track_idx, "OpenPoly", "ENV",
+            ),
         };
         if chg {
             *dirty = true;
         }
-        let tip = match i {
-            0 => format!("Filter Drive / Saturation: {:.0}%", poly.filter_drive * 100.0),
-            1 => format!("Filter Keytracking: {:.0}%", poly.filter_keytrack * 100.0),
-            _ => format!("FEG → Cutoff Depth: {:+.0}%", poly.filter_env_amount * 100.0),
-        };
-        let _ = resp.on_hover_text(tip);
+        if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+            let tip = match i {
+                0 => format!("Filter Drive / Saturation: {:.0}%", poly.filter_drive * 100.0),
+                1 => format!("Filter Keytracking: {:.0}%", poly.filter_keytrack * 100.0),
+                _ => format!("FEG → Cutoff Depth: {:+.0}%", poly.filter_env_amount * 100.0),
+            };
+            let _ = resp.on_hover_text(tip);
+        }
     }
 
     // Center hero Cutoff knob (48px log-mapped 20Hz..20kHz)
@@ -1210,23 +1254,26 @@ fn render_filter_section(
     let cut_r = Rect::from_center_size(pos2(cut_cx, cut_cy), vec2(48.0, 48.0));
     let mut cut_norm = hz_to_log_norm(poly.filter_cutoff_hz);
     let mut cut_ui = ui.new_child(egui::UiBuilder::new().max_rect(cut_r));
-    let (cut_resp, cut_chg) = rotary_knob(
+    let _ = mod_cutoff_delta;
+    let (cut_resp, cut_chg) = hikaru_openmodulation::modulatable_rotary_knob(
         &mut cut_ui,
         48.0,
         &mut cut_norm,
         0.0..=1.0,
         hz_to_log_norm(1650.0),
-        if mod_cutoff_delta.is_some() { MOD_ORANGE } else { KNOB_WHITE },
+        KNOB_WHITE,
         false,
+        track_idx,
+        "OpenPoly",
+        "CUTOFF",
     );
     if cut_chg {
         poly.filter_cutoff_hz = log_norm_to_hz(cut_norm);
         *dirty = true;
     }
-    if cut_resp.clicked() {
-        let _ = hikaru_openmodulation::handle_knob_mapping_click(track_idx, "OpenPoly", "CUTOFF");
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = cut_resp.on_hover_text(format!("Filter Cutoff: {}", format_hz(poly.filter_cutoff_hz)));
     }
-    let _ = cut_resp.on_hover_text(format!("Filter Cutoff: {}", format_hz(poly.filter_cutoff_hz)));
     p.text(
         pos2(cut_cx, cut_r.max.y + 11.0),
         Align2::CENTER_CENTER,
@@ -1240,7 +1287,7 @@ fn render_filter_section(
     let res_cy = body_top + 42.0;
     let res_r = Rect::from_center_size(pos2(res_cx, res_cy), vec2(32.0, 32.0));
     let mut res_ui = ui.new_child(egui::UiBuilder::new().max_rect(res_r));
-    let (res_resp, res_chg) = rotary_knob(
+    let (res_resp, res_chg) = hikaru_openmodulation::modulatable_rotary_knob(
         &mut res_ui,
         32.0,
         &mut poly.filter_resonance,
@@ -1248,11 +1295,16 @@ fn render_filter_section(
         0.22,
         FILTER_CYAN,
         false,
+        track_idx,
+        "OpenPoly",
+        "RESO",
     );
     if res_chg {
         *dirty = true;
     }
-    let _ = res_resp.on_hover_text(format!("Filter Resonance: {:.0}%", poly.filter_resonance * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = res_resp.on_hover_text(format!("Filter Resonance: {:.0}%", poly.filter_resonance * 100.0));
+    }
     p.text(
         pos2(res_cx, res_r.max.y + 11.0),
         Align2::CENTER_CENTER,
@@ -1267,6 +1319,7 @@ fn render_feg_section(
     rect: Rect,
     poly: &mut HikaruOpenPoly,
     dirty: &mut bool,
+    track_idx: usize,
     slot_idx: usize,
 ) {
     paint_panel(ui, rect, PANEL_BORDER);
@@ -1319,10 +1372,18 @@ fn render_feg_section(
         let mut kui = ui.new_child(egui::UiBuilder::new().max_rect(kr));
         let col = if poly.feg_enabled { FEG_GREEN } else { theme::TEXT_MUTED };
         let (resp, chg) = match i {
-            0 => rotary_knob(&mut kui, 26.0, &mut a_n, 0.0..=1.0, ms_to_log_norm(4.0, 0.5, 5000.0), col, false),
-            1 => rotary_knob(&mut kui, 26.0, &mut d_n, 0.0..=1.0, ms_to_log_norm(280.0, 1.0, 8000.0), col, false),
-            2 => rotary_knob(&mut kui, 26.0, &mut s_v, 0.0..=1.0, 0.25, col, false),
-            _ => rotary_knob(&mut kui, 26.0, &mut r_n, 0.0..=1.0, ms_to_log_norm(220.0, 1.0, 8000.0), col, false),
+            0 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut a_n, 0.0..=1.0, ms_to_log_norm(4.0, 0.5, 5000.0), col, false, track_idx, "OpenPoly", "FEG_A",
+            ),
+            1 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut d_n, 0.0..=1.0, ms_to_log_norm(280.0, 1.0, 8000.0), col, false, track_idx, "OpenPoly", "FEG_D",
+            ),
+            2 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut s_v, 0.0..=1.0, 0.25, col, false, track_idx, "OpenPoly", "FEG_S",
+            ),
+            _ => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut r_n, 0.0..=1.0, ms_to_log_norm(220.0, 1.0, 8000.0), col, false, track_idx, "OpenPoly", "FEG_R",
+            ),
         };
         if chg {
             match i {
@@ -1333,13 +1394,15 @@ fn render_feg_section(
             }
             *dirty = true;
         }
-        let tip = match i {
-            0 => format!("FEG Attack: {}", format_ms(poly.feg_attack_ms)),
-            1 => format!("FEG Decay: {}", format_ms(poly.feg_decay_ms)),
-            2 => format!("FEG Sustain: {:.0}%", poly.feg_sustain * 100.0),
-            _ => format!("FEG Release: {}", format_ms(poly.feg_release_ms)),
-        };
-        let _ = resp.on_hover_text(tip);
+        if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+            let tip = match i {
+                0 => format!("FEG Attack: {}", format_ms(poly.feg_attack_ms)),
+                1 => format!("FEG Decay: {}", format_ms(poly.feg_decay_ms)),
+                2 => format!("FEG Sustain: {:.0}%", poly.feg_sustain * 100.0),
+                _ => format!("FEG Release: {}", format_ms(poly.feg_release_ms)),
+            };
+            let _ = resp.on_hover_text(tip);
+        }
         p.text(
             pos2(cx, rect.max.y - 12.0),
             Align2::CENTER_CENTER,
@@ -1355,6 +1418,7 @@ fn render_amp_env_section(
     rect: Rect,
     poly: &mut HikaruOpenPoly,
     dirty: &mut bool,
+    track_idx: usize,
     slot_idx: usize,
 ) {
     paint_panel(ui, rect, PANEL_BORDER);
@@ -1500,10 +1564,18 @@ fn render_amp_env_section(
         };
         let col = if active_knob { AMP_BLUE } else { Color32::from_rgb(0x52, 0x56, 0x60) };
         let (resp, chg) = match i {
-            0 => rotary_knob(&mut kui, 26.0, &mut a_k, 0.0..=1.0, ms_to_log_norm(5.0, 0.5, 5000.0), col, false),
-            1 => rotary_knob(&mut kui, 26.0, &mut d_k, 0.0..=1.0, ms_to_log_norm(240.0, 1.0, 8000.0), col, false),
-            2 => rotary_knob(&mut kui, 26.0, &mut s_k, 0.0..=1.0, 0.78, col, false),
-            _ => rotary_knob(&mut kui, 26.0, &mut r_k, 0.0..=1.0, ms_to_log_norm(180.0, 1.0, 8000.0), col, false),
+            0 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut a_k, 0.0..=1.0, ms_to_log_norm(5.0, 0.5, 5000.0), col, false, track_idx, "OpenPoly", "AMP_A",
+            ),
+            1 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut d_k, 0.0..=1.0, ms_to_log_norm(240.0, 1.0, 8000.0), col, false, track_idx, "OpenPoly", "AMP_D",
+            ),
+            2 => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut s_k, 0.0..=1.0, 0.78, col, false, track_idx, "OpenPoly", "AMP_S",
+            ),
+            _ => hikaru_openmodulation::modulatable_rotary_knob(
+                &mut kui, 26.0, &mut r_k, 0.0..=1.0, ms_to_log_norm(180.0, 1.0, 8000.0), col, false, track_idx, "OpenPoly", "AMP_R",
+            ),
         };
         if chg {
             match i {
@@ -1514,13 +1586,15 @@ fn render_amp_env_section(
             }
             *dirty = true;
         }
-        let tip = match i {
-            0 => format!("Amp Attack: {}", format_ms(poly.amp_attack_ms)),
-            1 => format!("Amp Decay: {}", format_ms(poly.amp_decay_ms)),
-            2 => format!("Amp Sustain: {:.0}%", poly.amp_sustain * 100.0),
-            _ => format!("Amp Release: {}", format_ms(poly.amp_release_ms)),
-        };
-        let _ = resp.on_hover_text(tip);
+        if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+            let tip = match i {
+                0 => format!("Amp Attack: {}", format_ms(poly.amp_attack_ms)),
+                1 => format!("Amp Decay: {}", format_ms(poly.amp_decay_ms)),
+                2 => format!("Amp Sustain: {:.0}%", poly.amp_sustain * 100.0),
+                _ => format!("Amp Release: {}", format_ms(poly.amp_release_ms)),
+            };
+            let _ = resp.on_hover_text(tip);
+        }
         p.text(
             pos2(cx, rect.max.y - 10.0),
             Align2::CENTER_CENTER,
@@ -1536,6 +1610,7 @@ fn render_voice_section(
     rect: Rect,
     poly: &mut HikaruOpenPoly,
     dirty: &mut bool,
+    track_idx: usize,
     slot_idx: usize,
 ) {
     paint_panel(ui, rect, PANEL_BORDER);
@@ -1546,11 +1621,15 @@ fn render_voice_section(
     let vel_cx = rect.min.x + 26.0;
     let vel_r = Rect::from_center_size(pos2(vel_cx, ky), vec2(26.0, 26.0));
     let mut v_ui = ui.new_child(egui::UiBuilder::new().max_rect(vel_r));
-    let (v_resp, v_chg) = rotary_knob(&mut v_ui, 26.0, &mut poly.velocity_sens, 0.0..=1.0, 0.65, VOICE_CORAL, false);
+    let (v_resp, v_chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut v_ui, 26.0, &mut poly.velocity_sens, 0.0..=1.0, 0.65, VOICE_CORAL, false, track_idx, "OpenPoly", "VEL",
+    );
     if v_chg {
         *dirty = true;
     }
-    let _ = v_resp.on_hover_text(format!("Velocity → Amp Sensitivity: {:.0}%", poly.velocity_sens * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = v_resp.on_hover_text(format!("Velocity → Amp Sensitivity: {:.0}%", poly.velocity_sens * 100.0));
+    }
     p.text(
         pos2(vel_cx, rect.max.y - 12.0),
         Align2::CENTER_CENTER,
@@ -1563,12 +1642,16 @@ fn render_voice_section(
     let pit_cx = rect.min.x + 70.0;
     let pit_r = Rect::from_center_size(pos2(pit_cx, ky), vec2(26.0, 26.0));
     let mut p_ui = ui.new_child(egui::UiBuilder::new().max_rect(pit_r));
-    let (p_resp, p_chg) = rotary_knob(&mut p_ui, 26.0, &mut poly.global_pitch_st, -24.0..=24.0, 0.0, VOICE_CORAL, true);
+    let (p_resp, p_chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut p_ui, 26.0, &mut poly.global_pitch_st, -24.0..=24.0, 0.0, VOICE_CORAL, true, track_idx, "OpenPoly", "PITCH",
+    );
     if p_chg {
         poly.global_pitch_st = (poly.global_pitch_st * 2.0).round() * 0.5;
         *dirty = true;
     }
-    let _ = p_resp.on_hover_text(format!("Global Pitch: {:+.1} st", poly.global_pitch_st));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = p_resp.on_hover_text(format!("Global Pitch: {:+.1} st", poly.global_pitch_st));
+    }
     p.text(
         pos2(pit_cx, rect.max.y - 12.0),
         Align2::CENTER_CENTER,
@@ -1581,11 +1664,15 @@ fn render_voice_section(
     let gld_cx = rect.min.x + 112.0;
     let gld_r = Rect::from_center_size(pos2(gld_cx, ky), vec2(26.0, 26.0));
     let mut g_ui = ui.new_child(egui::UiBuilder::new().max_rect(gld_r));
-    let (g_resp, g_chg) = rotary_knob(&mut g_ui, 26.0, &mut poly.glide_ms, 0.0..=1500.0, 0.0, KNOB_WHITE, false);
+    let (g_resp, g_chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut g_ui, 26.0, &mut poly.glide_ms, 0.0..=1500.0, 0.0, KNOB_WHITE, false, track_idx, "OpenPoly", "GLIDE",
+    );
     if g_chg {
         *dirty = true;
     }
-    let _ = g_resp.on_hover_text(format!("Portamento Glide: {}", format_ms(poly.glide_ms)));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = g_resp.on_hover_text(format!("Portamento Glide: {}", format_ms(poly.glide_ms)));
+    }
     p.text(
         pos2(gld_cx, rect.max.y - 12.0),
         Align2::CENTER_CENTER,
@@ -1715,11 +1802,15 @@ fn render_output_section(
 
     let pan_r = Rect::from_center_size(pos2(body_cx + 12.0, row1_y), vec2(21.0, 21.0));
     let mut pan_ui = ui.new_child(egui::UiBuilder::new().max_rect(pan_r));
-    let (pan_resp, pan_chg) = rotary_knob(&mut pan_ui, 21.0, &mut poly.pan, -1.0..=1.0, 0.0, KNOB_WHITE, true);
+    let (pan_resp, pan_chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut pan_ui, 21.0, &mut poly.pan, -1.0..=1.0, 0.0, KNOB_WHITE, true, track_idx, "OpenPoly", "PAN",
+    );
     if pan_chg {
         *dirty = true;
     }
-    let _ = pan_resp.on_hover_text(format!("Pan: {:+.0}%", poly.pan * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = pan_resp.on_hover_text(format!("Pan: {:+.0}%", poly.pan * 100.0));
+    }
     p.text(
         pos2(pan_r.center().x, pan_r.max.y + 6.0),
         Align2::CENTER_CENTER,
@@ -1732,11 +1823,15 @@ fn render_output_section(
     let spr_y = row1_y + 34.0;
     let spr_r = Rect::from_center_size(pos2(body_cx, spr_y), vec2(22.0, 22.0));
     let mut s_ui = ui.new_child(egui::UiBuilder::new().max_rect(spr_r));
-    let (s_resp, s_chg) = rotary_knob(&mut s_ui, 22.0, &mut poly.unison_detune, 0.0..=1.0, 0.18, KNOB_WHITE, false);
+    let (s_resp, s_chg) = hikaru_openmodulation::modulatable_rotary_knob(
+        &mut s_ui, 22.0, &mut poly.unison_detune, 0.0..=1.0, 0.18, KNOB_WHITE, false, track_idx, "OpenPoly", "DETUNE",
+    );
     if s_chg {
         *dirty = true;
     }
-    let _ = s_resp.on_hover_text(format!("Unison Detune: {:.0}%", poly.unison_detune * 100.0));
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = s_resp.on_hover_text(format!("Unison Detune: {:.0}%", poly.unison_detune * 100.0));
+    }
     p.text(
         pos2(body_cx, spr_r.max.y + 6.0),
         Align2::CENTER_CENTER,
@@ -1749,22 +1844,25 @@ fn render_output_section(
     let out_y = rect.max.y - 36.0;
     let out_r = Rect::from_center_size(pos2(body_cx, out_y), vec2(32.0, 32.0));
     let mut o_ui = ui.new_child(egui::UiBuilder::new().max_rect(out_r));
-    let (o_resp, o_chg) = rotary_knob(
+    let _ = mod_vol_delta;
+    let (o_resp, o_chg) = hikaru_openmodulation::modulatable_rotary_knob(
         &mut o_ui,
         32.0,
         &mut poly.output_gain,
         0.0..=2.0,
         0.85,
-        if mod_vol_delta.is_some() { MOD_ORANGE } else { VOICE_CORAL },
+        VOICE_CORAL,
         false,
+        track_idx,
+        "OpenPoly",
+        "VOL",
     );
     if o_chg {
         *dirty = true;
     }
-    if o_resp.clicked() {
-        let _ = hikaru_openmodulation::handle_knob_mapping_click(track_idx, "OpenPoly", "VOL");
+    if hikaru_openmodulation::active_mapping_for_track(track_idx).is_none() {
+        let _ = o_resp.on_hover_text(format!("Output Gain: {:.0}%", poly.output_gain * 100.0));
     }
-    let _ = o_resp.on_hover_text(format!("Output Gain: {:.0}%", poly.output_gain * 100.0));
     p.text(
         pos2(body_cx, rect.max.y - 10.0),
         Align2::CENTER_CENTER,

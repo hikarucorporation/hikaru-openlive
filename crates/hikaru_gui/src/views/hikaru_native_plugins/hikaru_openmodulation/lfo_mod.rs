@@ -1,7 +1,8 @@
 // crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs
 // Hikaru OpenLFO MOD (Bitwig-style Dual LFO MOD Device)
-// Dual hardware-modeled, tempo-synced LFO modulator with phase, depth, retrigger,
-// polarity, dual oscilloscope, FX slot, and Mix control.
+// Dual hardware-modeled, tempo-synced LFO modulator with multi-target Bitwig-style
+// drag-to-assign modulation, phase, depth, retrigger, polarity, dual oscilloscope,
+// FX slot, and Mix control.
 
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -16,13 +17,15 @@ use hikaru_project_file::{LfoChannelParams, OpenModulationParams};
 use crate::app::AppState;
 use crate::theme;
 use crate::ui::bitwig_kit;
+use crate::ui::bitwig_wgpu::paint_rotary_knob;
 use crate::ui::fonts;
 
 pub const MODULATION_CARD_WIDTH: f32 = 272.0;
 
 const LFO1_WAVE_ORANGE: Color32 = Color32::from_rgb(0xE8, 0x7A, 0x24);
 const LFO2_WAVE_BLUE: Color32 = Color32::from_rgb(0x38, 0xA8, 0xE8);
-const MOD_ARROW_CYAN: Color32 = Color32::from_rgb(0x46, 0xC8, 0xF5);
+pub const MOD_ARROW_CYAN: Color32 = Color32::from_rgb(0x46, 0xC8, 0xF5);
+const MOD_KNOB_CAP_CYAN: Color32 = Color32::from_rgb(0x78, 0xB8, 0xCC);
 const PHASE_ARC_SILVER: Color32 = Color32::from_rgb(0xC8, 0xCC, 0xD4);
 const PANEL_BG: Color32 = Color32::from_rgb(0x28, 0x2A, 0x30);
 const PANEL_BORDER: Color32 = Color32::from_rgb(0x3A, 0x3D, 0x46);
@@ -32,11 +35,29 @@ const RIGHT_COL_BG: Color32 = Color32::from_rgb(0x33, 0x36, 0x3E);
 const BTN_IDLE_BG: Color32 = Color32::from_rgb(0x2E, 0x31, 0x38);
 const BTN_ACTIVE_BG: Color32 = Color32::from_rgb(0x4A, 0x4E, 0x58);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ModulationTarget {
-    #[default]
     OpenWavetableWtPos,
+    OpenPolyFold,
+    OpenPolySub,
+    OpenPolyNoise,
+    OpenPolyDrive,
+    OpenPolyKtr,
+    OpenPolyFilterEnv,
     OpenPolyCutoff,
+    OpenPolyReso,
+    OpenPolyAmpA,
+    OpenPolyAmpD,
+    OpenPolyAmpS,
+    OpenPolyAmpR,
+    OpenPolyFegA,
+    OpenPolyFegD,
+    OpenPolyFegS,
+    OpenPolyFegR,
+    OpenPolyVel,
+    OpenPolyPitch,
+    OpenPolyGlide,
+    OpenPolyPan,
     OpenWavetableDetune,
     OpenWavetablePhase,
     OpenWavetableVolume,
@@ -46,13 +67,33 @@ pub enum ModulationTarget {
     OpenEq3Low,
     OpenEq3Mid,
     OpenEq3High,
+    #[default]
     None,
 }
 
 impl ModulationTarget {
-    pub const ALL: [ModulationTarget; 12] = [
+    pub const ALL: [ModulationTarget; 31] = [
         ModulationTarget::OpenWavetableWtPos,
+        ModulationTarget::OpenPolyFold,
+        ModulationTarget::OpenPolySub,
+        ModulationTarget::OpenPolyNoise,
+        ModulationTarget::OpenPolyDrive,
+        ModulationTarget::OpenPolyKtr,
+        ModulationTarget::OpenPolyFilterEnv,
         ModulationTarget::OpenPolyCutoff,
+        ModulationTarget::OpenPolyReso,
+        ModulationTarget::OpenPolyAmpA,
+        ModulationTarget::OpenPolyAmpD,
+        ModulationTarget::OpenPolyAmpS,
+        ModulationTarget::OpenPolyAmpR,
+        ModulationTarget::OpenPolyFegA,
+        ModulationTarget::OpenPolyFegD,
+        ModulationTarget::OpenPolyFegS,
+        ModulationTarget::OpenPolyFegR,
+        ModulationTarget::OpenPolyVel,
+        ModulationTarget::OpenPolyPitch,
+        ModulationTarget::OpenPolyGlide,
+        ModulationTarget::OpenPolyPan,
         ModulationTarget::OpenWavetableDetune,
         ModulationTarget::OpenWavetablePhase,
         ModulationTarget::OpenWavetableVolume,
@@ -68,7 +109,26 @@ impl ModulationTarget {
     pub fn label(&self) -> &'static str {
         match self {
             ModulationTarget::OpenWavetableWtPos => "OpenPoly: INDEX",
+            ModulationTarget::OpenPolyFold => "OpenPoly: FOLD",
+            ModulationTarget::OpenPolySub => "OpenPoly: SUB",
+            ModulationTarget::OpenPolyNoise => "OpenPoly: NOISE",
+            ModulationTarget::OpenPolyDrive => "OpenPoly: DRV",
+            ModulationTarget::OpenPolyKtr => "OpenPoly: KTR",
+            ModulationTarget::OpenPolyFilterEnv => "OpenPoly: ENV",
             ModulationTarget::OpenPolyCutoff => "OpenPoly: CUTOFF",
+            ModulationTarget::OpenPolyReso => "OpenPoly: RESO",
+            ModulationTarget::OpenPolyAmpA => "OpenPoly: AMP A",
+            ModulationTarget::OpenPolyAmpD => "OpenPoly: AMP D",
+            ModulationTarget::OpenPolyAmpS => "OpenPoly: AMP S",
+            ModulationTarget::OpenPolyAmpR => "OpenPoly: AMP R",
+            ModulationTarget::OpenPolyFegA => "OpenPoly: FEG A",
+            ModulationTarget::OpenPolyFegD => "OpenPoly: FEG D",
+            ModulationTarget::OpenPolyFegS => "OpenPoly: FEG S",
+            ModulationTarget::OpenPolyFegR => "OpenPoly: FEG R",
+            ModulationTarget::OpenPolyVel => "OpenPoly: VEL",
+            ModulationTarget::OpenPolyPitch => "OpenPoly: PITCH",
+            ModulationTarget::OpenPolyGlide => "OpenPoly: GLIDE",
+            ModulationTarget::OpenPolyPan => "OpenPoly: PAN",
             ModulationTarget::OpenWavetableDetune => "OpenPoly: DETUNE",
             ModulationTarget::OpenWavetablePhase => "OpenPoly: PHASE",
             ModulationTarget::OpenWavetableVolume => "OpenPoly: VOL",
@@ -85,7 +145,26 @@ impl ModulationTarget {
     pub fn device_name(&self) -> &'static str {
         match self {
             ModulationTarget::OpenWavetableWtPos
+            | ModulationTarget::OpenPolyFold
+            | ModulationTarget::OpenPolySub
+            | ModulationTarget::OpenPolyNoise
+            | ModulationTarget::OpenPolyDrive
+            | ModulationTarget::OpenPolyKtr
+            | ModulationTarget::OpenPolyFilterEnv
             | ModulationTarget::OpenPolyCutoff
+            | ModulationTarget::OpenPolyReso
+            | ModulationTarget::OpenPolyAmpA
+            | ModulationTarget::OpenPolyAmpD
+            | ModulationTarget::OpenPolyAmpS
+            | ModulationTarget::OpenPolyAmpR
+            | ModulationTarget::OpenPolyFegA
+            | ModulationTarget::OpenPolyFegD
+            | ModulationTarget::OpenPolyFegS
+            | ModulationTarget::OpenPolyFegR
+            | ModulationTarget::OpenPolyVel
+            | ModulationTarget::OpenPolyPitch
+            | ModulationTarget::OpenPolyGlide
+            | ModulationTarget::OpenPolyPan
             | ModulationTarget::OpenWavetableDetune
             | ModulationTarget::OpenWavetablePhase
             | ModulationTarget::OpenWavetableVolume => "OpenPoly",
@@ -102,7 +181,26 @@ impl ModulationTarget {
     pub fn param_name(&self) -> &'static str {
         match self {
             ModulationTarget::OpenWavetableWtPos => "INDEX",
+            ModulationTarget::OpenPolyFold => "FOLD",
+            ModulationTarget::OpenPolySub => "SUB",
+            ModulationTarget::OpenPolyNoise => "NOISE",
+            ModulationTarget::OpenPolyDrive => "DRV",
+            ModulationTarget::OpenPolyKtr => "KTR",
+            ModulationTarget::OpenPolyFilterEnv => "ENV",
             ModulationTarget::OpenPolyCutoff => "CUTOFF",
+            ModulationTarget::OpenPolyReso => "RESO",
+            ModulationTarget::OpenPolyAmpA => "AMP_A",
+            ModulationTarget::OpenPolyAmpD => "AMP_D",
+            ModulationTarget::OpenPolyAmpS => "AMP_S",
+            ModulationTarget::OpenPolyAmpR => "AMP_R",
+            ModulationTarget::OpenPolyFegA => "FEG_A",
+            ModulationTarget::OpenPolyFegD => "FEG_D",
+            ModulationTarget::OpenPolyFegS => "FEG_S",
+            ModulationTarget::OpenPolyFegR => "FEG_R",
+            ModulationTarget::OpenPolyVel => "VEL",
+            ModulationTarget::OpenPolyPitch => "PITCH",
+            ModulationTarget::OpenPolyGlide => "GLIDE",
+            ModulationTarget::OpenPolyPan => "PAN",
             ModulationTarget::OpenWavetableDetune => "DETUNE",
             ModulationTarget::OpenWavetablePhase => "PHASE",
             ModulationTarget::OpenWavetableVolume => "VOL",
@@ -177,8 +275,9 @@ pub struct LfoChannelState {
     pub phase_deg: f32,       // 0.0 .. 360.0
     pub bipolar: bool,        // true = +/-1.0, false = 0.0 .. 1.0
     pub retrigger: bool,      // true = reset phase on transport play/start
-    pub amount: f32,          // -1.0 .. +1.0 modulation routing intensity
-    pub target: ModulationTarget,
+    pub amount: f32,          // Legacy single-target modulation intensity (-1.0 .. +1.0)
+    pub target: ModulationTarget, // Legacy primary target (kept synced with routes[0])
+    pub routes: Vec<(ModulationTarget, f32)>, // Bitwig-style multi-target modulation matrix
     pub is_mapping: bool,
     last_cycle_index: u64,
     current_sh_val: f32,
@@ -197,7 +296,8 @@ impl Default for LfoChannelState {
             bipolar: true,
             retrigger: true,
             amount: 0.5,
-            target: ModulationTarget::OpenWavetableWtPos,
+            target: ModulationTarget::None,
+            routes: Vec::new(),
             is_mapping: false,
             last_cycle_index: 0,
             current_sh_val: 0.0,
@@ -207,10 +307,7 @@ impl Default for LfoChannelState {
 
 impl LfoChannelState {
     pub fn default_lfo2() -> Self {
-        Self {
-            target: ModulationTarget::None,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn sync_index(&self) -> usize {
@@ -225,7 +322,92 @@ impl LfoChannelState {
         self.sync_continuous = self.sync_index() as f32;
     }
 
+    /// Returns the modulation amount (-1.0..+1.0) routed from this channel to `target`.
+    pub fn route_amount(&self, target: ModulationTarget) -> f32 {
+        if target == ModulationTarget::None {
+            return 0.0;
+        }
+        if let Some((_, amt)) = self.routes.iter().find(|(t, _)| *t == target) {
+            return *amt;
+        }
+        // Fallback for legacy single-target code/tests that set `state.target` directly
+        if self.routes.is_empty() && self.target == target {
+            return self.amount;
+        }
+        0.0
+    }
+
+    /// Returns the modulation amount matching `(device, param)`.
+    pub fn route_amount_for_param(&self, device: &str, param: &str) -> Option<f32> {
+        if !self.routes.is_empty() {
+            for &(t, amt) in &self.routes {
+                if t.matches(device, param) && amt.abs() > 1e-4 {
+                    return Some(amt);
+                }
+            }
+            return None;
+        }
+        if self.target.matches(device, param) {
+            return Some(self.amount);
+        }
+        None
+    }
+
+    /// Sets (or clears if near zero) a modulation route to `target` in Bitwig style.
+    pub fn set_route(&mut self, target: ModulationTarget, amount: f32) {
+        if target == ModulationTarget::None {
+            return;
+        }
+        let clamped = amount.clamp(-1.0, 1.0);
+        // Migrate legacy single target into routes if needed
+        if self.routes.is_empty() && self.target != ModulationTarget::None && self.target != target
+        {
+            self.routes.push((self.target, self.amount));
+        }
+
+        if clamped.abs() < 0.005 {
+            self.routes.retain(|(t, _)| *t != target);
+        } else if let Some(entry) = self.routes.iter_mut().find(|(t, _)| *t == target) {
+            entry.1 = clamped;
+        } else {
+            self.routes.push((target, clamped));
+        }
+
+        // Keep legacy `target` & `amount` in sync with primary route
+        if let Some(&(first_t, first_amt)) = self.routes.first() {
+            self.target = first_t;
+            self.amount = first_amt;
+        } else {
+            self.target = ModulationTarget::None;
+            self.amount = 0.5;
+        }
+    }
+
+    pub fn clear_all_routes(&mut self) {
+        self.routes.clear();
+        self.target = ModulationTarget::None;
+    }
+
+    pub fn has_any_route(&self) -> bool {
+        !self.routes.is_empty() || self.target != ModulationTarget::None
+    }
+
+    pub fn active_routes_snapshot(&self) -> Vec<(ModulationTarget, f32)> {
+        if !self.routes.is_empty() {
+            self.routes.clone()
+        } else if self.target != ModulationTarget::None {
+            vec![(self.target, self.amount)]
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn to_channel_params(&self) -> LfoChannelParams {
+        let saved_routes: Vec<(String, f32)> = self
+            .active_routes_snapshot()
+            .into_iter()
+            .map(|(t, a)| (t.label().to_string(), a))
+            .collect();
         LfoChannelParams {
             waveform: waveform_to_str(self.waveform).to_string(),
             sync_mode: sync_mode_to_str(self.sync_mode).to_string(),
@@ -237,6 +419,7 @@ impl LfoChannelState {
             retrigger: self.retrigger,
             amount: self.amount,
             target: self.target.label().to_string(),
+            routes: saved_routes,
         }
     }
 
@@ -256,6 +439,16 @@ impl LfoChannelState {
         self.retrigger = p.retrigger;
         self.amount = p.amount.clamp(-1.0, 1.0);
         self.target = ModulationTarget::parse_saved(&p.target, fallback_target);
+        self.routes.clear();
+        for (lbl, amt) in &p.routes {
+            let t = ModulationTarget::parse_saved(lbl, ModulationTarget::None);
+            if t != ModulationTarget::None && amt.abs() >= 0.005 {
+                self.routes.push((t, amt.clamp(-1.0, 1.0)));
+            }
+        }
+        if self.routes.is_empty() && self.target != ModulationTarget::None {
+            self.routes.push((self.target, self.amount));
+        }
     }
 
     pub fn effective_hz(&self, bpm: f32) -> f32 {
@@ -288,8 +481,6 @@ impl LfoChannelState {
     }
 
     /// Evaluates live LFO sample phase-locked to host transport position and project BPM.
-    /// When transport is paused or stopped, the LFO halts and holds at the initial phase.
-    /// When `retrigger` is enabled, phase restarts cleanly from `playback_start_sample`.
     pub fn compute_live_sample_from_transport(
         &mut self,
         transport: &LfoTransportState,
@@ -392,6 +583,12 @@ impl DerefMut for LfoModState {
 
 impl LfoModState {
     pub fn to_params(&self) -> OpenModulationParams {
+        let routes1: Vec<(String, f32)> = self
+            .lfo1
+            .active_routes_snapshot()
+            .into_iter()
+            .map(|(t, a)| (t.label().to_string(), a))
+            .collect();
         OpenModulationParams {
             waveform: waveform_to_str(self.lfo1.waveform).to_string(),
             sync_mode: sync_mode_to_str(self.lfo1.sync_mode).to_string(),
@@ -403,6 +600,7 @@ impl LfoModState {
             amount: self.lfo1.amount,
             target: self.lfo1.target.label().to_string(),
             retrigger: self.lfo1.retrigger,
+            routes: routes1,
             lfo2: Some(self.lfo2.to_channel_params()),
             mix: self.mix,
         }
@@ -423,8 +621,17 @@ impl LfoModState {
         self.lfo1.bipolar = p.bipolar;
         self.lfo1.retrigger = p.retrigger;
         self.lfo1.amount = p.amount.clamp(-1.0, 1.0);
-        self.lfo1.target =
-            ModulationTarget::parse_saved(&p.target, ModulationTarget::OpenWavetableWtPos);
+        self.lfo1.target = ModulationTarget::parse_saved(&p.target, ModulationTarget::None);
+        self.lfo1.routes.clear();
+        for (lbl, amt) in &p.routes {
+            let t = ModulationTarget::parse_saved(lbl, ModulationTarget::None);
+            if t != ModulationTarget::None && amt.abs() >= 0.005 {
+                self.lfo1.routes.push((t, amt.clamp(-1.0, 1.0)));
+            }
+        }
+        if self.lfo1.routes.is_empty() && self.lfo1.target != ModulationTarget::None {
+            self.lfo1.routes.push((self.lfo1.target, self.lfo1.amount));
+        }
 
         if let Some(ref ch2) = p.lfo2 {
             self.lfo2.apply_channel_params(ch2, ModulationTarget::None);
@@ -581,7 +788,7 @@ pub struct ActiveModulation {
 }
 
 /// Queries whether a given device knob on track_idx is currently modulated by any active LFO1 or LFO2.
-/// Sums contributions from both channels, scaled by the device's `mix` knob.
+/// Sums contributions from all matching routes across both channels, scaled by `mix`.
 pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<ActiveModulation> {
     let transport = get_global_transport();
     let mut map = lfo_state_map().lock().unwrap();
@@ -598,20 +805,20 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
         }
         let mix = state.mix.clamp(0.0, 1.0);
 
-        if state.lfo1.target.matches(device, param) {
-            let (phase, raw, delta) = state.lfo1.compute_live_sample_from_transport(&transport);
+        if let Some(amt1) = state.lfo1.route_amount_for_param(device, param) {
+            let (phase, raw, _) = state.lfo1.compute_live_sample_from_transport(&transport);
             matched = true;
             total_raw += raw * mix;
-            total_delta += delta * mix;
-            total_amount += state.lfo1.amount * mix;
+            total_delta += raw * amt1 * mix;
+            total_amount += amt1 * mix;
             last_phase = phase;
         }
-        if state.lfo2.target.matches(device, param) {
-            let (phase, raw, delta) = state.lfo2.compute_live_sample_from_transport(&transport);
+        if let Some(amt2) = state.lfo2.route_amount_for_param(device, param) {
+            let (phase, raw, _) = state.lfo2.compute_live_sample_from_transport(&transport);
             matched = true;
             total_raw += raw * mix;
-            total_delta += delta * mix;
-            total_amount += state.lfo2.amount * mix;
+            total_delta += raw * amt2 * mix;
+            total_amount += amt2 * mix;
             last_phase = phase;
         }
     }
@@ -628,12 +835,69 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
     }
 }
 
-/// Queries whether mapping mode is active and listening for knob clicks on this track.
-pub fn is_mapping_target(_track_idx: usize, _device: &str, _param: &str) -> bool {
-    mapping_mode_active().lock().unwrap().is_some()
+/// Returns `Some((track_idx, slot_idx, channel_idx))` if a modulator on `track_idx` is in Bitwig mapping mode.
+pub fn active_mapping_for_track(track_idx: usize) -> Option<(usize, usize, u8)> {
+    let active = mapping_mode_active().lock().unwrap();
+    active.filter(|&(tr, _, _)| tr == track_idx)
 }
 
-/// Binds a knob as target if mapping mode is active. Returns true if bound.
+/// Exits mapping mode globally.
+pub fn clear_mapping_mode() {
+    let mut active = mapping_mode_active().lock().unwrap();
+    if let Some((tr, slot, _)) = active.take() {
+        update_lfo_state(tr, slot, |st| {
+            st.lfo1.is_mapping = false;
+            st.lfo2.is_mapping = false;
+        });
+    }
+}
+
+/// Reads the current modulation amount (-1.0..+1.0) for a specific channel -> (device, param).
+pub fn get_channel_route_amount(
+    track_idx: usize,
+    slot_idx: usize,
+    channel_idx: u8,
+    device: &str,
+    param: &str,
+) -> f32 {
+    let Some(target) = ModulationTarget::from_device_and_param(device, param) else {
+        return 0.0;
+    };
+    let st = get_lfo_state(track_idx, slot_idx);
+    if channel_idx == 0 {
+        st.lfo1.route_amount(target)
+    } else {
+        st.lfo2.route_amount(target)
+    }
+}
+
+/// Sets the modulation amount (-1.0..+1.0) for a specific channel -> (device, param).
+pub fn set_channel_route_amount(
+    track_idx: usize,
+    slot_idx: usize,
+    channel_idx: u8,
+    device: &str,
+    param: &str,
+    amount: f32,
+) {
+    let Some(target) = ModulationTarget::from_device_and_param(device, param) else {
+        return;
+    };
+    update_lfo_state(track_idx, slot_idx, |st| {
+        if channel_idx == 0 {
+            st.lfo1.set_route(target, amount);
+        } else {
+            st.lfo2.set_route(target, amount);
+        }
+    });
+}
+
+/// Queries whether mapping mode is active and listening for knob clicks on this track.
+pub fn is_mapping_target(track_idx: usize, _device: &str, _param: &str) -> bool {
+    active_mapping_for_track(track_idx).is_some()
+}
+
+/// Legacy single-click mapping binding (still used by OpenWavetable & tests).
 pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) -> bool {
     let mut active = mapping_mode_active().lock().unwrap();
     if let Some((map_tr, map_slot, channel)) = *active {
@@ -641,10 +905,10 @@ pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) ->
             if let Some(target) = ModulationTarget::from_device_and_param(device, param) {
                 update_lfo_state(map_tr, map_slot, |st| {
                     if channel == 0 {
-                        st.lfo1.target = target;
+                        st.lfo1.set_route(target, 0.5);
                         st.lfo1.is_mapping = false;
                     } else {
-                        st.lfo2.target = target;
+                        st.lfo2.set_route(target, 0.5);
                         st.lfo2.is_mapping = false;
                     }
                 });
@@ -656,10 +920,202 @@ pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) ->
     false
 }
 
+/// Draws a Bitwig-style 270° modulation arc around a rotary knob from `from_norm` to `to_norm`.
+fn paint_knob_mod_arc(
+    p: &Painter,
+    center: Pos2,
+    radius: f32,
+    from_norm: f32,
+    to_norm: f32,
+    color: Color32,
+    stroke_width: f32,
+) {
+    let a = from_norm.clamp(0.0, 1.0);
+    let b = to_norm.clamp(0.0, 1.0);
+    if (b - a).abs() < 0.002 {
+        return;
+    }
+    let steps = (((b - a).abs() * 36.0).ceil() as usize).clamp(4, 36);
+    let mut pts = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let norm = a + (b - a) * t;
+        let deg = -135.0_f32 + norm * 270.0_f32;
+        let rad = deg.to_radians();
+        pts.push(pos2(center.x + radius * rad.sin(), center.y - radius * rad.cos()));
+    }
+    p.add(egui::epaint::PathShape::line(pts, Stroke::new(stroke_width, color)));
+}
+
+/// Bitwig-style modulatable rotary knob!
+///
+/// - When **LFO1/LFO2 mapping mode is active** on `track_idx`:
+///   - The knob cap glows bright **Bitwig cyan** (`#78B8CC`) with a crisp cyan ring.
+///   - Dragging UP/DOWN directly on the knob sets the bipolar modulation amount (`-100%..+100%`)
+///     for the active LFO channel **without modifying the knob's base value**.
+///   - Double-click clears the modulation route on this knob.
+/// - When **mapping mode is NOT active**:
+///   - Behaves as a normal `bitwig_kit::rotary_knob`.
+///   - If modulated by LFO1/LFO2, paints the cyan configured modulation range arc AND a live
+///     animated cyan modulation indicator arc moving in real time!
+#[allow(clippy::too_many_arguments)]
+pub fn modulatable_rotary_knob(
+    ui: &mut egui::Ui,
+    diameter: f32,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default_value: f32,
+    arc_color: Color32,
+    bipolar: bool,
+    track_idx: usize,
+    device: &str,
+    param: &str,
+) -> (egui::Response, bool) {
+    let lo = *range.start();
+    let hi = *range.end();
+    let span = (hi - lo).max(1.0e-6);
+    let base_norm = ((*value - lo) / span).clamp(0.0, 1.0);
+
+    // Check if Bitwig modulation mapping mode is active on this track
+    if let Some((map_tr, map_slot, ch_idx)) = active_mapping_for_track(track_idx) {
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(diameter, diameter), Sense::click_and_drag());
+
+        let mut route_amt = get_channel_route_amount(map_tr, map_slot, ch_idx, device, param);
+        let mut amt_changed = false;
+
+        if response.double_clicked() {
+            route_amt = 0.0;
+            amt_changed = true;
+        } else if response.dragged() {
+            let fine = ui.input(|i| i.modifiers.shift);
+            let sens = if fine { 0.0015 } else { 0.006 };
+            let delta = -response.drag_delta().y * sens;
+            if delta.abs() > 0.0 {
+                route_amt = (route_amt + delta).clamp(-1.0, 1.0);
+                amt_changed = true;
+            }
+        }
+        let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+        if response.hovered() && scroll_y.abs() > 0.0 {
+            let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
+            route_amt = (route_amt + step).clamp(-1.0, 1.0);
+            amt_changed = true;
+        }
+        if amt_changed {
+            set_channel_route_amount(map_tr, map_slot, ch_idx, device, param, route_amt);
+        }
+
+        if ui.is_rect_visible(rect) {
+            // Paint the rotary knob with Bitwig's signature cyan-lit cap!
+            paint_rotary_knob(
+                ui.painter(),
+                rect,
+                base_norm,
+                MOD_KNOB_CAP_CYAN,
+                arc_color,
+                response.hovered() || response.dragged(),
+                bipolar,
+            );
+            let p = ui.painter();
+            let c = rect.center();
+            let r = diameter * 0.5;
+            // Subtle cyan glow ring around the knob
+            p.circle_stroke(
+                c,
+                r - 0.5,
+                Stroke::new(
+                    if response.hovered() || response.dragged() {
+                        1.8_f32
+                    } else {
+                        1.1_f32
+                    },
+                    if response.hovered() || response.dragged() {
+                        Color32::from_rgb(0x74, 0xE2, 0xFF)
+                    } else {
+                        Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 190)
+                    },
+                ),
+            );
+            // Paint configured modulation depth arc in bright cyan
+            if route_amt.abs() > 0.004 {
+                paint_knob_mod_arc(
+                    p,
+                    c,
+                    r - 1.5,
+                    base_norm,
+                    (base_norm + route_amt).clamp(0.0, 1.0),
+                    MOD_ARROW_CYAN,
+                    2.6_f32,
+                );
+            }
+        }
+
+        if response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::None);
+        } else if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        }
+
+        let ch_lbl = if ch_idx == 0 { "LFO1" } else { "LFO2" };
+        let tip = if route_amt.abs() > 0.004 {
+            format!(
+                "{ch_lbl} → {param}: {:+.0}% (Drag up/down to adjust • Double-click to clear • Esc to finish)",
+                route_amt * 100.0
+            )
+        } else {
+            format!(
+                "{ch_lbl} → {param}: Drag up/down to modulate (Esc or click {ch_lbl} arrow to finish)"
+            )
+        };
+        let response = response.on_hover_text(tip);
+        return (response, false);
+    }
+
+    // Normal mode: standard rotary knob + live cyan modulation arc overlay
+    let (response, changed) =
+        bitwig_kit::rotary_knob(ui, diameter, value, range, default_value, arc_color, bipolar);
+
+    if ui.is_rect_visible(response.rect) {
+        if let Some(m) = get_modulation(track_idx, device, param) {
+            let p = ui.painter();
+            let c = response.rect.center();
+            let r = diameter * 0.5 - 1.5;
+            let cur_norm = ((*value - lo) / span).clamp(0.0, 1.0);
+            // Configured range arc (subtle cyan)
+            paint_knob_mod_arc(
+                p,
+                c,
+                r,
+                cur_norm,
+                (cur_norm + m.amount).clamp(0.0, 1.0),
+                Color32::from_rgba_unmultiplied(0x46, 0xC8, 0xF5, 90),
+                2.0_f32,
+            );
+            // Live animated modulation arc (bright cyan)
+            let live_norm = (cur_norm + m.delta).clamp(0.0, 1.0);
+            paint_knob_mod_arc(p, c, r, cur_norm, live_norm, MOD_ARROW_CYAN, 2.5_f32);
+            // Live tip dot
+            let deg = -135.0_f32 + live_norm * 270.0_f32;
+            let rad = deg.to_radians();
+            let tip_pos = pos2(c.x + r * rad.sin(), c.y - r * rad.cos());
+            p.circle_filled(tip_pos, 2.0, Color32::WHITE);
+        }
+    }
+
+    (response, changed)
+}
+
 /// Renders the Bitwig-style Hikaru OpenLFO MOD body inside the DSP rack card
 /// (to the right of the vertical `OPENLFO MOD` sidebar).
 pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, slot_idx: usize) {
     ui.ctx().request_repaint();
+
+    // Press Escape to exit Bitwig mapping mode cleanly
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && active_mapping_for_track(track_idx).is_some()
+    {
+        clear_mapping_mode();
+    }
 
     let is_playing =
         app.transport.playback_state == hikaru_transport::TransportPlaybackState::Playing;
@@ -801,8 +1257,10 @@ fn render_lfo_channel_panel(
         let active = mapping_mode_active().lock().unwrap();
         *active == Some((track_idx, slot_idx, channel_idx))
     };
-    let map_active = is_global_mapping || ch.is_mapping;
-    let is_assigned = ch.target != ModulationTarget::None;
+    let map_active = is_global_mapping;
+    ch.is_mapping = map_active;
+    let active_routes = ch.active_routes_snapshot();
+    let is_assigned = !active_routes.is_empty();
 
     let arrow_rect = Rect::from_center_size(
         pos2(zone_a.center().x, zone_a.min.y + 28.0),
@@ -836,15 +1294,18 @@ fn render_lfo_channel_panel(
     );
 
     let route_tip = if map_active {
-        format!("{label}: Click any device knob to map (click again to cancel)")
+        format!("{label}: Mapping active — Drag any highlighted cyan knob up/down • Click again or Esc to stop")
     } else if is_assigned {
+        let summary: Vec<String> = active_routes
+            .iter()
+            .map(|(t, a)| format!("{} ({:+.0}%)", t.label(), a * 100.0))
+            .collect();
         format!(
-            "{label} → {} ({:+.0}%)\nLeft-click: Map to knob • Right-click: Select target & amount",
-            ch.target.label(),
-            ch.amount * 100.0
+            "{label} → {}\nLeft-click: Map knobs • Right-click: Manage routes",
+            summary.join(", ")
         )
     } else {
-        format!("{label}: Unassigned\nLeft-click: Map to knob • Right-click: Select target")
+        format!("{label}: Not mapped\nLeft-click: Map knobs (drag any cyan knob) • Right-click: Target list")
     };
 
     let arrow_resp = arrow_resp.on_hover_text(route_tip);
@@ -860,33 +1321,61 @@ fn render_lfo_channel_panel(
     }
     arrow_resp.context_menu(|menu_ui| {
         menu_ui.label(
-            RichText::new(format!("{label} Modulation Target"))
+            RichText::new(format!("{label} Modulation Routes"))
                 .font(fonts::semibold(10.0))
                 .color(theme::ACCENT_ORANGE),
         );
         menu_ui.separator();
-        for &target in &ModulationTarget::ALL {
-            let sel = ch.target == target;
-            if menu_ui
-                .selectable_label(sel, RichText::new(target.label()).font(fonts::regular(10.0)))
-                .clicked()
-            {
-                ch.target = target;
+        let routes_snap = ch.active_routes_snapshot();
+        if routes_snap.is_empty() {
+            menu_ui.label(
+                RichText::new("Not mapped (click o-> then drag any cyan knob)")
+                    .font(fonts::regular(9.5))
+                    .color(theme::TEXT_MUTED),
+            );
+        } else {
+            for (t, mut amt) in routes_snap {
+                menu_ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(t.label())
+                            .font(fonts::regular(9.5))
+                            .color(MOD_ARROW_CYAN),
+                    );
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut amt, -1.0..=1.0)
+                                .fixed_decimals(2)
+                                .show_value(true),
+                        )
+                        .changed()
+                    {
+                        ch.set_route(t, amt);
+                    }
+                    if ui.small_button("×").clicked() {
+                        ch.set_route(t, 0.0);
+                    }
+                });
+            }
+            menu_ui.separator();
+            if menu_ui.button("Clear All Routes").clicked() {
+                ch.clear_all_routes();
                 menu_ui.close_menu();
             }
         }
         menu_ui.separator();
-        menu_ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Amount:")
-                    .font(fonts::semibold(9.5))
-                    .color(theme::TEXT_SECONDARY),
-            );
-            ui.add(
-                egui::Slider::new(&mut ch.amount, -1.0..=1.0)
-                    .fixed_decimals(2)
-                    .show_value(true),
-            );
+        menu_ui.menu_button("Add Target...", |sub_ui| {
+            for &target in &ModulationTarget::ALL {
+                if target == ModulationTarget::None {
+                    continue;
+                }
+                if sub_ui
+                    .selectable_label(ch.route_amount(target).abs() > 0.004, target.label())
+                    .clicked()
+                {
+                    ch.set_route(target, 0.5);
+                    sub_ui.close_menu();
+                }
+            }
         });
     });
 
@@ -1174,7 +1663,6 @@ fn render_lfo_channel_panel(
         egui::StrokeKind::Inside,
     );
 
-    // Draw small clock / sync icon on left of pill + down triangle on right
     let icon_cx = sync_rect.min.x + 13.0;
     let icon_cy = sync_rect.center().y;
     let icon_col = if is_sync {
@@ -1183,7 +1671,6 @@ fn render_lfo_channel_panel(
         Color32::from_rgb(0xCC, 0xD0, 0xD8)
     };
     if is_sync {
-        // Musical note / tempo sync glyph
         p.circle_filled(pos2(icon_cx - 1.5, icon_cy + 2.5), 2.3, icon_col);
         p.line_segment(
             [pos2(icon_cx + 0.5, icon_cy + 2.5), pos2(icon_cx + 0.5, icon_cy - 4.0)],
@@ -1194,7 +1681,6 @@ fn render_lfo_channel_panel(
             Stroke::new(1.3_f32, icon_col),
         );
     } else {
-        // Clock circle + hands
         p.circle_stroke(pos2(icon_cx, icon_cy), 4.5, Stroke::new(1.1_f32, icon_col));
         p.line_segment(
             [pos2(icon_cx, icon_cy), pos2(icon_cx, icon_cy - 2.6)],
@@ -1205,7 +1691,6 @@ fn render_lfo_channel_panel(
             Stroke::new(1.1_f32, icon_col),
         );
     }
-    // Small dropdown triangle on right
     let tri_cx = sync_rect.max.x - 8.0;
     p.add(egui::Shape::convex_polygon(
         vec![
@@ -1267,7 +1752,6 @@ fn render_lfo_channel_panel(
     };
     let norm_to_hz = |norm: f32| -> f32 { MIN_HZ * (MAX_HZ / MIN_HZ).powf(norm.clamp(0.0, 1.0)) };
 
-    // Handle drag, double-click, and mouse wheel on Rate bar
     let drag_delta = rate_resp.drag_delta();
     let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
     let fine = ui.input(|i| i.modifiers.shift);
@@ -1326,7 +1810,6 @@ fn render_lfo_channel_panel(
         }
     }
 
-    // Paint Rate bar
     p.rect_filled(rate_rect, 2.5, WELL_BG);
     p.rect_stroke(
         rate_rect,
@@ -1342,7 +1825,6 @@ fn render_lfo_channel_panel(
         egui::StrokeKind::Inside,
     );
 
-    // Orange left indicator tick (Bitwig style)
     let tick_rect = Rect::from_min_size(
         pos2(rate_rect.min.x + 3.0, rate_rect.min.y + 3.0),
         vec2(2.5, rate_rect.height() - 6.0),
@@ -1432,7 +1914,6 @@ fn render_dual_scope(
     );
 
     let mid_y = rect.center().y;
-    // Horizontal split divider between LFO1 and LFO2 lanes
     p.line_segment(
         [pos2(rect.min.x + 1.0, mid_y), pos2(rect.max.x - 1.0, mid_y)],
         Stroke::new(1.0_f32, Color32::from_rgb(0x28, 0x2B, 0x34)),
@@ -1461,7 +1942,6 @@ fn paint_scope_lane(
     is_playing: bool,
 ) {
     let cy = lane.center().y;
-    // Subtle center baseline
     p.line_segment(
         [pos2(lane.min.x, cy), pos2(lane.max.x, cy)],
         Stroke::new(0.6_f32, Color32::from_rgb(0x20, 0x23, 0x2B)),
@@ -1495,7 +1975,6 @@ fn paint_scope_lane(
     ));
     p.add(egui::epaint::PathShape::line(pts, Stroke::new(1.3_f32, color)));
 
-    // Live phase dot when playing
     if is_playing {
         let dot_norm_x = ((current_phase - phase_offset).rem_euclid(1.0)) / cycles;
         let dot_x = lane.min.x + dot_norm_x * lane.width();
@@ -1631,15 +2110,15 @@ fn paint_mod_routing_arrow(p: &Painter, center: Pos2, color: Color32, filled: bo
     let right_x = center.x + 6.5;
     let y = center.y;
 
-    // Small origin circle on the left
     if filled {
         p.circle_filled(pos2(left_x, y), 2.5, color);
     } else {
         p.circle_stroke(pos2(left_x, y), 2.5, Stroke::new(1.2_f32, color));
     }
-    // Shaft
-    p.line_segment([pos2(left_x + 2.5, y), pos2(right_x - 2.5, y)], Stroke::new(1.4_f32, color));
-    // Arrowhead on the right
+    p.line_segment(
+        [pos2(left_x + 2.5, y), pos2(right_x - 2.5, y)],
+        Stroke::new(1.4_f32, color),
+    );
     p.add(egui::Shape::convex_polygon(
         vec![
             pos2(right_x, y),

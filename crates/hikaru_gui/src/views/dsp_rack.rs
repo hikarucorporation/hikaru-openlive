@@ -682,12 +682,24 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
 
                         let p = ui.painter();
                         p.rect_filled(card_rect, 3.5, Color32::from_rgb(0x2E, 0x30, 0x35));
+                        let is_lfo_mod_card = matches!(
+                            slot.name.as_str(),
+                            "OpenLFO MOD"
+                                | "Hikaru OpenLFO MOD"
+                                | "LFO MOD"
+                                | "OpenModulation"
+                                | "Hikaru OpenModulation"
+                        );
+                        let mod_scope_active = !is_lfo_mod_card
+                            && hikaru_openmodulation::active_mapping_for_track(track_idx).is_some();
                         p.rect_stroke(
                             card_rect,
                             3.5,
                             Stroke::new(
-                                if is_selected { 1.5_f32 } else { 1.0_f32 },
-                                if is_selected {
+                                if is_selected || mod_scope_active { 1.5_f32 } else { 1.0_f32 },
+                                if mod_scope_active {
+                                    hikaru_openmodulation::MOD_ARROW_CYAN
+                                } else if is_selected {
                                     theme::ACCENT_ORANGE
                                 } else {
                                     Color32::from_rgb(0x46, 0x49, 0x52)
@@ -695,6 +707,14 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             ),
                             egui::StrokeKind::Inside,
                         );
+                        if mod_scope_active {
+                            // Bitwig-style top cyan modulation scope bar above target device
+                            let bar_r = Rect::from_min_size(
+                                pos2(card_rect.min.x + 1.0, card_rect.min.y - 3.5),
+                                vec2(card_rect.width() - 2.0, 2.5),
+                            );
+                            p.rect_filled(bar_r, 1.0, hikaru_openmodulation::MOD_ARROW_CYAN);
+                        }
 
                         if slot.is_open_poly() {
                             let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
