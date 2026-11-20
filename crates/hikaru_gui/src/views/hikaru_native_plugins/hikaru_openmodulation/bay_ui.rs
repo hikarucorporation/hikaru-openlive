@@ -87,12 +87,25 @@ pub fn render_device_modulator_bay(
 
         let m = &mut bay.slots[idx];
         let outs = m.evaluate(&transport, time_secs);
-        if m.enabled && matches!(m.kind, ModulatorKind::ClassicLfo | ModulatorKind::BeatLfo) {
+        if m.enabled
+            && matches!(
+                m.kind,
+                ModulatorKind::ClassicLfo
+                    | ModulatorKind::BeatLfo
+                    | ModulatorKind::Random
+                    | ModulatorKind::SampleAndHold
+                    | ModulatorKind::Steps
+                    | ModulatorKind::ParSeq8
+                    | ModulatorKind::Curves
+                    | ModulatorKind::Ramp
+                    | ModulatorKind::Segments
+            )
+        {
             any_lfo_active = true;
         }
         let mod_id = m.id;
         let out_labels = m.kind.meta().outputs;
-        let num_outs = out_labels.len().clamp(1, 4);
+        let num_outs = out_labels.len().clamp(1, 8);
         let any_map_active = (0..num_outs as u8)
             .any(|o| is_bay_mapping_active(track_idx, slot_idx, mod_id, o));
 
@@ -201,14 +214,14 @@ pub fn render_device_modulator_bay(
         );
 
         // --- Body control (depends on ModulatorKind) ---
-        let arrow_h = 15.0;
+        let arrow_h = if num_outs > 4 { 21.0 } else { 15.0 };
         let body_r = Rect::from_min_max(
             pos2(cell_rect.min.x + 4.0, hdr_r.max.y + 2.0),
             pos2(cell_rect.max.x - 4.0, cell_rect.max.y - arrow_h - 3.0),
         );
-        render_slot_body(ui, body_r, m, outs[0], track_idx, slot_idx, &mut dirty);
+        render_slot_body(ui, body_r, m, outs[0], time_secs, track_idx, slot_idx, &mut dirty);
 
-        // --- Bottom Cyan Mapping Arrow Strip (`●→`, supports 1..4 outputs) ---
+        // --- Bottom Cyan Mapping Arrow Strip (`●→`, supports 1..8 outputs) ---
         let arrow_strip_r = Rect::from_min_max(
             pos2(cell_rect.min.x + 4.0, cell_rect.max.y - arrow_h - 1.0),
             pos2(cell_rect.max.x - 4.0, cell_rect.max.y - 2.0),
@@ -303,7 +316,7 @@ fn render_output_arrow_strip(
     p: &Painter,
     strip_r: Rect,
     m: &mut ModulatorSlotState,
-    outs: [f32; 4],
+    outs: [f32; 8],
     out_labels: &[&str],
     track_idx: usize,
     slot_idx: usize,
@@ -311,15 +324,22 @@ fn render_output_arrow_strip(
     remove_id: &mut Option<u32>,
 ) {
     let mod_id = m.id;
-    let num_outs = out_labels.len().clamp(1, 4);
-    let gap = if num_outs > 1 { 1.5 } else { 0.0 };
-    let cell_w = (strip_r.width() - gap * (num_outs as f32 - 1.0)) / num_outs as f32;
+    let num_outs = out_labels.len().clamp(1, 8);
+    let rows = if num_outs > 4 { 2 } else { 1 };
+    let cols = if num_outs > 4 { 4 } else { num_outs };
+    let gap_x = if cols > 1 { 1.5 } else { 0.0 };
+    let gap_y = if rows > 1 { 1.5 } else { 0.0 };
+    let cell_w = (strip_r.width() - gap_x * (cols as f32 - 1.0)) / cols as f32;
+    let cell_h = (strip_r.height() - gap_y * (rows as f32 - 1.0)) / rows as f32;
 
     for out_i in 0..num_outs {
         let out_u8 = out_i as u8;
         let out_label = out_labels[out_i];
-        let x0 = strip_r.min.x + out_i as f32 * (cell_w + gap);
-        let arrow_r = Rect::from_min_size(pos2(x0, strip_r.min.y), vec2(cell_w, strip_r.height()));
+        let col = out_i % cols;
+        let row = out_i / cols;
+        let x0 = strip_r.min.x + col as f32 * (cell_w + gap_x);
+        let y0 = strip_r.min.y + row as f32 * (cell_h + gap_y);
+        let arrow_r = Rect::from_min_size(pos2(x0, y0), vec2(cell_w, cell_h));
 
         let arrow_resp = ui.interact(
             arrow_r,
@@ -384,17 +404,21 @@ fn render_output_arrow_strip(
                 Stroke::NONE,
             ));
         } else {
-            // 4 outputs: compact numbered mapping cell (1..4) with active dot
-            let short_tag = (out_i + 1).to_string();
+            // 4 or 8 outputs: compact labeled/numbered mapping cell with active dot
+            let short_tag = if out_label.len() <= 2 {
+                out_label.to_string()
+            } else {
+                (out_i + 1).to_string()
+            };
             p.text(
                 arrow_r.center(),
                 Align2::CENTER_CENTER,
                 short_tag,
-                fonts::semibold(8.0),
+                fonts::semibold(if num_outs > 4 { 7.0 } else { 8.0 }),
                 fg,
             );
             if is_assigned && !map_active {
-                p.circle_filled(pos2(arrow_r.max.x - 2.5, arrow_r.min.y + 2.5), 1.4, MOD_ARROW_CYAN);
+                p.circle_filled(pos2(arrow_r.max.x - 2.0, arrow_r.min.y + 2.0), 1.3, MOD_ARROW_CYAN);
             }
         }
 
@@ -501,11 +525,13 @@ fn render_output_arrow_strip(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_slot_body(
     ui: &mut Ui,
     rect: Rect,
     m: &mut ModulatorSlotState,
     live_out: f32,
+    time_secs: f32,
     track_idx: usize,
     slot_idx: usize,
     dirty: &mut bool,
@@ -1141,6 +1167,403 @@ fn render_slot_body(
             let dy = cy - live_out * (rect.height() * 0.42);
             p.circle_filled(pos2(dx, dy), 2.3, Color32::WHITE);
         }
+        ModulatorKind::Random => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_rand", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Random ({:.2} Hz, Smooth {:.0}%) — Click: toggle smooth • Drag vertical: rate",
+                    m.lfo_rate_hz,
+                    m.rand_smooth * 100.0
+                ));
+            if resp.clicked() {
+                m.rand_smooth = if m.rand_smooth > 0.1 { 0.0 } else { 0.5 };
+                *dirty = true;
+            } else if resp.dragged() {
+                let delta = -resp.drag_delta().y * 0.015;
+                m.lfo_rate_hz = (m.lfo_rate_hz * (1.0 + delta)).clamp(0.05, 25.0);
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let cy = rect.center().y;
+            let sample_vals = [0.2_f32, -0.7, 0.85, -0.35, 0.55, -0.8, 0.4, 0.1];
+            let mut pts = Vec::with_capacity(sample_vals.len() * 2);
+            for (i, &v) in sample_vals.iter().enumerate() {
+                let x0 = rect.min.x + 2.0 + (i as f32 / sample_vals.len() as f32) * (rect.width() - 4.0);
+                let x1 = rect.min.x + 2.0 + ((i + 1) as f32 / sample_vals.len() as f32) * (rect.width() - 4.0);
+                let y = cy - v * (rect.height() * 0.36);
+                if m.rand_smooth < 0.1 {
+                    pts.push(pos2(x0, y));
+                    pts.push(pos2(x1, y));
+                } else {
+                    pts.push(pos2((x0 + x1) * 0.5, y));
+                }
+            }
+            let col = if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.2_f32, col)));
+            let dy = cy - live_out * (rect.height() * 0.38);
+            p.circle_filled(pos2(rect.max.x - 4.5, dy), 2.3, Color32::WHITE);
+        }
+        ModulatorKind::SampleAndHold => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let src_names = ["Noise", "Sine", "Tri", "Saw"];
+            let src_tags = ["N", "S", "T", "W"];
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_sh", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Sample & Hold ({}, {:.2} Hz) — Click: cycle source • Drag vertical: rate",
+                    src_names[(m.sh_source as usize).min(3)],
+                    m.lfo_rate_hz
+                ));
+            if resp.clicked() {
+                m.sh_source = (m.sh_source + 1) % 4;
+                *dirty = true;
+            } else if resp.dragged() {
+                let delta = -resp.drag_delta().y * 0.015;
+                m.lfo_rate_hz = (m.lfo_rate_hz * (1.0 + delta)).clamp(0.05, 25.0);
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let cy = rect.center().y;
+            let steps = [0.6_f32, -0.45, 0.85, -0.75, 0.25, -0.15];
+            let mut pts = Vec::with_capacity(steps.len() * 2);
+            for (i, &v) in steps.iter().enumerate() {
+                let x0 = rect.min.x + 2.0 + (i as f32 / steps.len() as f32) * (rect.width() - 4.0);
+                let x1 = rect.min.x + 2.0 + ((i + 1) as f32 / steps.len() as f32) * (rect.width() - 4.0);
+                let y = cy - v * (rect.height() * 0.36);
+                pts.push(pos2(x0, y));
+                pts.push(pos2(x1, y));
+            }
+            let col = if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.2_f32, col)));
+            let dy = cy - live_out * (rect.height() * 0.38);
+            p.circle_filled(pos2(rect.max.x - 4.5, dy), 2.3, Color32::WHITE);
+            p.text(
+                pos2(rect.min.x + 2.5, rect.min.y + 1.5),
+                Align2::LEFT_TOP,
+                src_tags[(m.sh_source as usize).min(3)],
+                fonts::semibold(7.0),
+                Color32::from_rgb(0xCC, 0xD2, 0xDC),
+            );
+        }
+        ModulatorKind::Steps => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let len = (m.steps_len.clamp(2, 16)) as usize;
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_steps", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Steps ({} steps @ {}) — Drag to draw step values",
+                    len,
+                    m.lfo_sync_rate.label()
+                ));
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let tx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 0.999);
+                    let ty = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    let idx = (tx * len as f32) as usize;
+                    if idx < 16 {
+                        m.steps_values[idx] = ty;
+                        *dirty = true;
+                    }
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            }
+            let pad = 2.0;
+            let gap = 1.0;
+            let bw = ((rect.width() - pad * 2.0 - gap * (len as f32 - 1.0)) / len as f32).max(1.5);
+            for i in 0..len {
+                let x0 = rect.min.x + pad + i as f32 * (bw + gap);
+                let bh = (m.steps_values[i].clamp(0.05, 1.0)) * (rect.height() - pad * 2.0);
+                let bar = Rect::from_min_max(
+                    pos2(x0, rect.max.y - pad - bh),
+                    pos2(x0 + bw, rect.max.y - pad),
+                );
+                let is_cur = i == m.steps_last_idx;
+                let col = if !m.enabled {
+                    theme::TEXT_MUTED
+                } else if is_cur {
+                    MOD_ARROW_CYAN
+                } else {
+                    MOD_ORANGE
+                };
+                p.rect_filled(bar, 1.0, col);
+            }
+        }
+        ModulatorKind::ParSeq8 => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let len = (m.parseq_len.clamp(2, 8)) as usize;
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_parseq8", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "ParSeq-8 ({} steps @ {}) — Drag to edit per-step output level",
+                    len,
+                    m.lfo_sync_rate.label()
+                ));
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let tx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 0.999);
+                    let ty = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    let idx = (tx * len as f32) as usize;
+                    if idx < 8 {
+                        m.parseq_steps[idx] = ty;
+                        *dirty = true;
+                    }
+                }
+            }
+            let pad = 2.0;
+            let gap = 1.0;
+            let bw = ((rect.width() - pad * 2.0 - gap * (len as f32 - 1.0)) / len as f32).max(2.0);
+            for i in 0..len {
+                let x0 = rect.min.x + pad + i as f32 * (bw + gap);
+                let bh = (m.parseq_steps[i].clamp(0.08, 1.0)) * (rect.height() - pad * 2.0);
+                let bar = Rect::from_min_max(
+                    pos2(x0, rect.max.y - pad - bh),
+                    pos2(x0 + bw, rect.max.y - pad),
+                );
+                let is_cur = i == m.parseq_last_step;
+                let col = if !m.enabled {
+                    theme::TEXT_MUTED
+                } else if is_cur {
+                    MOD_ARROW_CYAN
+                } else {
+                    Color32::from_rgb(0x4E, 0x56, 0x64)
+                };
+                p.rect_filled(bar, 1.0, col);
+            }
+        }
+        ModulatorKind::Curves => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_curves", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text("Curves — Drag to sculpt the 8-node looping curve");
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let tx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 0.999);
+                    let ty = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    let idx = ((tx * 8.0) as usize).min(7);
+                    m.curves_nodes[idx] = ty;
+                    *dirty = true;
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            }
+            let steps = 24;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let v = m.eval_curve_at(t);
+                let x = rect.min.x + 2.0 + t * (rect.width() - 4.0);
+                let y = rect.max.y - 2.5 - v * (rect.height() - 5.0);
+                pts.push(pos2(x, y));
+            }
+            let col = if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, col)));
+            let dx = rect.min.x + 2.0 + m.lfo_last_phase * (rect.width() - 4.0);
+            let dy = rect.max.y - 2.5 - m.eval_curve_at(m.lfo_last_phase) * (rect.height() - 5.0);
+            p.circle_filled(pos2(dx, dy), 2.2, Color32::WHITE);
+        }
+        ModulatorKind::Ramp => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_ramp", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Ramp ({:.2}s, {}) — Click: retrigger • Drag vertical: curve",
+                    m.ramp_time_secs,
+                    if m.ramp_loop { "Loop" } else { "One-Shot" }
+                ));
+            if resp.clicked() {
+                m.ramp_start_time = time_secs;
+                *dirty = true;
+            } else if resp.dragged() {
+                m.ramp_curve = (m.ramp_curve - resp.drag_delta().y * 0.015).clamp(-1.0, 1.0);
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let steps = 20;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let v = m.eval_ramp_at(t);
+                let x = rect.min.x + 2.0 + t * (rect.width() - 4.0);
+                let y = rect.max.y - 2.5 - v * (rect.height() - 5.0);
+                pts.push(pos2(x, y));
+            }
+            let col = if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, col)));
+            let dx = rect.min.x + 2.0 + m.lfo_last_phase * (rect.width() - 4.0);
+            let dy = rect.max.y - 2.5 - m.eval_ramp_at(m.lfo_last_phase) * (rect.height() - 5.0);
+            p.circle_filled(pos2(dx, dy), 2.2, Color32::WHITE);
+        }
+        ModulatorKind::Segments => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_segs", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text("Segments (MSEG) — Click: retrigger • Drag to edit breakpoint");
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let tx = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    let ty = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    let idx = (tx * 5.0).round() as usize;
+                    if idx < 6 {
+                        m.seg_levels[idx] = ty;
+                        *dirty = true;
+                    }
+                }
+            } else if resp.clicked() {
+                m.seg_start_time = time_secs;
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            }
+            let steps = 25;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let v = m.eval_segments_at(t);
+                let x = rect.min.x + 2.0 + t * (rect.width() - 4.0);
+                let y = rect.max.y - 2.5 - v * (rect.height() - 5.0);
+                pts.push(pos2(x, y));
+            }
+            let col = if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, col)));
+            let dx = rect.min.x + 2.0 + m.lfo_last_phase * (rect.width() - 4.0);
+            let dy = rect.max.y - 2.5 - m.eval_segments_at(m.lfo_last_phase) * (rect.height() - 5.0);
+            p.circle_filled(pos2(dx, dy), 2.2, Color32::WHITE);
+        }
+        ModulatorKind::Vector4 => {
+            p.rect_filled(rect, 2.5, CELL_WELL_BG);
+            p.rect_stroke(rect, 2.5, Stroke::new(0.8_f32, CELL_BORDER), egui::StrokeKind::Inside);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_vec4", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text("Vector-4 (A/B/C/D corner blend) — Drag to morph • Double-click to center");
+            if resp.double_clicked() {
+                m.xy_x = 0.5;
+                m.xy_y = 0.5;
+                *dirty = true;
+            } else if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    m.xy_x = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    m.xy_y = (1.0 - (pos.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+                    *dirty = true;
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            }
+            // Corner markers A, B, C, D
+            let lbl_col = Color32::from_rgb(0x6C, 0x74, 0x82);
+            p.text(pos2(rect.min.x + 3.0, rect.min.y + 1.5), Align2::LEFT_TOP, "A", fonts::semibold(6.5), lbl_col);
+            p.text(pos2(rect.max.x - 3.0, rect.min.y + 1.5), Align2::RIGHT_TOP, "B", fonts::semibold(6.5), lbl_col);
+            p.text(pos2(rect.min.x + 3.0, rect.max.y - 1.5), Align2::LEFT_BOTTOM, "C", fonts::semibold(6.5), lbl_col);
+            p.text(pos2(rect.max.x - 3.0, rect.max.y - 1.5), Align2::RIGHT_BOTTOM, "D", fonts::semibold(6.5), lbl_col);
+            let pad = 3.0;
+            let px = rect.min.x + pad + m.xy_x * (rect.width() - pad * 2.0).max(1.0);
+            let py = rect.min.y + pad + (1.0 - m.xy_y) * (rect.height() - pad * 2.0).max(1.0);
+            let puck = pos2(px, py);
+            p.circle_filled(puck, 3.0, if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED });
+            p.circle_stroke(puck, 3.0, Stroke::new(0.9_f32, Color32::WHITE));
+        }
+        ModulatorKind::Vector8 => {
+            let z_w = 8.0;
+            let pad_r = Rect::from_min_max(rect.min, pos2(rect.max.x - z_w - 2.0, rect.max.y));
+            let z_r = Rect::from_min_max(pos2(rect.max.x - z_w, rect.min.y), rect.max);
+
+            p.rect_filled(pad_r, 2.0, CELL_WELL_BG);
+            p.rect_stroke(pad_r, 2.0, Stroke::new(0.8_f32, CELL_BORDER), egui::StrokeKind::Inside);
+            let xy_resp = ui
+                .interact(
+                    pad_r,
+                    ui.id().with(("bay_vec8_xy", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Vector-8 XY (X:{:.0}% Y:{:.0}% Z:{:.0}%) — Double-click to center",
+                    m.xy_x * 100.0,
+                    m.xy_y * 100.0,
+                    m.vec8_z * 100.0
+                ));
+            if xy_resp.double_clicked() {
+                m.xy_x = 0.5;
+                m.xy_y = 0.5;
+                m.vec8_z = 0.5;
+                *dirty = true;
+            } else if xy_resp.dragged() || xy_resp.clicked() {
+                if let Some(pos) = xy_resp.interact_pointer_pos() {
+                    m.xy_x = ((pos.x - pad_r.min.x) / pad_r.width().max(1.0)).clamp(0.0, 1.0);
+                    m.xy_y = (1.0 - (pos.y - pad_r.min.y) / pad_r.height().max(1.0)).clamp(0.0, 1.0);
+                    *dirty = true;
+                }
+            }
+            let p_pad = 2.5;
+            let px = pad_r.min.x + p_pad + m.xy_x * (pad_r.width() - p_pad * 2.0).max(1.0);
+            let py = pad_r.min.y + p_pad + (1.0 - m.xy_y) * (pad_r.height() - p_pad * 2.0).max(1.0);
+            p.circle_filled(pos2(px, py), 2.8, if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED });
+            p.circle_stroke(pos2(px, py), 2.8, Stroke::new(0.8_f32, Color32::WHITE));
+
+            // Vertical Z depth bar
+            p.rect_filled(z_r, 1.5, CELL_WELL_BG);
+            let z_resp = ui
+                .interact(
+                    z_r,
+                    ui.id().with(("bay_vec8_z", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!("Vector-8 Z Depth: {:.0}%", m.vec8_z * 100.0));
+            if z_resp.dragged() || z_resp.clicked() {
+                if let Some(pos) = z_resp.interact_pointer_pos() {
+                    m.vec8_z = (1.0 - (pos.y - z_r.min.y) / z_r.height().max(1.0)).clamp(0.0, 1.0);
+                    *dirty = true;
+                }
+            }
+            let zh = m.vec8_z.clamp(0.0, 1.0) * z_r.height();
+            p.rect_filled(
+                Rect::from_min_max(pos2(z_r.min.x + 1.0, z_r.max.y - zh), pos2(z_r.max.x - 1.0, z_r.max.y)),
+                1.0,
+                if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED },
+            );
+        }
     }
 }
 
@@ -1576,6 +1999,277 @@ fn render_modulator_inspector(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &m
                     .font(fonts::regular(9.0))
                     .color(MOD_ARROW_CYAN),
             );
+        }
+        ModulatorKind::Random => {
+            render_clock_mode_controls(ui, m, dirty);
+            if ui
+                .add(egui::Slider::new(&mut m.rand_smooth, 0.0..=1.0).text("Smooth"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.lfo_depth, 0.0..=1.0).text("Depth"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui.checkbox(&mut m.lfo_bipolar, "Bipolar (±)").changed() {
+                *dirty = true;
+            }
+        }
+        ModulatorKind::SampleAndHold => {
+            ui.horizontal(|ui| {
+                for (i, label) in ["Noise", "Sine", "Tri", "Saw"].iter().enumerate() {
+                    if ui.selectable_label(m.sh_source == i as u8, *label).clicked() {
+                        m.sh_source = i as u8;
+                        *dirty = true;
+                    }
+                }
+            });
+            ui.separator();
+            render_clock_mode_controls(ui, m, dirty);
+            if ui
+                .add(egui::Slider::new(&mut m.sh_slew, 0.0..=1.0).text("Slew"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.lfo_depth, 0.0..=1.0).text("Depth"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui.checkbox(&mut m.lfo_bipolar, "Bipolar (±)").changed() {
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Steps => {
+            render_clock_mode_controls(ui, m, dirty);
+            if ui
+                .add(egui::Slider::new(&mut m.steps_len, 2..=16).text("Steps"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.steps_smooth, 0.0..=1.0).text("Smooth"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui.checkbox(&mut m.steps_bipolar, "Bipolar (±)").changed() {
+                *dirty = true;
+            }
+        }
+        ModulatorKind::ParSeq8 => {
+            render_clock_mode_controls(ui, m, dirty);
+            if ui
+                .add(egui::Slider::new(&mut m.parseq_len, 2..=8).text("Length"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.parseq_smooth, 0.0..=1.0).text("Crossfade"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.separator();
+            for i in 0..8 {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut m.parseq_steps[i], 0.0..=1.0)
+                            .text(format!("Out {}", i + 1)),
+                    )
+                    .changed()
+                {
+                    *dirty = true;
+                }
+            }
+        }
+        ModulatorKind::Curves => {
+            render_clock_mode_controls(ui, m, dirty);
+            if ui
+                .add(egui::Slider::new(&mut m.lfo_depth, 0.0..=1.0).text("Depth"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut m.curves_smooth, "Smooth").changed() {
+                    *dirty = true;
+                }
+                if ui.checkbox(&mut m.curves_bipolar, "Bipolar (±)").changed() {
+                    *dirty = true;
+                }
+            });
+        }
+        ModulatorKind::Ramp => {
+            if ui
+                .add(
+                    egui::Slider::new(&mut m.ramp_time_secs, 0.05..=16.0)
+                        .logarithmic(true)
+                        .suffix(" s")
+                        .text("Time"),
+                )
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.ramp_curve, -1.0..=1.0).text("Curve"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut m.ramp_loop, "Loop").changed() {
+                    *dirty = true;
+                }
+                if ui.checkbox(&mut m.ramp_down, "Invert").changed() {
+                    *dirty = true;
+                }
+                if ui.checkbox(&mut m.ramp_bipolar, "±").changed() {
+                    *dirty = true;
+                }
+            });
+            if ui.button("Retrigger Ramp").clicked() {
+                m.ramp_start_time = clock_time_secs();
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Segments => {
+            if ui
+                .add(
+                    egui::Slider::new(&mut m.seg_time_secs, 0.05..=16.0)
+                        .logarithmic(true)
+                        .suffix(" s")
+                        .text("Duration"),
+                )
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.seg_curve, -1.0..=1.0).text("Curve"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut m.seg_loop, "Loop").changed() {
+                    *dirty = true;
+                }
+                if ui.checkbox(&mut m.seg_bipolar, "Bipolar (±)").changed() {
+                    *dirty = true;
+                }
+                if ui.button("Trigger").clicked() {
+                    m.seg_start_time = clock_time_secs();
+                    *dirty = true;
+                }
+            });
+            ui.separator();
+            for i in 0..6 {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut m.seg_levels[i], 0.0..=1.0)
+                            .text(format!("Pt {}", i + 1)),
+                    )
+                    .changed()
+                {
+                    *dirty = true;
+                }
+            }
+        }
+        ModulatorKind::Vector4 => {
+            if ui.add(egui::Slider::new(&mut m.xy_x, 0.0..=1.0).text("X")).changed() {
+                *dirty = true;
+            }
+            if ui.add(egui::Slider::new(&mut m.xy_y, 0.0..=1.0).text("Y")).changed() {
+                *dirty = true;
+            }
+            if ui.button("Center").clicked() {
+                m.xy_x = 0.5;
+                m.xy_y = 0.5;
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Vector8 => {
+            if ui.add(egui::Slider::new(&mut m.xy_x, 0.0..=1.0).text("X")).changed() {
+                *dirty = true;
+            }
+            if ui.add(egui::Slider::new(&mut m.xy_y, 0.0..=1.0).text("Y")).changed() {
+                *dirty = true;
+            }
+            if ui.add(egui::Slider::new(&mut m.vec8_z, 0.0..=1.0).text("Z")).changed() {
+                *dirty = true;
+            }
+            if ui.button("Center Cube").clicked() {
+                m.xy_x = 0.5;
+                m.xy_y = 0.5;
+                m.vec8_z = 0.5;
+                *dirty = true;
+            }
+        }
+    }
+}
+
+fn render_clock_mode_controls(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &mut bool) {
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(m.lfo_sync_mode == LfoSyncMode::FreeHz, "Hz")
+            .clicked()
+        {
+            m.lfo_sync_mode = LfoSyncMode::FreeHz;
+            *dirty = true;
+        }
+        if ui
+            .selectable_label(m.lfo_sync_mode == LfoSyncMode::TempoSync, "Sync")
+            .clicked()
+        {
+            m.lfo_sync_mode = LfoSyncMode::TempoSync;
+            *dirty = true;
+        }
+    });
+    match m.lfo_sync_mode {
+        LfoSyncMode::FreeHz => {
+            if ui
+                .add(
+                    egui::Slider::new(&mut m.lfo_rate_hz, 0.05..=25.0)
+                        .logarithmic(true)
+                        .suffix(" Hz")
+                        .text("Rate"),
+                )
+                .changed()
+            {
+                *dirty = true;
+            }
+        }
+        LfoSyncMode::TempoSync => {
+            let mut idx = SyncRate::ALL
+                .iter()
+                .position(|&r| r == m.lfo_sync_rate)
+                .unwrap_or(4);
+            if ui
+                .add(
+                    egui::Slider::new(&mut idx, 0..=SyncRate::ALL.len() - 1)
+                        .custom_formatter(|v, _| {
+                            SyncRate::ALL
+                                .get(v.round() as usize)
+                                .map(|r| r.label())
+                                .unwrap_or("1/4")
+                                .to_string()
+                        })
+                        .text("Rate"),
+                )
+                .changed()
+            {
+                m.lfo_sync_rate = SyncRate::ALL[idx];
+                *dirty = true;
+            }
         }
     }
 }

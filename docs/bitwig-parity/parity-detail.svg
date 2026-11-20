@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="5414.0" viewBox="0 0 1400 5414.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.1.7: every tracked feature by area, 267 of 616 done">
-<title>Hikaru OpenLive vs Bitwig Studio 5.1.7: every tracked feature by area, 267 of 616 done</title>
-<desc>Feature-by-feature parity of Hikaru OpenLive against Bitwig Studio 5.1.7: 267 done, 17 in progress, 332 planned, 1 open bug(s).</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="5414.0" viewBox="0 0 1400 5414.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.1.7: every tracked feature by area, 276 of 616 done">
+<title>Hikaru OpenLive vs Bitwig Studio 5.1.7: every tracked feature by area, 276 of 616 done</title>
+<desc>Feature-by-feature parity of Hikaru OpenLive against Bitwig Studio 5.1.7: 276 done, 17 in progress, 323 planned, 1 open bug(s).</desc>
 <rect width="1400" height="5414.0" fill="#0d1117"/>
 <text x="32" y="48" font-size="25" font-weight="700" fill="#F1EFE8">Hikaru OpenLive vs Bitwig Studio 5.1.7</text>
 <text x="32" y="72" font-size="12.5" fill="#B4B2A9">Paridad funcional sobre un catálogo de 616 features · revisión 143754 · auditoría 2026-11-17 · workspace 2.24.0</text>
@@ -10,20 +10,20 @@
 <text x="1217.1" y="47" font-size="12" fill="#B4B2A9">En progreso</text>
 <rect x="1134.0" y="38" width="9" height="9" rx="2" fill="#1D9E75"/>
 <text x="1150.0" y="47" font-size="12" fill="#B4B2A9">Hecho</text>
-<text x="32" y="138" font-size="52" font-weight="700" fill="#F1EFE8">43 %</text>
-<text x="32" y="160" font-size="12" fill="#B4B2A9">267 de 616 features implementadas</text>
-<text x="242.0" y="118" font-size="28" font-weight="700" fill="#1D9E75">267</text>
+<text x="32" y="138" font-size="52" font-weight="700" fill="#F1EFE8">45 %</text>
+<text x="32" y="160" font-size="12" fill="#B4B2A9">276 de 616 features implementadas</text>
+<text x="242.0" y="118" font-size="28" font-weight="700" fill="#1D9E75">276</text>
 <text x="242.0" y="138" font-size="11.5" fill="#B4B2A9">Hecho</text>
 <text x="392.0" y="118" font-size="28" font-weight="700" fill="#EF9F27">17</text>
 <text x="392.0" y="138" font-size="11.5" fill="#B4B2A9">En progreso</text>
-<text x="542.0" y="118" font-size="28" font-weight="700" fill="#5F5E5A">332</text>
+<text x="542.0" y="118" font-size="28" font-weight="700" fill="#5F5E5A">323</text>
 <text x="542.0" y="138" font-size="11.5" fill="#B4B2A9">Pendiente</text>
 <text x="692.0" y="118" font-size="28" font-weight="700" fill="#E24B4A">1</text>
 <text x="692.0" y="138" font-size="11.5" fill="#B4B2A9">bug abierto</text>
 <rect x="32" y="180.0" width="1336" height="12.0" rx="6" fill="#2C2C2A"/>
-<rect x="32.0" y="180.0" width="579.1" height="12.0" fill="#1D9E75"/>
-<rect x="611.1" y="180.0" width="36.9" height="12.0" fill="#EF9F27"/>
-<text x="32" y="210.0" font-size="12" fill="#B4B2A9">139 de 161 features del catálogo de Bitwig (118 devices + 43 modulators) siguen pendientes.</text>
+<rect x="32.0" y="180.0" width="598.6" height="12.0" fill="#1D9E75"/>
+<rect x="630.6" y="180.0" width="36.9" height="12.0" fill="#EF9F27"/>
+<text x="32" y="210.0" font-size="12" fill="#B4B2A9">130 de 161 features del catálogo de Bitwig (118 devices + 43 modulators) siguen pendientes.</text>
 <text x="1368" y="210.0" font-size="12" text-anchor="end" fill="#B4B2A9">Verde = implementado · Naranja = en progreso · Gris = pendiente</text>
 <text x="32" y="250.0" font-size="11" letter-spacing="1.4" fill="#B4B2A9">RESUMEN POR ÁREA</text>
 <text x="32.0" y="275.0" font-size="12" fill="#F1EFE8">Clip Launcher</text>
@@ -52,8 +52,8 @@
 <text x="686.0" y="395.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">9/118 · 8 %</text>
 <text x="32.0" y="419.0" font-size="12" fill="#F1EFE8">Modulators</text>
 <rect x="372.1" y="413.0" width="196.2" height="5" rx="2.5" fill="#2C2C2A"/>
-<rect x="372.1" y="413.0" width="59.3" height="5" rx="2.5" fill="#1D9E75"/>
-<text x="686.0" y="419.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">13/43 · 30 %</text>
+<rect x="372.1" y="413.0" width="100.4" height="5" rx="2.5" fill="#1D9E75"/>
+<text x="686.0" y="419.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">22/43 · 51 %</text>
 <text x="714.0" y="275.0" font-size="12" fill="#F1EFE8">Grid Devices</text>
 <rect x="1054.1" y="269.0" width="196.2" height="5" rx="2.5" fill="#2C2C2A"/>
 <rect x="1054.1" y="269.0" width="87.3" height="5" rx="2.5" fill="#1D9E75"/>
@@ -369,54 +369,54 @@
 <g><title>XY FX (dv-117)</title><rect x="482.0" y="2458.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2467.0" font-size="12.5" fill="#B4B2A9">XY FX</text></g>
 <g><title>XY Instrument (dv-118)</title><rect x="707.0" y="2458.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2467.0" font-size="12.5" fill="#B4B2A9">XY Instrument</text></g>
 <text x="32" y="2518.0" font-size="15" font-weight="600" fill="#F1EFE8">Modulators</text>
-<text x="1368" y="2518.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">13 de 43 · 30 %</text>
+<text x="1368" y="2518.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">22 de 43 · 51 %</text>
 <rect x="32" y="2527.0" width="1336" height="4" rx="2" fill="#2C2C2A"/>
-<rect x="32.0" y="2527.0" width="403.9" height="4" fill="#1D9E75"/>
-<text x="32" y="2554.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#1D9E75" fill-opacity="0.9">HECHO · 13</text>
-<text x="32" y="2648.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#5F5E5A" fill-opacity="0.9">PENDIENTE · 30</text>
+<rect x="32.0" y="2527.0" width="683.5" height="4" fill="#1D9E75"/>
+<text x="32" y="2554.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#1D9E75" fill-opacity="0.9">HECHO · 22</text>
+<text x="32" y="2674.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#5F5E5A" fill-opacity="0.9">PENDIENTE · 21</text>
 <g><title>Beat LFO (md-007)</title><rect x="32.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2567.0" font-size="12.5" fill="#F1EFE8">Beat LFO</text></g>
 <g><title>Button (md-008) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs</title><rect x="257.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2567.0" font-size="12.5" fill="#F1EFE8">Button</text></g>
 <g><title>Buttons (md-009)</title><rect x="482.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2567.0" font-size="12.5" fill="#F1EFE8">Buttons</text></g>
 <g><title>Classic LFO (md-011) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs</title><rect x="707.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2567.0" font-size="12.5" fill="#F1EFE8">Classic LFO</text></g>
-<g><title>LFO (md-018) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs</title><rect x="932.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2567.0" font-size="12.5" fill="#F1EFE8">LFO</text></g>
-<g><title>Macro (md-020) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs</title><rect x="1157.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2567.0" font-size="12.5" fill="#F1EFE8">Macro</text></g>
-<g><title>Macro-4 (md-021)</title><rect x="32.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Macro-4</text></g>
-<g><title>Math (md-022)</title><rect x="257.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Math</text></g>
-<g><title>Mix (md-023)</title><rect x="482.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Mix</text></g>
-<g><title>Polynom (md-028)</title><rect x="707.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Polynom</text></g>
-<g><title>Quantize (md-029)</title><rect x="932.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Quantize</text></g>
-<g><title>Select-4 (md-035)</title><rect x="1157.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Select-4</text></g>
-<g><title>XY (md-043)</title><rect x="32.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2619.0" font-size="12.5" fill="#F1EFE8">XY</text></g>
-<g><title>4-Stage (md-001)</title><rect x="32.0" y="2652.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2661.0" font-size="12.5" fill="#B4B2A9">4-Stage</text></g>
-<g><title>ADSR (md-002)</title><rect x="257.0" y="2652.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2661.0" font-size="12.5" fill="#B4B2A9">ADSR</text></g>
-<g><title>AHD on Release (md-003)</title><rect x="482.0" y="2652.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2661.0" font-size="12.5" fill="#B4B2A9">AHD on Release</text></g>
-<g><title>AHDSR (md-004)</title><rect x="707.0" y="2652.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2661.0" font-size="12.5" fill="#B4B2A9">AHDSR</text></g>
-<g><title>Audio Rate (md-005)</title><rect x="932.0" y="2652.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2661.0" font-size="12.5" fill="#B4B2A9">Audio Rate</text></g>
-<g><title>Audio Sidechain (md-006)</title><rect x="1157.0" y="2652.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2661.0" font-size="12.5" fill="#B4B2A9">Audio Sidechain</text></g>
-<g><title>Channel-16 (md-010)</title><rect x="32.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Channel-16</text></g>
-<g><title>Curves (md-012)</title><rect x="257.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Curves</text></g>
-<g><title>Envelope Follower (md-013)</title><rect x="482.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Envelope Follower</text></g>
-<g><title>Expressions (md-014)</title><rect x="707.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Expressions</text></g>
-<g><title>Globals (md-015)</title><rect x="932.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Globals</text></g>
-<g><title>HW CV In (md-016)</title><rect x="1157.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2687.0" font-size="12.5" fill="#B4B2A9">HW CV In</text></g>
-<g><title>Keytrack+ (md-017)</title><rect x="32.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Keytrack+</text></g>
-<g><title>MIDI (md-019)</title><rect x="257.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2713.0" font-size="12.5" fill="#B4B2A9">MIDI</text></g>
-<g><title>Note Counter (md-024)</title><rect x="482.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Note Counter</text></g>
-<g><title>Note Sidechain (md-025)</title><rect x="707.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Note Sidechain</text></g>
-<g><title>ParSeq-8 (md-026)</title><rect x="932.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2713.0" font-size="12.5" fill="#B4B2A9">ParSeq-8</text></g>
-<g><title>Pitch-12 (md-027)</title><rect x="1157.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Pitch-12</text></g>
-<g><title>Ramp (md-030)</title><rect x="32.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Ramp</text></g>
-<g><title>Random (md-031)</title><rect x="257.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Random</text></g>
-<g><title>Relative Keytrack (md-032)</title><rect x="482.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Relative Keytrack</text></g>
-<g><title>Sample and Hold (md-033)</title><rect x="707.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Sample and Hold</text></g>
-<g><title>Segments (md-034)</title><rect x="932.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Segments</text></g>
+<g><title>Curves (md-012)</title><rect x="932.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2567.0" font-size="12.5" fill="#F1EFE8">Curves</text></g>
+<g><title>LFO (md-018) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs</title><rect x="1157.0" y="2558.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2567.0" font-size="12.5" fill="#F1EFE8">LFO</text></g>
+<g><title>Macro (md-020) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs</title><rect x="32.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Macro</text></g>
+<g><title>Macro-4 (md-021)</title><rect x="257.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Macro-4</text></g>
+<g><title>Math (md-022)</title><rect x="482.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Math</text></g>
+<g><title>Mix (md-023)</title><rect x="707.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Mix</text></g>
+<g><title>ParSeq-8 (md-026)</title><rect x="932.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2593.0" font-size="12.5" fill="#F1EFE8">ParSeq-8</text></g>
+<g><title>Polynom (md-028)</title><rect x="1157.0" y="2584.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2593.0" font-size="12.5" fill="#F1EFE8">Polynom</text></g>
+<g><title>Quantize (md-029)</title><rect x="32.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2619.0" font-size="12.5" fill="#F1EFE8">Quantize</text></g>
+<g><title>Ramp (md-030)</title><rect x="257.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2619.0" font-size="12.5" fill="#F1EFE8">Ramp</text></g>
+<g><title>Random (md-031)</title><rect x="482.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2619.0" font-size="12.5" fill="#F1EFE8">Random</text></g>
+<g><title>Sample and Hold (md-033)</title><rect x="707.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2619.0" font-size="12.5" fill="#F1EFE8">Sample and Hold</text></g>
+<g><title>Segments (md-034)</title><rect x="932.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2619.0" font-size="12.5" fill="#F1EFE8">Segments</text></g>
+<g><title>Select-4 (md-035)</title><rect x="1157.0" y="2610.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2619.0" font-size="12.5" fill="#F1EFE8">Select-4</text></g>
+<g><title>Steps (md-037)</title><rect x="32.0" y="2636.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2645.0" font-size="12.5" fill="#F1EFE8">Steps</text></g>
+<g><title>Vector-4 (md-038)</title><rect x="257.0" y="2636.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2645.0" font-size="12.5" fill="#F1EFE8">Vector-4</text></g>
+<g><title>Vector-8 (md-039)</title><rect x="482.0" y="2636.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2645.0" font-size="12.5" fill="#F1EFE8">Vector-8</text></g>
+<g><title>XY (md-043)</title><rect x="707.0" y="2636.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2645.0" font-size="12.5" fill="#F1EFE8">XY</text></g>
+<g><title>4-Stage (md-001)</title><rect x="32.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2687.0" font-size="12.5" fill="#B4B2A9">4-Stage</text></g>
+<g><title>ADSR (md-002)</title><rect x="257.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2687.0" font-size="12.5" fill="#B4B2A9">ADSR</text></g>
+<g><title>AHD on Release (md-003)</title><rect x="482.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2687.0" font-size="12.5" fill="#B4B2A9">AHD on Release</text></g>
+<g><title>AHDSR (md-004)</title><rect x="707.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2687.0" font-size="12.5" fill="#B4B2A9">AHDSR</text></g>
+<g><title>Audio Rate (md-005)</title><rect x="932.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Audio Rate</text></g>
+<g><title>Audio Sidechain (md-006)</title><rect x="1157.0" y="2678.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2687.0" font-size="12.5" fill="#B4B2A9">Audio Sidechain</text></g>
+<g><title>Channel-16 (md-010)</title><rect x="32.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Channel-16</text></g>
+<g><title>Envelope Follower (md-013)</title><rect x="257.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Envelope Follower</text></g>
+<g><title>Expressions (md-014)</title><rect x="482.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Expressions</text></g>
+<g><title>Globals (md-015)</title><rect x="707.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Globals</text></g>
+<g><title>HW CV In (md-016)</title><rect x="932.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2713.0" font-size="12.5" fill="#B4B2A9">HW CV In</text></g>
+<g><title>Keytrack+ (md-017)</title><rect x="1157.0" y="2704.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2713.0" font-size="12.5" fill="#B4B2A9">Keytrack+</text></g>
+<g><title>MIDI (md-019)</title><rect x="32.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2739.0" font-size="12.5" fill="#B4B2A9">MIDI</text></g>
+<g><title>Note Counter (md-024)</title><rect x="257.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Note Counter</text></g>
+<g><title>Note Sidechain (md-025)</title><rect x="482.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Note Sidechain</text></g>
+<g><title>Pitch-12 (md-027)</title><rect x="707.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Pitch-12</text></g>
+<g><title>Relative Keytrack (md-032)</title><rect x="932.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Relative Keytrack</text></g>
 <g><title>Stack Spread (md-036)</title><rect x="1157.0" y="2730.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2739.0" font-size="12.5" fill="#B4B2A9">Stack Spread</text></g>
-<g><title>Steps (md-037)</title><rect x="32.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Steps</text></g>
-<g><title>Vector-4 (md-038)</title><rect x="257.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Vector-4</text></g>
-<g><title>Vector-8 (md-039)</title><rect x="482.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Vector-8</text></g>
-<g><title>Vibrato (md-040)</title><rect x="707.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Vibrato</text></g>
-<g><title>Voice Control (md-041)</title><rect x="932.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Voice Control</text></g>
-<g><title>Wavetable LFO (md-042)</title><rect x="1157.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Wavetable LFO</text></g>
+<g><title>Vibrato (md-040)</title><rect x="32.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Vibrato</text></g>
+<g><title>Voice Control (md-041)</title><rect x="257.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Voice Control</text></g>
+<g><title>Wavetable LFO (md-042)</title><rect x="482.0" y="2756.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2765.0" font-size="12.5" fill="#B4B2A9">Wavetable LFO</text></g>
 <text x="32" y="2816.0" font-size="15" font-weight="600" fill="#F1EFE8">Grid Devices</text>
 <text x="1368" y="2816.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">97 de 218 · 44 %</text>
 <rect x="32" y="2825.0" width="1336" height="4" rx="2" fill="#2C2C2A"/>
@@ -802,5 +802,5 @@
 <g><title>Sandboxed plugin hosting (bp-16)</title><rect x="842.0" y="5320.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="858.0" y="5329.0" font-size="12.5" fill="#B4B2A9">Sandboxed plugin hosting</text></g>
 <line x1="32" y1="5370.0" x2="1368" y2="5370.0" stroke="#5F5E5A" stroke-opacity="0.35" stroke-width="1"/>
 <text x="32" y="5392.0" font-size="11" fill="#B4B2A9">Fuente: docs/bitwig-parity/features_bitwig.json · generado por generate_status.py · auditoría 2026-11-17 · referencia Bitwig Studio 5.1.7 (rev 143754)</text>
-<text x="1368" y="5392.0" font-size="11" text-anchor="end" fill="#B4B2A9">267 hechas · 17 en progreso · 332 pendientes</text>
+<text x="1368" y="5392.0" font-size="11" text-anchor="end" fill="#B4B2A9">276 hechas · 17 en progreso · 323 pendientes</text>
 </svg>

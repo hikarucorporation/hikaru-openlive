@@ -311,7 +311,7 @@ mod tests {
         btns.buttons_on = [true, false, true, false];
         btns.buttons_momentary = [false, true, false, true];
         let b_outs = btns.evaluate(&transport, 0.0);
-        assert_eq!(b_outs, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(&b_outs[..4], &[1.0, 0.0, 1.0, 0.0]);
 
         // XY: 2 independent outputs (X=0, Y=1)
         let xy = bay.slots.iter_mut().find(|s| s.id == xy_id).unwrap();
@@ -430,5 +430,110 @@ mod tests {
 
         let r_poly = restored.slots.iter().find(|s| s.kind == ModulatorKind::Polynom).unwrap();
         assert!((r_poly.poly_c2 - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_block2_modulators_clock_random_sequencers_vectors() {
+        use hikaru_dsp::effects::lfo::LfoSyncMode;
+
+        let mut bay = DeviceModulatorBay::empty();
+        let rand_id = bay.add_modulator(ModulatorKind::Random);
+        let sh_id = bay.add_modulator(ModulatorKind::SampleAndHold);
+        let steps_id = bay.add_modulator(ModulatorKind::Steps);
+        let parseq_id = bay.add_modulator(ModulatorKind::ParSeq8);
+        let curves_id = bay.add_modulator(ModulatorKind::Curves);
+        let ramp_id = bay.add_modulator(ModulatorKind::Ramp);
+        let segs_id = bay.add_modulator(ModulatorKind::Segments);
+        let vec4_id = bay.add_modulator(ModulatorKind::Vector4);
+        let vec8_id = bay.add_modulator(ModulatorKind::Vector8);
+        let transport = LfoTransportState::default();
+
+        // 1. Random & SampleAndHold produce bounded outputs
+        let r = bay.slots.iter_mut().find(|s| s.id == rand_id).unwrap();
+        let rv = r.evaluate(&transport, 1.25)[0];
+        assert!((-1.0..=1.0).contains(&rv));
+
+        let sh = bay.slots.iter_mut().find(|s| s.id == sh_id).unwrap();
+        sh.sh_source = 1; // Sine
+        let shv = sh.evaluate(&transport, 1.25)[0];
+        assert!((-1.0..=1.0).contains(&shv));
+
+        // 2. Steps: FreeHz 1 Hz at t=2.1s => step index 2
+        let st = bay.slots.iter_mut().find(|s| s.id == steps_id).unwrap();
+        st.lfo_sync_mode = LfoSyncMode::FreeHz;
+        st.lfo_rate_hz = 1.0;
+        st.steps_len = 4;
+        st.steps_smooth = 0.0;
+        st.steps_values[2] = 0.77;
+        let stv = st.evaluate(&transport, 2.1)[0];
+        assert!((stv - 0.77).abs() < 1e-4, "Steps idx 2 expected 0.77, got {stv}");
+
+        // 3. ParSeq-8: FreeHz 1 Hz at t=5.1s => out_idx 5 active, others 0
+        let ps = bay.slots.iter_mut().find(|s| s.id == parseq_id).unwrap();
+        ps.lfo_sync_mode = LfoSyncMode::FreeHz;
+        ps.lfo_rate_hz = 1.0;
+        ps.parseq_len = 8;
+        ps.parseq_smooth = 0.0;
+        ps.parseq_steps[5] = 0.88;
+        let ps_outs = ps.evaluate(&transport, 5.1);
+        assert!((ps_outs[5] - 0.88).abs() < 1e-4);
+        assert!(ps_outs[0].abs() < 1e-4);
+
+        // 4. Curves: 8 nodes, linear mode at phase=0.0 => node 0
+        let crv = bay.slots.iter_mut().find(|s| s.id == curves_id).unwrap();
+        crv.lfo_sync_mode = LfoSyncMode::FreeHz;
+        crv.lfo_rate_hz = 1.0;
+        crv.curves_smooth = false;
+        crv.curves_nodes[0] = 0.42;
+        let cv = crv.evaluate(&transport, 0.0)[0];
+        assert!((cv - 0.42).abs() < 1e-4);
+
+        // 5. Ramp: 2s linear ramp at t=1.0s => 0.5
+        let rmp = bay.slots.iter_mut().find(|s| s.id == ramp_id).unwrap();
+        rmp.ramp_time_secs = 2.0;
+        rmp.ramp_curve = 0.0;
+        rmp.ramp_loop = false;
+        rmp.ramp_down = false;
+        rmp.ramp_start_time = 0.0;
+        assert!((rmp.evaluate(&transport, 1.0)[0] - 0.5).abs() < 1e-4);
+        assert!((rmp.evaluate(&transport, 3.0)[0] - 1.0).abs() < 1e-4);
+
+        // 6. Segments: 2s linear MSEG, at t=0.4s (pos=1.0) => seg_levels[1]
+        let sg = bay.slots.iter_mut().find(|s| s.id == segs_id).unwrap();
+        sg.seg_time_secs = 2.0;
+        sg.seg_curve = 0.0;
+        sg.seg_loop = false;
+        sg.seg_levels = [0.0, 0.9, 0.5, 0.7, 0.2, 0.0];
+        assert!((sg.evaluate(&transport, 0.4)[0] - 0.9).abs() < 1e-4);
+
+        // 7. Vector-4: bilinear corner weights sum to 1.0
+        let v4 = bay.slots.iter_mut().find(|s| s.id == vec4_id).unwrap();
+        v4.xy_x = 0.25;
+        v4.xy_y = 0.75;
+        let v4_outs = v4.evaluate(&transport, 0.0);
+        let sum4: f32 = v4_outs[..4].iter().sum();
+        assert!((sum4 - 1.0).abs() < 1e-4);
+        assert!((v4_outs[0] - 0.5625).abs() < 1e-4); // (1-0.25)*0.75
+
+        // 8. Vector-8: trilinear cube weights sum to 1.0 across all 8 outputs
+        let v8 = bay.slots.iter_mut().find(|s| s.id == vec8_id).unwrap();
+        v8.xy_x = 0.5;
+        v8.xy_y = 0.5;
+        v8.vec8_z = 0.25;
+        let v8_outs = v8.evaluate(&transport, 0.0);
+        let sum8: f32 = v8_outs.iter().sum();
+        assert!((sum8 - 1.0).abs() < 1e-4);
+        assert!((v8_outs[0] - 0.1875).abs() < 1e-4); // 0.25 * 0.75
+        assert!((v8_outs[4] - 0.0625).abs() < 1e-4); // 0.25 * 0.25
+
+        // Persistence roundtrip for all 9
+        let saved = bay.to_project_params(true);
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved);
+        assert_eq!(restored.slots.len(), 9);
+        let r_v8 = restored.slots.iter().find(|s| s.kind == ModulatorKind::Vector8).unwrap();
+        assert!((r_v8.vec8_z - 0.25).abs() < 1e-4);
+        let r_ps = restored.slots.iter().find(|s| s.kind == ModulatorKind::ParSeq8).unwrap();
+        assert!((r_ps.parseq_steps[5] - 0.88).abs() < 1e-4);
     }
 }

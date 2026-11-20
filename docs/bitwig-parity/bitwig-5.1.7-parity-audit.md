@@ -139,16 +139,16 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Group Tracks & Routing | 22 | 14 | 2 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
 | Built-in Devices & FX | 118 | 9 | 3 | 106 | 0 |
-| Modulators | 43 | 13 | 0 | 30 | 0 |
+| Modulators | 43 | 22 | 0 | 21 | 0 |
 | Grid Devices | 218 | 97 | 0 | 121 | 0 |
 | Mixer & I/O | 27 | 18 | 1 | 8 | 0 |
 | Browser & Files | 24 | 15 | 2 | 7 | 0 |
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
 | Build & Platform | 16 | 10 | 2 | 4 | 1 |
-| **Total** | **616** | **267** | **17** | **332** | **1** |
+| **Total** | **616** | **276** | **17** | **323** | **1** |
 
-Paridad global: **267 / 616 = 43 %**.
+Paridad global: **276 / 616 = 45 %**.
 
 ### Bugs abiertos
 

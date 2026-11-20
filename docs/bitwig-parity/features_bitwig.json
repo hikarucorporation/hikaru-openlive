@@ -37,11 +37,11 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 267,
+    "done": 276,
     "in_progress": 17,
-    "planned": 332,
+    "planned": 323,
     "bugs": 1,
-    "parity_percent": 43
+    "parity_percent": 45
   },
   "areas": [
     {
@@ -1452,7 +1452,7 @@
         {
           "id": "md-012",
           "name": "Curves",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-013",
@@ -1524,7 +1524,7 @@
         {
           "id": "md-026",
           "name": "ParSeq-8",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-027",
@@ -1544,12 +1544,12 @@
         {
           "id": "md-030",
           "name": "Ramp",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-031",
           "name": "Random",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-032",
@@ -1559,12 +1559,12 @@
         {
           "id": "md-033",
           "name": "Sample and Hold",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-034",
           "name": "Segments",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-035",
@@ -1579,17 +1579,17 @@
         {
           "id": "md-037",
           "name": "Steps",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-038",
           "name": "Vector-4",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-039",
           "name": "Vector-8",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-040",

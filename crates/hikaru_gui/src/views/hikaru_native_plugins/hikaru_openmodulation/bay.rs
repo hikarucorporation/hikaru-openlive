@@ -125,16 +125,25 @@ impl MathOp {
 pub enum ModulatorKind {
     ClassicLfo,
     BeatLfo,
+    Random,
+    SampleAndHold,
     Macro,
     Macro4,
     Button,
     Buttons,
     Xy,
+    Vector4,
+    Vector8,
     Math,
     Mix,
     Quantize,
     Select4,
     Polynom,
+    Steps,
+    ParSeq8,
+    Curves,
+    Ramp,
+    Segments,
 }
 
 impl ModulatorKind {
@@ -150,16 +159,27 @@ impl ModulatorKind {
         match lower.as_str() {
             "classic lfo" | "classiclfo" | "lfo" => Some(Self::ClassicLfo),
             "beat lfo" | "beatlfo" => Some(Self::BeatLfo),
+            "random" => Some(Self::Random),
+            "sample and hold" | "sample & hold" | "s&h" | "sampleandhold" => {
+                Some(Self::SampleAndHold)
+            }
             "macro" => Some(Self::Macro),
             "macro-4" | "macro4" | "macro 4" => Some(Self::Macro4),
             "button" => Some(Self::Button),
             "buttons" | "buttons-4" | "buttons4" => Some(Self::Buttons),
             "xy" | "x-y" | "xy pad" => Some(Self::Xy),
+            "vector-4" | "vector4" | "vector 4" => Some(Self::Vector4),
+            "vector-8" | "vector8" | "vector 8" => Some(Self::Vector8),
             "math" => Some(Self::Math),
             "mix" => Some(Self::Mix),
             "quantize" => Some(Self::Quantize),
             "select-4" | "select4" | "select 4" => Some(Self::Select4),
             "polynom" | "polynomial" => Some(Self::Polynom),
+            "steps" => Some(Self::Steps),
+            "parseq-8" | "parseq8" | "parseq 8" => Some(Self::ParSeq8),
+            "curves" => Some(Self::Curves),
+            "ramp" => Some(Self::Ramp),
+            "segments" => Some(Self::Segments),
             _ => None,
         }
     }
@@ -191,6 +211,22 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         short_name: "BeatLFO",
         category: ModulatorCategory::Lfo,
         description: "Tempo-synced musical LFO locked to project beats/bars with phase skew, depth, and bipolar/unipolar output.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Random,
+        name: "Random",
+        short_name: "Random",
+        category: ModulatorCategory::Lfo,
+        description: "Stepped or smoothly interpolated random LFO with Free Hz / Tempo Sync, Smooth, Depth, and Bipolar/Unipolar output.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::SampleAndHold,
+        name: "Sample and Hold",
+        short_name: "S&H",
+        category: ModulatorCategory::Lfo,
+        description: "Clocked Sample & Hold modulator sampling Noise, Sine, Triangle, or Saw with optional slew smoothing.",
         outputs: &["OUT"],
     },
     ModulatorMeta {
@@ -234,6 +270,22 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         outputs: &["X", "Y"],
     },
     ModulatorMeta {
+        kind: ModulatorKind::Vector4,
+        name: "Vector-4",
+        short_name: "Vec-4",
+        category: ModulatorCategory::Interface,
+        description: "2D vector pad distributing bilinear weights across 4 independent corner outputs (A, B, C, D).",
+        outputs: &["A", "B", "C", "D"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Vector8,
+        name: "Vector-8",
+        short_name: "Vec-8",
+        category: ModulatorCategory::Interface,
+        description: "3D vector cube (X, Y, Z) distributing trilinear weights across 8 independent corner outputs.",
+        outputs: &["1", "2", "3", "4", "5", "6", "7", "8"],
+    },
+    ModulatorMeta {
         kind: ModulatorKind::Math,
         name: "Math",
         short_name: "Math",
@@ -271,6 +323,46 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         short_name: "Poly",
         category: ModulatorCategory::Modifier,
         description: "Cubic polynomial waveshaper (c0 + c1·x + c2·x² + c3·x³) for custom nonlinear modulation curves.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Steps,
+        name: "Steps",
+        short_name: "Steps",
+        category: ModulatorCategory::Sequence,
+        description: "Up to 16-step modulation sequencer with editable bars, Free Hz / Tempo Sync, smoothing, and bipolar mode.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::ParSeq8,
+        name: "ParSeq-8",
+        short_name: "ParSeq8",
+        category: ModulatorCategory::Sequence,
+        description: "8-step parallel sequencer with 8 independent per-step outputs firing sequentially on the clock.",
+        outputs: &["1", "2", "3", "4", "5", "6", "7", "8"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Curves,
+        name: "Curves",
+        short_name: "Curves",
+        category: ModulatorCategory::Sequence,
+        description: "Looping beat-synced 8-node curve modulator with smooth cosine or linear interpolation.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Ramp,
+        name: "Ramp",
+        short_name: "Ramp",
+        category: ModulatorCategory::Envelope,
+        description: "One-shot or looping curved ramp envelope with adjustable duration, curve tension, and up/down direction.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Segments,
+        name: "Segments",
+        short_name: "Segs",
+        category: ModulatorCategory::Envelope,
+        description: "Multi-segment breakpoint envelope (MSEG) with 6 editable nodes, curve tension, and loop/one-shot mode.",
         outputs: &["OUT"],
     },
 ];
@@ -355,25 +447,77 @@ pub struct ModulatorSlotState {
     pub poly_c2: f32,
     pub poly_c3: f32,
 
+    // Random & Sample-and-Hold
+    pub rand_smooth: f32,
+    pub sh_source: u8, // 0=Noise, 1=Sine, 2=Triangle, 3=Saw
+    pub sh_slew: f32,
+
+    // Steps (16-step sequencer)
+    pub steps_values: [f32; 16],
+    pub steps_len: u8,
+    pub steps_smooth: f32,
+    pub steps_bipolar: bool,
+    pub steps_last_idx: usize,
+
+    // ParSeq-8 (8-step parallel sequencer)
+    pub parseq_steps: [f32; 8],
+    pub parseq_len: u8,
+    pub parseq_smooth: f32,
+    pub parseq_last_step: usize,
+
+    // Curves (8-node looping curve)
+    pub curves_nodes: [f32; 8],
+    pub curves_smooth: bool,
+    pub curves_bipolar: bool,
+
+    // Ramp & Segments
+    pub ramp_time_secs: f32,
+    pub ramp_curve: f32,
+    pub ramp_loop: bool,
+    pub ramp_down: bool,
+    pub ramp_bipolar: bool,
+    pub ramp_start_time: f32,
+
+    pub seg_levels: [f32; 6],
+    pub seg_curve: f32,
+    pub seg_loop: bool,
+    pub seg_time_secs: f32,
+    pub seg_start_time: f32,
+    pub seg_bipolar: bool,
+
+    // Vector-8 Z axis (reuses xy_x, xy_y for X/Y)
+    pub vec8_z: f32,
+
     // Rutas de modulación
     pub routes: Vec<BayModRoute>,
-    pub last_outputs: [f32; 4],
+    pub last_outputs: [f32; 8],
 }
 
 impl ModulatorSlotState {
     pub fn new(id: u32, kind: ModulatorKind) -> Self {
+        let default_sync = matches!(
+            kind,
+            ModulatorKind::BeatLfo
+                | ModulatorKind::Steps
+                | ModulatorKind::ParSeq8
+                | ModulatorKind::Curves
+        );
         Self {
             id,
             kind,
             enabled: true,
             lfo_waveform: LfoWaveform::Sine,
-            lfo_sync_mode: if kind == ModulatorKind::BeatLfo {
+            lfo_sync_mode: if default_sync {
                 LfoSyncMode::TempoSync
             } else {
                 LfoSyncMode::FreeHz
             },
             lfo_rate_hz: 1.0,
-            lfo_sync_rate: SyncRate::Quarter,
+            lfo_sync_rate: if matches!(kind, ModulatorKind::Steps | ModulatorKind::ParSeq8) {
+                SyncRate::Eighth
+            } else {
+                SyncRate::Quarter
+            },
             lfo_phase_deg: 0.0,
             lfo_depth: 1.0,
             lfo_bipolar: true,
@@ -411,8 +555,39 @@ impl ModulatorSlotState {
             poly_c1: 1.0,
             poly_c2: 0.0,
             poly_c3: 0.0,
+            rand_smooth: 0.35,
+            sh_source: 0,
+            sh_slew: 0.0,
+            steps_values: [
+                0.85, 0.30, 0.65, 0.95, 0.25, 0.70, 0.45, 0.55,
+                0.80, 0.20, 0.60, 0.90, 0.35, 0.75, 0.40, 0.50,
+            ],
+            steps_len: 8,
+            steps_smooth: 0.0,
+            steps_bipolar: false,
+            steps_last_idx: 0,
+            parseq_steps: [1.0; 8],
+            parseq_len: 8,
+            parseq_smooth: 0.0,
+            parseq_last_step: 0,
+            curves_nodes: [0.0, 0.85, 0.35, 1.0, 0.55, 0.90, 0.20, 0.45],
+            curves_smooth: true,
+            curves_bipolar: false,
+            ramp_time_secs: 2.0,
+            ramp_curve: 0.0,
+            ramp_loop: true,
+            ramp_down: false,
+            ramp_bipolar: false,
+            ramp_start_time: 0.0,
+            seg_levels: [0.0, 1.0, 0.65, 0.85, 0.25, 0.0],
+            seg_curve: 0.0,
+            seg_loop: true,
+            seg_time_secs: 2.0,
+            seg_start_time: 0.0,
+            seg_bipolar: false,
+            vec8_z: 0.5,
             routes: Vec::new(),
-            last_outputs: [0.0; 4],
+            last_outputs: [0.0; 8],
         }
     }
 
@@ -452,39 +627,82 @@ impl ModulatorSlotState {
         }
     }
 
+    pub fn compute_clock_cycles(
+        &self,
+        transport: &LfoTransportState,
+        time_secs: f32,
+        force_sync: bool,
+    ) -> (u64, f32) {
+        let phase_offset = (self.lfo_phase_deg / 360.0).rem_euclid(1.0);
+        let use_sync = force_sync || self.lfo_sync_mode == LfoSyncMode::TempoSync;
+        let total_cycles = if use_sync {
+            if transport.is_playing {
+                let elapsed_samples = transport
+                    .sample_count
+                    .saturating_sub(transport.playback_start_sample);
+                let elapsed_secs =
+                    elapsed_samples as f64 / transport.sample_rate.max(1.0) as f64;
+                let beats = elapsed_secs * (transport.bpm.max(20.0) as f64 / 60.0);
+                let bpc = self.lfo_sync_rate.beats_per_cycle().max(1.0e-4) as f64;
+                beats / bpc + phase_offset as f64
+            } else {
+                let hz = self.lfo_sync_rate.hz_at_bpm(transport.bpm) as f64;
+                time_secs as f64 * hz + phase_offset as f64
+            }
+        } else {
+            let hz = self.lfo_rate_hz.clamp(0.02, 30.0) as f64;
+            time_secs as f64 * hz + phase_offset as f64
+        };
+        let cycle_idx = total_cycles.floor().max(0.0) as u64;
+        let phase = (total_cycles.fract() as f32).rem_euclid(1.0);
+        (cycle_idx, phase)
+    }
+
+    pub fn eval_curve_at(&self, phase: f32) -> f32 {
+        let p = phase.rem_euclid(1.0) * 8.0;
+        let i0 = (p.floor() as usize) % 8;
+        let i1 = (i0 + 1) % 8;
+        let f = p.fract();
+        let mu = if self.curves_smooth {
+            0.5 - 0.5 * (f * std::f32::consts::PI).cos()
+        } else {
+            f
+        };
+        (self.curves_nodes[i0] + (self.curves_nodes[i1] - self.curves_nodes[i0]) * mu)
+            .clamp(0.0, 1.0)
+    }
+
+    pub fn eval_segments_at(&self, t: f32) -> f32 {
+        let pos = t.clamp(0.0, 1.0) * 5.0;
+        let i0 = (pos.floor() as usize).min(4);
+        let f = (pos - i0 as f32).clamp(0.0, 1.0);
+        let exp = 2.0_f32.powf(-self.seg_curve.clamp(-1.0, 1.0) * 1.5);
+        let wf = f.powf(exp);
+        (self.seg_levels[i0] + (self.seg_levels[i0 + 1] - self.seg_levels[i0]) * wf)
+            .clamp(0.0, 1.0)
+    }
+
+    pub fn eval_ramp_at(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        let exp = 2.0_f32.powf(-self.ramp_curve.clamp(-1.0, 1.0) * 2.0);
+        let shaped = t.powf(exp);
+        if self.ramp_down {
+            1.0 - shaped
+        } else {
+            shaped
+        }
+    }
+
     /// Evalúa las salidas en vivo del modulador (rango normalizado -1.0..+1.0 o 0.0..1.0).
-    pub fn evaluate(&mut self, transport: &LfoTransportState, time_secs: f32) -> [f32; 4] {
+    pub fn evaluate(&mut self, transport: &LfoTransportState, time_secs: f32) -> [f32; 8] {
         if !self.enabled {
-            self.last_outputs = [0.0; 4];
+            self.last_outputs = [0.0; 8];
             return self.last_outputs;
         }
-        let mut outs = [0.0_f32; 4];
+        let mut outs = [0.0_f32; 8];
         match self.kind {
             ModulatorKind::ClassicLfo => {
-                let phase_offset = (self.lfo_phase_deg / 360.0).rem_euclid(1.0);
-                let total_cycles = match self.lfo_sync_mode {
-                    LfoSyncMode::TempoSync => {
-                        if transport.is_playing {
-                            let elapsed_samples = transport
-                                .sample_count
-                                .saturating_sub(transport.playback_start_sample);
-                            let elapsed_secs =
-                                elapsed_samples as f64 / transport.sample_rate.max(1.0) as f64;
-                            let beats = elapsed_secs * (transport.bpm.max(20.0) as f64 / 60.0);
-                            let bpc = self.lfo_sync_rate.beats_per_cycle().max(1.0e-4) as f64;
-                            beats / bpc + phase_offset as f64
-                        } else {
-                            let hz = self.lfo_sync_rate.hz_at_bpm(transport.bpm) as f64;
-                            time_secs as f64 * hz + phase_offset as f64
-                        }
-                    }
-                    LfoSyncMode::FreeHz => {
-                        let hz = self.lfo_rate_hz.clamp(0.02, 30.0) as f64;
-                        time_secs as f64 * hz + phase_offset as f64
-                    }
-                };
-                let cycle_idx = total_cycles.floor().max(0.0) as u64;
-                let phase = (total_cycles.fract() as f32).rem_euclid(1.0);
+                let (cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
                 if cycle_idx != self.lfo_last_sh_cycle {
                     self.lfo_last_sh_cycle = cycle_idx;
                     self.lfo_last_sh_val =
@@ -500,22 +718,7 @@ impl ModulatorSlotState {
                 outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
             }
             ModulatorKind::BeatLfo => {
-                let phase_offset = (self.lfo_phase_deg / 360.0).rem_euclid(1.0);
-                let total_cycles = if transport.is_playing {
-                    let elapsed_samples = transport
-                        .sample_count
-                        .saturating_sub(transport.playback_start_sample);
-                    let elapsed_secs =
-                        elapsed_samples as f64 / transport.sample_rate.max(1.0) as f64;
-                    let beats = elapsed_secs * (transport.bpm.max(20.0) as f64 / 60.0);
-                    let bpc = self.lfo_sync_rate.beats_per_cycle().max(1.0e-4) as f64;
-                    beats / bpc + phase_offset as f64
-                } else {
-                    let hz = self.lfo_sync_rate.hz_at_bpm(transport.bpm) as f64;
-                    time_secs as f64 * hz + phase_offset as f64
-                };
-                let cycle_idx = total_cycles.floor().max(0.0) as u64;
-                let raw_phase = (total_cycles.fract() as f32).rem_euclid(1.0);
+                let (cycle_idx, raw_phase) = self.compute_clock_cycles(transport, time_secs, true);
                 if cycle_idx != self.lfo_last_sh_cycle {
                     self.lfo_last_sh_cycle = cycle_idx;
                     self.lfo_last_sh_val =
@@ -524,6 +727,58 @@ impl ModulatorSlotState {
                 self.lfo_last_phase = raw_phase;
                 let warped = Self::warp_beat_phase(raw_phase, self.beat_lfo_skew);
                 let raw = evaluate_waveform(self.lfo_waveform, warped, self.lfo_last_sh_val);
+                let shaped = if self.lfo_bipolar {
+                    raw
+                } else {
+                    (raw + 1.0) * 0.5
+                };
+                outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::Random => {
+                let (cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
+                self.lfo_last_phase = phase;
+                let seed = self.id as u64 * 173;
+                let cur = pseudo_random_step(cycle_idx.wrapping_add(seed));
+                let prev = pseudo_random_step(cycle_idx.saturating_sub(1).wrapping_add(seed));
+                let raw = if self.rand_smooth > 0.01 {
+                    let t = (phase / self.rand_smooth.clamp(0.01, 1.0)).clamp(0.0, 1.0);
+                    let mu = 0.5 - 0.5 * (t * std::f32::consts::PI).cos();
+                    prev + (cur - prev) * mu
+                } else {
+                    cur
+                };
+                let shaped = if self.lfo_bipolar {
+                    raw
+                } else {
+                    (raw + 1.0) * 0.5
+                };
+                outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::SampleAndHold => {
+                let (cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
+                self.lfo_last_phase = phase;
+                let sample_at = |c: u64| -> f32 {
+                    match self.sh_source {
+                        1 => ((c as f32 * 0.618034).fract() * std::f32::consts::TAU).sin(),
+                        2 => {
+                            let p = (c as f32 * 0.381966).fract();
+                            evaluate_waveform(LfoWaveform::Triangle, p, 0.0)
+                        }
+                        3 => {
+                            let p = (c as f32 * 0.271828).fract();
+                            evaluate_waveform(LfoWaveform::SawUp, p, 0.0)
+                        }
+                        _ => pseudo_random_step(c.wrapping_add(self.id as u64 * 251)),
+                    }
+                };
+                let cur = sample_at(cycle_idx);
+                let prev = sample_at(cycle_idx.saturating_sub(1));
+                let raw = if self.sh_slew > 0.01 {
+                    let t = (phase / self.sh_slew.clamp(0.01, 1.0)).clamp(0.0, 1.0);
+                    prev + (cur - prev) * t
+                } else {
+                    cur
+                };
                 let shaped = if self.lfo_bipolar {
                     raw
                 } else {
@@ -555,6 +810,32 @@ impl ModulatorSlotState {
                 outs[0] = if self.xy_bipolar { x * 2.0 - 1.0 } else { x };
                 outs[1] = if self.xy_bipolar { y * 2.0 - 1.0 } else { y };
             }
+            ModulatorKind::Vector4 => {
+                let x = self.xy_x.clamp(0.0, 1.0);
+                let y = self.xy_y.clamp(0.0, 1.0);
+                outs[0] = (1.0 - x) * y;
+                outs[1] = x * y;
+                outs[2] = (1.0 - x) * (1.0 - y);
+                outs[3] = x * (1.0 - y);
+            }
+            ModulatorKind::Vector8 => {
+                let x = self.xy_x.clamp(0.0, 1.0);
+                let y = self.xy_y.clamp(0.0, 1.0);
+                let z = self.vec8_z.clamp(0.0, 1.0);
+                let fz = 1.0 - z;
+                let a = (1.0 - x) * y;
+                let b = x * y;
+                let c = (1.0 - x) * (1.0 - y);
+                let d = x * (1.0 - y);
+                outs[0] = a * fz;
+                outs[1] = b * fz;
+                outs[2] = c * fz;
+                outs[3] = d * fz;
+                outs[4] = a * z;
+                outs[5] = b * z;
+                outs[6] = c * z;
+                outs[7] = d * z;
+            }
             ModulatorKind::Math => {
                 outs[0] = self.math_op.apply(self.math_a, self.math_b);
             }
@@ -579,6 +860,79 @@ impl ModulatorSlotState {
             }
             ModulatorKind::Polynom => {
                 outs[0] = self.eval_polynom(self.poly_in);
+            }
+            ModulatorKind::Steps => {
+                let (cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
+                let len = (self.steps_len.clamp(2, 16)) as usize;
+                let idx = (cycle_idx as usize) % len;
+                let prev_idx = (idx + len - 1) % len;
+                self.steps_last_idx = idx;
+                self.lfo_last_phase = phase;
+                let cur = self.steps_values[idx].clamp(0.0, 1.0);
+                let prev = self.steps_values[prev_idx].clamp(0.0, 1.0);
+                let v = if self.steps_smooth > 0.01 {
+                    let t = (phase / self.steps_smooth.clamp(0.01, 1.0)).clamp(0.0, 1.0);
+                    prev + (cur - prev) * t
+                } else {
+                    cur
+                };
+                outs[0] = if self.steps_bipolar { v * 2.0 - 1.0 } else { v };
+            }
+            ModulatorKind::ParSeq8 => {
+                let (cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
+                let len = (self.parseq_len.clamp(2, 8)) as usize;
+                let active = (cycle_idx as usize) % len;
+                let next = (active + 1) % len;
+                self.parseq_last_step = active;
+                self.lfo_last_phase = phase;
+                if self.parseq_smooth > 0.01 {
+                    let s = self.parseq_smooth.clamp(0.01, 1.0);
+                    let fade_start = 1.0 - s;
+                    if phase >= fade_start {
+                        let f = ((phase - fade_start) / s).clamp(0.0, 1.0);
+                        outs[active] = self.parseq_steps[active].clamp(0.0, 1.0) * (1.0 - f);
+                        outs[next] = self.parseq_steps[next].clamp(0.0, 1.0) * f;
+                    } else {
+                        outs[active] = self.parseq_steps[active].clamp(0.0, 1.0);
+                    }
+                } else {
+                    outs[active] = self.parseq_steps[active].clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::Curves => {
+                let (_cycle_idx, phase) = self.compute_clock_cycles(transport, time_secs, false);
+                self.lfo_last_phase = phase;
+                let v = self.eval_curve_at(phase);
+                let shaped = if self.curves_bipolar {
+                    v * 2.0 - 1.0
+                } else {
+                    v
+                };
+                outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::Ramp => {
+                let dur = self.ramp_time_secs.clamp(0.05, 16.0);
+                let elapsed = (time_secs - self.ramp_start_time).max(0.0);
+                let t = if self.ramp_loop {
+                    (elapsed / dur).fract()
+                } else {
+                    (elapsed / dur).min(1.0)
+                };
+                self.lfo_last_phase = t;
+                let v = self.eval_ramp_at(t);
+                outs[0] = if self.ramp_bipolar { v * 2.0 - 1.0 } else { v };
+            }
+            ModulatorKind::Segments => {
+                let dur = self.seg_time_secs.clamp(0.05, 16.0);
+                let elapsed = (time_secs - self.seg_start_time).max(0.0);
+                let t = if self.seg_loop {
+                    (elapsed / dur).fract()
+                } else {
+                    (elapsed / dur).min(1.0)
+                };
+                self.lfo_last_phase = t;
+                let v = self.eval_segments_at(t);
+                outs[0] = if self.seg_bipolar { v * 2.0 - 1.0 } else { v };
             }
         }
         self.last_outputs = outs;
@@ -707,6 +1061,92 @@ impl ModulatorSlotState {
                 vec![],
                 0,
             ),
+            ModulatorKind::Random => {
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(4) as f32;
+                (
+                    vec![self.lfo_rate_hz, self.lfo_depth, self.rand_smooth, sync_idx],
+                    vec![
+                        self.lfo_sync_mode == LfoSyncMode::TempoSync,
+                        self.lfo_bipolar,
+                    ],
+                    0,
+                )
+            }
+            ModulatorKind::SampleAndHold => {
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(4) as f32;
+                (
+                    vec![self.lfo_rate_hz, self.lfo_depth, self.sh_slew, sync_idx],
+                    vec![
+                        self.lfo_sync_mode == LfoSyncMode::TempoSync,
+                        self.lfo_bipolar,
+                    ],
+                    self.sh_source,
+                )
+            }
+            ModulatorKind::Vector4 => (vec![self.xy_x, self.xy_y], vec![], 0),
+            ModulatorKind::Vector8 => (vec![self.xy_x, self.xy_y, self.vec8_z], vec![], 0),
+            ModulatorKind::Steps => {
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(5) as f32;
+                let mut params = vec![self.lfo_rate_hz, self.steps_smooth, sync_idx];
+                params.extend_from_slice(&self.steps_values);
+                (
+                    params,
+                    vec![
+                        self.lfo_sync_mode == LfoSyncMode::TempoSync,
+                        self.steps_bipolar,
+                    ],
+                    self.steps_len.clamp(2, 16),
+                )
+            }
+            ModulatorKind::ParSeq8 => {
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(5) as f32;
+                let mut params = vec![self.lfo_rate_hz, self.parseq_smooth, sync_idx];
+                params.extend_from_slice(&self.parseq_steps);
+                (
+                    params,
+                    vec![self.lfo_sync_mode == LfoSyncMode::TempoSync],
+                    self.parseq_len.clamp(2, 8),
+                )
+            }
+            ModulatorKind::Curves => {
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(4) as f32;
+                let mut params = vec![self.lfo_rate_hz, self.lfo_depth, sync_idx];
+                params.extend_from_slice(&self.curves_nodes);
+                (
+                    params,
+                    vec![
+                        self.lfo_sync_mode == LfoSyncMode::TempoSync,
+                        self.curves_smooth,
+                        self.curves_bipolar,
+                    ],
+                    0,
+                )
+            }
+            ModulatorKind::Ramp => (
+                vec![self.ramp_time_secs, self.ramp_curve],
+                vec![self.ramp_loop, self.ramp_down, self.ramp_bipolar],
+                0,
+            ),
+            ModulatorKind::Segments => {
+                let mut params = vec![self.seg_time_secs, self.seg_curve];
+                params.extend_from_slice(&self.seg_levels);
+                (params, vec![self.seg_loop, self.seg_bipolar], 0)
+            }
         };
         let routes = self
             .routes
@@ -903,6 +1343,205 @@ impl ModulatorSlotState {
                 }
                 if let Some(&c3) = p.params.get(4) {
                     st.poly_c3 = c3.clamp(-2.0, 2.0);
+                }
+            }
+            ModulatorKind::Random => {
+                if let Some(&hz) = p.params.first() {
+                    st.lfo_rate_hz = hz.clamp(0.02, 30.0);
+                }
+                if let Some(&d) = p.params.get(1) {
+                    st.lfo_depth = d.clamp(0.0, 1.0);
+                }
+                if let Some(&sm) = p.params.get(2) {
+                    st.rand_smooth = sm.clamp(0.0, 1.0);
+                }
+                if let Some(&sr) = p.params.get(3) {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Quarter);
+                }
+                if let Some(&sync) = p.bool_flags.first() {
+                    st.lfo_sync_mode = if sync {
+                        LfoSyncMode::TempoSync
+                    } else {
+                        LfoSyncMode::FreeHz
+                    };
+                }
+                if let Some(&bip) = p.bool_flags.get(1) {
+                    st.lfo_bipolar = bip;
+                }
+            }
+            ModulatorKind::SampleAndHold => {
+                st.sh_source = p.mode_idx.min(3);
+                if let Some(&hz) = p.params.first() {
+                    st.lfo_rate_hz = hz.clamp(0.02, 30.0);
+                }
+                if let Some(&d) = p.params.get(1) {
+                    st.lfo_depth = d.clamp(0.0, 1.0);
+                }
+                if let Some(&sl) = p.params.get(2) {
+                    st.sh_slew = sl.clamp(0.0, 1.0);
+                }
+                if let Some(&sr) = p.params.get(3) {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Quarter);
+                }
+                if let Some(&sync) = p.bool_flags.first() {
+                    st.lfo_sync_mode = if sync {
+                        LfoSyncMode::TempoSync
+                    } else {
+                        LfoSyncMode::FreeHz
+                    };
+                }
+                if let Some(&bip) = p.bool_flags.get(1) {
+                    st.lfo_bipolar = bip;
+                }
+            }
+            ModulatorKind::Vector4 => {
+                if let Some(&x) = p.params.first() {
+                    st.xy_x = x.clamp(0.0, 1.0);
+                }
+                if let Some(&y) = p.params.get(1) {
+                    st.xy_y = y.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::Vector8 => {
+                if let Some(&x) = p.params.first() {
+                    st.xy_x = x.clamp(0.0, 1.0);
+                }
+                if let Some(&y) = p.params.get(1) {
+                    st.xy_y = y.clamp(0.0, 1.0);
+                }
+                if let Some(&z) = p.params.get(2) {
+                    st.vec8_z = z.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::Steps => {
+                st.steps_len = p.mode_idx.clamp(2, 16);
+                if let Some(&hz) = p.params.first() {
+                    st.lfo_rate_hz = hz.clamp(0.02, 30.0);
+                }
+                if let Some(&sm) = p.params.get(1) {
+                    st.steps_smooth = sm.clamp(0.0, 1.0);
+                }
+                if let Some(&sr) = p.params.get(2) {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Eighth);
+                }
+                for i in 0..16 {
+                    if let Some(&v) = p.params.get(3 + i) {
+                        st.steps_values[i] = v.clamp(0.0, 1.0);
+                    }
+                }
+                if let Some(&sync) = p.bool_flags.first() {
+                    st.lfo_sync_mode = if sync {
+                        LfoSyncMode::TempoSync
+                    } else {
+                        LfoSyncMode::FreeHz
+                    };
+                }
+                if let Some(&bip) = p.bool_flags.get(1) {
+                    st.steps_bipolar = bip;
+                }
+            }
+            ModulatorKind::ParSeq8 => {
+                st.parseq_len = p.mode_idx.clamp(2, 8);
+                if let Some(&hz) = p.params.first() {
+                    st.lfo_rate_hz = hz.clamp(0.02, 30.0);
+                }
+                if let Some(&sm) = p.params.get(1) {
+                    st.parseq_smooth = sm.clamp(0.0, 1.0);
+                }
+                if let Some(&sr) = p.params.get(2) {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Eighth);
+                }
+                for i in 0..8 {
+                    if let Some(&v) = p.params.get(3 + i) {
+                        st.parseq_steps[i] = v.clamp(0.0, 1.0);
+                    }
+                }
+                if let Some(&sync) = p.bool_flags.first() {
+                    st.lfo_sync_mode = if sync {
+                        LfoSyncMode::TempoSync
+                    } else {
+                        LfoSyncMode::FreeHz
+                    };
+                }
+            }
+            ModulatorKind::Curves => {
+                if let Some(&hz) = p.params.first() {
+                    st.lfo_rate_hz = hz.clamp(0.02, 30.0);
+                }
+                if let Some(&d) = p.params.get(1) {
+                    st.lfo_depth = d.clamp(0.0, 1.0);
+                }
+                if let Some(&sr) = p.params.get(2) {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Quarter);
+                }
+                for i in 0..8 {
+                    if let Some(&v) = p.params.get(3 + i) {
+                        st.curves_nodes[i] = v.clamp(0.0, 1.0);
+                    }
+                }
+                if let Some(&sync) = p.bool_flags.first() {
+                    st.lfo_sync_mode = if sync {
+                        LfoSyncMode::TempoSync
+                    } else {
+                        LfoSyncMode::FreeHz
+                    };
+                }
+                if let Some(&sm) = p.bool_flags.get(1) {
+                    st.curves_smooth = sm;
+                }
+                if let Some(&bip) = p.bool_flags.get(2) {
+                    st.curves_bipolar = bip;
+                }
+            }
+            ModulatorKind::Ramp => {
+                if let Some(&t) = p.params.first() {
+                    st.ramp_time_secs = t.clamp(0.05, 16.0);
+                }
+                if let Some(&c) = p.params.get(1) {
+                    st.ramp_curve = c.clamp(-1.0, 1.0);
+                }
+                if let Some(&lp) = p.bool_flags.first() {
+                    st.ramp_loop = lp;
+                }
+                if let Some(&dn) = p.bool_flags.get(1) {
+                    st.ramp_down = dn;
+                }
+                if let Some(&bip) = p.bool_flags.get(2) {
+                    st.ramp_bipolar = bip;
+                }
+            }
+            ModulatorKind::Segments => {
+                if let Some(&t) = p.params.first() {
+                    st.seg_time_secs = t.clamp(0.05, 16.0);
+                }
+                if let Some(&c) = p.params.get(1) {
+                    st.seg_curve = c.clamp(-1.0, 1.0);
+                }
+                for i in 0..6 {
+                    if let Some(&v) = p.params.get(2 + i) {
+                        st.seg_levels[i] = v.clamp(0.0, 1.0);
+                    }
+                }
+                if let Some(&lp) = p.bool_flags.first() {
+                    st.seg_loop = lp;
+                }
+                if let Some(&bip) = p.bool_flags.get(1) {
+                    st.seg_bipolar = bip;
                 }
             }
         }
@@ -1147,7 +1786,18 @@ pub fn evaluate_bay_modulation_for_track(
                     sum_raw += raw;
                     sum_delta += raw * r.amount;
                     sum_amount += r.amount;
-                    if matches!(m.kind, ModulatorKind::ClassicLfo | ModulatorKind::BeatLfo) {
+                    if matches!(
+                        m.kind,
+                        ModulatorKind::ClassicLfo
+                            | ModulatorKind::BeatLfo
+                            | ModulatorKind::Random
+                            | ModulatorKind::SampleAndHold
+                            | ModulatorKind::Steps
+                            | ModulatorKind::ParSeq8
+                            | ModulatorKind::Curves
+                            | ModulatorKind::Ramp
+                            | ModulatorKind::Segments
+                    ) {
                         last_phase = m.lfo_last_phase;
                     }
                 }
