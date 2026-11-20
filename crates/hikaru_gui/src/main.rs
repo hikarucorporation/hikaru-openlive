@@ -59,6 +59,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
         position_clock.clone(),
     );
     engine.set_mode(hikaru_audio_engine::EngineMode::OpenLive);
+    engine.set_global_launch_quantization(hikaru_sequencer::quantizer::QuantizationGrid::Bar);
     let engine_arc = Arc::new(Mutex::new(engine));
 
     let engine_for_commands = engine_arc.clone();

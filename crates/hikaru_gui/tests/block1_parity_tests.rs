@@ -551,3 +551,88 @@ fn cl21_and_cl22_launch_modes_and_clip_gain_handle_sync_engine() {
         _ => panic!("Se esperaba GuiCommand::SetClipGain"),
     }
 }
+
+#[test]
+fn bitwig_clip_launch_starts_transport_immediately_and_stop_pad_queues_to_next_bar() {
+    let (mut state, rx) = make_app_state();
+    assert!(!state.is_playing());
+    assert_eq!(
+        state.matrix_state.global_launch_quantization,
+        QuantizationGrid::Bar
+    );
+
+    // Cargar un clip MIDI en track 0, scene 0
+    hikaru_gui::views::matrix::create_empty_midi_clip(
+        &mut state.matrix_state,
+        &state.audio_proxy,
+        0,
+        0,
+    );
+    while rx.try_recv().is_ok() {}
+
+    // Simular transporte frenado en una posición arbitraria (como 1.3.1 en el video)
+    state.transport.sample_count = 44100;
+    state.playlist_state.playhead_tick = 1920;
+
+    // 1. Disparar clip: el transporte debe arrancar al toque desde compás 1.1.1
+    state.trigger_clip_slot(0, 0);
+    assert!(state.is_playing());
+    assert_eq!(state.transport.sample_count, 0);
+    assert_eq!(state.playlist_state.playhead_tick, 0);
+    assert_eq!(
+        state.matrix_state.slot(0, 0).unwrap().state,
+        hikaru_gui::views::matrix::SlotState::Playing
+    );
+
+    let mut saw_seek_zero = false;
+    let mut saw_play = false;
+    let mut saw_trigger = false;
+    while let Ok(cmd) = rx.try_recv() {
+        match cmd {
+            GuiCommand::Seek { sample_count: 0 } => saw_seek_zero = true,
+            GuiCommand::Play => saw_play = true,
+            GuiCommand::TriggerClip {
+                track_idx: 0,
+                scene_idx: 0,
+            } => saw_trigger = true,
+            _ => {}
+        }
+    }
+    assert!(saw_seek_zero && saw_play && saw_trigger);
+
+    // 2. Frenar desde el pad de Stop mientras suena -> pasa a QueuedToStop (espera a la barra siguiente)
+    state.stop_clip_track(0);
+    assert_eq!(
+        state.matrix_state.slot(0, 0).unwrap().state,
+        hikaru_gui::views::matrix::SlotState::QueuedToStop
+    );
+    assert_eq!(
+        state
+            .pending_stop_tracks_mask
+            .load(std::sync::atomic::Ordering::Relaxed)
+            & 1,
+        1
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(GuiCommand::StopTrack { track_idx: 0 })
+    ));
+
+    // Mientras el motor sigue esperando el límite de compás, sigue en QueuedToStop
+    state.reconcile_queued_stops();
+    assert_eq!(
+        state.matrix_state.slot(0, 0).unwrap().state,
+        hikaru_gui::views::matrix::SlotState::QueuedToStop
+    );
+
+    // Cuando el motor llega al próximo compás limpia la máscara -> pasa a Stopped y el transporte sigue andando
+    state
+        .pending_stop_tracks_mask
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    state.reconcile_queued_stops();
+    assert_eq!(
+        state.matrix_state.slot(0, 0).unwrap().state,
+        hikaru_gui::views::matrix::SlotState::Stopped
+    );
+    assert!(state.is_playing());
+}

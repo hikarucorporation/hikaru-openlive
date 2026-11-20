@@ -818,15 +818,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if let Some((t_idx, s_idx)) = actions.trigger_slot {
-        matrix::trigger_pad(&mut state.matrix_state, &state.audio_proxy, t_idx, s_idx);
+        state.trigger_clip_slot(t_idx, s_idx);
     }
 
     if let Some(t_idx) = actions.stop_track {
-        state.matrix_state.stop_track(&state.audio_proxy, t_idx);
+        state.stop_clip_track(t_idx);
     }
 
     if let Some(s_idx) = trigger_scene {
-        matrix::trigger_scene(&mut state.matrix_state, &state.audio_proxy, s_idx);
+        state.trigger_clip_scene(s_idx);
     }
 
     if let Some((t_idx, s_idx, click_pos)) = actions.open_context_menu {
@@ -1265,9 +1265,7 @@ fn render_channel_strip(
                                     );
                                     for child_mixer_idx in children {
                                         if child_mixer_idx > 0 {
-                                            matrix::trigger_pad(
-                                                &mut state.matrix_state,
-                                                &state.audio_proxy,
+                                            state.trigger_clip_slot(
                                                 child_mixer_idx - 1,
                                                 scene_idx,
                                             );
@@ -1283,8 +1281,11 @@ fn render_channel_strip(
                         let ptr_in_slot = pointer_pos.is_some_and(|p| slot_rect.contains(p) && ui.clip_rect().contains(p));
                         let is_drag_target = clip_drag_active.is_some() && ptr_in_slot;
 
+                        let has_clip_here = clip_opt.is_some();
+                        let has_stop_btn_here = slot.map(|s| s.has_stop_button).unwrap_or(true);
                         if let Some(clip) = clip_opt {
-                            let is_playing = slot_state == SlotState::Playing;
+                            let is_queued_to_stop = slot_state == SlotState::QueuedToStop;
+                            let is_playing = slot_state == SlotState::Playing || is_queued_to_stop;
                             let eff_color = clip.color.unwrap_or(track_color);
                             let base = if clip.muted {
                                 Color32::from_rgb(0x40, 0x43, 0x48)
@@ -1311,10 +1312,19 @@ fn render_channel_strip(
                                 vec2(12.0, 12.0),
                             );
                             if is_playing {
+                                let stop_col = if is_queued_to_stop {
+                                    if (ui.ctx().input(|i| i.time) * 6.0).sin() > 0.0 {
+                                        Color32::WHITE
+                                    } else {
+                                        Color32::from_rgb(0x10, 0x11, 0x13)
+                                    }
+                                } else {
+                                    Color32::from_rgb(0x10, 0x11, 0x13)
+                                };
                                 icons::paint_stop_square(
                                     ui.painter(),
                                     icon_r,
-                                    Color32::from_rgb(0x10, 0x11, 0x13),
+                                    stop_col,
                                 );
                             } else {
                                 icons::paint_play_triangle(
@@ -1425,7 +1435,25 @@ fn render_channel_strip(
                             }
                         }
                         if slot_resp.clicked() {
-                            actions.trigger_slot = Some((matrix_idx, scene_idx));
+                            if has_clip_here {
+                                actions.trigger_slot = Some((matrix_idx, scene_idx));
+                            } else if has_stop_btn_here {
+                                let track_active = state
+                                    .matrix_state
+                                    .grid
+                                    .get(matrix_idx)
+                                    .is_some_and(|row| {
+                                        row.iter().any(|s| {
+                                            matches!(
+                                                s.state,
+                                                SlotState::Playing | SlotState::QueuedToPlay
+                                            )
+                                        })
+                                    });
+                                if track_active {
+                                    actions.stop_track = Some(matrix_idx);
+                                }
+                            }
                             actions.selected_track_idx = idx;
                         }
                         if slot_resp.secondary_clicked() {

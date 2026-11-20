@@ -1672,6 +1672,14 @@ pub struct PendingSceneLaunch {
     pub grid: QuantizationGrid,
 }
 
+/// Detención cuantizada de pista pendiente en el motor de audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingTrackStop {
+    pub track_index: usize,
+    pub target_sample: u64,
+    pub grid: QuantizationGrid,
+}
+
 pub struct AudioEngine<'a> {
     pub transport: TransportPosition,
     pub mode: EngineMode,
@@ -1685,6 +1693,10 @@ pub struct AudioEngine<'a> {
     pub pending_scene_launch: Option<PendingSceneLaunch>,
     /// Índice atómico de la escena en cola (`-1` si no hay ninguna) para UI.
     pub pending_scene_index_atomic: Arc<AtomicI32>,
+    /// Pistas en cola para detenerse en el próximo límite de cuantización.
+    pub pending_track_stops: Vec<PendingTrackStop>,
+    /// Máscara de bits (1 << track_index) de pistas con stop cuantizado pendiente.
+    pub pending_stop_tracks_mask: Arc<AtomicU32>,
     pub main_filter: StateVariableFilter,
     pub oscillator: WavetableOscillator<'a>,
     pub sample_rate: f32,
@@ -1766,6 +1778,8 @@ impl<'a> AudioEngine<'a> {
             scene_quantization_overrides: vec![None; hikaru_sequencer::matrix::DEFAULT_SCENE_COUNT],
             pending_scene_launch: None,
             pending_scene_index_atomic: Arc::new(AtomicI32::new(-1)),
+            pending_track_stops: Vec::new(),
+            pending_stop_tracks_mask: Arc::new(AtomicU32::new(0)),
             main_filter: filter,
             oscillator: WavetableOscillator::new(wavetable, sr),
             sample_rate: sr.get(),
@@ -2590,6 +2604,8 @@ impl<'a> AudioEngine<'a> {
         self.transport.sample_count = 0;
         self.pending_scene_launch = None;
         self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
+        self.pending_track_stops.clear();
+        self.pending_stop_tracks_mask.store(0, Ordering::Relaxed);
         self.wavetable_voice_pool.kill_all();
         self.sampler_voice_pool.kill_all();
         self.open_poly_voice_pool.kill_all();
@@ -2871,6 +2887,7 @@ impl<'a> AudioEngine<'a> {
     ///   (caso "cualquier pad").
     /// - Sin nada sonando: arranca desde cero como antes (`now`).
     pub fn trigger_clip(&mut self, track_index: usize, scene_index: usize) {
+        self.cancel_pending_track_stop(track_index);
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
         let target_audio_playing = self
@@ -3087,6 +3104,8 @@ impl<'a> AudioEngine<'a> {
         }
         self.pending_scene_launch = None;
         self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
+        self.pending_track_stops.clear();
+        self.pending_stop_tracks_mask.store(0, Ordering::Relaxed);
         let now = self.transport.sample_count;
         let now_abs = self.absolute_frame;
         self.execute_scene_launch(scene_index, now, now_abs);
@@ -3269,7 +3288,68 @@ impl<'a> AudioEngine<'a> {
         None
     }
 
+    fn refresh_pending_stop_mask(&self) {
+        let mut mask = 0u32;
+        for p in &self.pending_track_stops {
+            if p.track_index < 32 {
+                mask |= 1u32 << p.track_index;
+            }
+        }
+        self.pending_stop_tracks_mask.store(mask, Ordering::Relaxed);
+    }
+
+    fn cancel_pending_track_stop(&mut self, track_index: usize) {
+        let before = self.pending_track_stops.len();
+        self.pending_track_stops.retain(|p| p.track_index != track_index);
+        if self.pending_track_stops.len() != before {
+            self.refresh_pending_stop_mask();
+        }
+    }
+
     pub fn stop_track(&mut self, track_index: usize) {
+        let track_has_playing = self
+            .clips
+            .iter()
+            .any(|c| c.track_index == track_index && c.is_playing)
+            || self
+                .midi_clips
+                .iter()
+                .any(|c| c.track_index == track_index && c.is_playing);
+        let grid = self.global_launch_quantization;
+        if track_has_playing
+            && grid != QuantizationGrid::None
+            && self.transport.playback_state == TransportPlaybackState::Playing
+        {
+            let wait = QuantizationEngine::samples_until_next_sync(
+                &self.transport,
+                grid,
+                self.sample_rate as f64,
+            );
+            if wait > 0 {
+                let target_sample = self.transport.sample_count.saturating_add(wait);
+                if let Some(existing) = self
+                    .pending_track_stops
+                    .iter_mut()
+                    .find(|p| p.track_index == track_index)
+                {
+                    existing.target_sample = target_sample;
+                    existing.grid = grid;
+                } else {
+                    self.pending_track_stops.push(PendingTrackStop {
+                        track_index,
+                        target_sample,
+                        grid,
+                    });
+                }
+                self.refresh_pending_stop_mask();
+                return;
+            }
+        }
+        self.cancel_pending_track_stop(track_index);
+        self.execute_stop_track(track_index);
+    }
+
+    fn execute_stop_track(&mut self, track_index: usize) {
         for clip in self.clips.iter_mut().filter(|c| c.track_index == track_index) {
             clip.is_playing = false;
         }
@@ -3630,6 +3710,30 @@ impl<'a> AudioEngine<'a> {
                         self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
                         let fire_abs = self.absolute_frame.saturating_add(offset);
                         self.execute_scene_launch(pending.scene_index, fire_sample, fire_abs);
+                    }
+                }
+                if !self.pending_track_stops.is_empty() {
+                    let frame_start = self.transport.sample_count;
+                    let frame_end = frame_start.saturating_add(buffer_frames);
+                    let mut due_tracks = Vec::new();
+                    let mut remaining = Vec::with_capacity(self.pending_track_stops.len());
+                    for pending in self.pending_track_stops.drain(..) {
+                        let loop_wraps_before_target = self.transport.has_valid_loop()
+                            && frame_start < self.transport.loop_end_samples
+                            && frame_end >= self.transport.loop_end_samples
+                            && pending.target_sample >= self.transport.loop_end_samples;
+                        if pending.target_sample < frame_end || loop_wraps_before_target {
+                            due_tracks.push(pending.track_index);
+                        } else {
+                            remaining.push(pending);
+                        }
+                    }
+                    self.pending_track_stops = remaining;
+                    if !due_tracks.is_empty() {
+                        for ti in due_tracks {
+                            self.execute_stop_track(ti);
+                        }
+                        self.refresh_pending_stop_mask();
                     }
                 }
             }
@@ -5789,5 +5893,46 @@ mod tests {
             assert!(!mc.clip_loop_enabled);
             assert!(!mc.has_valid_clip_loop());
         }
+    }
+
+    #[test]
+    fn stop_track_is_quantized_to_next_bar_while_playing() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(120.0); // 44100 Hz -> 88200 samples/bar
+        engine.set_global_launch_quantization(QuantizationGrid::Bar);
+        engine.add_clip(1, 0, 0, ramp_samples(200_000), 0.0, 0.0, 0.0, 2, true);
+
+        engine.play();
+        engine.trigger_clip(0, 0);
+        run_frames(&mut engine, 10_000); // mid-bar 1
+        assert!(engine.clips[0].is_playing);
+
+        // Stop track mid-bar -> queued until bar 2 (sample 88200), still playing now.
+        engine.stop_track(0);
+        assert!(engine.clips[0].is_playing);
+        assert_eq!(engine.pending_track_stops.len(), 1);
+        assert_eq!(engine.pending_track_stops[0].target_sample, 88200);
+        assert_eq!(
+            engine.pending_stop_tracks_mask.load(Ordering::Relaxed) & 1,
+            1
+        );
+
+        // Advance to sample 80_000 (still in bar 1): still playing.
+        run_frames(&mut engine, 70_000);
+        assert!(engine.clips[0].is_playing);
+
+        // Cross bar 2 boundary (88200): clip stops, mask clears, transport stays Playing.
+        run_frames(&mut engine, 10_000);
+        assert!(!engine.clips[0].is_playing);
+        assert!(engine.pending_track_stops.is_empty());
+        assert_eq!(
+            engine.pending_stop_tracks_mask.load(Ordering::Relaxed) & 1,
+            0
+        );
+        assert_eq!(
+            engine.transport.playback_state,
+            TransportPlaybackState::Playing
+        );
     }
 }

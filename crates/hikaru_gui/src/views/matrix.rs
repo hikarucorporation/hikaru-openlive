@@ -425,7 +425,7 @@ impl Default for SessionMatrixState {
             editor_height: 104.0,
             editor_zoom_x: 0.04,
             show_editor: true,
-            global_launch_quantization: QuantizationGrid::Quarter,
+            global_launch_quantization: QuantizationGrid::Bar,
             context_menu: None,
             scene_context_menu: None,
             clip_drag: None,
@@ -453,14 +453,47 @@ impl SessionMatrixState {
     }
 
     pub fn stop_track(&mut self, audio_proxy: &AudioProxy, track_idx: usize) {
+        self.stop_track_with_transport(audio_proxy, track_idx, false);
+    }
+
+    /// Detiene la pista respetando la cuantización global cuando el transporte
+    /// está reproduciendo (Bitwig 1:1: pasa los clips activos a `QueuedToStop`
+    /// hasta el próximo compás/grilla). Devuelve `true` si quedó en cola.
+    pub fn stop_track_with_transport(
+        &mut self,
+        audio_proxy: &AudioProxy,
+        track_idx: usize,
+        is_playing: bool,
+    ) -> bool {
+        let quantized = is_playing && self.global_launch_quantization != QuantizationGrid::None;
+        let mut any_queued = false;
         if let Some(row) = self.grid.get_mut(track_idx) {
             for slot in row.iter_mut() {
-                if slot.state == SlotState::Playing || slot.state == SlotState::QueuedToPlay {
-                    slot.state = SlotState::Stopped;
+                match slot.state {
+                    SlotState::Playing => {
+                        if quantized {
+                            slot.state = SlotState::QueuedToStop;
+                            any_queued = true;
+                        } else {
+                            slot.state = SlotState::Stopped;
+                        }
+                    }
+                    SlotState::QueuedToPlay => {
+                        slot.state = SlotState::Stopped;
+                    }
+                    SlotState::QueuedToStop => {
+                        if quantized {
+                            any_queued = true;
+                        } else {
+                            slot.state = SlotState::Stopped;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
         audio_proxy.send(GuiCommand::StopTrack { track_idx });
+        any_queued
     }
 
     pub fn add_track(&mut self) {
@@ -3030,7 +3063,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 if let Some(clip) = clip_opt {
                     // Populated Bitwig Clip Card
-                    let is_playing = slot_state == SlotState::Playing;
+                    let is_queued_to_stop = slot_state == SlotState::QueuedToStop;
+                    let is_playing = slot_state == SlotState::Playing || is_queued_to_stop;
                     let effective_color = clip.color.unwrap_or(track_color);
                     let card_bg = if is_drag_source {
                         Color32::from_rgba_unmultiplied(30, 32, 36, 110)
@@ -3063,10 +3097,20 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         vec2(12.0, 12.0),
                     );
                     if is_playing {
+                        let stop_icon_col = if is_queued_to_stop {
+                            let blink = (ui.ctx().input(|i| i.time) * 6.0).sin() > 0.0;
+                            if blink {
+                                Color32::WHITE
+                            } else {
+                                Color32::from_rgb(0x10, 0x10, 0x12)
+                            }
+                        } else {
+                            Color32::from_rgb(0x10, 0x10, 0x12)
+                        };
                         icons::paint_stop_square(
                             &lg_painter,
                             ic_rect,
-                            Color32::from_rgb(0x10, 0x10, 0x12),
+                            stop_icon_col,
                         );
                     } else {
                         icons::paint_play_triangle(
@@ -3303,6 +3347,22 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 trigger_slot_action = Some((track_idx, scene_idx));
                                 select_slot_action = Some((track_idx, scene_idx));
                             } else {
+                                let has_stop_btn = slot.map(|s| s.has_stop_button).unwrap_or(true);
+                                let track_active = state
+                                    .matrix_state
+                                    .grid
+                                    .get(track_idx)
+                                    .is_some_and(|row| {
+                                        row.iter().any(|s| {
+                                            matches!(
+                                                s.state,
+                                                SlotState::Playing | SlotState::QueuedToPlay
+                                            )
+                                        })
+                                    });
+                                if has_stop_btn && track_active {
+                                    stop_track_action = Some(track_idx);
+                                }
                                 select_slot_action = Some((track_idx, scene_idx));
                             }
                         }
@@ -4987,7 +5047,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             for child_mixer_idx in children {
                 if child_mixer_idx > 0 {
                     let child_matrix_idx = child_mixer_idx - 1;
-                    trigger_pad(&mut state.matrix_state, &state.audio_proxy, child_matrix_idx, scene_idx);
+                    state.trigger_clip_slot(child_matrix_idx, scene_idx);
                 }
             }
         }
@@ -5105,7 +5165,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             }
         }
 
-        trigger_pad(&mut state.matrix_state, &state.audio_proxy, t_idx, s_idx);
+        state.trigger_clip_slot(t_idx, s_idx);
     }
 
     if let Some((t_idx, s_idx)) = select_slot_action {
@@ -5157,11 +5217,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     if let Some(t_idx) = stop_track_action {
-        state.matrix_state.stop_track(&state.audio_proxy, t_idx);
+        state.stop_clip_track(t_idx);
     }
 
     if let Some(s_idx) = trigger_scene_action {
-        trigger_scene(&mut state.matrix_state, &state.audio_proxy, s_idx);
+        state.trigger_clip_scene(s_idx);
     }
 
     if let Some(t_idx) = toggle_mute_action {

@@ -392,6 +392,7 @@ pub struct AppState {
     pub tap_tempo: TapTempoDetector,
     pub tap_tempo_enabled: bool,
     pub pending_scene_index_atomic: Arc<AtomicI32>,
+    pub pending_stop_tracks_mask: Arc<AtomicU32>,
     pub queued_scene_index: Option<usize>,
     pub editing_bpm: bool,
     pub editing_sig: bool,
@@ -525,22 +526,30 @@ impl AppState {
         }
         let fx_tracks = vec![mixer::Track::new_fx(0, "FX 1".to_string())];
 
-        let (track_peak_bits, track_clip_playhead, pending_scene_index_atomic): (
+        let (
+            track_peak_bits,
+            track_clip_playhead,
+            pending_scene_index_atomic,
+            pending_stop_tracks_mask,
+        ): (
             Vec<Arc<AtomicU32>>,
             Vec<Arc<AtomicU64>>,
             Arc<AtomicI32>,
+            Arc<AtomicU32>,
         ) = if let Some(ref handle) = engine_handle {
             if let Ok(engine) = handle.try_lock() {
                 (
                     engine.track_peak_bits.iter().map(|a| Arc::clone(a)).collect(),
                     engine.track_clip_playhead.iter().map(|a| Arc::clone(a)).collect(),
                     Arc::clone(&engine.pending_scene_index_atomic),
+                    Arc::clone(&engine.pending_stop_tracks_mask),
                 )
             } else {
                 (
                     (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
                     (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
                     Arc::new(AtomicI32::new(-1)),
+                    Arc::new(AtomicU32::new(0)),
                 )
             }
         } else {
@@ -548,6 +557,7 @@ impl AppState {
                 (0..16).map(|_| Arc::new(AtomicU32::new(0.0f32.to_bits()))).collect(),
                 (0..16).map(|_| Arc::new(AtomicU64::new(0))).collect(),
                 Arc::new(AtomicI32::new(-1)),
+                Arc::new(AtomicU32::new(0)),
             )
         };
 
@@ -568,6 +578,7 @@ impl AppState {
             tap_tempo: TapTempoDetector::with_bpm_range(BPM_MIN, BPM_MAX),
             tap_tempo_enabled: false,
             pending_scene_index_atomic,
+            pending_stop_tracks_mask,
             queued_scene_index: None,
             editing_bpm: false,
             editing_sig: false,
@@ -1392,6 +1403,82 @@ impl AppState {
         self.audio_proxy.send(GuiCommand::Pause);
     }
 
+    /// Bitwig 1:1: al disparar un clip o escena con el transporte frenado,
+    /// el transporte arranca de inmediato desde compás 1.1.1.
+    pub fn ensure_transport_running_for_clip_launch(&mut self) {
+        if self.is_playing() {
+            return;
+        }
+        self.audio_proxy.send(GuiCommand::SetAppMode(false));
+        self.sync_wavetables_to_engine();
+        self.sync_samplers_to_engine();
+        self.transport.sample_count = 0;
+        self.playlist_state.playhead_tick = 0;
+        self.transport.playback_state = TransportPlaybackState::Playing;
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::on_transport_play(0);
+        self.audio_proxy.send(GuiCommand::Seek { sample_count: 0 });
+        self.audio_proxy.send(GuiCommand::Play);
+    }
+
+    pub fn trigger_clip_slot(&mut self, track_idx: usize, scene_idx: usize) {
+        let should_start_transport = self
+            .matrix_state
+            .slot(track_idx, scene_idx)
+            .is_some_and(|s| s.clip.is_some() && s.state == matrix::SlotState::Stopped);
+        if should_start_transport {
+            self.ensure_transport_running_for_clip_launch();
+        }
+        if track_idx < 32 {
+            self.pending_stop_tracks_mask
+                .fetch_and(!(1u32 << track_idx), Ordering::Relaxed);
+        }
+        matrix::trigger_pad(&mut self.matrix_state, &self.audio_proxy, track_idx, scene_idx);
+    }
+
+    pub fn trigger_clip_scene(&mut self, scene_idx: usize) {
+        let has_any_clip = (0..self.matrix_state.tracks.len()).any(|t| {
+            self.matrix_state
+                .slot(t, scene_idx)
+                .is_some_and(|s| s.clip.is_some())
+        });
+        if has_any_clip {
+            self.ensure_transport_running_for_clip_launch();
+        }
+        self.pending_stop_tracks_mask.store(0, Ordering::Relaxed);
+        matrix::trigger_scene(&mut self.matrix_state, &self.audio_proxy, scene_idx);
+    }
+
+    pub fn stop_clip_track(&mut self, track_idx: usize) {
+        let is_playing = self.is_playing();
+        let queued = self.matrix_state.stop_track_with_transport(
+            &self.audio_proxy,
+            track_idx,
+            is_playing,
+        );
+        if queued && track_idx < 32 {
+            self.pending_stop_tracks_mask
+                .fetch_or(1u32 << track_idx, Ordering::Relaxed);
+        } else if track_idx < 32 {
+            self.pending_stop_tracks_mask
+                .fetch_and(!(1u32 << track_idx), Ordering::Relaxed);
+        }
+    }
+
+    pub fn reconcile_queued_stops(&mut self) {
+        let mask = self.pending_stop_tracks_mask.load(Ordering::Relaxed);
+        let playing = self.is_playing();
+        for (track_idx, row) in self.matrix_state.grid.iter_mut().enumerate() {
+            let track_still_pending = playing && track_idx < 32 && (mask & (1u32 << track_idx)) != 0;
+            if !track_still_pending {
+                for slot in row.iter_mut() {
+                    if slot.state == matrix::SlotState::QueuedToStop {
+                        slot.state = matrix::SlotState::Stopped;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
@@ -1399,9 +1486,15 @@ impl AppState {
         self.playlist_state.playhead_tick = 0;
         self.piano_roll_state.playhead_tick = self.piano_roll_state.loop_start_tick;
         self.piano_roll_state.prev_playhead_tick = self.piano_roll_state.playhead_tick;
+        self.pending_stop_tracks_mask.store(0, Ordering::Relaxed);
         for row in self.matrix_state.grid.iter_mut() {
             for slot in row.iter_mut() {
-                if slot.state == matrix::SlotState::Playing {
+                if matches!(
+                    slot.state,
+                    matrix::SlotState::Playing
+                        | matrix::SlotState::QueuedToPlay
+                        | matrix::SlotState::QueuedToStop
+                ) {
                     slot.state = matrix::SlotState::Stopped;
                 }
             }
@@ -1651,6 +1744,7 @@ impl HikaruApp {
         } else {
             None
         };
+        self.state.reconcile_queued_stops();
         self.state.playlist_state.ppqn = self.state.transport.ppqn();
         let raw_tick = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
         self.state.playlist_state.playhead_tick = raw_tick;

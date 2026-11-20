@@ -185,7 +185,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         state.selected_fx_index = None;
     }
     if let Some(idx) = trigger_scene_idx {
-        crate::views::matrix::trigger_scene(&mut state.matrix_state, &state.audio_proxy, idx);
+        state.trigger_clip_scene(idx);
     }
     if let Some((scene_idx, click_pos)) = open_scene_menu {
         state.matrix_state.selected_scene = Some(scene_idx);
