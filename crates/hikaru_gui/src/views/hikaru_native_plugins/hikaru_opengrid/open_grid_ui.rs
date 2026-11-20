@@ -175,101 +175,18 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
     let y0 = avail.min.y;
     let p = ui.painter().clone();
 
-    // Optional left Modulators drawer (MW LFO + Expressions + '+')
+    // Bitwig-style Device Modulator Bay (columnas dinámicas de 3 slots + botón '+')
     if grid.modulators_open {
-        let col_w = 62.0;
-        let lfo_r = Rect::from_min_size(pos2(cursor_x, y0), vec2(col_w, 88.0));
-        let exp_r = Rect::from_min_size(pos2(cursor_x, lfo_r.max.y + gap), vec2(col_w, 80.0));
-        let plus_r = Rect::from_min_max(
-            pos2(cursor_x, exp_r.max.y + gap),
-            pos2(cursor_x + col_w, y0 + total_h),
-        );
-
-        // Mini LFO card
-        p.rect_filled(lfo_r, 3.0, PANEL_BG);
-        p.rect_stroke(lfo_r, 3.0, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
-        p.text(
-            pos2(lfo_r.max.x - 4.0, lfo_r.min.y + 9.0),
-            Align2::RIGHT_CENTER,
-            "MW",
-            fonts::semibold(8.0),
-            if grid.patch.lfo_enabled { MOD_ORANGE } else { theme::TEXT_MUTED },
-        );
-        let wave_r = Rect::from_min_size(pos2(lfo_r.min.x + 4.0, lfo_r.min.y + 17.0), vec2(col_w - 8.0, 34.0));
-        p.rect_filled(wave_r, 2.0, PANEL_BG_DARK);
-        let cy = wave_r.center().y;
-        p.line_segment(
-            [pos2(wave_r.min.x + 2.0, cy), pos2(wave_r.max.x - 2.0, cy)],
-            Stroke::new(0.7_f32, Color32::from_rgb(0x32, 0x36, 0x40)),
-        );
-        let pts: Vec<Pos2> = (0..=24)
-            .map(|i| {
-                let t = i as f32 / 24.0;
-                pos2(
-                    wave_r.min.x + 2.0 + t * (wave_r.width() - 4.0),
-                    cy - (t * TAU).sin() * (wave_r.height() * 0.36),
-                )
-            })
-            .collect();
-        p.add(egui::Shape::line(pts, Stroke::new(1.3_f32, MOD_ORANGE)));
-        let lfo_resp = ui
-            .interact(lfo_r, ui.id().with(("grid_mod_lfo", slot_idx)), Sense::click())
-            .on_hover_text("Click to toggle OpenGrid MW LFO");
-        if lfo_resp.clicked() {
-            grid.patch.lfo_enabled = !grid.patch.lfo_enabled;
-            dirty = true;
-        }
-        p.text(
-            pos2(lfo_r.center().x, lfo_r.max.y - 12.0),
-            Align2::CENTER_CENTER,
-            format!("{:.1} Hz", grid.patch.lfo_rate_hz),
-            fonts::regular(8.0),
-            Color32::from_rgb(0xB8, 0xBC, 0xC6),
-        );
-
-        // Expressions box
-        p.rect_filled(exp_r, 3.0, PANEL_BG);
-        p.rect_stroke(exp_r, 3.0, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
-        p.text(
-            pos2(exp_r.center().x, exp_r.min.y + 9.0),
-            Align2::CENTER_CENTER,
-            "Expressions",
-            fonts::regular(8.0),
-            Color32::from_rgb(0xB8, 0xBC, 0xC6),
-        );
-        for (i, lbl) in ["VEL", "TIMB", "REL", "PRES"].iter().enumerate() {
-            let col = (i % 2) as f32;
-            let row = (i / 2) as f32;
-            let cx = exp_r.min.x + 16.0 + col * 30.0;
-            let cy = exp_r.min.y + 26.0 + row * 28.0;
-            p.text(pos2(cx, cy), Align2::CENTER_CENTER, *lbl, fonts::semibold(7.5), Color32::from_rgb(0xC2, 0xC8, 0xD2));
-            let pill = Rect::from_center_size(pos2(cx, cy + 11.0), vec2(17.0, 6.0));
-            p.rect_filled(pill, 3.0, Color32::from_rgb(0x1E, 0x4E, 0x5A));
-            p.circle_filled(pos2(pill.center().x + 3.0, pill.center().y), 2.2, VIEWPORT_BLUE);
-        }
-
-        // '+' button
-        p.rect_filled(plus_r, 3.0, PANEL_BG);
-        p.rect_stroke(plus_r, 3.0, Stroke::new(1.0_f32, PANEL_BORDER), egui::StrokeKind::Inside);
-        let plus_resp = ui
-            .interact(plus_r, ui.id().with(("grid_add_mod", track_idx, slot_idx)), Sense::click())
-            .on_hover_text("Add Hikaru OpenLFO MOD device to track");
-        if plus_resp.hovered() {
-            p.rect_filled(plus_r.shrink(1.0), 2.5, Color32::from_rgb(0x32, 0x36, 0x3E));
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        }
-        p.text(
-            plus_r.center(),
-            Align2::CENTER_CENTER,
-            "+",
-            fonts::semibold(15.0),
-            if plus_resp.hovered() { Color32::WHITE } else { theme::TEXT_SECONDARY },
-        );
-        if plus_resp.clicked() {
-            request_add_modulator = true;
-        }
-
-        cursor_x += col_w + gap;
+        let bay_w =
+            crate::views::hikaru_native_plugins::hikaru_openmodulation::render_device_modulator_bay(
+                ui,
+                pos2(cursor_x, y0),
+                total_h,
+                track_idx,
+                slot_idx,
+                &mut request_add_modulator,
+            );
+        cursor_x += bay_w;
     }
 
     // Main column: Top Live Minimap + Bottom Global Controls
@@ -517,13 +434,7 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
         app.open_grid_editor = Some((track_idx, slot_idx));
     }
     if request_add_modulator {
-        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
-            let next_id = track.effects.len();
-            track.effects.push(crate::views::mixer::DspSlot::new(
-                next_id,
-                "OpenLFO MOD".to_string(),
-            ));
-        }
+        app.popup_browser.open_insert_modulator(track_idx, slot_idx);
     }
     if request_insert_device {
         app.popup_browser.open_insert_device(track_idx);
