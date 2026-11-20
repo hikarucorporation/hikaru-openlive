@@ -1478,6 +1478,44 @@ impl AppState {
         true
     }
 
+    /// Renombra la escena `scene_idx`.
+    pub fn rename_scene(&mut self, scene_idx: usize, new_name: impl Into<String>) -> bool {
+        self.matrix_state.rename_scene(scene_idx, new_name)
+    }
+
+    /// Reordena la escena `from_idx` a `to_idx` manteniendo matriz, motor,
+    /// `queued_scene_index` y `clip_editor` sincronizados.
+    pub fn move_scene(&mut self, from_idx: usize, to_idx: usize) -> bool {
+        if !self
+            .matrix_state
+            .move_scene_synced(from_idx, to_idx, &self.audio_proxy)
+        {
+            return false;
+        }
+        let remap = |idx: usize| -> usize {
+            if idx == from_idx {
+                to_idx
+            } else if from_idx < to_idx && idx > from_idx && idx <= to_idx {
+                idx - 1
+            } else if to_idx < from_idx && idx >= to_idx && idx < from_idx {
+                idx + 1
+            } else {
+                idx
+            }
+        };
+        if let Some(q) = self.queued_scene_index {
+            self.queued_scene_index = Some(remap(q));
+        }
+        let remap_target = |t: &mut Option<detail_editor_panel::ClipEditorTarget>| {
+            if let Some(detail_editor_panel::ClipEditorTarget::Matrix { slot_idx, .. }) = t {
+                *slot_idx = remap(*slot_idx);
+            }
+        };
+        remap_target(&mut self.clip_editor.target);
+        remap_target(&mut self.clip_editor.active_target);
+        true
+    }
+
     pub fn copy_scene_at(&mut self, scene_idx: usize) -> bool {
         if let Some(copied) = self.matrix_state.copy_scene(scene_idx) {
             self.matrix_clipboard.copy_scene(copied);

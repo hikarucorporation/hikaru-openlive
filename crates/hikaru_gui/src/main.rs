@@ -494,6 +494,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.remove_scene(scene_idx);
                     }
                 }
+                GuiCommand::MoveScene { from_idx, to_idx } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.move_scene(from_idx, to_idx);
+                    }
+                }
 
                 GuiCommand::LoadDmsSample { pad_idx, path } => {
                     if let Ok(mut reader) = hikaru_gui::wav_io::open(&path) {

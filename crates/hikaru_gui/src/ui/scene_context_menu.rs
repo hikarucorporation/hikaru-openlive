@@ -21,6 +21,7 @@ const TRAY_PAD: f32 = 4.0;
 const TRAY_ARROW_W: f32 = 12.0;
 const SEP_H: f32 = 13.0;
 const ICON_ROW_H: f32 = 42.0;
+const TEXT_ROW_H: f32 = 22.0;
 
 const MENU_BG: Color32 = Color32::from_rgb(0x2E, 0x2F, 0x33);
 const MENU_BORDER: Color32 = Color32::from_rgb(0x18, 0x19, 0x1C);
@@ -60,6 +61,7 @@ pub const SCENE_PALETTE: [[u32; 9]; 3] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SceneMenuAction {
     SetColor(Color32),
+    Rename,
     Cut,
     Copy,
     Paste,
@@ -91,7 +93,7 @@ pub fn show(
     let grid_h = 3.0 * SWATCH_H + 2.0 * SWATCH_GAP;
     let tray_w = grid_w + TRAY_PAD * 2.0 + TRAY_ARROW_W;
     let tray_h = grid_h + TRAY_PAD * 2.0;
-    let total_h = PAD_TOP + tray_h + SEP_H + ICON_ROW_H + PAD_BOTTOM;
+    let total_h = PAD_TOP + tray_h + SEP_H + ICON_ROW_H + SEP_H + TEXT_ROW_H + PAD_BOTTOM;
 
     let screen = ctx.screen_rect();
     let origin = pos2(
@@ -249,6 +251,33 @@ pub fn show(
                     action = Some(*act);
                     should_close = true;
                 }
+            }
+            y += ICON_ROW_H;
+
+            // --- Separador horizontal + acción Rename ---
+            let ly2 = (y + SEP_H * 0.5).round() - 0.5;
+            p.line_segment(
+                [pos2(x0, ly2), pos2(x0 + inner_w, ly2)],
+                Stroke::new(1.0_f32, SEP),
+            );
+            y += SEP_H;
+
+            let rename_rect = Rect::from_min_size(pos2(x0, y), vec2(inner_w, TEXT_ROW_H));
+            let rename_resp = ui.interact(rename_rect, key.with("scene_rename"), Sense::click());
+            let rename_hot = rename_resp.hovered();
+            if rename_hot {
+                p.rect_filled(rename_rect, 2.0, ROW_HOVER);
+            }
+            p.text(
+                pos2(rename_rect.min.x + 8.0, rename_rect.center().y),
+                Align2::LEFT_CENTER,
+                "Rename Scene...",
+                fonts::semibold(10.5),
+                if rename_hot { TXT_ON_HOVER } else { TXT },
+            );
+            if rename_resp.clicked() {
+                action = Some(SceneMenuAction::Rename);
+                should_close = true;
             }
 
             if ctx.input(|i| i.pointer.any_pressed()) {

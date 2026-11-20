@@ -37,9 +37,9 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 251,
+    "done": 252,
     "in_progress": 18,
-    "planned": 347,
+    "planned": 346,
     "bugs": 1,
     "parity_percent": 41
   },
@@ -186,7 +186,8 @@
         {
           "id": "cl-24",
           "name": "Scene rename / reorder / color",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/scenes_headers.rs, crates/hikaru_gui/src/ui/scene_context_menu.rs, crates/hikaru_gui/src/views/matrix.rs, crates/hikaru_sequencer/src/matrix.rs, crates/hikaru_audio_engine/src/lib.rs, crates/hikaru_gui/tests/block1_parity_tests.rs"
         },
         {
           "id": "cl-25",

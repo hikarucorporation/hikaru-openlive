@@ -234,6 +234,10 @@ pub enum GuiCommand {
     RemoveScene { 
         scene_idx: usize 
     },
+    MoveScene {
+        from_idx: usize,
+        to_idx: usize,
+    },
     SetTrackPan { 
         track_idx: usize, 
         pan: f32 

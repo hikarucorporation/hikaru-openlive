@@ -92,6 +92,44 @@ impl TrackMatrix {
         true
     }
 
+    /// Reordena la escena `from_idx` a la posición `to_idx`, desplazando las
+    /// columnas intermedias y preservando clips y overrides de cuantización.
+    pub fn move_scene(&mut self, from_idx: usize, to_idx: usize) -> bool {
+        if from_idx >= self.scene_count || to_idx >= self.scene_count || from_idx == to_idx {
+            return false;
+        }
+        if from_idx < to_idx {
+            let moved_q = self.scene_quantizations[from_idx];
+            for s in from_idx..to_idx {
+                self.scene_quantizations[s] = self.scene_quantizations[s + 1];
+            }
+            self.scene_quantizations[to_idx] = moved_q;
+
+            for track in 0..MAX_TRACKS {
+                let moved = self.slots[track][from_idx].take();
+                for s in from_idx..to_idx {
+                    self.slots[track][s] = self.slots[track][s + 1].take();
+                }
+                self.slots[track][to_idx] = moved;
+            }
+        } else {
+            let moved_q = self.scene_quantizations[from_idx];
+            for s in (to_idx..from_idx).rev() {
+                self.scene_quantizations[s + 1] = self.scene_quantizations[s];
+            }
+            self.scene_quantizations[to_idx] = moved_q;
+
+            for track in 0..MAX_TRACKS {
+                let moved = self.slots[track][from_idx].take();
+                for s in (to_idx..from_idx).rev() {
+                    self.slots[track][s + 1] = self.slots[track][s].take();
+                }
+                self.slots[track][to_idx] = moved;
+            }
+        }
+        true
+    }
+
     /// Configura la cuantización global de lanzamiento.
     pub fn set_global_quantization(&mut self, grid: QuantizationGrid) {
         self.global_quantization = grid;
@@ -403,5 +441,36 @@ mod tests {
         matrix.trigger_scene_now(2, 2500);
         assert_eq!(matrix.slots[0][1].as_ref().unwrap().get_state(), ClipState::Stopped);
         assert_eq!(matrix.slots[0][2].as_ref().unwrap().start_sample, 2500);
+    }
+
+    #[test]
+    fn move_scene_reorders_clips_and_quantization_overrides() {
+        let mut matrix = TrackMatrix::new();
+        matrix.slots[0][0] = Some(Clip::new(100, 1));
+        matrix.slots[0][2] = Some(Clip::new(200, 1));
+        matrix.slots[1][3] = Some(Clip::new(300, 2));
+        matrix.set_scene_quantization(0, Some(QuantizationGrid::Eighth));
+        matrix.set_scene_quantization(2, Some(QuantizationGrid::Bar));
+
+        // Mover 0 -> 2: [0, 1, 2, 3] => [1, 2, 0, 3]
+        assert!(matrix.move_scene(0, 2));
+        assert!(matrix.slots[0][0].is_none());
+        assert_eq!(matrix.slots[0][1].as_ref().unwrap().id, 200);
+        assert_eq!(matrix.slots[0][2].as_ref().unwrap().id, 100);
+        assert_eq!(matrix.slots[1][3].as_ref().unwrap().id, 300);
+        assert_eq!(matrix.scene_quantizations[1], Some(QuantizationGrid::Bar));
+        assert_eq!(matrix.scene_quantizations[2], Some(QuantizationGrid::Eighth));
+
+        // Mover 3 -> 0: [1, 2, 0, 3] => [3, 1, 2, 0]
+        assert!(matrix.move_scene(3, 0));
+        assert_eq!(matrix.slots[1][0].as_ref().unwrap().id, 300);
+        assert_eq!(matrix.slots[0][2].as_ref().unwrap().id, 200);
+        assert_eq!(matrix.slots[0][3].as_ref().unwrap().id, 100);
+        assert_eq!(matrix.scene_quantizations[2], Some(QuantizationGrid::Bar));
+        assert_eq!(matrix.scene_quantizations[3], Some(QuantizationGrid::Eighth));
+
+        // Casos inválidos / no-op
+        assert!(!matrix.move_scene(1, 1));
+        assert!(!matrix.move_scene(0, MAX_SCENES));
     }
 }

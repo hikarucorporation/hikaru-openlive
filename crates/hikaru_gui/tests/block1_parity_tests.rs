@@ -426,3 +426,60 @@ fn cl18_scene_launch_quantization_override_persists_and_drives_engine() {
     assert!(engine.pending_scene_launch().is_none());
     assert!(engine.clips[0].is_playing);
 }
+
+#[test]
+fn cl24_scene_rename_reorder_and_color_syncs_state_and_engine() {
+    let (mut state, rx) = make_app_state();
+
+    // 1. Rename: rechaza vacío y guarda recortado
+    assert!(!state.rename_scene(0, "   "));
+    assert!(state.rename_scene(0, "  Intro  "));
+    assert_eq!(state.matrix_state.scenes[0].name, "Intro");
+    assert!(state.rename_scene(2, "Drop"));
+    assert_eq!(state.matrix_state.scenes[2].name, "Drop");
+
+    // 2. Color
+    let intro_col = egui::Color32::from_rgb(0xFF, 0x5A, 0x00);
+    assert!(state.matrix_state.set_scene_color(0, intro_col));
+    assert_eq!(state.matrix_state.scenes[0].color, Some(intro_col));
+
+    // 3. Reorder: colocar clip en escena 0, seleccionarla y abrirla en clip_editor
+    matrix::create_empty_midi_clip(&mut state.matrix_state, &state.audio_proxy, 0, 0);
+    while rx.try_recv().is_ok() {}
+    state.matrix_state.selected_scene = Some(0);
+    state.matrix_state.selected_slot = Some((0, 0));
+    state.queued_scene_index = Some(0);
+    state.clip_editor.target = Some(ClipEditorTarget::Matrix {
+        track_idx: 0,
+        slot_idx: 0,
+    });
+
+    // Mover escena 0 ("Intro") -> posición 2
+    assert!(state.move_scene(0, 2));
+    assert_eq!(state.matrix_state.scenes[2].name, "Intro");
+    assert_eq!(state.matrix_state.scenes[2].color, Some(intro_col));
+    assert_eq!(state.matrix_state.scenes[1].name, "Drop");
+    assert!(state.matrix_state.slot(0, 2).unwrap().clip.is_some());
+    assert!(state.matrix_state.slot(0, 0).unwrap().clip.is_none());
+    assert_eq!(state.matrix_state.selected_scene, Some(2));
+    assert_eq!(state.matrix_state.selected_slot, Some((0, 2)));
+    assert_eq!(state.queued_scene_index, Some(2));
+    assert_eq!(
+        state.clip_editor.target,
+        Some(ClipEditorTarget::Matrix {
+            track_idx: 0,
+            slot_idx: 2,
+        })
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(GuiCommand::MoveScene {
+            from_idx: 0,
+            to_idx: 2
+        })
+    ));
+
+    // No-op y fuera de rango
+    assert!(!state.move_scene(1, 1));
+    assert!(!state.move_scene(0, 999));
+}

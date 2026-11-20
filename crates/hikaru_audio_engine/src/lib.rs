@@ -2731,6 +2731,52 @@ impl<'a> AudioEngine<'a> {
         let _ = self.matrix.remove_scene(scene_idx);
     }
 
+    /// Reordena la escena `from_idx` a la posición `to_idx`: reindexa todos los
+    /// clips de matriz (audio y MIDI), la escena pendiente en cola y los
+    /// overrides de cuantización.
+    pub fn move_scene(&mut self, from_idx: usize, to_idx: usize) {
+        if from_idx == to_idx
+            || from_idx >= self.matrix.scene_count
+            || to_idx >= self.matrix.scene_count
+        {
+            return;
+        }
+        let remap = |idx: usize| -> usize {
+            if idx == from_idx {
+                to_idx
+            } else if from_idx < to_idx && idx > from_idx && idx <= to_idx {
+                idx - 1
+            } else if to_idx < from_idx && idx >= to_idx && idx < from_idx {
+                idx + 1
+            } else {
+                idx
+            }
+        };
+
+        for clip in self.clips.iter_mut() {
+            if clip.is_matrix_clip {
+                clip.scene_index = remap(clip.scene_index);
+            }
+        }
+        for clip in self.midi_clips.iter_mut() {
+            if clip.is_matrix_clip {
+                clip.scene_index = remap(clip.scene_index);
+            }
+        }
+        if let Some(pending) = &mut self.pending_scene_launch {
+            pending.scene_index = remap(pending.scene_index);
+            self.pending_scene_index_atomic
+                .store(pending.scene_index as i32, Ordering::Relaxed);
+        }
+        if from_idx < self.scene_quantization_overrides.len()
+            && to_idx < self.scene_quantization_overrides.len()
+        {
+            let ov = self.scene_quantization_overrides.remove(from_idx);
+            self.scene_quantization_overrides.insert(to_idx, ov);
+        }
+        let _ = self.matrix.move_scene(from_idx, to_idx);
+    }
+
     pub fn set_global_loop(&mut self, start_samples: u64, end_samples: u64, enabled: bool) {
         self.transport.set_loop_region_samples(start_samples, end_samples);
         self.transport.set_loop_enabled(enabled);
@@ -5518,6 +5564,33 @@ mod tests {
             engine.scene_quantization_overrides[1],
             Some(QuantizationGrid::Sixteenth)
         );
+    }
+
+    #[test]
+    fn move_scene_reindexes_clips_and_overrides_in_engine() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.add_clip(1, 0, 0, ramp_samples(4096), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(2, 0, 1, ramp_samples(4096), 0.0, 0.0, 0.0, 2, true);
+        engine.add_clip(3, 0, 2, ramp_samples(4096), 0.0, 0.0, 0.0, 2, true);
+        engine.set_scene_launch_quantization(0, Some(QuantizationGrid::Eighth));
+        engine.set_scene_launch_quantization(2, Some(QuantizationGrid::Bar));
+
+        // Mover escena 0 -> 2: [0, 1, 2] -> [1, 2, 0]
+        engine.move_scene(0, 2);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 2).unwrap().scene_index, 0);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 3).unwrap().scene_index, 1);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 1).unwrap().scene_index, 2);
+        assert_eq!(engine.scene_quantization_overrides[1], Some(QuantizationGrid::Bar));
+        assert_eq!(engine.scene_quantization_overrides[2], Some(QuantizationGrid::Eighth));
+
+        // Mover escena 2 -> 0: vuelve a [0, 1, 2]
+        engine.move_scene(2, 0);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 1).unwrap().scene_index, 0);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 2).unwrap().scene_index, 1);
+        assert_eq!(engine.clips.iter().find(|c| c.id == 3).unwrap().scene_index, 2);
+        assert_eq!(engine.scene_quantization_overrides[0], Some(QuantizationGrid::Eighth));
+        assert_eq!(engine.scene_quantization_overrides[2], Some(QuantizationGrid::Bar));
     }
 
     #[test]

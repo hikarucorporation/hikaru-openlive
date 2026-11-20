@@ -378,6 +378,8 @@ pub struct SessionMatrixState {
     pub context_menu: Option<crate::views::clip_context_menu::ClipLauncherContextMenu>,
     pub scene_context_menu: Option<SceneContextMenu>,
     pub clip_drag: Option<MatrixClipDrag>,
+    pub renaming_scene: Option<(usize, String)>,
+    pub scene_drag: Option<usize>,
 }
 
 impl Default for SessionMatrixState {
@@ -425,6 +427,8 @@ impl Default for SessionMatrixState {
             context_menu: None,
             scene_context_menu: None,
             clip_drag: None,
+            renaming_scene: None,
+            scene_drag: None,
         }
     }
 }
@@ -604,6 +608,71 @@ impl SessionMatrixState {
         };
         scene.color = Some(color);
         true
+    }
+
+    pub fn rename_scene(&mut self, scene_idx: usize, new_name: impl Into<String>) -> bool {
+        let trimmed = new_name.into().trim().to_string();
+        if trimmed.is_empty() {
+            return false;
+        }
+        let Some(scene) = self.scenes.get_mut(scene_idx) else {
+            return false;
+        };
+        scene.name = trimmed;
+        true
+    }
+
+    pub fn move_scene(&mut self, from_idx: usize, to_idx: usize) -> bool {
+        if from_idx >= self.scenes.len() || to_idx >= self.scenes.len() || from_idx == to_idx {
+            return false;
+        }
+        let scene = self.scenes.remove(from_idx);
+        self.scenes.insert(to_idx, scene);
+        for track_row in &mut self.grid {
+            if from_idx < track_row.len() && to_idx < track_row.len() {
+                let slot = track_row.remove(from_idx);
+                track_row.insert(to_idx, slot);
+            }
+        }
+        let remap = |idx: usize| -> usize {
+            if idx == from_idx {
+                to_idx
+            } else if from_idx < to_idx && idx > from_idx && idx <= to_idx {
+                idx - 1
+            } else if to_idx < from_idx && idx >= to_idx && idx < from_idx {
+                idx + 1
+            } else {
+                idx
+            }
+        };
+        if let Some((t, s)) = self.selected_slot {
+            self.selected_slot = Some((t, remap(s)));
+        }
+        if let Some(sel) = self.selected_scene {
+            self.selected_scene = Some(remap(sel));
+        }
+        if let Some((idx, buf)) = self.renaming_scene.take() {
+            self.renaming_scene = Some((remap(idx), buf));
+        }
+        self.context_menu = None;
+        self.scene_context_menu = None;
+        self.clip_drag = None;
+        self.scene_drag = None;
+        true
+    }
+
+    pub fn move_scene_synced(
+        &mut self,
+        from_idx: usize,
+        to_idx: usize,
+        audio_proxy: &AudioProxy,
+    ) -> bool {
+        if self.move_scene(from_idx, to_idx) {
+            audio_proxy.send(GuiCommand::MoveScene { from_idx, to_idx });
+            true
+        } else {
+            false
+        }
     }
 
     pub fn copy_scene(&self, scene_idx: usize) -> Option<crate::views::clipboard::CopiedScene> {
@@ -5013,6 +5082,11 @@ pub fn render_scene_context_menu(ui: &mut Ui, state: &mut AppState) {
         match act {
             SceneMenuAction::SetColor(col) => {
                 state.matrix_state.set_scene_color(scene_idx, col);
+            }
+            SceneMenuAction::Rename => {
+                if let Some(scene) = state.matrix_state.scenes.get(scene_idx) {
+                    state.matrix_state.renaming_scene = Some((scene_idx, scene.name.clone()));
+                }
             }
             SceneMenuAction::Cut => {
                 state.cut_scene_at(scene_idx);
