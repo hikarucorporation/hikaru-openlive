@@ -37,9 +37,9 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 254,
+    "done": 255,
     "in_progress": 18,
-    "planned": 344,
+    "planned": 343,
     "bugs": 1,
     "parity_percent": 41
   },
@@ -369,7 +369,8 @@
         {
           "id": "ar-28",
           "name": "Follow-playhead / auto-scroll",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/playlist.rs, crates/hikaru_gui/src/views/matrix.rs"
         }
       ]
     },

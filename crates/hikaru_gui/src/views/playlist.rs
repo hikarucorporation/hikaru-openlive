@@ -147,6 +147,7 @@ pub struct PlaylistState {
     pub trim_hover: Option<(usize, TrimEdge)>,
     pub hover_tick: Option<u64>,
     pub active_tool: PlaylistTool,
+    pub follow_playhead: bool,
 }
 
 impl Default for PlaylistState {
@@ -188,11 +189,31 @@ impl Default for PlaylistState {
             trim_hover: None,
             hover_tick: None,
             active_tool: PlaylistTool::Pointer,
+            follow_playhead: true,
         }
     }
 }
 
 impl PlaylistState {
+    /// Auto-scrolls the timeline horizontally to keep the playhead visible
+    /// while playing (Bitwig-style page-turn follow-playhead).
+    /// Returns `true` if `scroll_offset_x` was updated.
+    pub fn update_follow_playhead_scroll(&mut self, viewport_w: f32, is_playing: bool) -> bool {
+        if !self.follow_playhead || !is_playing || viewport_w <= 1.0 {
+            return false;
+        }
+        let playhead_px = (self.playhead_tick as f32) * self.zoom_x.max(1e-6);
+        let screen_x = playhead_px + self.scroll_offset_x;
+        let right_limit = (viewport_w - 24.0).max(viewport_w * 0.85);
+        if screen_x > right_limit || screen_x < 0.0 {
+            let target = -(playhead_px - viewport_w * 0.1).max(0.0);
+            if (target - self.scroll_offset_x).abs() > 0.5 {
+                self.scroll_offset_x = target;
+                return true;
+            }
+        }
+        false
+    }
     pub fn insert_cue_marker_at(&mut self, tick: u64) -> usize {
         if let Some(existing) = self.cue_markers.iter().find(|m| m.tick == tick) {
             return existing.id;
@@ -1356,5 +1377,39 @@ mod tests {
         remove_time_range(&mut s, 960, 1920);
         assert_eq!(s.clips.len(), 2);
         assert_eq!(s.clips[1].1.start_tick, 960);
+    }
+
+    #[test]
+    fn follow_playhead_auto_scrolls_on_page_turn_and_loop_wrap() {
+        let mut s = PlaylistState::default();
+        assert!(s.follow_playhead);
+        s.zoom_x = 0.1; // 1000 ticks = 100 px
+        let viewport_w = 500.0;
+
+        // Paused: never scrolls even if playhead is off-screen.
+        s.playhead_tick = 10_000;
+        assert!(!s.update_follow_playhead_scroll(viewport_w, false));
+        assert_eq!(s.scroll_offset_x, 0.0);
+
+        // Disabled: never scrolls while playing.
+        s.follow_playhead = false;
+        assert!(!s.update_follow_playhead_scroll(viewport_w, true));
+        assert_eq!(s.scroll_offset_x, 0.0);
+
+        // Re-enabled, playhead inside viewport: no scroll.
+        s.follow_playhead = true;
+        s.playhead_tick = 2_000; // 200 px
+        assert!(!s.update_follow_playhead_scroll(viewport_w, true));
+        assert_eq!(s.scroll_offset_x, 0.0);
+
+        // Playhead crosses right margin (> 476 px): page-turn to ~10% from left.
+        s.playhead_tick = 5_000; // 500 px
+        assert!(s.update_follow_playhead_scroll(viewport_w, true));
+        assert!((s.scroll_offset_x - (-450.0)).abs() < 1e-3);
+
+        // Loop wrap back to bar 1 (tick 0): scrolls back to 0.0.
+        s.playhead_tick = 0;
+        assert!(s.update_follow_playhead_scroll(viewport_w, true));
+        assert_eq!(s.scroll_offset_x, 0.0);
     }
 }

@@ -2016,6 +2016,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 };
                 state.playlist_state.scroll_offset_x =
                     (state.playlist_state.scroll_offset_x + pan_dx).min(0.0);
+                if state.is_playing() && pan_dx.abs() > 0.5 {
+                    state.playlist_state.follow_playhead = false;
+                }
             } else {
                 let max_scroll_y =
                     ((tracks_count as f32 + 1.0) * row_h - (tracks_y1 - tracks_y0)).max(0.0);
@@ -2024,6 +2027,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 if show_timeline {
                     state.playlist_state.scroll_offset_x =
                         (state.playlist_state.scroll_offset_x + scroll_delta.x).min(0.0);
+                    if state.is_playing() && scroll_delta.x.abs() > 0.5 {
+                        state.playlist_state.follow_playhead = false;
+                    }
                 }
             }
         }
@@ -2137,8 +2143,39 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         toggle_timeline_clicked = true;
     }
 
-    let rem_toolbar_w = (toolbar_ui.available_width() - 44.0).max(0.0);
+    let rem_toolbar_w = (toolbar_ui.available_width() - 68.0).max(0.0);
     toolbar_ui.add_space(rem_toolbar_w);
+
+    // Follow Playhead (Auto-Scroll) toggle button (Bitwig-style vector icon)
+    if bitwig_kit::capsule_icon_button(
+        &mut toolbar_ui,
+        vec2(20.0, 20.0),
+        state.playlist_state.follow_playhead,
+        ACCENT_ORANGE,
+        JoinSide::Standalone,
+        |p, r, fg| {
+            let c = r.center();
+            // Vertical playhead line
+            p.line_segment(
+                [pos2(c.x - 3.5, c.y - 4.5), pos2(c.x - 3.5, c.y + 4.5)],
+                Stroke::new(1.5_f32, fg),
+            );
+            // Right-pointing follow chevron
+            p.line_segment(
+                [pos2(c.x + 0.5, c.y - 3.5), pos2(c.x + 4.0, c.y)],
+                Stroke::new(1.5_f32, fg),
+            );
+            p.line_segment(
+                [pos2(c.x + 4.0, c.y), pos2(c.x + 0.5, c.y + 3.5)],
+                Stroke::new(1.5_f32, fg),
+            );
+        },
+    )
+    .on_hover_text("Follow Playhead (Auto-Scroll)")
+    .clicked()
+    {
+        state.playlist_state.follow_playhead = !state.playlist_state.follow_playhead;
+    }
 
     // Active Playlist Tool indicator (Bitwig sub-bar right icon)
     let tool_label = match state.playlist_state.active_tool {
@@ -3498,6 +3535,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // 4. ARRANGER TIMELINE (Bitwig Signature Medium-Grey Lanes & Crisp Grid)
     // =========================================================================
     if show_timeline && timeline_w > 0.0 {
+        let is_playing = state.is_playing();
+        state
+            .playlist_state
+            .update_follow_playhead_scroll(timeline_w, is_playing);
         let ppqn = state.playlist_state.ppqn.max(1);
         let zoom_x = state.playlist_state.zoom_x;
         let scroll_x = state.playlist_state.scroll_offset_x;
