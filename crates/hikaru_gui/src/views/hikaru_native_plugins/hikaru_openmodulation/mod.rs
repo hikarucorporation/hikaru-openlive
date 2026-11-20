@@ -5,15 +5,24 @@
 //! Phase, Depth, Retrigger, Polaridad ±/+, Sync/Hz, slot FX y Mix) capaz de modular cualquier
 //! knob de dispositivos nativos o externos (como `INDEX` / `WT POS` en Hikaru OpenPoly).
 
+pub mod bay;
+pub mod bay_ui;
 pub mod lfo_mod;
 
+pub use bay::{
+    add_bay_modulator, bay_width_for_slot, capture_bay_params, clear_bay_for_slot, get_bay_state,
+    remove_bay_modulator, restore_bay_params, update_bay_state, DeviceModulatorBay,
+    ModulatorCategory, ModulatorKind, ModulatorMeta, ModulatorSlotState, MODULATOR_CATALOG,
+};
+pub use bay_ui::render_device_modulator_bay;
 pub use lfo_mod::{
-    active_mapping_for_track, clear_mapping_mode, get_channel_route_amount, get_global_transport,
-    get_lfo_state, get_modulation, handle_knob_mapping_click, is_mapping_target,
-    modulatable_rotary_knob, on_transport_pause_or_stop, on_transport_play, render_module,
-    render_preset_menu, set_channel_route_amount, update_global_transport, update_lfo_state,
-    ActiveModulation, LfoChannelState, LfoModState, LfoTransportState, ModulationTarget,
-    MODULATION_CARD_WIDTH, MOD_ARROW_CYAN,
+    active_mapping_for_track, active_mapping_source_for_track, clear_mapping_mode,
+    get_channel_route_amount, get_global_transport, get_lfo_state, get_modulation,
+    handle_knob_mapping_click, is_any_mapping_active_for_track, is_bay_mapping_active,
+    is_mapping_target, modulatable_rotary_knob, on_transport_pause_or_stop, on_transport_play,
+    render_module, render_preset_menu, set_channel_route_amount, toggle_bay_mapping_mode,
+    update_global_transport, update_lfo_state, ActiveModulation, LfoChannelState, LfoModState,
+    LfoTransportState, ModSourceId, ModulationTarget, MODULATION_CARD_WIDTH, MOD_ARROW_CYAN,
 };
 
 #[cfg(test)]
@@ -203,5 +212,78 @@ mod tests {
         assert!((restored.lfo2.amount - (-0.75)).abs() < 1e-4);
         assert_eq!(restored.lfo2.target, ModulationTarget::OpenWavetableVolume);
         assert!((restored.mix - 0.65).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_device_modulator_bay_classic_lfo_macro_button_eval_and_columns() {
+        let mut bay = DeviceModulatorBay::empty();
+        assert_eq!(bay.column_count(), 1); // just '+'
+
+        let lfo_id = bay.add_modulator(ModulatorKind::ClassicLfo);
+        let macro_id = bay.add_modulator(ModulatorKind::Macro);
+        let btn_id = bay.add_modulator(ModulatorKind::Button);
+        // 3 slots + '+' = 4 cells -> expands to 2 columns
+        assert_eq!(bay.column_count(), 2);
+
+        let transport = LfoTransportState::default();
+
+        // Classic LFO at 2 Hz, t = 0.125s => sine peak = +1.0
+        let lfo = bay.slots.iter_mut().find(|s| s.id == lfo_id).unwrap();
+        lfo.lfo_rate_hz = 2.0;
+        lfo.lfo_depth = 1.0;
+        lfo.lfo_bipolar = true;
+        let lfo_out = lfo.evaluate(&transport, 0.125)[0];
+        assert!((lfo_out - 1.0).abs() < 1e-3, "Classic LFO sine peak expected ~1.0, got {lfo_out}");
+
+        // Macro unipolar and bipolar
+        let mac = bay.slots.iter_mut().find(|s| s.id == macro_id).unwrap();
+        mac.macro_value = 0.75;
+        mac.macro_bipolar = false;
+        assert!((mac.evaluate(&transport, 0.0)[0] - 0.75).abs() < 1e-4);
+        mac.macro_bipolar = true;
+        assert!((mac.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+
+        // Button OFF -> 0.0, ON -> 1.0
+        let btn = bay.slots.iter_mut().find(|s| s.id == btn_id).unwrap();
+        btn.button_on = false;
+        assert_eq!(btn.evaluate(&transport, 0.0)[0], 0.0);
+        btn.button_on = true;
+        assert_eq!(btn.evaluate(&transport, 0.0)[0], 1.0);
+
+        // Project params roundtrip
+        mac.set_route(0, ModulationTarget::OpenPolyCutoff, 0.42);
+        let saved = bay.to_project_params(true);
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved);
+        assert_eq!(restored.slots.len(), 3);
+        let r_mac = restored.slots.iter().find(|s| s.kind == ModulatorKind::Macro).unwrap();
+        assert!((r_mac.macro_value - 0.75).abs() < 1e-4);
+        assert!(r_mac.macro_bipolar);
+        assert!((r_mac.route_amount(0, ModulationTarget::OpenPolyCutoff) - 0.42).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_bay_mapping_mode_and_get_modulation() {
+        let track_idx = 99;
+        let slot_idx = 3;
+        clear_bay_for_slot(track_idx, slot_idx);
+        let macro_id = add_bay_modulator(track_idx, slot_idx, ModulatorKind::Macro);
+        update_bay_state(track_idx, slot_idx, |bay| {
+            if let Some(m) = bay.slots.iter_mut().find(|s| s.id == macro_id) {
+                m.macro_value = 0.8;
+            }
+        });
+
+        toggle_bay_mapping_mode(track_idx, slot_idx, macro_id, 0);
+        assert!(is_bay_mapping_active(track_idx, slot_idx, macro_id, 0));
+        assert!(is_any_mapping_active_for_track(track_idx));
+        assert!(handle_knob_mapping_click(track_idx, "OpenPoly", "CUTOFF"));
+        assert!(!is_bay_mapping_active(track_idx, slot_idx, macro_id, 0));
+
+        let m = get_modulation(track_idx, "OpenPoly", "CUTOFF")
+            .expect("Macro modulation should be visible via get_modulation");
+        assert!((m.delta - 0.4).abs() < 1e-3, "0.8 * 0.5 expected 0.4, got {}", m.delta);
+
+        clear_bay_for_slot(track_idx, slot_idx);
     }
 }

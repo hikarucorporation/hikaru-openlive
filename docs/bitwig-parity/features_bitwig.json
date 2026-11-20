@@ -37,11 +37,11 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 255,
-    "in_progress": 18,
-    "planned": 343,
+    "done": 258,
+    "in_progress": 17,
+    "planned": 341,
     "bugs": 1,
-    "parity_percent": 41
+    "parity_percent": 42
   },
   "areas": [
     {
@@ -1430,7 +1430,8 @@
         {
           "id": "md-008",
           "name": "Button",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs"
         },
         {
           "id": "md-009",
@@ -1445,9 +1446,8 @@
         {
           "id": "md-011",
           "name": "Classic LFO",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs",
-          "note": "OpenModulation covers a basic LFO; Bitwig's shape/polarity set is partial."
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs"
         },
         {
           "id": "md-012",
@@ -1493,7 +1493,8 @@
         {
           "id": "md-020",
           "name": "Macro",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/bay_ui.rs"
         },
         {
           "id": "md-021",

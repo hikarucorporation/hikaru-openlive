@@ -14,7 +14,7 @@ use crate::views::hikaru_native_plugins::hikaru_opengrid::{
 };
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATION_CARD_WIDTH};
 use crate::views::hikaru_native_plugins::hikaru_openpoly::{
-    self, OPEN_POLY_CARD_WIDTH, OPEN_POLY_COMPACT_CARD_WIDTH,
+    self, OPEN_POLY_COMPACT_CARD_WIDTH,
 };
 use crate::views::hikaru_native_plugins::hikaru_openspectral_phaser::openspectral_phaser;
 use crate::views::hikaru_native_plugins::hikaru_sampler::{sampler_editor, SAMPLER_CARD_WIDTH};
@@ -652,7 +652,10 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                     .map(|p| p.modulators_open)
                                     .unwrap_or(true);
                                 if mods_open {
-                                    OPEN_POLY_CARD_WIDTH
+                                    OPEN_POLY_COMPACT_CARD_WIDTH
+                                        + hikaru_openmodulation::bay_width_for_slot(
+                                            track_idx, slot_idx,
+                                        )
                                 } else {
                                     OPEN_POLY_COMPACT_CARD_WIDTH
                                 }

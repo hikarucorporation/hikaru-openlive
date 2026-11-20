@@ -246,7 +246,7 @@ impl ModulationTarget {
         None
     }
 
-    fn parse_saved(label: &str, fallback: Self) -> Self {
+    pub(crate) fn parse_saved(label: &str, fallback: Self) -> Self {
         Self::ALL
             .iter()
             .find(|t| t.label().eq_ignore_ascii_case(label))
@@ -746,8 +746,31 @@ fn lfo_state_map() -> &'static LfoMap {
     CELL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-// Stores (track_idx, slot_idx, channel_idx: 0 = LFO1, 1 = LFO2)
-type MappingActive = Mutex<Option<(usize, usize, u8)>>;
+/// Identifica la fuente activa del modo mapping estilo Bitwig (flecha cyan `●→`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModSourceId {
+    LfoMod {
+        track_idx: usize,
+        slot_idx: usize,
+        channel_idx: u8,
+    },
+    DeviceBay {
+        track_idx: usize,
+        slot_idx: usize,
+        mod_id: u32,
+        out_idx: u8,
+    },
+}
+
+impl ModSourceId {
+    pub fn track_idx(self) -> usize {
+        match self {
+            Self::LfoMod { track_idx, .. } | Self::DeviceBay { track_idx, .. } => track_idx,
+        }
+    }
+}
+
+type MappingActive = Mutex<Option<ModSourceId>>;
 fn mapping_mode_active() -> &'static MappingActive {
     static CELL: OnceLock<MappingActive> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
@@ -885,6 +908,18 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
         }
     }
 
+    let (bay_matched, bay_raw, bay_delta, bay_amount, bay_phase) =
+        super::bay::evaluate_bay_modulation_for_track(track_idx, device, param, &transport);
+    if bay_matched {
+        matched = true;
+        total_raw += bay_raw;
+        total_delta += bay_delta;
+        total_amount += bay_amount;
+        if last_phase == 0.0 {
+            last_phase = bay_phase;
+        }
+    }
+
     if matched {
         Some(ActiveModulation {
             raw_lfo: total_raw.clamp(-1.0, 1.0),
@@ -897,16 +932,71 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
     }
 }
 
+/// Returns the active modulation mapping source on `track_idx` (either LFO MOD or Device Modulator Bay).
+pub fn active_mapping_source_for_track(track_idx: usize) -> Option<ModSourceId> {
+    let active = mapping_mode_active().lock().unwrap();
+    active.filter(|src| src.track_idx() == track_idx)
+}
+
+/// Returns `true` if any modulator (LFO MOD or Device Modulator Bay) on `track_idx` is in mapping mode.
+pub fn is_any_mapping_active_for_track(track_idx: usize) -> bool {
+    active_mapping_source_for_track(track_idx).is_some()
+}
+
+/// Toggles Bitwig mapping mode for a Device Modulator Bay output.
+pub fn toggle_bay_mapping_mode(track_idx: usize, slot_idx: usize, mod_id: u32, out_idx: u8) {
+    let target_src = ModSourceId::DeviceBay {
+        track_idx,
+        slot_idx,
+        mod_id,
+        out_idx,
+    };
+    let mut active = mapping_mode_active().lock().unwrap();
+    if *active == Some(target_src) {
+        *active = None;
+    } else {
+        *active = Some(target_src);
+    }
+}
+
+/// Returns `true` if the specified Device Modulator Bay output is currently in mapping mode.
+pub fn is_bay_mapping_active(track_idx: usize, slot_idx: usize, mod_id: u32, out_idx: u8) -> bool {
+    let active = mapping_mode_active().lock().unwrap();
+    *active
+        == Some(ModSourceId::DeviceBay {
+            track_idx,
+            slot_idx,
+            mod_id,
+            out_idx,
+        })
+}
+
 /// Returns `Some((track_idx, slot_idx, channel_idx))` if a modulator on `track_idx` is in Bitwig mapping mode.
 pub fn active_mapping_for_track(track_idx: usize) -> Option<(usize, usize, u8)> {
-    let active = mapping_mode_active().lock().unwrap();
-    active.filter(|&(tr, _, _)| tr == track_idx)
+    match active_mapping_source_for_track(track_idx)? {
+        ModSourceId::LfoMod {
+            track_idx,
+            slot_idx,
+            channel_idx,
+        } => Some((track_idx, slot_idx, channel_idx)),
+        ModSourceId::DeviceBay {
+            track_idx,
+            slot_idx,
+            out_idx,
+            ..
+        } => Some((track_idx, slot_idx, out_idx)),
+    }
 }
 
 /// Exits mapping mode globally.
 pub fn clear_mapping_mode() {
     let mut active = mapping_mode_active().lock().unwrap();
-    if let Some((tr, slot, _)) = active.take() {
+    if let Some(ModSourceId::LfoMod {
+        track_idx: tr,
+        slot_idx: slot,
+        ..
+    }) = active.take()
+    {
         update_lfo_state(tr, slot, |st| {
             st.lfo1.is_mapping = false;
             st.lfo2.is_mapping = false;
@@ -962,8 +1052,12 @@ pub fn is_mapping_target(track_idx: usize, _device: &str, _param: &str) -> bool 
 /// Legacy single-click mapping binding (still used by OpenWavetable & tests).
 pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) -> bool {
     let mut active = mapping_mode_active().lock().unwrap();
-    if let Some((map_tr, map_slot, channel)) = *active {
-        if map_tr == track_idx {
+    match *active {
+        Some(ModSourceId::LfoMod {
+            track_idx: map_tr,
+            slot_idx: map_slot,
+            channel_idx: channel,
+        }) if map_tr == track_idx => {
             if let Some(target) = ModulationTarget::from_device_and_param(device, param) {
                 update_lfo_state(map_tr, map_slot, |st| {
                     if channel == 0 {
@@ -978,6 +1072,21 @@ pub fn handle_knob_mapping_click(track_idx: usize, device: &str, param: &str) ->
                 return true;
             }
         }
+        Some(ModSourceId::DeviceBay {
+            track_idx: map_tr,
+            slot_idx: map_slot,
+            mod_id,
+            out_idx,
+        }) if map_tr == track_idx => {
+            if ModulationTarget::from_device_and_param(device, param).is_some() {
+                super::bay::set_bay_route_amount(
+                    map_tr, map_slot, mod_id, out_idx, device, param, 0.5,
+                );
+                *active = None;
+                return true;
+            }
+        }
+        _ => {}
     }
     false
 }
@@ -1039,11 +1148,23 @@ pub fn modulatable_rotary_knob(
     let base_norm = ((*value - lo) / span).clamp(0.0, 1.0);
 
     // Check if Bitwig modulation mapping mode is active on this track
-    if let Some((map_tr, map_slot, ch_idx)) = active_mapping_for_track(track_idx) {
+    if let Some(mod_src) = active_mapping_source_for_track(track_idx) {
         let (rect, response) =
             ui.allocate_exact_size(vec2(diameter, diameter), Sense::click_and_drag());
 
-        let mut route_amt = get_channel_route_amount(map_tr, map_slot, ch_idx, device, param);
+        let mut route_amt = match mod_src {
+            ModSourceId::LfoMod {
+                track_idx: map_tr,
+                slot_idx: map_slot,
+                channel_idx: ch_idx,
+            } => get_channel_route_amount(map_tr, map_slot, ch_idx, device, param),
+            ModSourceId::DeviceBay {
+                track_idx: map_tr,
+                slot_idx: map_slot,
+                mod_id,
+                out_idx,
+            } => super::bay::get_bay_route_amount(map_tr, map_slot, mod_id, out_idx, device, param),
+        };
         let mut amt_changed = false;
 
         if response.double_clicked() {
@@ -1065,7 +1186,21 @@ pub fn modulatable_rotary_knob(
             amt_changed = true;
         }
         if amt_changed {
-            set_channel_route_amount(map_tr, map_slot, ch_idx, device, param, route_amt);
+            match mod_src {
+                ModSourceId::LfoMod {
+                    track_idx: map_tr,
+                    slot_idx: map_slot,
+                    channel_idx: ch_idx,
+                } => set_channel_route_amount(map_tr, map_slot, ch_idx, device, param, route_amt),
+                ModSourceId::DeviceBay {
+                    track_idx: map_tr,
+                    slot_idx: map_slot,
+                    mod_id,
+                    out_idx,
+                } => super::bay::set_bay_route_amount(
+                    map_tr, map_slot, mod_id, out_idx, device, param, route_amt,
+                ),
+            }
         }
 
         if ui.is_rect_visible(rect) {
@@ -1124,7 +1259,11 @@ pub fn modulatable_rotary_knob(
             ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
         }
 
-        let ch_lbl = if ch_idx == 0 { "LFO1" } else { "LFO2" };
+        let ch_lbl = match mod_src {
+            ModSourceId::LfoMod { channel_idx: 0, .. } => "LFO1",
+            ModSourceId::LfoMod { .. } => "LFO2",
+            ModSourceId::DeviceBay { .. } => "MOD",
+        };
         let tip = if route_amt.abs() > 0.004 {
             format!(
                 "{ch_lbl} → {param}: {:+.0}% (Drag up/down to adjust • Double-click to clear • Esc to finish)",
@@ -1315,7 +1454,12 @@ fn render_lfo_channel_panel(
 
     let is_global_mapping = {
         let active = mapping_mode_active().lock().unwrap();
-        *active == Some((track_idx, slot_idx, channel_idx))
+        *active
+            == Some(ModSourceId::LfoMod {
+                track_idx,
+                slot_idx,
+                channel_idx,
+            })
     };
     let map_active = is_global_mapping;
     ch.is_mapping = map_active;
@@ -1382,7 +1526,11 @@ fn render_lfo_channel_panel(
         ch.is_mapping = next;
         let mut active = mapping_mode_active().lock().unwrap();
         if next {
-            *active = Some((track_idx, slot_idx, channel_idx));
+            *active = Some(ModSourceId::LfoMod {
+                track_idx,
+                slot_idx,
+                channel_idx,
+            });
         } else {
             *active = None;
         }
@@ -2299,6 +2447,7 @@ pub fn save_openmodulation_preset(state: &LfoModState) {
             sampler: None,
             open_poly: None,
             open_grid: None,
+            modulator_bay: None,
         };
         let preset = hikaru_project_file::HikaruDevicePreset {
             format_version: hikaru_project_file::FORMAT_VERSION,

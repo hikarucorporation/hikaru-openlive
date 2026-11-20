@@ -10,8 +10,7 @@
 
 use egui::{pos2, vec2, Align2, Color32, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, Ui};
 use hikaru_dsp::synth::open_poly::{
-    eval_osc_preview, OpenPolyEnvType, OpenPolyFilterType, OpenPolyLfoWave, OpenPolyOscType,
-    OpenPolySubWave,
+    eval_osc_preview, OpenPolyEnvType, OpenPolyFilterType, OpenPolyOscType, OpenPolySubWave,
 };
 
 use crate::app::AppState;
@@ -192,50 +191,18 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
     let y0 = avail.min.y;
 
     // =========================================================================
-    // COLUMN 0 (optional): Built-in Modulators Drawer (LFO + Expressions + '+')
+    // COLUMN 0 (optional): Reusable Bitwig-style Device Modulator Bay
     // =========================================================================
     if poly.modulators_open {
-        let col_w = 62.0;
-        let lfo_rect = Rect::from_min_size(pos2(cursor_x, y0), vec2(col_w, 92.0));
-        let exp_rect = Rect::from_min_size(pos2(cursor_x, lfo_rect.max.y + gap), vec2(col_w, 82.0));
-        let plus_rect = Rect::from_min_max(
-            pos2(cursor_x, exp_rect.max.y + gap),
-            pos2(cursor_x + col_w, y0 + total_h),
+        let bay_w = hikaru_openmodulation::render_device_modulator_bay(
+            ui,
+            pos2(cursor_x, y0),
+            total_h,
+            track_idx,
+            slot_idx,
+            &mut request_add_modulator,
         );
-
-        render_lfo_drawer(ui, lfo_rect, &mut poly, &mut dirty, slot_idx);
-        render_expressions_drawer(ui, exp_rect, &mut poly, &mut dirty, slot_idx);
-
-        // '+' button to add external OpenModulation device to track
-        paint_panel(ui, plus_rect, PANEL_BORDER);
-        let plus_resp = ui
-            .interact(
-                plus_rect,
-                ui.id().with(("openpoly_add_mod", track_idx, slot_idx)),
-                Sense::click(),
-            )
-            .on_hover_text("Add Hikaru OpenLFO MOD to track");
-        if plus_resp.hovered() {
-            ui.painter()
-                .rect_filled(plus_rect.shrink(1.0), 2.5, Color32::from_rgb(0x32, 0x35, 0x3D));
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        }
-        ui.painter().text(
-            plus_rect.center(),
-            Align2::CENTER_CENTER,
-            "+",
-            fonts::semibold(15.0),
-            if plus_resp.hovered() {
-                Color32::WHITE
-            } else {
-                theme::TEXT_SECONDARY
-            },
-        );
-        if plus_resp.clicked() {
-            request_add_modulator = true;
-        }
-
-        cursor_x += col_w + gap;
+        cursor_x += bay_w;
     }
 
     // =========================================================================
@@ -330,261 +297,10 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
         crate::views::explorer::begin_wavetable_pick(app, track_idx, slot_idx);
     }
     if request_add_modulator {
-        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
-            let next_id = track.effects.len();
-            track.effects.push(crate::views::mixer::DspSlot::new(
-                next_id,
-                "OpenLFO MOD".to_string(),
-            ));
-        }
+        app.popup_browser.open_insert_modulator(track_idx, slot_idx);
     }
     if request_insert_device {
         app.popup_browser.open_insert_device(track_idx);
-    }
-}
-
-fn render_lfo_drawer(
-    ui: &mut Ui,
-    rect: Rect,
-    poly: &mut HikaruOpenPoly,
-    dirty: &mut bool,
-    slot_idx: usize,
-) {
-    paint_panel(ui, rect, if poly.lfo_enabled { Color32::from_rgb(0x4E, 0x45, 0x3A) } else { PANEL_BORDER });
-    let p = ui.painter().clone();
-
-    // Header row: wave label + ON toggle
-    let hdr_r = Rect::from_min_size(rect.min + vec2(3.0, 2.0), vec2(rect.width() - 6.0, 14.0));
-    let hdr_resp = ui
-        .interact(hdr_r, ui.id().with(("poly_lfo_en", slot_idx)), Sense::click())
-        .on_hover_text("Toggle built-in LFO modulator");
-    p.text(
-        pos2(hdr_r.min.x + 1.0, hdr_r.center().y),
-        Align2::LEFT_CENTER,
-        "LFO",
-        fonts::semibold(8.5),
-        if poly.lfo_enabled { MOD_ORANGE } else { theme::TEXT_MUTED },
-    );
-    p.text(
-        pos2(hdr_r.max.x - 1.0, hdr_r.center().y),
-        Align2::RIGHT_CENTER,
-        poly.lfo_wave.label(),
-        fonts::regular(8.0),
-        Color32::from_rgb(0xC8, 0xCC, 0xD4),
-    );
-    if hdr_resp.clicked() {
-        poly.lfo_enabled = !poly.lfo_enabled;
-        *dirty = true;
-    }
-
-    // Mini waveform screen (click cycles waveform)
-    let wave_r = Rect::from_min_size(pos2(rect.min.x + 4.0, hdr_r.max.y + 2.0), vec2(rect.width() - 8.0, 28.0));
-    p.rect_filled(wave_r, 2.0, PANEL_BG_DARK);
-    let wave_resp = ui
-        .interact(wave_r, ui.id().with(("poly_lfo_wave", slot_idx)), Sense::click())
-        .on_hover_text("Click to cycle LFO waveform (Sine / Tri / Saw / Sqr / S&H)");
-    if wave_resp.clicked() {
-        poly.lfo_wave = poly.lfo_wave.cycle();
-        *dirty = true;
-    }
-    if wave_resp.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-
-    // Zero line
-    let cy = wave_r.center().y;
-    p.line_segment(
-        [pos2(wave_r.min.x + 2.0, cy), pos2(wave_r.max.x - 2.0, cy)],
-        Stroke::new(0.7_f32, Color32::from_rgb(0x36, 0x3A, 0x42)),
-    );
-    let steps = 28;
-    let mut pts = Vec::with_capacity(steps + 1);
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let v = match poly.lfo_wave {
-            OpenPolyLfoWave::Sine => (t * std::f32::consts::TAU).sin(),
-            OpenPolyLfoWave::Triangle => 1.0 - 4.0 * (t - 0.5).abs(),
-            OpenPolyLfoWave::Saw => 2.0 * t - 1.0,
-            OpenPolyLfoWave::Square => if t < 0.5 { 0.9 } else { -0.9 },
-            OpenPolyLfoWave::SampleHold => {
-                let b = (t * 4.0).floor() as i32;
-                match b {
-                    0 => 0.65,
-                    1 => -0.5,
-                    2 => 0.85,
-                    _ => -0.25,
-                }
-            }
-        };
-        let x = wave_r.min.x + 2.0 + t * (wave_r.width() - 4.0);
-        let y = cy - v * (wave_r.height() * 0.38);
-        pts.push(pos2(x, y));
-    }
-    let lfo_col = if poly.lfo_enabled { MOD_ORANGE } else { Color32::from_rgb(0x62, 0x66, 0x70) };
-    p.add(egui::Shape::line(pts, Stroke::new(1.3_f32, lfo_col)));
-
-    // Rate drag pill
-    let rate_r = Rect::from_min_size(pos2(rect.min.x + 4.0, wave_r.max.y + 3.0), vec2(rect.width() - 8.0, 15.0));
-    p.rect_filled(rate_r, 2.0, Color32::from_rgb(0x1D, 0x1F, 0x24));
-    let rate_resp = ui
-        .interact(rate_r, ui.id().with(("poly_lfo_rate", slot_idx)), Sense::click_and_drag())
-        .on_hover_text("Drag vertically to adjust LFO Rate (Hz). Double-click resets.");
-    if rate_resp.double_clicked() {
-        poly.lfo_rate_hz = 1.5;
-        *dirty = true;
-    } else if rate_resp.dragged() {
-        let norm = ms_to_log_norm(poly.lfo_rate_hz, 0.05, 25.0);
-        let next = (norm - rate_resp.drag_delta().y * 0.006).clamp(0.0, 1.0);
-        poly.lfo_rate_hz = log_norm_to_ms(next, 0.05, 25.0);
-        *dirty = true;
-    }
-    if rate_resp.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
-    }
-    p.text(
-        rate_r.center(),
-        Align2::CENTER_CENTER,
-        format!("{:.1} Hz", poly.lfo_rate_hz),
-        fonts::regular(8.5),
-        Color32::from_rgb(0xD6, 0xDA, 0xE2),
-    );
-
-    // Target selector + Amount drag row
-    let row_y = rate_r.max.y + 3.0;
-    let tgt_r = Rect::from_min_size(pos2(rect.min.x + 4.0, row_y), vec2(26.0, 18.0));
-    let amt_r = Rect::from_min_size(pos2(tgt_r.max.x + 2.0, row_y), vec2(rect.width() - 36.0, 18.0));
-
-    let cur_tgt = poly.lfo_selected_target;
-    let cur_amt = poly.lfo_target_amount(cur_tgt);
-    p.rect_filled(
-        tgt_r,
-        2.0,
-        if cur_amt.abs() > 0.01 {
-            Color32::from_rgb(0x5A, 0x38, 0x1A)
-        } else {
-            Color32::from_rgb(0x2E, 0x31, 0x38)
-        },
-    );
-    let tgt_resp = ui
-        .interact(tgt_r, ui.id().with(("poly_lfo_tgt", slot_idx)), Sense::click())
-        .on_hover_text(format!("LFO Target: {} (click to cycle Cutoff / Index / Pitch / Amp)", cur_tgt.label()));
-    if tgt_resp.clicked() {
-        poly.lfo_selected_target = cur_tgt.cycle();
-    }
-    if tgt_resp.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-    p.text(
-        tgt_r.center(),
-        Align2::CENTER_CENTER,
-        cur_tgt.short_label(),
-        fonts::semibold(8.0),
-        if cur_amt.abs() > 0.01 { MOD_ORANGE } else { KNOB_WHITE },
-    );
-
-    p.rect_filled(amt_r, 2.0, Color32::from_rgb(0x1D, 0x1F, 0x24));
-    let amt_resp = ui
-        .interact(amt_r, ui.id().with(("poly_lfo_amt", slot_idx)), Sense::click_and_drag())
-        .on_hover_text(format!("Drag LFO → {} depth (-100%..+100%). Double-click = 0%", cur_tgt.label()));
-    if amt_resp.double_clicked() {
-        *poly.lfo_target_amount_mut(cur_tgt) = 0.0;
-        *dirty = true;
-    } else if amt_resp.dragged() {
-        let v = poly.lfo_target_amount_mut(cur_tgt);
-        *v = (*v - amt_resp.drag_delta().y * 0.008).clamp(-1.0, 1.0);
-        *dirty = true;
-    }
-    if amt_resp.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
-    }
-    let amt_now = poly.lfo_target_amount(cur_tgt);
-    p.text(
-        amt_r.center(),
-        Align2::CENTER_CENTER,
-        format!("{:+.0}", amt_now * 100.0),
-        fonts::regular(8.0),
-        if amt_now.abs() > 0.01 { MOD_ORANGE } else { theme::TEXT_MUTED },
-    );
-}
-
-fn render_expressions_drawer(
-    ui: &mut Ui,
-    rect: Rect,
-    poly: &mut HikaruOpenPoly,
-    dirty: &mut bool,
-    slot_idx: usize,
-) {
-    paint_panel(ui, rect, PANEL_BORDER);
-    let p = ui.painter().clone();
-    p.text(
-        pos2(rect.center().x, rect.min.y + 9.0),
-        Align2::CENTER_CENTER,
-        "Expressions",
-        fonts::regular(8.5),
-        Color32::from_rgb(0xB8, 0xBC, 0xC6),
-    );
-
-    let items = [
-        ("VEL", poly.filter_vel_amount, "Velocity → Filter Cutoff (drag vertically)"),
-        ("TIMB", poly.osc_fold, "Timbre / Wavefold amount (drag vertically)"),
-        ("REL", (poly.amp_release_ms / 4000.0).clamp(0.0, 1.0), "Release expression"),
-        ("PRES", poly.filter_drive, "Pressure / Filter Drive (drag vertically)"),
-    ];
-
-    let cell_w = (rect.width() - 10.0) * 0.5;
-    let cell_h = 26.0;
-    for (idx, (lbl, val, tip)) in items.iter().enumerate() {
-        let col = (idx % 2) as f32;
-        let row = (idx / 2) as f32;
-        let cr = Rect::from_min_size(
-            pos2(rect.min.x + 4.0 + col * (cell_w + 2.0), rect.min.y + 19.0 + row * (cell_h + 4.0)),
-            vec2(cell_w, cell_h),
-        );
-        let resp = ui
-            .interact(cr, ui.id().with(("poly_expr", slot_idx, idx)), Sense::click_and_drag())
-            .on_hover_text(*tip);
-        if resp.dragged() {
-            let d = -resp.drag_delta().y * 0.006;
-            match idx {
-                0 => poly.filter_vel_amount = (poly.filter_vel_amount + d).clamp(0.0, 1.0),
-                1 => poly.osc_fold = (poly.osc_fold + d).clamp(0.0, 1.0),
-                2 => {
-                    let n = ms_to_log_norm(poly.amp_release_ms, 1.0, 8000.0);
-                    poly.amp_release_ms = log_norm_to_ms((n + d).clamp(0.0, 1.0), 1.0, 8000.0);
-                }
-                3 => poly.filter_drive = (poly.filter_drive + d).clamp(0.0, 1.0),
-                _ => {}
-            }
-            *dirty = true;
-        }
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
-        }
-
-        p.text(
-            pos2(cr.center().x, cr.min.y + 6.0),
-            Align2::CENTER_CENTER,
-            *lbl,
-            fonts::semibold(7.5),
-            if *val > 0.02 { FEG_GREEN } else { Color32::from_rgb(0xA4, 0xAA, 0xB4) },
-        );
-        // Tiny green modulation arrow indicator
-        let pill_r = Rect::from_center_size(pos2(cr.center().x, cr.min.y + 18.0), vec2(18.0, 7.0));
-        p.rect_filled(
-            pill_r,
-            3.5,
-            if *val > 0.02 {
-                Color32::from_rgb(0x1E, 0x5A, 0x38)
-            } else {
-                Color32::from_rgb(0x2F, 0x33, 0x3B)
-            },
-        );
-        let dot_x = pill_r.min.x + 3.5 + val.clamp(0.0, 1.0) * (pill_r.width() - 7.0);
-        p.circle_filled(
-            pos2(dot_x, pill_r.center().y),
-            2.4,
-            if *val > 0.02 { FEG_GREEN } else { Color32::from_rgb(0x70, 0x76, 0x82) },
-        );
     }
 }
 

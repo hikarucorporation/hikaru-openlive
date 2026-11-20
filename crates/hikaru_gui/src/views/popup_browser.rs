@@ -16,6 +16,9 @@ use crate::theme;
 use crate::ui::fonts;
 use crate::ui::icons;
 use crate::views::dsp_rack::PLUGIN_CATALOG;
+use crate::views::hikaru_native_plugins::hikaru_openmodulation::{
+    self, ModulatorKind, MODULATOR_CATALOG, MOD_ARROW_CYAN,
+};
 use crate::views::mixer::{DspSlot, Track};
 
 // Bitwig Pop-up Browser palette (matched to Bitwig Studio 5.x)
@@ -45,6 +48,7 @@ const ACTIVE_BLUE_TEXT: Color32 = Color32::from_rgb(0x4C, 0xA8, 0xE8);
 pub enum BrowserTargetMode {
     NewInstrumentTrack,
     InsertDevice { track_idx: usize },
+    InsertModulator { track_idx: usize, slot_idx: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -136,6 +140,7 @@ impl MetadataFilterTab {
 pub enum BrowserPayload {
     Native { name: String },
     External(PluginDescriptor),
+    Modulator { kind: ModulatorKind },
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +215,42 @@ impl PopupBrowserState {
         self.selected_item_idx = 0;
         self.focus_search = true;
     }
+
+    pub fn open_insert_modulator(&mut self, track_idx: usize, slot_idx: usize) {
+        self.open = true;
+        self.mode = BrowserTargetMode::InsertModulator {
+            track_idx,
+            slot_idx,
+        };
+        self.active_rail = BrowserRailTab::Everything;
+        self.metadata_tab = MetadataFilterTab::Category;
+        self.quick_filter = None;
+        self.selected_filter_value = None;
+        self.search_query.clear();
+        self.selected_item_idx = 0;
+        self.focus_search = true;
+    }
+}
+
+fn build_modulator_items() -> Vec<BrowserItem> {
+    MODULATOR_CATALOG
+        .iter()
+        .map(|meta| BrowserItem {
+            id: format!("modulator:{}", meta.name),
+            name: meta.name.to_string(),
+            category: meta.category.label().to_string(),
+            creator: "Hikaru".to_string(),
+            location: "Modulators".to_string(),
+            file_kind: "Modulator".to_string(),
+            device_type: "Modulator".to_string(),
+            tags: vec![meta.category.label().to_string(), "Modulator".to_string()],
+            description: meta.description.to_string(),
+            rail: BrowserRailTab::NoteFx,
+            quick: Some(QuickInstrumentFilter::Modulation),
+            badge_color: MOD_ARROW_CYAN,
+            payload: BrowserPayload::Modulator { kind: meta.kind },
+        })
+        .collect()
 }
 
 fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserItem> {
@@ -557,6 +598,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 slot.external = Some(desc.clone());
                 slot
             }
+            BrowserPayload::Modulator { .. } => DspSlot::default(),
         }
     };
 
@@ -616,6 +658,15 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 }
             }
         }
+        BrowserTargetMode::InsertModulator {
+            track_idx,
+            slot_idx,
+        } => {
+            if let BrowserPayload::Modulator { kind } = item.payload {
+                hikaru_openmodulation::add_bay_modulator(track_idx, slot_idx, kind);
+                state.project_dirty = true;
+            }
+        }
     }
     state.popup_browser.open = false;
 }
@@ -644,7 +695,10 @@ pub fn render(ctx: &Context, state: &mut AppState) {
     let dim_painter = ctx.layer_painter(dim_layer);
     dim_painter.rect_filled(screen, 0.0, Color32::from_black_alpha(70));
 
-    let all_items = build_catalog_items(&state.plugin_settings_state.discovered_plugins);
+    let all_items = match state.popup_browser.mode {
+        BrowserTargetMode::InsertModulator { .. } => build_modulator_items(),
+        _ => build_catalog_items(&state.plugin_settings_state.discovered_plugins),
+    };
 
     // Filter by rail + favorites + quick filter
     let rail_items: Vec<BrowserItem> = all_items

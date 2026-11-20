@@ -323,6 +323,7 @@ pub fn save_opengrid_preset(grid: &HikaruOpenGrid) {
             sampler: None,
             open_poly: None,
             open_grid: Some(grid.to_project_params()),
+            modulator_bay: None,
         };
         let preset = hikaru_project_file::HikaruDevicePreset {
             format_version: hikaru_project_file::FORMAT_VERSION,

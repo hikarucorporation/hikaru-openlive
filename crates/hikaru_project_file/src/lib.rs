@@ -163,6 +163,63 @@ pub struct DspSlot {
     /// Parámetros y grafo de patch si el slot contiene un Hikaru OpenGrid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_grid: Option<OpenGridParams>,
+    /// Panel izquierdo de moduladores acoplados al dispositivo (estilo Bitwig Modulator Bay).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modulator_bay: Option<DeviceModulatorBayParams>,
+}
+
+/// Ruta de modulación de una salida de modulador hacia un parámetro de dispositivo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModulatorRouteParams {
+    pub out_idx: u8,
+    pub target: String,
+    pub amount: f32,
+}
+
+impl Default for ModulatorRouteParams {
+    fn default() -> Self {
+        Self {
+            out_idx: 0,
+            target: String::new(),
+            amount: 0.0,
+        }
+    }
+}
+
+/// Estado serializado de un modulador individual dentro del Device Modulator Bay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModulatorSlotParams {
+    pub id: u32,
+    pub kind: String,
+    pub enabled: bool,
+    pub params: Vec<f32>,
+    pub bool_flags: Vec<bool>,
+    pub mode_idx: u8,
+    pub routes: Vec<ModulatorRouteParams>,
+}
+
+impl Default for ModulatorSlotParams {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            kind: "Macro".to_string(),
+            enabled: true,
+            params: Vec::new(),
+            bool_flags: Vec::new(),
+            mode_idx: 0,
+            routes: Vec::new(),
+        }
+    }
+}
+
+/// Estado serializado del Device Modulator Bay acoplado a cualquier `DspSlot`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DeviceModulatorBayParams {
+    pub open: bool,
+    pub slots: Vec<ModulatorSlotParams>,
 }
 
 /// Nodo serializado de un módulo dentro de Hikaru OpenGrid.
@@ -775,6 +832,7 @@ mod tests {
                 sampler: None,
                 open_poly: None,
                 open_grid: None,
+                modulator_bay: None,
             }),
             chain: None,
         };
@@ -807,5 +865,54 @@ mod tests {
         assert_eq!(slot.name, "OpenWavetable");
         assert!(slot.open_wavetable.is_none());
         assert!(slot.open_modulation.is_none());
+        assert!(slot.modulator_bay.is_none());
+    }
+
+    #[test]
+    fn modulator_bay_params_roundtrip() {
+        let bay = DeviceModulatorBayParams {
+            open: true,
+            slots: vec![
+                ModulatorSlotParams {
+                    id: 1,
+                    kind: "Classic LFO".to_string(),
+                    enabled: true,
+                    params: vec![1.5, 0.75, 0.0],
+                    bool_flags: vec![true, false],
+                    mode_idx: 0,
+                    routes: vec![ModulatorRouteParams {
+                        out_idx: 0,
+                        target: "OpenPoly: CUTOFF".to_string(),
+                        amount: 0.45,
+                    }],
+                },
+                ModulatorSlotParams {
+                    id: 2,
+                    kind: "Macro".to_string(),
+                    enabled: true,
+                    params: vec![0.6],
+                    bool_flags: vec![],
+                    mode_idx: 0,
+                    routes: vec![],
+                },
+            ],
+        };
+        let slot = DspSlot {
+            id: 0,
+            name: "OpenPoly".to_string(),
+            active: true,
+            wavetable_path: None,
+            plugin_path: None,
+            plugin_format: None,
+            open_wavetable: None,
+            open_modulation: None,
+            sampler: None,
+            open_poly: None,
+            open_grid: None,
+            modulator_bay: Some(bay.clone()),
+        };
+        let json = serde_json::to_string(&slot).unwrap();
+        let decoded: DspSlot = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.modulator_bay, Some(bay));
     }
 }

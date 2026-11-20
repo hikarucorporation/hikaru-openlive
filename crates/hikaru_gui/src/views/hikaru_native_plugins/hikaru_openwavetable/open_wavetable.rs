@@ -2014,6 +2014,7 @@ pub fn save_openwavetable_preset(editor: &WavetableEditor) {
             sampler: None,
             open_poly: None,
             open_grid: None,
+            modulator_bay: None,
         };
         let preset = hikaru_project_file::HikaruDevicePreset {
             format_version: hikaru_project_file::FORMAT_VERSION,

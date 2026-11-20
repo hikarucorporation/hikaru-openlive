@@ -123,6 +123,18 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     .and_then(|p| p.table.path.as_ref())
                     .or(e.wavetable.table.path.as_ref())
                     .map(|p| p.to_string_lossy().to_string());
+                let bay_open = e
+                    .open_poly
+                    .as_ref()
+                    .map(|p| p.modulators_open)
+                    .or_else(|| e.open_grid.as_ref().map(|g| g.modulators_open))
+                    .unwrap_or(false);
+                let modulator_bay =
+                    crate::views::hikaru_native_plugins::hikaru_openmodulation::capture_bay_params(
+                        t.id,
+                        slot_idx,
+                        bay_open,
+                    );
                 DspSlot {
                     id: e.id,
                     name: e.name.clone(),
@@ -141,6 +153,7 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     sampler,
                     open_poly,
                     open_grid,
+                    modulator_bay,
                 }
             })
             .collect(),
@@ -237,6 +250,15 @@ pub fn build_track(t: &Track) -> mixer::Track {
                         },
                     );
                 }
+            }
+
+            // Reconstruir Device Modulator Bay acoplado al slot (si existe)
+            if let Some(ref bay_params) = e.modulator_bay {
+                crate::views::hikaru_native_plugins::hikaru_openmodulation::restore_bay_params(
+                    t.id,
+                    slot_idx,
+                    bay_params,
+                );
             }
 
             // Reconstruir estado de Hikaru Sampler
