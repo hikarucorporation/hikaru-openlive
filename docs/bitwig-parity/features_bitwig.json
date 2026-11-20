@@ -37,11 +37,11 @@
   "summary": {
     "areas": 13,
     "features": 616,
-    "done": 261,
+    "done": 267,
     "in_progress": 17,
-    "planned": 338,
+    "planned": 332,
     "bugs": 1,
-    "parity_percent": 42
+    "parity_percent": 43
   },
   "areas": [
     {
@@ -1425,7 +1425,7 @@
         {
           "id": "md-007",
           "name": "Beat LFO",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-008",
@@ -1504,12 +1504,12 @@
         {
           "id": "md-022",
           "name": "Math",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-023",
           "name": "Mix",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-024",
@@ -1534,12 +1534,12 @@
         {
           "id": "md-028",
           "name": "Polynom",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-029",
           "name": "Quantize",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-030",
@@ -1569,7 +1569,7 @@
         {
           "id": "md-035",
           "name": "Select-4",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "md-036",

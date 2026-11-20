@@ -11,7 +11,7 @@ pub mod lfo_mod;
 
 pub use bay::{
     add_bay_modulator, bay_width_for_slot, capture_bay_params, clear_bay_for_slot, get_bay_state,
-    remove_bay_modulator, restore_bay_params, update_bay_state, DeviceModulatorBay,
+    remove_bay_modulator, restore_bay_params, update_bay_state, DeviceModulatorBay, MathOp,
     ModulatorCategory, ModulatorKind, ModulatorMeta, ModulatorSlotState, MODULATOR_CATALOG,
 };
 pub use bay_ui::render_device_modulator_bay;
@@ -343,5 +343,92 @@ mod tests {
         assert!((r_xy.xy_y - 0.75).abs() < 1e-4);
         assert!(r_xy.xy_bipolar);
         assert!((r_xy.route_amount(1, ModulationTarget::OpenPolyCutoff) - (-0.4)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_block1_modulators_beat_lfo_math_mix_quantize_select4_polynom() {
+        use hikaru_dsp::effects::lfo::{LfoWaveform, SyncRate};
+
+        let mut bay = DeviceModulatorBay::empty();
+        let blfo_id = bay.add_modulator(ModulatorKind::BeatLfo);
+        let math_id = bay.add_modulator(ModulatorKind::Math);
+        let mix_id = bay.add_modulator(ModulatorKind::Mix);
+        let quant_id = bay.add_modulator(ModulatorKind::Quantize);
+        let sel4_id = bay.add_modulator(ModulatorKind::Select4);
+        let poly_id = bay.add_modulator(ModulatorKind::Polynom);
+
+        // Transport at 120 BPM (2 beats/sec), quarter note = 2 Hz, elapsed 0.125s = 0.25 cycles -> sine +1.0
+        let transport = LfoTransportState {
+            bpm: 120.0,
+            sample_count: 5512, // ~0.125s at 44100 Hz
+            sample_rate: 44100.0,
+            is_playing: true,
+            playback_start_sample: 0,
+        };
+
+        // 1. Beat LFO
+        let blfo = bay.slots.iter_mut().find(|s| s.id == blfo_id).unwrap();
+        blfo.lfo_waveform = LfoWaveform::Sine;
+        blfo.lfo_sync_rate = SyncRate::Quarter;
+        blfo.beat_lfo_skew = 0.5;
+        blfo.lfo_depth = 1.0;
+        blfo.lfo_bipolar = true;
+        let blfo_out = blfo.evaluate(&transport, 0.0)[0];
+        assert!((blfo_out - 1.0).abs() < 0.02, "Beat LFO expected ~1.0 at 1/4 cycle, got {blfo_out}");
+
+        // 2. Math (Multiply: 0.5 * -0.4 = -0.2)
+        let math = bay.slots.iter_mut().find(|s| s.id == math_id).unwrap();
+        math.math_op = MathOp::Multiply;
+        math.math_a = 0.5;
+        math.math_b = -0.4;
+        assert!((math.evaluate(&transport, 0.0)[0] - (-0.2)).abs() < 1e-4);
+
+        // 3. Mix (A=-0.5, B=0.5, mix=0.75 => +0.25)
+        let mix = bay.slots.iter_mut().find(|s| s.id == mix_id).unwrap();
+        mix.mix_a = -0.5;
+        mix.mix_b = 0.5;
+        mix.mix_amount = 0.75;
+        assert!((mix.evaluate(&transport, 0.0)[0] - 0.25).abs() < 1e-4);
+
+        // 4. Quantize (5 steps: 0, 0.25, 0.5, 0.75, 1.0; input 0.62 -> 0.5)
+        let quant = bay.slots.iter_mut().find(|s| s.id == quant_id).unwrap();
+        quant.quant_steps = 5;
+        quant.quant_bipolar = false;
+        quant.quant_in = 0.62;
+        assert!((quant.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+
+        // 5. Select-4 (smooth midpoint between In2=0.2 and In3=0.8 at index=0.5 -> 0.5)
+        let sel4 = bay.slots.iter_mut().find(|s| s.id == sel4_id).unwrap();
+        sel4.sel4_values = [0.0, 0.2, 0.8, 1.0];
+        sel4.sel4_index = 0.5; // pos = 1.5 -> midpoint between idx 1 and 2
+        sel4.sel4_smooth = true;
+        assert!((sel4.evaluate(&transport, 0.0)[0] - 0.5).abs() < 1e-4);
+        sel4.sel4_smooth = false;
+        sel4.sel4_index = 1.0; // idx 3 -> 1.0
+        assert!((sel4.evaluate(&transport, 0.0)[0] - 1.0).abs() < 1e-4);
+
+        // 6. Polynom (c0=0.1, c1=0.0, c2=1.0, c3=0.0 at x=0.5 -> 0.1 + 0.25 = 0.35)
+        let poly = bay.slots.iter_mut().find(|s| s.id == poly_id).unwrap();
+        poly.poly_in = 0.5;
+        poly.poly_c0 = 0.1;
+        poly.poly_c1 = 0.0;
+        poly.poly_c2 = 1.0;
+        poly.poly_c3 = 0.0;
+        assert!((poly.evaluate(&transport, 0.0)[0] - 0.35).abs() < 1e-4);
+
+        // Persistence roundtrip for all 6
+        let saved = bay.to_project_params(true);
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved);
+        assert_eq!(restored.slots.len(), 6);
+        let r_math = restored.slots.iter().find(|s| s.kind == ModulatorKind::Math).unwrap();
+        assert_eq!(r_math.math_op, MathOp::Multiply);
+        assert!((r_math.math_b - (-0.4)).abs() < 1e-4);
+
+        let r_quant = restored.slots.iter().find(|s| s.kind == ModulatorKind::Quantize).unwrap();
+        assert_eq!(r_quant.quant_steps, 5);
+
+        let r_poly = restored.slots.iter().find(|s| s.kind == ModulatorKind::Polynom).unwrap();
+        assert!((r_poly.poly_c2 - 1.0).abs() < 1e-4);
     }
 }

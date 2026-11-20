@@ -11,8 +11,8 @@ use crate::ui::bitwig_kit;
 use crate::ui::fonts;
 
 use super::bay::{
-    get_bay_state, update_bay_state, ModulatorKind, ModulatorSlotState, BAY_COL_WIDTH, BAY_GAP,
-    BAY_SLOTS_PER_COL,
+    get_bay_state, update_bay_state, MathOp, ModulatorKind, ModulatorSlotState, BAY_COL_WIDTH,
+    BAY_GAP, BAY_SLOTS_PER_COL,
 };
 use super::lfo_mod::{
     clear_mapping_mode, clock_time_secs, get_global_transport, is_bay_mapping_active,
@@ -87,7 +87,7 @@ pub fn render_device_modulator_bay(
 
         let m = &mut bay.slots[idx];
         let outs = m.evaluate(&transport, time_secs);
-        if m.enabled && m.kind == ModulatorKind::ClassicLfo {
+        if m.enabled && matches!(m.kind, ModulatorKind::ClassicLfo | ModulatorKind::BeatLfo) {
             any_lfo_active = true;
         }
         let mod_id = m.id;
@@ -568,6 +568,70 @@ fn render_slot_body(
             let dot_y = cy - live_out * (rect.height() * 0.36);
             p.circle_filled(pos2(dot_x, dot_y), 2.1, Color32::WHITE);
         }
+        ModulatorKind::BeatLfo => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_blfo_wave", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Beat LFO: {} @ {} — Click: cycle beat rate • Drag vertical: skew",
+                    m.lfo_waveform.label(),
+                    m.lfo_sync_rate.label()
+                ));
+            if resp.clicked() {
+                let idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == m.lfo_sync_rate)
+                    .unwrap_or(4);
+                m.lfo_sync_rate = SyncRate::ALL[(idx + 1) % SyncRate::ALL.len()];
+                *dirty = true;
+            } else if resp.dragged() {
+                let delta = -resp.drag_delta().y * 0.008;
+                m.beat_lfo_skew = (m.beat_lfo_skew + delta).clamp(0.05, 0.95);
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+
+            let cy = rect.center().y;
+            p.line_segment(
+                [pos2(rect.min.x + 2.0, cy), pos2(rect.max.x - 2.0, cy)],
+                Stroke::new(0.7_f32, Color32::from_rgb(0x36, 0x3A, 0x42)),
+            );
+            let steps = 24;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let wt = ModulatorSlotState::warp_beat_phase(t, m.beat_lfo_skew);
+                let v = evaluate_waveform(m.lfo_waveform, wt, if t < 0.5 { 0.65 } else { -0.55 });
+                let x = rect.min.x + 2.0 + t * (rect.width() - 4.0);
+                let y = cy - v * (rect.height() * 0.34);
+                pts.push(pos2(x, y));
+            }
+            let wave_col = if m.enabled {
+                MOD_ARROW_CYAN
+            } else {
+                Color32::from_rgb(0x62, 0x66, 0x70)
+            };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, wave_col)));
+
+            let dot_x = rect.min.x + 2.0 + m.lfo_last_phase * (rect.width() - 4.0);
+            let dot_y = cy - live_out * (rect.height() * 0.34);
+            p.circle_filled(pos2(dot_x, dot_y), 2.1, Color32::WHITE);
+
+            // Musical rate badge in top-right corner
+            p.text(
+                pos2(rect.max.x - 2.0, rect.min.y + 1.5),
+                Align2::RIGHT_TOP,
+                m.lfo_sync_rate.label(),
+                fonts::semibold(7.0),
+                Color32::from_rgb(0xCC, 0xD2, 0xDC),
+            );
+        }
         ModulatorKind::Macro => {
             let knob_d = rect.height().min(rect.width()).clamp(22.0, 28.0);
             let knob_r = Rect::from_center_size(rect.center(), vec2(knob_d, knob_d));
@@ -810,6 +874,273 @@ fn render_slot_body(
             p.circle_filled(puck, 3.2, puck_col);
             p.circle_stroke(puck, 3.2, Stroke::new(0.9_f32, Color32::WHITE));
         }
+        ModulatorKind::Math => {
+            // Top badge: op selector (click cycles op); bottom: A & B mini knobs
+            let op_h = 11.0;
+            let op_r = Rect::from_min_size(rect.min, vec2(rect.width(), op_h));
+            let op_resp = ui
+                .interact(
+                    op_r,
+                    ui.id().with(("bay_math_op", track_idx, slot_idx, m.id)),
+                    Sense::click(),
+                )
+                .on_hover_text(format!("Math: {} — Click to cycle operation", m.math_op.label()));
+            if op_resp.clicked() {
+                let idx = MathOp::ALL
+                    .iter()
+                    .position(|&o| o == m.math_op)
+                    .unwrap_or(0);
+                m.math_op = MathOp::ALL[(idx + 1) % MathOp::ALL.len()];
+                *dirty = true;
+            }
+            if op_resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            p.rect_filled(op_r, 2.0, CELL_WELL_BG);
+            p.text(
+                op_r.center(),
+                Align2::CENTER_CENTER,
+                m.math_op.short_symbol(),
+                fonts::semibold(7.5),
+                if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED },
+            );
+
+            let knobs_r = Rect::from_min_max(pos2(rect.min.x, op_r.max.y + 2.0), rect.max);
+            let half_w = knobs_r.width() * 0.5;
+            let knob_d = half_w.min(knobs_r.height()).clamp(12.0, 16.0);
+            let col = if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED };
+            let r_a = Rect::from_center_size(
+                pos2(knobs_r.min.x + half_w * 0.5, knobs_r.center().y),
+                vec2(knob_d, knob_d),
+            );
+            let r_b = Rect::from_center_size(
+                pos2(knobs_r.min.x + half_w * 1.5, knobs_r.center().y),
+                vec2(knob_d, knob_d),
+            );
+            let mut ch_a = ui.new_child(egui::UiBuilder::new().max_rect(r_a));
+            let (ra, ca) = bitwig_kit::rotary_knob(&mut ch_a, knob_d, &mut m.math_a, -1.0..=1.0, 0.5, col, true);
+            ra.on_hover_text(format!("A: {:+.2}", m.math_a));
+            let mut ch_b = ui.new_child(egui::UiBuilder::new().max_rect(r_b));
+            let (rb, cb) = bitwig_kit::rotary_knob(&mut ch_b, knob_d, &mut m.math_b, -1.0..=1.0, 0.5, col, true);
+            rb.on_hover_text(format!("B: {:+.2}", m.math_b));
+            if ca || cb {
+                *dirty = true;
+            }
+        }
+        ModulatorKind::Mix => {
+            let knob_d = (rect.height() - 6.0).min(rect.width()).clamp(18.0, 24.0);
+            let knob_r = Rect::from_center_size(
+                pos2(rect.center().x, rect.min.y + knob_d * 0.5 + 1.0),
+                vec2(knob_d, knob_d),
+            );
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(knob_r));
+            let (resp, changed) = bitwig_kit::rotary_knob(
+                &mut child,
+                knob_d,
+                &mut m.mix_amount,
+                0.0..=1.0,
+                0.5,
+                if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED },
+                false,
+            );
+            resp.on_hover_text(format!(
+                "Mix: {:.0}% (A={:+.2}, B={:+.2} → Out={:+.2})",
+                m.mix_amount * 100.0,
+                m.mix_a,
+                m.mix_b,
+                live_out
+            ));
+            if changed {
+                *dirty = true;
+            }
+            // Mini crossfade bar at bottom
+            let bar_r = Rect::from_min_max(
+                pos2(rect.min.x + 2.0, rect.max.y - 4.0),
+                pos2(rect.max.x - 2.0, rect.max.y - 1.0),
+            );
+            p.rect_filled(bar_r, 1.0, CELL_WELL_BG);
+            let fill_w = bar_r.width() * m.mix_amount.clamp(0.0, 1.0);
+            p.rect_filled(
+                Rect::from_min_size(bar_r.min, vec2(fill_w, bar_r.height())),
+                1.0,
+                if m.enabled { MOD_ARROW_CYAN } else { theme::TEXT_MUTED },
+            );
+        }
+        ModulatorKind::Quantize => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_quant", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Quantize ({} steps): In={:.2} → Out={:.2}\nDrag horizontal: input • Click: cycle steps",
+                    m.quant_steps, m.quant_in, live_out
+                ));
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let t = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    m.quant_in = if m.quant_bipolar { t * 2.0 - 1.0 } else { t };
+                    *dirty = true;
+                }
+            } else if resp.clicked() {
+                const PRESETS: [u8; 6] = [2, 3, 4, 6, 8, 12];
+                let next = PRESETS
+                    .iter()
+                    .copied()
+                    .find(|&s| s > m.quant_steps)
+                    .unwrap_or(PRESETS[0]);
+                m.quant_steps = next;
+                *dirty = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+            }
+
+            // Staircase transfer plot
+            let steps = m.quant_steps.clamp(2, 32) as usize;
+            let samples = 24;
+            let mut pts = Vec::with_capacity(samples + 1);
+            for i in 0..=samples {
+                let t = i as f32 / samples as f32;
+                let q = ((t * (steps - 1) as f32).round() / (steps - 1) as f32).clamp(0.0, 1.0);
+                let x = rect.min.x + 2.0 + t * (rect.width() - 4.0);
+                let y = rect.max.y - 3.0 - q * (rect.height() - 6.0);
+                pts.push(pos2(x, y));
+            }
+            let col = if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.2_f32, col)));
+
+            let in_norm = if m.quant_bipolar {
+                (m.quant_in.clamp(-1.0, 1.0) + 1.0) * 0.5
+            } else {
+                m.quant_in.clamp(0.0, 1.0)
+            };
+            let out_norm = if m.quant_bipolar {
+                (live_out.clamp(-1.0, 1.0) + 1.0) * 0.5
+            } else {
+                live_out.clamp(0.0, 1.0)
+            };
+            let dx = rect.min.x + 2.0 + in_norm * (rect.width() - 4.0);
+            let dy = rect.max.y - 3.0 - out_norm * (rect.height() - 6.0);
+            p.circle_filled(pos2(dx, dy), 2.3, Color32::WHITE);
+            p.text(
+                pos2(rect.min.x + 2.5, rect.min.y + 1.5),
+                Align2::LEFT_TOP,
+                format!("{}st", m.quant_steps),
+                fonts::semibold(7.0),
+                Color32::from_rgb(0xCC, 0xD2, 0xDC),
+            );
+        }
+        ModulatorKind::Select4 => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_sel4", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Select-4 ({}): Pos={:.0}% → Out={:+.2}\nDrag horizontal to sweep selector",
+                    if m.sel4_smooth { "Morph" } else { "Step" },
+                    m.sel4_index * 100.0,
+                    live_out
+                ));
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    m.sel4_index = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    *dirty = true;
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+            }
+
+            // 4 vertical bars for the 4 values
+            let pad = 2.5;
+            let gap = 2.0;
+            let inner_w = (rect.width() - pad * 2.0 - gap * 3.0).max(4.0);
+            let bw = inner_w / 4.0;
+            let active_pos = m.sel4_index.clamp(0.0, 1.0) * 3.0;
+            for i in 0..4 {
+                let x0 = rect.min.x + pad + i as f32 * (bw + gap);
+                let norm = ((m.sel4_values[i].clamp(-1.0, 1.0) + 1.0) * 0.5).clamp(0.05, 1.0);
+                let bh = norm * (rect.height() - pad * 2.0);
+                let bar_r = Rect::from_min_max(
+                    pos2(x0, rect.max.y - pad - bh),
+                    pos2(x0 + bw, rect.max.y - pad),
+                );
+                let dist = (active_pos - i as f32).abs();
+                let highlight = if m.sel4_smooth {
+                    (1.0 - dist).clamp(0.0, 1.0)
+                } else if dist < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+                let bar_col = if !m.enabled {
+                    theme::TEXT_MUTED
+                } else if highlight > 0.35 {
+                    MOD_ARROW_CYAN
+                } else {
+                    Color32::from_rgb(0x4A, 0x52, 0x60)
+                };
+                p.rect_filled(bar_r, 1.5, bar_col);
+            }
+            // Selector cursor line
+            let sx = rect.min.x + pad + m.sel4_index.clamp(0.0, 1.0) * (rect.width() - pad * 2.0);
+            p.line_segment(
+                [pos2(sx, rect.min.y + 1.0), pos2(sx, rect.max.y - 1.0)],
+                Stroke::new(1.1_f32, MOD_ORANGE),
+            );
+        }
+        ModulatorKind::Polynom => {
+            p.rect_filled(rect, 2.0, CELL_WELL_BG);
+            let resp = ui
+                .interact(
+                    rect,
+                    ui.id().with(("bay_poly", track_idx, slot_idx, m.id)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_text(format!(
+                    "Polynom: x={:+.2} → y={:+.2}\nDrag horizontal to sweep input x",
+                    m.poly_in, live_out
+                ));
+            if resp.dragged() || resp.clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let t = ((pos.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                    m.poly_in = t * 2.0 - 1.0;
+                    *dirty = true;
+                }
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+            }
+
+            let cy = rect.center().y;
+            p.line_segment(
+                [pos2(rect.min.x + 2.0, cy), pos2(rect.max.x - 2.0, cy)],
+                Stroke::new(0.6_f32, Color32::from_rgb(0x32, 0x36, 0x40)),
+            );
+            let steps = 24;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let x_in = t * 2.0 - 1.0;
+                let y_out = m.eval_polynom(x_in);
+                let px = rect.min.x + 2.0 + t * (rect.width() - 4.0);
+                let py = cy - y_out * (rect.height() * 0.42);
+                pts.push(pos2(px, py));
+            }
+            let curve_col = if m.enabled { MOD_ORANGE } else { theme::TEXT_MUTED };
+            p.add(egui::Shape::line(pts, Stroke::new(1.25_f32, curve_col)));
+
+            let dot_t = (m.poly_in.clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let dx = rect.min.x + 2.0 + dot_t * (rect.width() - 4.0);
+            let dy = cy - live_out * (rect.height() * 0.42);
+            p.circle_filled(pos2(dx, dy), 2.3, Color32::WHITE);
+        }
     }
 }
 
@@ -931,6 +1262,68 @@ fn render_modulator_inspector(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &m
                 }
             });
         }
+        ModulatorKind::BeatLfo => {
+            ui.label(
+                RichText::new("Waveform")
+                    .font(fonts::semibold(9.5))
+                    .color(theme::TEXT_SECONDARY),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for &wf in &LfoWaveform::ALL {
+                    if ui.selectable_label(m.lfo_waveform == wf, wf.label()).clicked() {
+                        m.lfo_waveform = wf;
+                        *dirty = true;
+                    }
+                }
+            });
+            ui.separator();
+            let mut idx = SyncRate::ALL
+                .iter()
+                .position(|&r| r == m.lfo_sync_rate)
+                .unwrap_or(4);
+            if ui
+                .add(
+                    egui::Slider::new(&mut idx, 0..=SyncRate::ALL.len() - 1)
+                        .custom_formatter(|v, _| {
+                            SyncRate::ALL
+                                .get(v.round() as usize)
+                                .map(|r| r.label())
+                                .unwrap_or("1/4")
+                                .to_string()
+                        })
+                        .text("Beat Rate"),
+                )
+                .changed()
+            {
+                m.lfo_sync_rate = SyncRate::ALL[idx];
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.beat_lfo_skew, 0.05..=0.95).text("Skew"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.lfo_depth, 0.0..=1.0).text("Depth"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(
+                    egui::Slider::new(&mut m.lfo_phase_deg, 0.0..=360.0)
+                        .suffix("°")
+                        .text("Phase"),
+                )
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui.checkbox(&mut m.lfo_bipolar, "Bipolar (±)").changed() {
+                *dirty = true;
+            }
+        }
         ModulatorKind::Macro => {
             if ui
                 .add(egui::Slider::new(&mut m.macro_value, 0.0..=1.0).text("Value"))
@@ -1017,6 +1410,172 @@ fn render_modulator_inspector(ui: &mut Ui, m: &mut ModulatorSlotState, dirty: &m
                     *dirty = true;
                 }
             });
+        }
+        ModulatorKind::Math => {
+            ui.label(
+                RichText::new("Operation")
+                    .font(fonts::semibold(9.5))
+                    .color(theme::TEXT_SECONDARY),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for &op in &MathOp::ALL {
+                    if ui.selectable_label(m.math_op == op, op.short_symbol()).clicked() {
+                        m.math_op = op;
+                        *dirty = true;
+                    }
+                }
+            });
+            ui.separator();
+            if ui
+                .add(egui::Slider::new(&mut m.math_a, -1.0..=1.0).text("Input A"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.math_b, -1.0..=1.0).text("Input B"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.label(
+                RichText::new(format!("Output: {:+.3}", m.math_op.apply(m.math_a, m.math_b)))
+                    .font(fonts::regular(9.0))
+                    .color(MOD_ARROW_CYAN),
+            );
+        }
+        ModulatorKind::Mix => {
+            if ui
+                .add(egui::Slider::new(&mut m.mix_a, -1.0..=1.0).text("Input A"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.mix_b, -1.0..=1.0).text("Input B"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.mix_amount, 0.0..=1.0).text("Mix"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            let out = (m.mix_a * (1.0 - m.mix_amount) + m.mix_b * m.mix_amount).clamp(-1.0, 1.0);
+            ui.label(
+                RichText::new(format!("Output: {:+.3}", out))
+                    .font(fonts::regular(9.0))
+                    .color(MOD_ARROW_CYAN),
+            );
+        }
+        ModulatorKind::Quantize => {
+            let range = if m.quant_bipolar { -1.0..=1.0 } else { 0.0..=1.0 };
+            if ui
+                .add(egui::Slider::new(&mut m.quant_in, range).text("Input"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.quant_steps, 2..=32).text("Steps"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui.checkbox(&mut m.quant_bipolar, "Bipolar (±)").changed() {
+                *dirty = true;
+            }
+            ui.label(
+                RichText::new(format!("Output: {:+.3}", m.eval_quantize(m.quant_in)))
+                    .font(fonts::regular(9.0))
+                    .color(MOD_ARROW_CYAN),
+            );
+        }
+        ModulatorKind::Select4 => {
+            if ui
+                .add(egui::Slider::new(&mut m.sel4_index, 0.0..=1.0).text("Select"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui.checkbox(&mut m.sel4_smooth, "Smooth Morph").changed() {
+                *dirty = true;
+            }
+            ui.separator();
+            for i in 0..4 {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut m.sel4_values[i], -1.0..=1.0)
+                            .text(format!("In {}", i + 1)),
+                    )
+                    .changed()
+                {
+                    *dirty = true;
+                }
+            }
+        }
+        ModulatorKind::Polynom => {
+            if ui
+                .add(egui::Slider::new(&mut m.poly_in, -1.0..=1.0).text("Input (x)"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.separator();
+            if ui
+                .add(egui::Slider::new(&mut m.poly_c0, -2.0..=2.0).text("x⁰ (Offset)"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.poly_c1, -2.0..=2.0).text("x¹ (Linear)"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.poly_c2, -2.0..=2.0).text("x² (Quad)"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut m.poly_c3, -2.0..=2.0).text("x³ (Cubic)"))
+                .changed()
+            {
+                *dirty = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.small_button("Linear").clicked() {
+                    m.poly_c0 = 0.0;
+                    m.poly_c1 = 1.0;
+                    m.poly_c2 = 0.0;
+                    m.poly_c3 = 0.0;
+                    *dirty = true;
+                }
+                if ui.small_button("S-Curve").clicked() {
+                    m.poly_c0 = 0.0;
+                    m.poly_c1 = 1.5;
+                    m.poly_c2 = 0.0;
+                    m.poly_c3 = -0.5;
+                    *dirty = true;
+                }
+                if ui.small_button("Parabola").clicked() {
+                    m.poly_c0 = 0.0;
+                    m.poly_c1 = 0.0;
+                    m.poly_c2 = 1.0;
+                    m.poly_c3 = 0.0;
+                    *dirty = true;
+                }
+            });
+            ui.label(
+                RichText::new(format!("Output: {:+.3}", m.eval_polynom(m.poly_in)))
+                    .font(fonts::regular(9.0))
+                    .color(MOD_ARROW_CYAN),
+            );
         }
     }
 }

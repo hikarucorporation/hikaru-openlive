@@ -60,15 +60,81 @@ impl ModulatorCategory {
     }
 }
 
+/// Operación matemática del modulador `Math`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MathOp {
+    Add,
+    Subtract,
+    Multiply,
+    Min,
+    Max,
+    Average,
+    AbsDiff,
+}
+
+impl MathOp {
+    pub const ALL: [MathOp; 7] = [
+        MathOp::Add,
+        MathOp::Subtract,
+        MathOp::Multiply,
+        MathOp::Min,
+        MathOp::Max,
+        MathOp::Average,
+        MathOp::AbsDiff,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Add => "Add (A+B)",
+            Self::Subtract => "Sub (A-B)",
+            Self::Multiply => "Mul (A×B)",
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Average => "Avg",
+            Self::AbsDiff => "|A-B|",
+        }
+    }
+
+    pub fn short_symbol(self) -> &'static str {
+        match self {
+            Self::Add => "A+B",
+            Self::Subtract => "A-B",
+            Self::Multiply => "A×B",
+            Self::Min => "MIN",
+            Self::Max => "MAX",
+            Self::Average => "AVG",
+            Self::AbsDiff => "|Δ|",
+        }
+    }
+
+    pub fn apply(self, a: f32, b: f32) -> f32 {
+        match self {
+            Self::Add => (a + b).clamp(-1.0, 1.0),
+            Self::Subtract => (a - b).clamp(-1.0, 1.0),
+            Self::Multiply => (a * b).clamp(-1.0, 1.0),
+            Self::Min => a.min(b).clamp(-1.0, 1.0),
+            Self::Max => a.max(b).clamp(-1.0, 1.0),
+            Self::Average => ((a + b) * 0.5).clamp(-1.0, 1.0),
+            Self::AbsDiff => (a - b).abs().clamp(0.0, 1.0),
+        }
+    }
+}
+
 /// Tipos de moduladores nativos soportados en el Device Modulator Bay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModulatorKind {
     ClassicLfo,
+    BeatLfo,
     Macro,
     Macro4,
     Button,
     Buttons,
     Xy,
+    Math,
+    Mix,
+    Quantize,
+    Select4,
+    Polynom,
 }
 
 impl ModulatorKind {
@@ -83,11 +149,17 @@ impl ModulatorKind {
         let lower = name.trim().to_ascii_lowercase();
         match lower.as_str() {
             "classic lfo" | "classiclfo" | "lfo" => Some(Self::ClassicLfo),
+            "beat lfo" | "beatlfo" => Some(Self::BeatLfo),
             "macro" => Some(Self::Macro),
             "macro-4" | "macro4" | "macro 4" => Some(Self::Macro4),
             "button" => Some(Self::Button),
             "buttons" | "buttons-4" | "buttons4" => Some(Self::Buttons),
             "xy" | "x-y" | "xy pad" => Some(Self::Xy),
+            "math" => Some(Self::Math),
+            "mix" => Some(Self::Mix),
+            "quantize" => Some(Self::Quantize),
+            "select-4" | "select4" | "select 4" => Some(Self::Select4),
+            "polynom" | "polynomial" => Some(Self::Polynom),
             _ => None,
         }
     }
@@ -111,6 +183,14 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         short_name: "Classic",
         category: ModulatorCategory::Lfo,
         description: "LFO with discrete waveshapes (Sine, Triangle, Saw Up/Down, Square, S&H), Free Hz / Tempo Sync, Phase, Depth and Bipolar/Unipolar polarity.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::BeatLfo,
+        name: "Beat LFO",
+        short_name: "BeatLFO",
+        category: ModulatorCategory::Lfo,
+        description: "Tempo-synced musical LFO locked to project beats/bars with phase skew, depth, and bipolar/unipolar output.",
         outputs: &["OUT"],
     },
     ModulatorMeta {
@@ -152,6 +232,46 @@ pub const MODULATOR_CATALOG: &[ModulatorMeta] = &[
         category: ModulatorCategory::Interface,
         description: "2D XY pad modulator with independent X and Y modulation outputs.",
         outputs: &["X", "Y"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Math,
+        name: "Math",
+        short_name: "Math",
+        category: ModulatorCategory::Modifier,
+        description: "Combines two modulation values A and B using Add, Subtract, Multiply, Min, Max, Average, or AbsDiff.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Mix,
+        name: "Mix",
+        short_name: "Mix",
+        category: ModulatorCategory::Modifier,
+        description: "Crossfades smoothly between two modulation values A and B controlled by a Mix knob.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Quantize,
+        name: "Quantize",
+        short_name: "Quant",
+        category: ModulatorCategory::Modifier,
+        description: "Stepped quantizer that snaps a continuous input signal into N discrete levels (2..32 steps).",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Select4,
+        name: "Select-4",
+        short_name: "Sel-4",
+        category: ModulatorCategory::Modifier,
+        description: "Selects or smoothly morphs across four modulation values using a continuous selector.",
+        outputs: &["OUT"],
+    },
+    ModulatorMeta {
+        kind: ModulatorKind::Polynom,
+        name: "Polynom",
+        short_name: "Poly",
+        category: ModulatorCategory::Modifier,
+        description: "Cubic polynomial waveshaper (c0 + c1·x + c2·x² + c3·x³) for custom nonlinear modulation curves.",
+        outputs: &["OUT"],
     },
 ];
 
@@ -205,6 +325,36 @@ pub struct ModulatorSlotState {
     pub xy_y: f32,
     pub xy_bipolar: bool,
 
+    // Beat LFO (uses lfo_waveform, lfo_sync_rate, lfo_phase_deg, lfo_depth, lfo_bipolar + skew)
+    pub beat_lfo_skew: f32,
+
+    // Math
+    pub math_op: MathOp,
+    pub math_a: f32,
+    pub math_b: f32,
+
+    // Mix
+    pub mix_a: f32,
+    pub mix_b: f32,
+    pub mix_amount: f32,
+
+    // Quantize
+    pub quant_in: f32,
+    pub quant_steps: u8,
+    pub quant_bipolar: bool,
+
+    // Select-4
+    pub sel4_values: [f32; 4],
+    pub sel4_index: f32,
+    pub sel4_smooth: bool,
+
+    // Polynom (c0 + c1*x + c2*x^2 + c3*x^3)
+    pub poly_in: f32,
+    pub poly_c0: f32,
+    pub poly_c1: f32,
+    pub poly_c2: f32,
+    pub poly_c3: f32,
+
     // Rutas de modulación
     pub routes: Vec<BayModRoute>,
     pub last_outputs: [f32; 4],
@@ -217,7 +367,11 @@ impl ModulatorSlotState {
             kind,
             enabled: true,
             lfo_waveform: LfoWaveform::Sine,
-            lfo_sync_mode: LfoSyncMode::FreeHz,
+            lfo_sync_mode: if kind == ModulatorKind::BeatLfo {
+                LfoSyncMode::TempoSync
+            } else {
+                LfoSyncMode::FreeHz
+            },
             lfo_rate_hz: 1.0,
             lfo_sync_rate: SyncRate::Quarter,
             lfo_phase_deg: 0.0,
@@ -239,8 +393,55 @@ impl ModulatorSlotState {
             xy_x: 0.5,
             xy_y: 0.5,
             xy_bipolar: false,
+            beat_lfo_skew: 0.5,
+            math_op: MathOp::Add,
+            math_a: 0.5,
+            math_b: 0.5,
+            mix_a: 0.0,
+            mix_b: 1.0,
+            mix_amount: 0.5,
+            quant_in: 0.5,
+            quant_steps: 4,
+            quant_bipolar: false,
+            sel4_values: [0.0, 0.33, 0.66, 1.0],
+            sel4_index: 0.0,
+            sel4_smooth: true,
+            poly_in: 0.5,
+            poly_c0: 0.0,
+            poly_c1: 1.0,
+            poly_c2: 0.0,
+            poly_c3: 0.0,
             routes: Vec::new(),
             last_outputs: [0.0; 4],
+        }
+    }
+
+    pub fn eval_polynom(&self, x: f32) -> f32 {
+        let x = x.clamp(-1.0, 1.0);
+        let x2 = x * x;
+        let x3 = x2 * x;
+        (self.poly_c0 + self.poly_c1 * x + self.poly_c2 * x2 + self.poly_c3 * x3).clamp(-1.0, 1.0)
+    }
+
+    pub fn eval_quantize(&self, input: f32) -> f32 {
+        let steps = (self.quant_steps.clamp(2, 32) - 1) as f32;
+        if self.quant_bipolar {
+            let norm = (input.clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let q = (norm * steps).round() / steps;
+            (q * 2.0 - 1.0).clamp(-1.0, 1.0)
+        } else {
+            let norm = input.clamp(0.0, 1.0);
+            ((norm * steps).round() / steps).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn warp_beat_phase(phase: f32, skew: f32) -> f32 {
+        let p = phase.rem_euclid(1.0);
+        let s = skew.clamp(0.05, 0.95);
+        if p < s {
+            0.5 * (p / s)
+        } else {
+            0.5 + 0.5 * ((p - s) / (1.0 - s))
         }
     }
 
@@ -298,6 +499,38 @@ impl ModulatorSlotState {
                 };
                 outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
             }
+            ModulatorKind::BeatLfo => {
+                let phase_offset = (self.lfo_phase_deg / 360.0).rem_euclid(1.0);
+                let total_cycles = if transport.is_playing {
+                    let elapsed_samples = transport
+                        .sample_count
+                        .saturating_sub(transport.playback_start_sample);
+                    let elapsed_secs =
+                        elapsed_samples as f64 / transport.sample_rate.max(1.0) as f64;
+                    let beats = elapsed_secs * (transport.bpm.max(20.0) as f64 / 60.0);
+                    let bpc = self.lfo_sync_rate.beats_per_cycle().max(1.0e-4) as f64;
+                    beats / bpc + phase_offset as f64
+                } else {
+                    let hz = self.lfo_sync_rate.hz_at_bpm(transport.bpm) as f64;
+                    time_secs as f64 * hz + phase_offset as f64
+                };
+                let cycle_idx = total_cycles.floor().max(0.0) as u64;
+                let raw_phase = (total_cycles.fract() as f32).rem_euclid(1.0);
+                if cycle_idx != self.lfo_last_sh_cycle {
+                    self.lfo_last_sh_cycle = cycle_idx;
+                    self.lfo_last_sh_val =
+                        pseudo_random_step(cycle_idx.wrapping_add(self.id as u64 * 131));
+                }
+                self.lfo_last_phase = raw_phase;
+                let warped = Self::warp_beat_phase(raw_phase, self.beat_lfo_skew);
+                let raw = evaluate_waveform(self.lfo_waveform, warped, self.lfo_last_sh_val);
+                let shaped = if self.lfo_bipolar {
+                    raw
+                } else {
+                    (raw + 1.0) * 0.5
+                };
+                outs[0] = (shaped * self.lfo_depth.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
+            }
             ModulatorKind::Macro => {
                 let v = self.macro_value.clamp(0.0, 1.0);
                 outs[0] = if self.macro_bipolar { v * 2.0 - 1.0 } else { v };
@@ -321,6 +554,31 @@ impl ModulatorSlotState {
                 let y = self.xy_y.clamp(0.0, 1.0);
                 outs[0] = if self.xy_bipolar { x * 2.0 - 1.0 } else { x };
                 outs[1] = if self.xy_bipolar { y * 2.0 - 1.0 } else { y };
+            }
+            ModulatorKind::Math => {
+                outs[0] = self.math_op.apply(self.math_a, self.math_b);
+            }
+            ModulatorKind::Mix => {
+                let m = self.mix_amount.clamp(0.0, 1.0);
+                outs[0] = (self.mix_a * (1.0 - m) + self.mix_b * m).clamp(-1.0, 1.0);
+            }
+            ModulatorKind::Quantize => {
+                outs[0] = self.eval_quantize(self.quant_in);
+            }
+            ModulatorKind::Select4 => {
+                let pos = self.sel4_index.clamp(0.0, 1.0) * 3.0;
+                if self.sel4_smooth {
+                    let i0 = (pos.floor() as usize).min(2);
+                    let frac = (pos - i0 as f32).clamp(0.0, 1.0);
+                    let v = self.sel4_values[i0] * (1.0 - frac) + self.sel4_values[i0 + 1] * frac;
+                    outs[0] = v.clamp(-1.0, 1.0);
+                } else {
+                    let idx = (pos.round() as usize).min(3);
+                    outs[0] = self.sel4_values[idx].clamp(-1.0, 1.0);
+                }
+            }
+            ModulatorKind::Polynom => {
+                outs[0] = self.eval_polynom(self.poly_in);
             }
         }
         self.last_outputs = outs;
@@ -397,6 +655,21 @@ impl ModulatorSlotState {
                     wf_idx,
                 )
             }
+            ModulatorKind::BeatLfo => {
+                let wf_idx = LfoWaveform::ALL
+                    .iter()
+                    .position(|&w| w == self.lfo_waveform)
+                    .unwrap_or(0) as u8;
+                let sync_idx = SyncRate::ALL
+                    .iter()
+                    .position(|&r| r == self.lfo_sync_rate)
+                    .unwrap_or(4) as f32;
+                (
+                    vec![sync_idx, self.lfo_depth, self.lfo_phase_deg, self.beat_lfo_skew],
+                    vec![self.lfo_bipolar],
+                    wf_idx,
+                )
+            }
             ModulatorKind::Macro => (vec![self.macro_value], vec![self.macro_bipolar], 0),
             ModulatorKind::Macro4 => (
                 self.macro4_values.to_vec(),
@@ -411,6 +684,29 @@ impl ModulatorSlotState {
                 (vec![], flags, 0)
             }
             ModulatorKind::Xy => (vec![self.xy_x, self.xy_y], vec![self.xy_bipolar], 0),
+            ModulatorKind::Math => {
+                let op_idx = MathOp::ALL
+                    .iter()
+                    .position(|&op| op == self.math_op)
+                    .unwrap_or(0) as u8;
+                (vec![self.math_a, self.math_b], vec![], op_idx)
+            }
+            ModulatorKind::Mix => (vec![self.mix_a, self.mix_b, self.mix_amount], vec![], 0),
+            ModulatorKind::Quantize => (
+                vec![self.quant_in],
+                vec![self.quant_bipolar],
+                self.quant_steps.clamp(2, 32),
+            ),
+            ModulatorKind::Select4 => {
+                let mut params = self.sel4_values.to_vec();
+                params.push(self.sel4_index);
+                (params, vec![self.sel4_smooth], 0)
+            }
+            ModulatorKind::Polynom => (
+                vec![self.poly_in, self.poly_c0, self.poly_c1, self.poly_c2, self.poly_c3],
+                vec![],
+                0,
+            ),
         };
         let routes = self
             .routes
@@ -475,6 +771,31 @@ impl ModulatorSlotState {
                     st.lfo_per_voice = pv;
                 }
             }
+            ModulatorKind::BeatLfo => {
+                st.lfo_sync_mode = LfoSyncMode::TempoSync;
+                st.lfo_waveform = LfoWaveform::ALL
+                    .get(p.mode_idx as usize)
+                    .copied()
+                    .unwrap_or(LfoWaveform::Sine);
+                if let Some(&sr_idx) = p.params.first() {
+                    st.lfo_sync_rate = SyncRate::ALL
+                        .get(sr_idx.round().max(0.0) as usize)
+                        .copied()
+                        .unwrap_or(SyncRate::Quarter);
+                }
+                if let Some(&depth) = p.params.get(1) {
+                    st.lfo_depth = depth.clamp(0.0, 1.0);
+                }
+                if let Some(&phase) = p.params.get(2) {
+                    st.lfo_phase_deg = phase.clamp(0.0, 360.0);
+                }
+                if let Some(&skew) = p.params.get(3) {
+                    st.beat_lfo_skew = skew.clamp(0.05, 0.95);
+                }
+                if let Some(&bip) = p.bool_flags.first() {
+                    st.lfo_bipolar = bip;
+                }
+            }
             ModulatorKind::Macro => {
                 if let Some(&v) = p.params.first() {
                     st.macro_value = v.clamp(0.0, 1.0);
@@ -520,6 +841,68 @@ impl ModulatorSlotState {
                 }
                 if let Some(&bip) = p.bool_flags.first() {
                     st.xy_bipolar = bip;
+                }
+            }
+            ModulatorKind::Math => {
+                st.math_op = MathOp::ALL
+                    .get(p.mode_idx as usize)
+                    .copied()
+                    .unwrap_or(MathOp::Add);
+                if let Some(&a) = p.params.first() {
+                    st.math_a = a.clamp(-1.0, 1.0);
+                }
+                if let Some(&b) = p.params.get(1) {
+                    st.math_b = b.clamp(-1.0, 1.0);
+                }
+            }
+            ModulatorKind::Mix => {
+                if let Some(&a) = p.params.first() {
+                    st.mix_a = a.clamp(-1.0, 1.0);
+                }
+                if let Some(&b) = p.params.get(1) {
+                    st.mix_b = b.clamp(-1.0, 1.0);
+                }
+                if let Some(&amt) = p.params.get(2) {
+                    st.mix_amount = amt.clamp(0.0, 1.0);
+                }
+            }
+            ModulatorKind::Quantize => {
+                if let Some(&inp) = p.params.first() {
+                    st.quant_in = inp.clamp(-1.0, 1.0);
+                }
+                if let Some(&bip) = p.bool_flags.first() {
+                    st.quant_bipolar = bip;
+                }
+                st.quant_steps = p.mode_idx.clamp(2, 32);
+            }
+            ModulatorKind::Select4 => {
+                for i in 0..4 {
+                    if let Some(&v) = p.params.get(i) {
+                        st.sel4_values[i] = v.clamp(-1.0, 1.0);
+                    }
+                }
+                if let Some(&idx) = p.params.get(4) {
+                    st.sel4_index = idx.clamp(0.0, 1.0);
+                }
+                if let Some(&sm) = p.bool_flags.first() {
+                    st.sel4_smooth = sm;
+                }
+            }
+            ModulatorKind::Polynom => {
+                if let Some(&x) = p.params.first() {
+                    st.poly_in = x.clamp(-1.0, 1.0);
+                }
+                if let Some(&c0) = p.params.get(1) {
+                    st.poly_c0 = c0.clamp(-2.0, 2.0);
+                }
+                if let Some(&c1) = p.params.get(2) {
+                    st.poly_c1 = c1.clamp(-2.0, 2.0);
+                }
+                if let Some(&c2) = p.params.get(3) {
+                    st.poly_c2 = c2.clamp(-2.0, 2.0);
+                }
+                if let Some(&c3) = p.params.get(4) {
+                    st.poly_c3 = c3.clamp(-2.0, 2.0);
                 }
             }
         }
@@ -764,7 +1147,7 @@ pub fn evaluate_bay_modulation_for_track(
                     sum_raw += raw;
                     sum_delta += raw * r.amount;
                     sum_amount += r.amount;
-                    if m.kind == ModulatorKind::ClassicLfo {
+                    if matches!(m.kind, ModulatorKind::ClassicLfo | ModulatorKind::BeatLfo) {
                         last_phase = m.lfo_last_phase;
                     }
                 }
