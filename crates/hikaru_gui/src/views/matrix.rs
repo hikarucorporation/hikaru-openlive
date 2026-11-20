@@ -2176,7 +2176,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         toggle_timeline_clicked = true;
     }
 
-    let rem_toolbar_w = (toolbar_ui.available_width() - 68.0).max(0.0);
+    let rem_toolbar_w = (toolbar_ui.available_width() - 74.0).max(0.0);
     toolbar_ui.add_space(rem_toolbar_w);
 
     // Follow Playhead (Auto-Scroll) toggle button (Bitwig-style vector icon)
@@ -2570,8 +2570,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         // Right-edge Track Stop Clip column (22px wide, slate background + crisp vector `■`)
         let stop_col_rect =
             Rect::from_min_max(pos2(header_x1 - 22.0, row_y0), pos2(header_x1, row_y1 - 1.0));
-        let stop_hov =
-            pointer_pos.is_some_and(|p| tracks_col_rect.contains(p) && stop_col_rect.contains(p));
+        let stop_col_clipped = stop_col_rect.intersect(tracks_col_rect);
+        let stop_col_resp = if stop_col_clipped.is_positive() {
+            Some(ui.interact(
+                stop_col_clipped,
+                ui.id().with(("arr_trk_stop", track_idx)),
+                Sense::click(),
+            ))
+        } else {
+            None
+        };
+        let stop_hov = stop_col_resp.as_ref().is_some_and(|r| r.hovered())
+            || pointer_pos.is_some_and(|p| tracks_col_rect.contains(p) && stop_col_rect.contains(p));
         tracks_painter.rect_filled(
             stop_col_rect,
             0.0,
@@ -2589,8 +2599,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         icons::paint_stop_square(
             &tracks_painter,
             stop_btn_rect,
-            Color32::from_rgb(0x16, 0x17, 0x1A),
+            if stop_hov {
+                Color32::from_rgb(0xEE, 0xF0, 0xF4)
+            } else {
+                Color32::from_rgb(0x16, 0x17, 0x1A)
+            },
         );
+        if let Some(resp) = stop_col_resp {
+            if resp.on_hover_text("Stop Track Clips").clicked() {
+                stop_track_action = Some(track_idx);
+            }
+        }
 
         // Hit testing on Track Header
         if let Some(pos) = pointer_pos {
@@ -3274,8 +3293,23 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     if is_armed {
                         icons::paint_record_circle(&lg_painter, ic_rect, REC_RED, false);
                     } else if has_stop_btn {
-                        // Mismo gris medio que usa Bitwig, iluminado en hover.
-                        let icon_hovered = pointer_pos.is_some_and(|p| ic_rect.expand(2.0).contains(p));
+                        // Botón interactivo dedicado (Sense::click) para el `■` dentro del pad vacío
+                        // en el Arranger, idéntico al Clip Launcher.
+                        let stop_hit = ic_rect.expand(4.0).intersect(launcher_grid_rect);
+                        let pad_stop_resp = if stop_hit.is_positive()
+                            && state.matrix_state.clip_drag.is_none()
+                            && !is_dragging_sample
+                        {
+                            Some(ui.interact(
+                                stop_hit,
+                                ui.id().with(("arr_pad_stop", track_idx, scene_idx)),
+                                Sense::click(),
+                            ))
+                        } else {
+                            None
+                        };
+                        let icon_hovered = pad_stop_resp.as_ref().is_some_and(|r| r.hovered())
+                            || pointer_pos.is_some_and(|p| ic_rect.expand(2.0).contains(p));
                         let stop_col = if icon_hovered {
                             Color32::from_rgb(0xEE, 0xF0, 0xF4)
                         } else if cell_hovered {
@@ -3288,6 +3322,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             ic_rect,
                             stop_col,
                         );
+                        if let Some(resp) = pad_stop_resp {
+                            if resp.on_hover_text("Stop clip").clicked() {
+                                stop_track_action = Some(track_idx);
+                                select_slot_action = Some((track_idx, scene_idx));
+                            }
+                        }
                     }
                 }
 
