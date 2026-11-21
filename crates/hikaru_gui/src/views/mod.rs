@@ -42,4 +42,5 @@ pub mod control_panel;
 pub mod modal;
 pub mod clip_context_menu;
 pub mod popup_browser;
+pub mod remote_controls;
 pub mod hikaru_native_plugins;

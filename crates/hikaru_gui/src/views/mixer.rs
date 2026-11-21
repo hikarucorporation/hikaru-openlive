@@ -218,6 +218,7 @@ pub struct Track {
     pub route_destination_id: usize,
     pub sends: Vec<SendConnection>,
     pub effects: Vec<DspSlot>,
+    pub remotes: crate::views::remote_controls::RemoteControlsState,
     pub matrix_idx: Option<usize>,
     pub width: f32,
 }
@@ -256,6 +257,7 @@ impl Track {
             route_destination_id: 0,
             sends: Vec::new(),
             effects: Vec::new(),
+            remotes: crate::views::remote_controls::RemoteControlsState::default(),
             matrix_idx: None,
             width: arranger_view::DEFAULT_TRACK_WIDTH,
         }

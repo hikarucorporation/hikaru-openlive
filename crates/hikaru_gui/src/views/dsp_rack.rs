@@ -442,191 +442,56 @@ fn render_dms_fx_plus_slot(
 
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     let track_idx = app.safe_track_index();
-    let is_project_master = track_idx == 0;
-    let (track_name, track_color, has_opendms, has_openpoly, has_opengrid) = app
+    let track_name = app
         .current_tracks()
         .get(track_idx)
-        .map(|t| {
-            let dms = t.effects.iter().any(|s| s.name == "Hikaru OpenDMS");
-            let poly = t.effects.iter().any(|s| s.is_open_poly());
-            let grid = t.effects.iter().any(|s| s.is_open_grid());
-            (t.name.clone(), t.color, dms, poly, grid)
-        })
-        .unwrap_or_else(|| ("Track".into(), theme::ACCENT_ORANGE, false, false, false));
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| "Track".into());
 
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    // =========================================================================
+    // Pozo negro profundo `#0B0C0E` de la cadena de dispositivos Bitwig:
+    // [ PROJECT (Remotes/Mods) ] [ <TRACK> (Remotes/Mods) ] [ Devices... ] [ + ]
+    // Tomamos el rectángulo completo ANTES de cualquier `ui.horizontal` para que
+    // ocupe el 100% de la altura del panel inferior (como Bitwig Studio).
+    // =========================================================================
+    let well_rect = ui.available_rect_before_wrap();
+    ui.allocate_rect(well_rect, Sense::hover());
+    ui.painter().rect_filled(well_rect, 0.0, theme::BW_DARK_WELL);
+    let content_rect = well_rect.shrink2(vec2(5.0, 4.0));
+    let mut well_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Min)),
+    );
+    egui::ScrollArea::horizontal()
+        .id_salt("dsp_rack_scroll")
+        .auto_shrink([false; 2])
+        .show(&mut well_ui, |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
 
-        // =====================================================================
-        // 1. Tira vertical izquierda de Bitwig (`PROJECT` corona / `TRACK`)
-        // =====================================================================
-        let strip_h = ui.available_height().max(RACK_HEIGHT - 4.0);
-        let (strip_rect, _) = ui.allocate_exact_size(vec2(26.0, strip_h), Sense::hover());
-        if ui.is_rect_visible(strip_rect) {
-            let p = ui.painter();
-            p.rect_filled(strip_rect, 0.0, Color32::from_rgb(0x23, 0x25, 0x29));
+                let pill_h = (content_rect.height() - 2.0).max(180.0);
 
-            let half_h = (strip_rect.height() * 0.48).round();
-            let proj_tab = Rect::from_min_size(strip_rect.min, vec2(26.0, half_h));
-            let trk_tab = Rect::from_min_max(pos2(strip_rect.min.x, proj_tab.max.y + 1.0), strip_rect.max);
+                // 1. Panel PROJECT (Project Remotes + Project Modulators)
+                crate::views::remote_controls::render_project_panel(ui, app, pill_h);
 
-            let proj_resp = ui.interact(proj_tab, ui.id().with("dsp_proj_tab"), Sense::click());
-            let trk_resp = ui.interact(trk_tab, ui.id().with("dsp_trk_tab"), Sense::click());
-
-            p.rect_filled(
-                proj_tab,
-                0.0,
-                if is_project_master {
-                    Color32::from_rgb(0x52, 0x54, 0x5A)
-                } else {
-                    Color32::from_rgb(0x32, 0x34, 0x3A)
-                },
-            );
-            icons::paint_crown(
-                p,
-                Rect::from_center_size(pos2(proj_tab.center().x, proj_tab.min.y + 12.0), vec2(12.0, 10.0)),
-                if is_project_master {
-                    theme::ACCENT_ORANGE
-                } else {
-                    Color32::from_rgb(0x9E, 0xA2, 0xAA)
-                },
-            );
-            paint_rotated_label(
-                p,
-                proj_tab.center().x,
-                proj_tab.max.y - 10.0,
-                10,
-                "PROJECT",
-                8.5,
-                if is_project_master {
-                    Color32::from_rgb(0x11, 0x12, 0x14)
-                } else {
-                    Color32::from_rgb(0xA6, 0xAA, 0xB2)
-                },
-            );
-
-            p.rect_filled(
-                trk_tab,
-                0.0,
-                if !is_project_master {
-                    Color32::from_rgb(0x58, 0x5A, 0x60)
-                } else {
-                    Color32::from_rgb(0x32, 0x34, 0x3A)
-                },
-            );
-            p.rect_filled(
-                Rect::from_min_size(trk_tab.min, vec2(3.5, trk_tab.height())),
-                0.0,
-                track_color,
-            );
-            icons::paint_icon(
-                p,
-                Rect::from_center_size(pos2(trk_tab.center().x + 1.0, trk_tab.min.y + 12.0), vec2(12.0, 10.0)),
-                icons::KEYBOARD,
-                if !is_project_master {
-                    Color32::from_rgb(0x11, 0x12, 0x14)
-                } else {
-                    Color32::from_rgb(0x9E, 0xA2, 0xAA)
-                },
-                1.4,
-            );
-            let trk_label = if has_opendms {
-                "DRUM MACHINE"
-            } else if has_opengrid {
-                "OPENGRID"
-            } else if has_openpoly {
-                "OPENPOLY"
-            } else {
-                "TRACK"
-            };
-            paint_rotated_label(
-                p,
-                trk_tab.center().x + 1.0,
-                trk_tab.max.y - 8.0,
-                14,
-                trk_label,
-                8.0,
-                if !is_project_master {
-                    Color32::from_rgb(0x11, 0x12, 0x14)
-                } else {
-                    Color32::from_rgb(0xA6, 0xAA, 0xB2)
-                },
-            );
-
-            p.line_segment(
-                [strip_rect.right_top(), strip_rect.right_bottom()],
-                Stroke::new(1.0_f32, theme::BW_CAPSULE_BORDER),
-            );
-
-            if proj_resp.on_hover_text("Project / Master Devices").clicked() {
-                app.selected_track_index = 0;
-            }
-            if trk_resp.on_hover_text("Selected Track Devices").clicked() && app.selected_track_index == 0 {
-                if app.current_tracks().len() > 1 {
-                    app.selected_track_index = 1;
+                // 2. Panel de la pista seleccionada (Track Remotes + Track Modulators)
+                let mut req_save_chain = false;
+                let mut req_load_chain = false;
+                crate::views::remote_controls::render_track_panel(
+                    ui,
+                    app,
+                    track_idx,
+                    pill_h,
+                    &mut req_save_chain,
+                    &mut req_load_chain,
+                );
+                if req_save_chain {
+                    save_device_chain_dialog(app, track_idx);
                 }
-            }
-        }
-
-        // =====================================================================
-        // 2. Pozo negro profundo `#0B0C0E` de la cadena de dispositivos Bitwig
-        // =====================================================================
-        let well_rect = ui.available_rect_before_wrap();
-        ui.painter().rect_filled(well_rect, 0.0, theme::BW_DARK_WELL);
-        let content_rect = well_rect.shrink2(vec2(6.0, 4.0));
-        let mut well_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(content_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Min)),
-        );
-        egui::ScrollArea::horizontal()
-            .id_salt("dsp_rack_scroll")
-            .auto_shrink([false; 2])
-            .show(&mut well_ui, |ui| {
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-
-                    // Píldora vertical de cabecera de pista a la izquierda de la cadena
-                    let pill_h = (content_rect.height() - 2.0).clamp(136.0, RACK_HEIGHT - 10.0);
-                    let (pill_rect, pill_resp) = ui.allocate_exact_size(vec2(22.0, pill_h), Sense::click());
-                    pill_resp.context_menu(|ui| {
-                        if ui.button("💾 Guardar Cadena de Pista (*.hdp)...").clicked() {
-                            save_device_chain_dialog(app, track_idx);
-                            ui.close_menu();
-                        }
-                        if ui.button("📂 Cargar Cadena de Pista (*.hdp)...").clicked() {
-                            load_device_chain_dialog(app, track_idx);
-                            ui.close_menu();
-                        }
-                    });
-                    if ui.is_rect_visible(pill_rect) {
-                        let p = ui.painter();
-                        p.rect_filled(pill_rect, 3.0, Color32::from_rgb(0x46, 0x48, 0x4E));
-                        p.rect_filled(
-                            Rect::from_min_size(pill_rect.min, vec2(pill_rect.width(), 12.0)),
-                            2.5,
-                            track_color,
-                        );
-                        icons::paint_power_switch(
-                            p,
-                            Rect::from_center_size(
-                                pos2(pill_rect.center().x, pill_rect.min.y + 24.0),
-                                vec2(14.0, 14.0),
-                            ),
-                            theme::ACCENT_ORANGE,
-                            Color32::from_rgb(0x14, 0x12, 0x10),
-                        );
-                        icons::paint_icon(
-                            p,
-                            Rect::from_center_size(
-                                pos2(pill_rect.center().x, pill_rect.max.y - 16.0),
-                                vec2(13.0, 13.0),
-                            ),
-                            icons::LINK,
-                            Color32::from_rgb(0x18, 0x19, 0x1C),
-                            1.7,
-                        );
-                    }
+                if req_load_chain {
+                    load_device_chain_dialog(app, track_idx);
+                }
 
                     let slot_count = app
                         .current_tracks()
@@ -1427,9 +1292,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                         }
                     }
 
-                    // Botón circular `+` estilo ranura de inserción Bitwig
+                    // Botón `+` centrado verticalmente estilo ranura de inserción Bitwig
                     ui.vertical(|ui| {
-                        ui.add_space(56.0);
+                        ui.add_space((pill_h * 0.5 - 14.0).max(40.0));
                         let plus_btn = ui.button(
                             RichText::new("+")
                                 .font(fonts::semibold(15.0))
@@ -1461,6 +1326,4 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                     });
                 });
             });
-        ui.allocate_rect(well_rect, Sense::hover());
-    });
 }

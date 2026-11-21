@@ -486,6 +486,7 @@ pub struct AppState {
     /// When `Some((track_idx, slot_idx))`, displays the full interactive Hikaru OpenGrid patch editor
     /// in the central workspace panel above the bottom DSP Rack.
     pub open_grid_editor: Option<(usize, usize)>,
+    pub project_remotes: crate::views::remote_controls::RemoteControlsState,
 }
 
 impl AppState {
@@ -662,6 +663,7 @@ impl AppState {
             synced_open_poly_revs: [None; 16],
             synced_open_grid_revs: [None; 16],
             open_grid_editor: None,
+            project_remotes: crate::views::remote_controls::RemoteControlsState::default(),
         };
         state.audio_proxy.send(GuiCommand::SetAppMode(false));
         state
