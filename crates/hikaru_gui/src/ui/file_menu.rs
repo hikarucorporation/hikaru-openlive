@@ -691,12 +691,27 @@ fn save_as_template(state: &mut AppState) {
         .set_directory(&dir)
         .set_file_name(&default_name)
         .add_filter(label, &[ext])
+        .add_filter(
+            project::bwtemplate::FILE_FILTER,
+            &[project::BWTEMPLATE_EXTENSION],
+        )
         .save_file()
     else {
         return;
     };
 
-    match project::save(state, &target) {
+    let is_bwtemplate = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(project::BWTEMPLATE_EXTENSION));
+
+    let result = if is_bwtemplate {
+        project::bwproject::export_to_path(state, &target).map(|()| target.clone())
+    } else {
+        project::save(state, &target)
+    };
+
+    match result {
         Ok(saved) => {
             println!("[PROJECT] plantilla guardada: {}", saved.display());
             state.control_panel_state.status_notice =

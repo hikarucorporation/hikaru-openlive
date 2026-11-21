@@ -37,9 +37,9 @@
   "summary": {
     "areas": 18,
     "features": 645,
-    "done": 316,
+    "done": 318,
     "in_progress": 17,
-    "planned": 312,
+    "planned": 310,
     "bugs": 1,
     "parity_percent": 49
   },
@@ -3705,12 +3705,12 @@
         {
           "id": "bt-02",
           "name": "Default tracks, routing & sends",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "bt-03",
           "name": "Preloaded devices & channel strips",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "bt-04",

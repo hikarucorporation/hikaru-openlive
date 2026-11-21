@@ -14,9 +14,44 @@ pub const FILE_FILTER: &str = "Bitwig Template (*.bwtemplate)";
 /// Parsea y aplica un archivo `.bwtemplate` sobre `state`.
 ///
 /// Reutiliza el parser de `.bwproject` (contenedor `BWPROJ\x01\x00` TLV y
-/// detección de cabecera nativa `BtWg`).
+/// detección de cabecera nativa `BtWg`), y aplica el saneamiento de pistas por
+/// defecto, ruteo, envíos (`bt-02`) y *channel strips* (`bt-03`).
 pub fn load(state: &mut AppState, path: &Path) -> Result<(), ProjectError> {
-    bwproject::load(state, path)
+    bwproject::load(state, path)?;
+    ensure_default_tracks_and_routing(state);
+    apply_channel_strip_defaults(state);
+    Ok(())
+}
+
+/// Garantiza pistas por defecto, índice de selección válido y envíos (`sends`)
+/// acotados a `fx_tracks` (`bt-02`).
+pub fn ensure_default_tracks_and_routing(state: &mut AppState) {
+    if state.live_tracks.is_empty() {
+        state
+            .live_tracks
+            .push(crate::views::mixer::Track::new(0, "Master".to_string(), true));
+        state
+            .live_tracks
+            .push(crate::views::mixer::Track::new(1, "Track 1".to_string(), false));
+    }
+    if state.selected_track_index >= state.live_tracks.len() {
+        state.selected_track_index = 0;
+    }
+    let fx_count = state.fx_tracks.len();
+    for track in &mut state.live_tracks {
+        if track.sends.len() > fx_count {
+            track.sends.truncate(fx_count);
+        }
+    }
+}
+
+/// Sanea los parámetros de *channel strip* (volumen, paneo) de las pistas
+/// cargadas desde plantilla (`bt-03`).
+pub fn apply_channel_strip_defaults(state: &mut AppState) {
+    for track in &mut state.live_tracks {
+        track.volume = track.volume.clamp(0.0, 2.0);
+        track.pan = track.pan.clamp(-1.0, 1.0);
+    }
 }
 
 /// Crea un nuevo proyecto en memoria a partir de una plantilla `.bwtemplate`.
@@ -89,5 +124,27 @@ mod tests {
         assert!(!dst.project_dirty);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn template_ensures_default_tracks_sends_and_channel_strip_bounds() {
+        let mut state = test_state();
+        state.live_tracks.clear();
+        state.selected_track_index = 99;
+
+        ensure_default_tracks_and_routing(&mut state);
+        assert!(state.live_tracks.len() >= 2);
+        assert_eq!(state.selected_track_index, 0);
+
+        let fx_count = state.fx_tracks.len();
+        for track in &state.live_tracks {
+            assert!(track.sends.len() <= fx_count);
+        }
+
+        state.live_tracks[0].volume = 5.0;
+        state.live_tracks[0].pan = -3.0;
+        apply_channel_strip_defaults(&mut state);
+        assert!((state.live_tracks[0].volume - 2.0).abs() < 0.001);
+        assert!((state.live_tracks[0].pan - (-1.0)).abs() < 0.001);
     }
 }
