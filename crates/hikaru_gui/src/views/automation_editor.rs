@@ -714,7 +714,27 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             app.automation.selected_point = None;
             app.automation.dragging_point = None;
         }
-    } else if canvas_resp.clicked() {
+    } else if canvas_resp.dragged_by(egui::PointerButton::Middle) {
+        let delta = canvas_resp.drag_delta();
+        // Bitwig-style MIDDLE-DRAG: vertical = zoom, horizontal = pan
+        if delta.y.abs() > 0.0 {
+            let old_ppb = app.automation.px_per_beat;
+            let factor = (1.0 - delta.y * 0.008).clamp(0.85, 1.15);
+            let new_ppb = (old_ppb * factor).clamp(18.0, 260.0);
+            if let Some(pos) = pointer_pos {
+                let rel_x = (pos.x - canvas_rect.min.x).max(0.0) as f64;
+                let anchor_beat = app.automation.scroll_x_beats + rel_x / old_ppb as f64;
+                app.automation.scroll_x_beats = (anchor_beat - rel_x / new_ppb as f64).max(0.0);
+            }
+            app.automation.px_per_beat = new_ppb;
+        }
+        if delta.x.abs() > 0.0 {
+            app.automation.scroll_x_beats = (app.automation.scroll_x_beats
+                - delta.x as f64 / app.automation.px_per_beat as f64)
+                .max(0.0);
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if canvas_resp.clicked_by(egui::PointerButton::Primary) {
         if let Some(idx) = hovered_node_idx {
             app.automation.selected_point = Some(idx);
         } else if let Some(pos) = pointer_pos {
@@ -736,7 +756,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         }
     }
 
-    if canvas_resp.drag_started() {
+    if canvas_resp.drag_started_by(egui::PointerButton::Primary) {
         if let Some(idx) = hovered_node_idx {
             app.automation.dragging_point = Some(idx);
             app.automation.selected_point = Some(idx);
@@ -756,7 +776,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         }
     }
 
-    if canvas_resp.dragged() {
+    if canvas_resp.dragged_by(egui::PointerButton::Primary) {
         if let (Some(drag_idx), Some(pos)) = (app.automation.dragging_point, pointer_pos) {
             let raw_tick = x_to_tick(pos.x);
             let tick = if shift {
@@ -883,6 +903,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             ("CLICK".to_string(), "Insert / Select point".to_string()),
             ("DRAG".to_string(), "Move point".to_string()),
             ("RIGHT-CLICK".to_string(), "Delete point".to_string()),
+            ("MIDDLE-DRAG".to_string(), "Zoom & pan".to_string()),
             ("SHIFT".to_string(), "Free time".to_string()),
         ];
     }
