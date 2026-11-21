@@ -1803,7 +1803,7 @@ impl HikaruApp {
         }
 
         if self.state.is_playing() {
-            let tick = self.state.piano_roll_state.playhead_tick;
+            let tick = self.state.playlist_state.playhead_tick;
             crate::views::automation_editor::apply_automation_at_tick(&mut self.state, tick);
         }
 

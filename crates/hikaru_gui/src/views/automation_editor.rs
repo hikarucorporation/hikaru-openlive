@@ -666,8 +666,8 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             );
         }
 
-        // Playhead vertical line
-        let ph_x = tick_to_x(app.piano_roll_state.playhead_tick);
+        // Playhead vertical line (synced to Arranger/Playlist playhead, not Piano Roll loop)
+        let ph_x = tick_to_x(app.playlist_state.playhead_tick);
         if ph_x >= canvas_rect.min.x && ph_x <= canvas_rect.max.x {
             p.line_segment(
                 [pos2(ph_x, ruler_rect.min.y), pos2(ph_x, canvas_rect.max.y)],
