@@ -273,6 +273,43 @@ impl Track {
         tr.color = Color32::from_rgb(0x9A, 0x9C, 0xA2); // Bitwig FX Track light grey
         tr
     }
+
+    /// Returns the send level (`0.0..=1.0`) routed to `target_id` (e.g. `ROUTE_FX_BASE + fx_idx`).
+    pub fn send_amount(&self, target_id: usize) -> f32 {
+        self.sends
+            .iter()
+            .find(|s| s.target_id == target_id)
+            .map(|s| s.amount.clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    }
+
+    /// Sets the send level (`0.0..=1.0`) routed to `target_id`.
+    /// Removes the connection when `amount <= 0.0`.
+    pub fn set_send_amount(&mut self, target_id: usize, amount: f32) {
+        let clamped = if amount.is_finite() {
+            amount.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if clamped <= f32::EPSILON {
+            self.sends.retain(|s| s.target_id != target_id);
+        } else if let Some(existing) = self.sends.iter_mut().find(|s| s.target_id == target_id) {
+            existing.amount = clamped;
+        } else {
+            self.sends.push(SendConnection {
+                target_id,
+                amount: clamped,
+            });
+        }
+    }
+}
+
+pub fn send_db_text(amount: f32) -> String {
+    if !amount.is_finite() || amount <= 0.001 {
+        "-inf dB".to_string()
+    } else {
+        db_text(amount)
+    }
 }
 
 /// Returns `true` if the track at `idx` is visible (all ancestor groups are expanded).
@@ -472,199 +509,476 @@ pub fn route_options(app: &AppState, target: StripTarget) -> Vec<(usize, String)
 pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
     use crate::ui::bitwig_kit::{
         capsule_icon_button, capsule_text_button, fader_horizontal_range,
-        fader_vertical_track_vol, stereo_meter_bar, JoinSide,
+        fader_vertical_track_vol, rotary_knob, stereo_meter_bar, JoinSide,
     };
     use crate::ui::icons;
 
     let tracks_count = state.tracks().len();
     let mut selected_track_idx = state.selected_track_index;
+    let mut selected_fx_idx = state.selected_fx_index;
+    let mut fx_to_delete: Option<usize> = None;
 
-    ScrollArea::horizontal().auto_shrink([false; 2]).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
 
-            for idx in 0..tracks_count {
-                let is_sel = selected_track_idx == idx;
-                let is_master = idx == 0;
-
-                let (name, track_color, mut vol, mut pan, mut mute, mut solo, mut arm, peak) = {
-                    let tracks = state.tracks();
-                    let t = &tracks[idx];
-                    let peak = if is_master {
-                        state.smoothed_master_peak
-                    } else {
-                        state
-                            .smoothed_track_peaks
-                            .get(idx.saturating_sub(1))
-                            .copied()
-                            .unwrap_or(0.0)
-                    };
-                    (
-                        t.name.clone(),
-                        t.color,
-                        t.volume,
-                        t.pan,
-                        t.mute,
-                        t.solo,
-                        t.arm,
-                        peak,
+        // Left control sidebar: toggle Sends visibility + Add FX Send Bus
+        egui::Frame::NONE
+            .fill(SURFACE_BG)
+            .stroke(Stroke::new(1.0_f32, BORDER_COLOR))
+            .corner_radius(2.0)
+            .inner_margin(4.0)
+            .show(ui, |ui| {
+                ui.set_width(BOTTOM_MIXER_SIDEBAR_WIDTH);
+                ui.vertical_centered(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    if capsule_text_button(
+                        ui,
+                        vec2(BOTTOM_MIXER_SIDEBAR_WIDTH - 4.0, 20.0),
+                        "Sends",
+                        9.0,
+                        state.bottom_mixer_show_sends,
+                        BW_FADER_AMBER,
+                        JoinSide::Standalone,
+                        false,
                     )
-                };
+                    .on_hover_text("Show/hide Send Buses controls")
+                    .clicked()
+                    {
+                        state.bottom_mixer_show_sends = !state.bottom_mixer_show_sends;
+                    }
 
-                let bg_col = if is_sel { SELECTED_BG } else { SURFACE_BG };
+                    if capsule_text_button(
+                        ui,
+                        vec2(BOTTOM_MIXER_SIDEBAR_WIDTH - 4.0, 20.0),
+                        "+ FX",
+                        9.0,
+                        false,
+                        BW_FADER_ORANGE,
+                        JoinSide::Standalone,
+                        false,
+                    )
+                    .on_hover_text("Add FX Send Bus")
+                    .clicked()
+                    {
+                        let new_idx = state.add_fx_track();
+                        selected_fx_idx = Some(new_idx);
+                    }
+                });
+            });
 
-                egui::Frame::NONE
-                    .fill(bg_col)
-                    .stroke(Stroke::new(1.0_f32, BORDER_COLOR))
-                    .corner_radius(2.0)
-                    .inner_margin(4.0)
-                    .show(ui, |ui| {
-                        ui.set_width(BOTTOM_MIXER_TRACK_WIDTH);
+        let show_sends = state.bottom_mixer_show_sends;
+        let fx_labels: Vec<String> = state.fx_tracks.iter().map(|t| t.name.clone()).collect();
+        let fader_h = if show_sends && !fx_labels.is_empty() {
+            76.0
+        } else {
+            110.0
+        };
 
-                        ui.vertical_centered(|ui| {
-                            let (bar_r, _) =
-                                ui.allocate_exact_size(vec2(BOTTOM_MIXER_TRACK_WIDTH - 4.0, 5.0), Sense::hover());
-                            ui.painter().rect_filled(bar_r, 1.0, track_color);
+        ScrollArea::horizontal().auto_shrink([false; 2]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
 
-                            // Track label
-                            if ui
-                                .selectable_label(is_sel, RichText::new(&name).size(11.0).strong())
-                                .clicked()
-                            {
-                                selected_track_idx = idx;
-                            }
+                // Regular tracks + Master (idx 0 = Master)
+                for idx in 0..tracks_count {
+                    let is_sel = selected_fx_idx.is_none() && selected_track_idx == idx;
+                    let is_master = idx == 0;
 
-                            // GPU [● | S | M] capsule group
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                if !is_master {
-                                    if capsule_icon_button(
-                                        ui,
-                                        vec2(24.0, 18.0),
-                                        arm,
-                                        REC_RED,
-                                        JoinSide::Left,
-                                        |p, r, fg| icons::paint_record_circle(p, r, fg, true),
-                                    )
-                                    .clicked()
-                                    {
-                                        arm = !arm;
-                                        state.tracks_mut()[idx].arm = arm;
-                                    }
-                                    if capsule_text_button(
-                                        ui,
-                                        vec2(24.0, 18.0),
-                                        "S",
-                                        9.5,
-                                        solo,
-                                        SOLO_YELLOW,
-                                        JoinSide::Middle,
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        solo = !solo;
-                                        state.tracks_mut()[idx].solo = solo;
-                                    }
-                                    if capsule_text_button(
-                                        ui,
-                                        vec2(24.0, 18.0),
-                                        "M",
-                                        9.5,
-                                        mute,
-                                        MUTE_BLUE,
-                                        JoinSide::Right,
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        mute = !mute;
-                                        state.tracks_mut()[idx].mute = mute;
-                                    }
-                                } else {
-                                    if capsule_text_button(
-                                        ui,
-                                        vec2(34.0, 18.0),
-                                        "S",
-                                        9.5,
-                                        solo,
-                                        SOLO_YELLOW,
-                                        JoinSide::Left,
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        solo = !solo;
-                                        state.tracks_mut()[idx].solo = solo;
-                                    }
-                                    if capsule_text_button(
-                                        ui,
-                                        vec2(34.0, 18.0),
-                                        "M",
-                                        9.5,
-                                        mute,
-                                        MUTE_BLUE,
-                                        JoinSide::Right,
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        mute = !mute;
-                                        state.tracks_mut()[idx].mute = mute;
-                                    }
-                                }
-                            });
+                    let (name, track_color, mut vol, mut pan, mut mute, mut solo, mut arm, peak) = {
+                        let tracks = state.tracks();
+                        let t = &tracks[idx];
+                        let peak = if is_master {
+                            state.smoothed_master_peak
+                        } else {
+                            state
+                                .smoothed_track_peaks
+                                .get(idx.saturating_sub(1))
+                                .copied()
+                                .unwrap_or(0.0)
+                        };
+                        (
+                            t.name.clone(),
+                            t.color,
+                            t.volume,
+                            t.pan,
+                            t.mute,
+                            t.solo,
+                            t.arm,
+                            peak,
+                        )
+                    };
 
-                            // GPU Bipolar Pan Bar
-                            if fader_horizontal_range(
-                                ui,
-                                vec2(BOTTOM_MIXER_TRACK_WIDTH - 6.0, 13.0),
-                                &mut pan,
-                                -1.0..=1.0,
-                                0.0,
-                                BW_FADER_AMBER,
-                                BW_FADER_ORANGE,
-                                true,
-                            )
-                            .1
-                            {
-                                state.tracks_mut()[idx].pan = pan;
-                            }
+                    let bg_col = if is_sel { SELECTED_BG } else { SURFACE_BG };
 
-                            // GPU Stereo Meter + GPU Vertical Fader
-                            ui.horizontal(|ui| {
-                                stereo_meter_bar(
-                                    ui,
-                                    vec2(VU_WIDTH, 110.0),
-                                    [
-                                        peak,
-                                        (peak * 0.96).clamp(0.0, 1.0),
-                                        (peak * 1.04).min(1.0),
-                                        (peak * 1.01).min(1.0),
-                                    ],
+                    egui::Frame::NONE
+                        .fill(bg_col)
+                        .stroke(Stroke::new(1.0_f32, BORDER_COLOR))
+                        .corner_radius(2.0)
+                        .inner_margin(4.0)
+                        .show(ui, |ui| {
+                            ui.set_width(BOTTOM_MIXER_TRACK_WIDTH);
+
+                            ui.vertical_centered(|ui| {
+                                let (bar_r, _) = ui.allocate_exact_size(
+                                    vec2(BOTTOM_MIXER_TRACK_WIDTH - 4.0, 5.0),
+                                    Sense::hover(),
                                 );
-                                if fader_vertical_track_vol(
+                                ui.painter().rect_filled(bar_r, 1.0, track_color);
+
+                                // Track label
+                                if ui
+                                    .selectable_label(is_sel, RichText::new(&name).size(11.0).strong())
+                                    .clicked()
+                                {
+                                    selected_track_idx = idx;
+                                    selected_fx_idx = None;
+                                }
+
+                                // GPU [● | S | M] capsule group
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    if !is_master {
+                                        if capsule_icon_button(
+                                            ui,
+                                            vec2(24.0, 18.0),
+                                            arm,
+                                            REC_RED,
+                                            JoinSide::Left,
+                                            |p, r, fg| icons::paint_record_circle(p, r, fg, true),
+                                        )
+                                        .clicked()
+                                        {
+                                            arm = !arm;
+                                            state.tracks_mut()[idx].arm = arm;
+                                        }
+                                        if capsule_text_button(
+                                            ui,
+                                            vec2(24.0, 18.0),
+                                            "S",
+                                            9.5,
+                                            solo,
+                                            SOLO_YELLOW,
+                                            JoinSide::Middle,
+                                            false,
+                                        )
+                                        .clicked()
+                                        {
+                                            solo = !solo;
+                                            state.tracks_mut()[idx].solo = solo;
+                                        }
+                                        if capsule_text_button(
+                                            ui,
+                                            vec2(24.0, 18.0),
+                                            "M",
+                                            9.5,
+                                            mute,
+                                            MUTE_BLUE,
+                                            JoinSide::Right,
+                                            false,
+                                        )
+                                        .clicked()
+                                        {
+                                            mute = !mute;
+                                            state.tracks_mut()[idx].mute = mute;
+                                        }
+                                    } else {
+                                        if capsule_text_button(
+                                            ui,
+                                            vec2(34.0, 18.0),
+                                            "S",
+                                            9.5,
+                                            solo,
+                                            SOLO_YELLOW,
+                                            JoinSide::Left,
+                                            false,
+                                        )
+                                        .clicked()
+                                        {
+                                            solo = !solo;
+                                            state.tracks_mut()[idx].solo = solo;
+                                        }
+                                        if capsule_text_button(
+                                            ui,
+                                            vec2(34.0, 18.0),
+                                            "M",
+                                            9.5,
+                                            mute,
+                                            MUTE_BLUE,
+                                            JoinSide::Right,
+                                            false,
+                                        )
+                                        .clicked()
+                                        {
+                                            mute = !mute;
+                                            state.tracks_mut()[idx].mute = mute;
+                                        }
+                                    }
+                                });
+
+                                // Sends section (non-master tracks)
+                                if show_sends && !is_master && !fx_labels.is_empty() {
+                                    ScrollArea::vertical()
+                                        .id_salt(("bottom_mixer_sends", idx))
+                                        .max_height(38.0)
+                                        .show(ui, |ui| {
+                                            ui.spacing_mut().item_spacing.y = 1.0;
+                                            for (fx_i, fx_name) in fx_labels.iter().enumerate() {
+                                                let target_id = ROUTE_FX_BASE + fx_i;
+                                                let mut send_amt =
+                                                    state.tracks()[idx].send_amount(target_id);
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                                    ui.label(
+                                                        RichText::new(fx_name)
+                                                            .size(9.0)
+                                                            .color(Color32::from_rgb(0xC8, 0xCA, 0xD0)),
+                                                    );
+                                                    let (resp, changed) = rotary_knob(
+                                                        ui,
+                                                        16.0,
+                                                        &mut send_amt,
+                                                        0.0..=1.0,
+                                                        0.0,
+                                                        BW_FADER_AMBER,
+                                                        false,
+                                                    );
+                                                    resp.on_hover_text(format!(
+                                                        "{fx_name} Send ({})",
+                                                        send_db_text(send_amt)
+                                                    ));
+                                                    if changed {
+                                                        state.tracks_mut()[idx]
+                                                            .set_send_amount(target_id, send_amt);
+                                                    }
+                                                });
+                                            }
+                                        });
+                                }
+
+                                // GPU Bipolar Pan Bar
+                                if fader_horizontal_range(
                                     ui,
-                                    vec2(36.0, 110.0),
-                                    &mut vol,
-                                    0.75,
+                                    vec2(BOTTOM_MIXER_TRACK_WIDTH - 6.0, 13.0),
+                                    &mut pan,
+                                    -1.0..=1.0,
+                                    0.0,
+                                    BW_FADER_AMBER,
+                                    BW_FADER_ORANGE,
+                                    true,
                                 )
                                 .1
                                 {
-                                    state.tracks_mut()[idx].volume = vol;
-                                    state.audio_proxy.send(GuiCommand::SetTrackVolume {
-                                        track_idx: idx,
-                                        volume_db: vol,
-                                    });
+                                    state.tracks_mut()[idx].pan = pan;
                                 }
-                            });
 
-                            ui.label(RichText::new(db_text(vol)).size(9.0).color(BW_FADER_ORANGE));
+                                // GPU Stereo Meter + GPU Vertical Fader
+                                ui.horizontal(|ui| {
+                                    stereo_meter_bar(
+                                        ui,
+                                        vec2(VU_WIDTH, fader_h),
+                                        [
+                                            peak,
+                                            (peak * 0.96).clamp(0.0, 1.0),
+                                            (peak * 1.04).min(1.0),
+                                            (peak * 1.01).min(1.0),
+                                        ],
+                                    );
+                                    if fader_vertical_track_vol(
+                                        ui,
+                                        vec2(36.0, fader_h),
+                                        &mut vol,
+                                        0.75,
+                                    )
+                                    .1
+                                    {
+                                        state.tracks_mut()[idx].volume = vol;
+                                        state.audio_proxy.send(GuiCommand::SetTrackVolume {
+                                            track_idx: idx,
+                                            volume_db: vol,
+                                        });
+                                    }
+                                });
+
+                                ui.label(
+                                    RichText::new(db_text(vol)).size(9.0).color(BW_FADER_ORANGE),
+                                );
+                            });
                         });
-                    });
-            }
+                }
+
+                // FX Send Bus strips
+                for fx_idx in 0..state.fx_tracks.len() {
+                    let is_sel = selected_fx_idx == Some(fx_idx);
+                    let (name, track_color, mut vol, mut pan, mut mute, mut solo) = {
+                        let fx = &state.fx_tracks[fx_idx];
+                        (fx.name.clone(), fx.color, fx.volume, fx.pan, fx.mute, fx.solo)
+                    };
+                    let bg_col = if is_sel { SELECTED_BG } else { SURFACE_BG };
+
+                    egui::Frame::NONE
+                        .fill(bg_col)
+                        .stroke(Stroke::new(1.0_f32, BORDER_COLOR))
+                        .corner_radius(2.0)
+                        .inner_margin(4.0)
+                        .show(ui, |ui| {
+                            ui.set_width(BOTTOM_MIXER_TRACK_WIDTH);
+
+                            ui.vertical_centered(|ui| {
+                                let (bar_r, _) = ui.allocate_exact_size(
+                                    vec2(BOTTOM_MIXER_TRACK_WIDTH - 4.0, 5.0),
+                                    Sense::hover(),
+                                );
+                                ui.painter().rect_filled(bar_r, 1.0, track_color);
+
+                                // FX bus label + remove button
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .selectable_label(
+                                            is_sel,
+                                            RichText::new(&name).size(11.0).strong(),
+                                        )
+                                        .clicked()
+                                    {
+                                        selected_fx_idx = Some(fx_idx);
+                                    }
+                                    if ui
+                                        .small_button("×")
+                                        .on_hover_text(format!("Delete {name}"))
+                                        .clicked()
+                                    {
+                                        fx_to_delete = Some(fx_idx);
+                                    }
+                                });
+
+                                // S | M capsule group
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    if capsule_text_button(
+                                        ui,
+                                        vec2(34.0, 18.0),
+                                        "S",
+                                        9.5,
+                                        solo,
+                                        SOLO_YELLOW,
+                                        JoinSide::Left,
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        solo = !solo;
+                                        state.fx_tracks[fx_idx].solo = solo;
+                                    }
+                                    if capsule_text_button(
+                                        ui,
+                                        vec2(34.0, 18.0),
+                                        "M",
+                                        9.5,
+                                        mute,
+                                        MUTE_BLUE,
+                                        JoinSide::Right,
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        mute = !mute;
+                                        state.fx_tracks[fx_idx].mute = mute;
+                                    }
+                                });
+
+                                // Cross-FX sends (self-send disabled)
+                                if show_sends && fx_labels.len() > 1 {
+                                    ScrollArea::vertical()
+                                        .id_salt(("bottom_mixer_fx_sends", fx_idx))
+                                        .max_height(38.0)
+                                        .show(ui, |ui| {
+                                            ui.spacing_mut().item_spacing.y = 1.0;
+                                            for (other_i, other_name) in
+                                                fx_labels.iter().enumerate()
+                                            {
+                                                if other_i == fx_idx {
+                                                    continue;
+                                                }
+                                                let target_id = ROUTE_FX_BASE + other_i;
+                                                let mut send_amt = state.fx_tracks[fx_idx]
+                                                    .send_amount(target_id);
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                                    ui.label(
+                                                        RichText::new(other_name)
+                                                            .size(9.0)
+                                                            .color(Color32::from_rgb(
+                                                                0xC8, 0xCA, 0xD0,
+                                                            )),
+                                                    );
+                                                    let (resp, changed) = rotary_knob(
+                                                        ui,
+                                                        16.0,
+                                                        &mut send_amt,
+                                                        0.0..=1.0,
+                                                        0.0,
+                                                        BW_FADER_AMBER,
+                                                        false,
+                                                    );
+                                                    resp.on_hover_text(format!(
+                                                        "{other_name} Send ({})",
+                                                        send_db_text(send_amt)
+                                                    ));
+                                                    if changed {
+                                                        state.fx_tracks[fx_idx]
+                                                            .set_send_amount(target_id, send_amt);
+                                                    }
+                                                });
+                                            }
+                                        });
+                                }
+
+                                // Pan
+                                if fader_horizontal_range(
+                                    ui,
+                                    vec2(BOTTOM_MIXER_TRACK_WIDTH - 6.0, 13.0),
+                                    &mut pan,
+                                    -1.0..=1.0,
+                                    0.0,
+                                    BW_FADER_AMBER,
+                                    BW_FADER_ORANGE,
+                                    true,
+                                )
+                                .1
+                                {
+                                    state.fx_tracks[fx_idx].pan = pan;
+                                }
+
+                                // Meter + Fader
+                                ui.horizontal(|ui| {
+                                    stereo_meter_bar(
+                                        ui,
+                                        vec2(VU_WIDTH, fader_h),
+                                        [0.0, 0.0, 0.0, 0.0],
+                                    );
+                                    if fader_vertical_track_vol(
+                                        ui,
+                                        vec2(36.0, fader_h),
+                                        &mut vol,
+                                        0.75,
+                                    )
+                                    .1
+                                    {
+                                        state.fx_tracks[fx_idx].volume = vol;
+                                    }
+                                });
+
+                                ui.label(
+                                    RichText::new(db_text(vol)).size(9.0).color(BW_FADER_ORANGE),
+                                );
+                            });
+                        });
+                }
+            });
         });
     });
 
     state.selected_track_index = selected_track_idx;
+    state.selected_fx_index = selected_fx_idx;
+    if let Some(fx_idx) = fx_to_delete {
+        state.delete_fx_track(fx_idx);
+    }
 }

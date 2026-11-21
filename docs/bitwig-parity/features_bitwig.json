@@ -37,11 +37,11 @@
   "summary": {
     "areas": 18,
     "features": 645,
-    "done": 306,
-    "in_progress": 19,
+    "done": 308,
+    "in_progress": 17,
     "planned": 320,
     "bugs": 1,
-    "parity_percent": 47
+    "parity_percent": 48
   },
   "areas": [
     {
@@ -560,9 +560,8 @@
         {
           "id": "gr-16",
           "name": "Send buses UI",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/src/views/mixer.rs",
-          "note": "The Track model carries sends; routing UI is partial."
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs, crates/hikaru_gui/src/views/arranger_view.rs, crates/hikaru_gui/tests/send_buses_ui_tests.rs"
         },
         {
           "id": "gr-17",
@@ -2901,8 +2900,8 @@
         {
           "id": "mx-19",
           "name": "Send buses UI",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_gui/src/views/mixer.rs"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/mixer.rs, crates/hikaru_gui/src/views/arranger_view.rs, crates/hikaru_gui/tests/send_buses_ui_tests.rs"
         },
         {
           "id": "mx-20",

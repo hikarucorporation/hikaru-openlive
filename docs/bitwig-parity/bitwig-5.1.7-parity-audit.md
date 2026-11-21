@@ -139,12 +139,12 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Clip Launcher | 25 | 21 | 0 | 4 | 0 |
 | Arranger | 26 | 15 | 2 | 9 | 0 |
 | Transport & Sync | 17 | 12 | 1 | 4 | 0 |
-| Group Tracks & Routing | 22 | 14 | 2 | 6 | 0 |
+| Group Tracks & Routing | 22 | 15 | 1 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
 | Built-in Devices & FX | 118 | 9 | 3 | 106 | 0 |
 | Modulators | 43 | 43 | 0 | 0 | 0 |
 | Grid Devices | 218 | 97 | 0 | 121 | 0 |
-| Mixer & I/O | 27 | 18 | 1 | 8 | 0 |
+| Mixer & I/O | 27 | 19 | 0 | 8 | 0 |
 | Browser & Files | 24 | 15 | 2 | 7 | 0 |
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
@@ -154,9 +154,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 0 | 0 | 6 | 0 |
 | .bwtemplate | 4 | 0 | 0 | 4 | 0 |
-| **Total** | **645** | **306** | **19** | **320** | **1** |
+| **Total** | **645** | **308** | **17** | **320** | **1** |
 
-Paridad global: **306 / 645 = 47 %**.
+Paridad global: **308 / 645 = 48 %**.
 
 ### Bugs abiertos
 

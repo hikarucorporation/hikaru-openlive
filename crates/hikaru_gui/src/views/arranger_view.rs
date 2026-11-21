@@ -18,7 +18,7 @@ use crate::ui::icons;
 use crate::views::dsp_rack::PLUGIN_CATALOG;
 use crate::views::header::clip_launcher_toggle_widget;
 use crate::views::matrix::{self, SlotState};
-use crate::views::mixer::{self, DspSlot, SendConnection, Track};
+use crate::views::mixer::{self, DspSlot, Track};
 
 pub const DEFAULT_TRACK_WIDTH: f32 = 88.0;
 pub const MIN_TRACK_WIDTH: f32 = 82.0;
@@ -1618,19 +1618,13 @@ fn render_channel_strip(
                                     BW_FADER_AMBER,
                                     false,
                                 );
-                                s_resp.on_hover_text(format!("{fx_name} Send"));
+                                s_resp.on_hover_text(format!(
+                                    "{fx_name} Send ({})",
+                                    mixer::send_db_text(send_amt)
+                                ));
                                 if s_changed {
                                     let tr = strip_track_mut(state, kind);
-                                    if let Some(existing) =
-                                        tr.sends.iter_mut().find(|s| s.target_id == target_id)
-                                    {
-                                        existing.amount = send_amt;
-                                    } else {
-                                        tr.sends.push(SendConnection {
-                                            target_id,
-                                            amount: send_amt,
-                                        });
-                                    }
+                                    tr.set_send_amount(target_id, send_amt);
                                 }
                             }
                         });
