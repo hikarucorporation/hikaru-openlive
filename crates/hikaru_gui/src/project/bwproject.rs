@@ -618,6 +618,12 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                 BwClipContent::Audio { path } => resolve_path(base_dir, path),
                 _ => PathBuf::new(),
             };
+            let initial_loop_end = match &content {
+                ClipData::Audio { preview_sr, .. } => {
+                    (dur_secs * (*preview_sr).max(1) as f64).round().max(1.0) as u64
+                }
+                ClipData::Midi { .. } => (pc.duration_beats * ppqn).round().max(1.0) as u64,
+            };
             let mut mclip = MatrixClip {
                 id: next_id,
                 name: pc.name.clone(),
@@ -628,7 +634,7 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                 local_track: state.live_tracks[track_idx].clone(),
                 local_bar: 0.0,
                 loop_start: 0,
-                loop_end: (pc.duration_beats * ppqn).round().max(1.0) as u64,
+                loop_end: initial_loop_end,
                 loop_enabled: true,
                 launch_legato: false,
                 has_time_selection: false,
@@ -643,6 +649,7 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                     let total_frames = samples.len() / channels.max(1);
                     if sr > 0 && total_frames > 0 {
                         mclip.duration_secs = total_frames as f64 / sr as f64;
+                        mclip.loop_end = total_frames as u64;
                     }
                     let ev_name = path
                         .file_stem()
@@ -688,20 +695,15 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                         s_idx,
                     );
                 }
-                let transport_ppqn = state.transport.ppqn();
+                let clip_sr = match &mclip.content {
+                    ClipData::Audio { preview_sr, .. } if *preview_sr > 0 => *preview_sr as f64,
+                    _ => 44100.0,
+                };
                 state.audio_proxy.send(GuiCommand::SetClipLoop {
                     track_idx: m_idx,
                     scene_idx: s_idx,
-                    start_secs: crate::views::playlist::ticks_to_secs_precise(
-                        mclip.loop_start,
-                        transport_ppqn,
-                        bpm,
-                    ),
-                    end_secs: crate::views::playlist::ticks_to_secs_precise(
-                        mclip.loop_end,
-                        transport_ppqn,
-                        bpm,
-                    ),
+                    start_secs: (mclip.loop_start as f64 / clip_sr) as f32,
+                    end_secs: (mclip.loop_end as f64 / clip_sr) as f32,
                     enabled: mclip.loop_enabled,
                 });
             } else if let ClipData::Midi { notes } = &mclip.content {

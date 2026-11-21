@@ -204,6 +204,12 @@ mod tests {
         assert_eq!(loaded.name, "Cymatics - Energize");
         assert_eq!(loaded.path, sample_path);
         assert!(matches!(loaded.content, ClipData::Audio { .. }));
+        // Para clips de audio, loop_end está en frames (4.0s * 44100 = 176400), no en ticks.
+        assert!(
+            loaded.loop_end >= 170_000,
+            "expected audio loop_end in frames, got {}",
+            loaded.loop_end
+        );
 
         let cmds: Vec<GuiCommand> = rx.try_iter().collect();
         let has_load_clip = cmds.iter().any(|c| {
