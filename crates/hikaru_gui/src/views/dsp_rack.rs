@@ -441,6 +441,7 @@ fn render_dms_fx_plus_slot(
 }
 
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
+    crate::views::remote_controls::sync_global_mapping_flag(app);
     let track_idx = app.safe_track_index();
     let track_name = app
         .current_tracks()

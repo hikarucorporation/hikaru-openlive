@@ -57,6 +57,14 @@ pub enum RemoteTarget {
     OpenPolyReso { track_idx: usize, slot_idx: usize },
     /// OpenPoly native synth Drive (`0.0..=1.0`).
     OpenPolyDrive { track_idx: usize, slot_idx: usize },
+    /// Any OpenPoly / native modulatable parameter by `(track_idx, param_name)`.
+    OpenPolyNamedParam { track_idx: usize, param: String },
+    /// FX bus volume (`0.0..=1.0`).
+    FxTrackVolume { fx_idx: usize },
+    /// FX bus pan (`-1.0..=1.0` mapped to `0.0..=1.0`).
+    FxTrackPan { fx_idx: usize },
+    /// FX bus cross-send (`0.0..=1.0`).
+    FxTrackSend { fx_idx: usize, target_fx_idx: usize },
 }
 
 /// One of the 8 knobs on a Remote Controls page.
@@ -203,11 +211,15 @@ pub fn default_norm_for_target(target: &RemoteTarget) -> f32 {
         RemoteTarget::OpenPolyCutoff { .. } => 0.8,
         RemoteTarget::OpenPolyReso { .. } => 0.15,
         RemoteTarget::OpenPolyDrive { .. } => 0.0,
+        RemoteTarget::OpenPolyNamedParam { .. } => 0.5,
+        RemoteTarget::FxTrackVolume { .. } => 0.75,
+        RemoteTarget::FxTrackPan { .. } => 0.5,
+        RemoteTarget::FxTrackSend { .. } => 0.0,
     }
 }
 
 pub fn read_target_normalized(app: &AppState, target: &RemoteTarget) -> Option<f32> {
-    match *target {
+    match target {
         RemoteTarget::ProjectTempo => Some(bpm_to_norm(app.transport.bpm)),
         RemoteTarget::MasterVolume => app.current_tracks().first().map(|t| t.volume.clamp(0.0, 1.0)),
         RemoteTarget::MasterPan => app
@@ -216,44 +228,63 @@ pub fn read_target_normalized(app: &AppState, target: &RemoteTarget) -> Option<f
             .map(|t| ((t.pan + 1.0) * 0.5).clamp(0.0, 1.0)),
         RemoteTarget::TrackVolume { track_idx } => app
             .current_tracks()
-            .get(track_idx)
+            .get(*track_idx)
             .map(|t| t.volume.clamp(0.0, 1.0)),
         RemoteTarget::TrackPan { track_idx } => app
             .current_tracks()
-            .get(track_idx)
+            .get(*track_idx)
             .map(|t| ((t.pan + 1.0) * 0.5).clamp(0.0, 1.0)),
         RemoteTarget::TrackSend { track_idx, fx_idx } => app
             .current_tracks()
-            .get(track_idx)
-            .map(|t| t.send_amount(ROUTE_FX_BASE + fx_idx).clamp(0.0, 1.0)),
+            .get(*track_idx)
+            .map(|t| t.send_amount(ROUTE_FX_BASE + *fx_idx).clamp(0.0, 1.0)),
         RemoteTarget::DeviceParam {
             track_idx,
             slot_idx,
             param_idx,
         } => app
             .current_tracks()
-            .get(track_idx)
-            .and_then(|t| t.effects.get(slot_idx))
-            .and_then(|s| s.cached_params.get(param_idx))
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
+            .and_then(|s| s.cached_params.get(*param_idx))
             .map(|p| p.value.clamp(0.0, 1.0)),
         RemoteTarget::OpenPolyCutoff { track_idx, slot_idx } => app
             .current_tracks()
-            .get(track_idx)
-            .and_then(|t| t.effects.get(slot_idx))
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
             .and_then(|s| s.open_poly.as_ref())
             .map(|p| ((p.filter_cutoff_hz.clamp(20.0, 20000.0) / 20.0).log10() / 3.0).clamp(0.0, 1.0)),
         RemoteTarget::OpenPolyReso { track_idx, slot_idx } => app
             .current_tracks()
-            .get(track_idx)
-            .and_then(|t| t.effects.get(slot_idx))
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
             .and_then(|s| s.open_poly.as_ref())
             .map(|p| p.filter_resonance.clamp(0.0, 1.0)),
         RemoteTarget::OpenPolyDrive { track_idx, slot_idx } => app
             .current_tracks()
-            .get(track_idx)
-            .and_then(|t| t.effects.get(slot_idx))
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
             .and_then(|s| s.open_poly.as_ref())
             .map(|p| p.filter_drive.clamp(0.0, 1.0)),
+        RemoteTarget::OpenPolyNamedParam { track_idx, param } => app
+            .current_tracks()
+            .get(*track_idx)
+            .and_then(|t| t.effects.iter().find_map(|s| s.open_poly.as_ref()))
+            .and_then(|p| read_openpoly_param_norm(p, param)),
+        RemoteTarget::FxTrackVolume { fx_idx } => {
+            app.fx_tracks.get(*fx_idx).map(|f| f.volume.clamp(0.0, 1.0))
+        }
+        RemoteTarget::FxTrackPan { fx_idx } => app
+            .fx_tracks
+            .get(*fx_idx)
+            .map(|f| ((f.pan + 1.0) * 0.5).clamp(0.0, 1.0)),
+        RemoteTarget::FxTrackSend {
+            fx_idx,
+            target_fx_idx,
+        } => app
+            .fx_tracks
+            .get(*fx_idx)
+            .map(|f| f.send_amount(ROUTE_FX_BASE + *target_fx_idx).clamp(0.0, 1.0)),
     }
 }
 
@@ -263,7 +294,7 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
     } else {
         0.5
     };
-    match *target {
+    match target {
         RemoteTarget::ProjectTempo => {
             app.set_bpm(norm_to_bpm(v));
         }
@@ -285,24 +316,26 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
             app.audio_proxy.send(GuiCommand::SetTrackPan { track_idx: 0, pan });
         }
         RemoteTarget::TrackVolume { track_idx } => {
-            if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+            let ti = *track_idx;
+            if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                 t.volume = v;
             }
             app.audio_proxy.send(GuiCommand::SetTrackVolume {
-                track_idx,
+                track_idx: ti,
                 volume_db: v,
             });
         }
         RemoteTarget::TrackPan { track_idx } => {
+            let ti = *track_idx;
             let pan = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
-            if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+            if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                 t.pan = pan;
             }
-            app.audio_proxy.send(GuiCommand::SetTrackPan { track_idx, pan });
+            app.audio_proxy.send(GuiCommand::SetTrackPan { track_idx: ti, pan });
         }
         RemoteTarget::TrackSend { track_idx, fx_idx } => {
-            if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
-                t.set_send_amount(ROUTE_FX_BASE + fx_idx, v);
+            if let Some(t) = app.current_tracks_mut().get_mut(*track_idx) {
+                t.set_send_amount(ROUTE_FX_BASE + *fx_idx, v);
             }
         }
         RemoteTarget::DeviceParam {
@@ -312,10 +345,10 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
         } => {
             if let Some(slot) = app
                 .current_tracks_mut()
-                .get_mut(track_idx)
-                .and_then(|t| t.effects.get_mut(slot_idx))
+                .get_mut(*track_idx)
+                .and_then(|t| t.effects.get_mut(*slot_idx))
             {
-                if let Some(p) = slot.cached_params.get_mut(param_idx) {
+                if let Some(p) = slot.cached_params.get_mut(*param_idx) {
                     p.value = v;
                     p.pending_to_engine = true;
                 }
@@ -324,8 +357,8 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
         RemoteTarget::OpenPolyCutoff { track_idx, slot_idx } => {
             if let Some(poly) = app
                 .current_tracks_mut()
-                .get_mut(track_idx)
-                .and_then(|t| t.effects.get_mut(slot_idx))
+                .get_mut(*track_idx)
+                .and_then(|t| t.effects.get_mut(*slot_idx))
                 .and_then(|s| s.open_poly.as_mut())
             {
                 poly.filter_cutoff_hz = (20.0 * 1000.0_f32.powf(v)).clamp(20.0, 20000.0);
@@ -335,8 +368,8 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
         RemoteTarget::OpenPolyReso { track_idx, slot_idx } => {
             if let Some(poly) = app
                 .current_tracks_mut()
-                .get_mut(track_idx)
-                .and_then(|t| t.effects.get_mut(slot_idx))
+                .get_mut(*track_idx)
+                .and_then(|t| t.effects.get_mut(*slot_idx))
                 .and_then(|s| s.open_poly.as_mut())
             {
                 poly.filter_resonance = v;
@@ -346,26 +379,117 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
         RemoteTarget::OpenPolyDrive { track_idx, slot_idx } => {
             if let Some(poly) = app
                 .current_tracks_mut()
-                .get_mut(track_idx)
-                .and_then(|t| t.effects.get_mut(slot_idx))
+                .get_mut(*track_idx)
+                .and_then(|t| t.effects.get_mut(*slot_idx))
                 .and_then(|s| s.open_poly.as_mut())
             {
                 poly.filter_drive = v;
                 poly.mark_params_dirty();
             }
         }
+        RemoteTarget::OpenPolyNamedParam { track_idx, param } => {
+            if let Some(poly) = app
+                .current_tracks_mut()
+                .get_mut(*track_idx)
+                .and_then(|t| t.effects.iter_mut().find_map(|s| s.open_poly.as_mut()))
+            {
+                write_openpoly_param_norm(poly, param, v);
+            }
+        }
+        RemoteTarget::FxTrackVolume { fx_idx } => {
+            if let Some(f) = app.fx_tracks.get_mut(*fx_idx) {
+                f.volume = v;
+            }
+        }
+        RemoteTarget::FxTrackPan { fx_idx } => {
+            if let Some(f) = app.fx_tracks.get_mut(*fx_idx) {
+                f.pan = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
+            }
+        }
+        RemoteTarget::FxTrackSend {
+            fx_idx,
+            target_fx_idx,
+        } => {
+            if let Some(f) = app.fx_tracks.get_mut(*fx_idx) {
+                f.set_send_amount(ROUTE_FX_BASE + *target_fx_idx, v);
+            }
+        }
     }
 }
 
+fn read_openpoly_param_norm(
+    poly: &crate::views::hikaru_native_plugins::hikaru_openpoly::HikaruOpenPoly,
+    param: &str,
+) -> Option<f32> {
+    let key = param.trim().to_ascii_uppercase();
+    match key.as_str() {
+        "WT POS" | "INDEX" => Some(poly.osc_index.clamp(0.0, 1.0)),
+        "FOLD" => Some(poly.osc_fold.clamp(0.0, 1.0)),
+        "SUB" => Some(poly.sub_level.clamp(0.0, 1.0)),
+        "NOISE" => Some(poly.noise_level.clamp(0.0, 1.0)),
+        "DRIVE" => Some(poly.filter_drive.clamp(0.0, 1.0)),
+        "KTR" => Some(poly.filter_keytrack.clamp(0.0, 1.0)),
+        "ENV" => Some(((poly.filter_env_amount + 1.0) * 0.5).clamp(0.0, 1.0)),
+        "CUTOFF" => Some(((poly.filter_cutoff_hz.clamp(20.0, 20000.0) / 20.0).log10() / 3.0).clamp(0.0, 1.0)),
+        "RESO" => Some(poly.filter_resonance.clamp(0.0, 1.0)),
+        "VEL" => Some(poly.velocity_sens.clamp(0.0, 1.0)),
+        "GLIDE" => Some((poly.glide_ms / 500.0).clamp(0.0, 1.0)),
+        "PAN" => Some(((poly.pan + 1.0) * 0.5).clamp(0.0, 1.0)),
+        "GAIN" => Some(poly.output_gain.clamp(0.0, 1.0)),
+        "AMP A" => Some((poly.amp_attack_ms / 2000.0).clamp(0.0, 1.0)),
+        "AMP D" => Some((poly.amp_decay_ms / 4000.0).clamp(0.0, 1.0)),
+        "AMP S" => Some(poly.amp_sustain.clamp(0.0, 1.0)),
+        "AMP R" => Some((poly.amp_release_ms / 5000.0).clamp(0.0, 1.0)),
+        "FEG A" => Some((poly.feg_attack_ms / 2000.0).clamp(0.0, 1.0)),
+        "FEG D" => Some((poly.feg_decay_ms / 4000.0).clamp(0.0, 1.0)),
+        "FEG S" => Some(poly.feg_sustain.clamp(0.0, 1.0)),
+        "FEG R" => Some((poly.feg_release_ms / 5000.0).clamp(0.0, 1.0)),
+        _ => None,
+    }
+}
+
+fn write_openpoly_param_norm(
+    poly: &mut crate::views::hikaru_native_plugins::hikaru_openpoly::HikaruOpenPoly,
+    param: &str,
+    v: f32,
+) {
+    let key = param.trim().to_ascii_uppercase();
+    match key.as_str() {
+        "WT POS" | "INDEX" => poly.osc_index = v,
+        "FOLD" => poly.osc_fold = v,
+        "SUB" => poly.sub_level = v,
+        "NOISE" => poly.noise_level = v,
+        "DRIVE" => poly.filter_drive = v,
+        "KTR" => poly.filter_keytrack = v,
+        "ENV" => poly.filter_env_amount = v * 2.0 - 1.0,
+        "CUTOFF" => poly.filter_cutoff_hz = (20.0 * 1000.0_f32.powf(v)).clamp(20.0, 20000.0),
+        "RESO" => poly.filter_resonance = v,
+        "VEL" => poly.velocity_sens = v,
+        "GLIDE" => poly.glide_ms = v * 500.0,
+        "PAN" => poly.pan = v * 2.0 - 1.0,
+        "GAIN" => poly.output_gain = v,
+        "AMP A" => poly.amp_attack_ms = v * 2000.0,
+        "AMP D" => poly.amp_decay_ms = v * 4000.0,
+        "AMP S" => poly.amp_sustain = v,
+        "AMP R" => poly.amp_release_ms = v * 5000.0,
+        "FEG A" => poly.feg_attack_ms = v * 2000.0,
+        "FEG D" => poly.feg_decay_ms = v * 4000.0,
+        "FEG S" => poly.feg_sustain = v,
+        "FEG R" => poly.feg_release_ms = v * 5000.0,
+        _ => return,
+    }
+    poly.mark_params_dirty();
+}
+
 pub fn target_short_label(app: &AppState, target: &RemoteTarget) -> String {
-    match *target {
+    match target {
         RemoteTarget::ProjectTempo => "Tempo".to_string(),
         RemoteTarget::MasterVolume => "Mst Vol".to_string(),
         RemoteTarget::MasterPan => "Mst Pan".to_string(),
         RemoteTarget::TrackVolume { track_idx } => {
             let name = app
                 .current_tracks()
-                .get(track_idx)
+                .get(*track_idx)
                 .map(|t| t.name.as_str())
                 .unwrap_or("Trk");
             if name.len() <= 5 {
@@ -382,22 +506,30 @@ pub fn target_short_label(app: &AppState, target: &RemoteTarget) -> String {
             param_idx,
         } => app
             .current_tracks()
-            .get(track_idx)
-            .and_then(|t| t.effects.get(slot_idx))
-            .and_then(|s| s.cached_params.get(param_idx))
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
+            .and_then(|s| s.cached_params.get(*param_idx))
             .map(|p| truncate_label(&p.info.name, 7))
             .unwrap_or_else(|| "Param".to_string()),
         RemoteTarget::OpenPolyCutoff { .. } => "Cutoff".to_string(),
         RemoteTarget::OpenPolyReso { .. } => "Reso".to_string(),
         RemoteTarget::OpenPolyDrive { .. } => "Drive".to_string(),
+        RemoteTarget::OpenPolyNamedParam { param, .. } => truncate_label(param, 8),
+        RemoteTarget::FxTrackVolume { fx_idx } => format!("FX{} Vol", fx_idx + 1),
+        RemoteTarget::FxTrackPan { fx_idx } => format!("FX{} Pan", fx_idx + 1),
+        RemoteTarget::FxTrackSend { target_fx_idx, .. } => format!("FX Snd {}", target_fx_idx + 1),
     }
 }
 
 pub fn format_target_value(app: &AppState, target: &RemoteTarget, norm: f32) -> String {
-    match *target {
+    match target {
         RemoteTarget::ProjectTempo => format!("{:.2} BPM", norm_to_bpm(norm)),
-        RemoteTarget::MasterVolume | RemoteTarget::TrackVolume { .. } => mixer::db_text(norm),
-        RemoteTarget::MasterPan | RemoteTarget::TrackPan { .. } => {
+        RemoteTarget::MasterVolume
+        | RemoteTarget::TrackVolume { .. }
+        | RemoteTarget::FxTrackVolume { .. } => mixer::db_text(norm),
+        RemoteTarget::MasterPan
+        | RemoteTarget::TrackPan { .. }
+        | RemoteTarget::FxTrackPan { .. } => {
             let pan = norm * 2.0 - 1.0;
             if pan.abs() < 0.01 {
                 "C".to_string()
@@ -407,16 +539,18 @@ pub fn format_target_value(app: &AppState, target: &RemoteTarget, norm: f32) -> 
                 format!("{:.0}% R", pan * 100.0)
             }
         }
-        RemoteTarget::TrackSend { .. } => mixer::send_db_text(norm),
+        RemoteTarget::TrackSend { .. } | RemoteTarget::FxTrackSend { .. } => {
+            mixer::send_db_text(norm)
+        }
         RemoteTarget::DeviceParam {
             track_idx,
             slot_idx,
             param_idx,
         } => app
             .current_tracks()
-            .get(track_idx)
-            .and_then(|t| t.effects.get(slot_idx))
-            .and_then(|s| s.cached_params.get(param_idx))
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
+            .and_then(|s| s.cached_params.get(*param_idx))
             .map(|p| p.display())
             .unwrap_or_else(|| format!("{:.0}%", norm * 100.0)),
         RemoteTarget::OpenPolyCutoff { .. } => {
@@ -428,7 +562,8 @@ pub fn format_target_value(app: &AppState, target: &RemoteTarget, norm: f32) -> 
             }
         }
         RemoteTarget::OpenPolyReso { .. }
-        | RemoteTarget::OpenPolyDrive { .. } => format!("{:.0}%", norm * 100.0),
+        | RemoteTarget::OpenPolyDrive { .. }
+        | RemoteTarget::OpenPolyNamedParam { .. } => format!("{:.0}%", norm * 100.0),
     }
 }
 
@@ -669,6 +804,55 @@ pub fn paint_mappable_overlay(ui: &Ui, rect: Rect) {
         Stroke::new(1.2_f32, REMOTE_CYAN),
         egui::StrokeKind::Inside,
     );
+}
+
+/// Highlights a mappable widget when Remote Mapping Mode is active and completes
+/// the mapping if clicked. Returns `true` if mapping mode consumed the interaction.
+pub fn handle_mappable_widget(
+    ui: &Ui,
+    app: &mut AppState,
+    resp: &egui::Response,
+    target: RemoteTarget,
+) -> bool {
+    if is_mapping_active(app) {
+        paint_mappable_overlay(ui, resp.rect);
+        if resp.clicked() {
+            complete_mapping(app, target);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+static GLOBAL_REMOTE_MAPPING_FLAG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static PENDING_KNOB_REMOTE_PICK: std::sync::OnceLock<std::sync::Mutex<Option<(usize, String)>>> =
+    std::sync::OnceLock::new();
+
+pub fn sync_global_mapping_flag(app: &mut AppState) {
+    GLOBAL_REMOTE_MAPPING_FLAG.store(
+        app.remote_mapping.is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    if let Some(lock) = PENDING_KNOB_REMOTE_PICK.get() {
+        if let Ok(mut guard) = lock.lock() {
+            if let Some((track_idx, param)) = guard.take() {
+                complete_mapping(app, RemoteTarget::OpenPolyNamedParam { track_idx, param });
+            }
+        }
+    }
+}
+
+pub fn is_global_remote_mapping_active() -> bool {
+    GLOBAL_REMOTE_MAPPING_FLAG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn request_global_knob_remote_map(track_idx: usize, param: &str) {
+    let lock = PENDING_KNOB_REMOTE_PICK.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some((track_idx, param.to_string()));
+    }
 }
 
 fn render_remotes_body(

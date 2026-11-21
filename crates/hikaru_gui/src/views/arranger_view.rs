@@ -1618,11 +1618,21 @@ fn render_channel_strip(
                                     BW_FADER_AMBER,
                                     false,
                                 );
-                                s_resp.on_hover_text(format!(
+                                s_resp.clone().on_hover_text(format!(
                                     "{fx_name} Send ({})",
                                     mixer::send_db_text(send_amt)
                                 ));
-                                if s_changed {
+                                let handled = !is_fx
+                                    && crate::views::remote_controls::handle_mappable_widget(
+                                        ui,
+                                        state,
+                                        &s_resp,
+                                        crate::views::remote_controls::RemoteTarget::TrackSend {
+                                            track_idx: user_idx.unwrap_or(0),
+                                            fx_idx: fx_i,
+                                        },
+                                    );
+                                if !handled && s_changed {
                                     let tr = strip_track_mut(state, kind);
                                     tr.set_send_amount(target_id, send_amt);
                                 }
@@ -1802,8 +1812,18 @@ fn render_channel_strip(
                         BW_FADER_ORANGE,
                         true,
                     );
-                    pan_resp.on_hover_text("Pan (double-click to center)");
-                    if pan_changed {
+                    pan_resp.clone().on_hover_text("Pan (double-click to center)");
+                    let pan_mapped = !is_fx
+                        && crate::views::remote_controls::handle_mappable_widget(
+                            ui,
+                            state,
+                            &pan_resp,
+                            match user_idx {
+                                Some(ti) => crate::views::remote_controls::RemoteTarget::TrackPan { track_idx: ti },
+                                None => crate::views::remote_controls::RemoteTarget::MasterPan,
+                            },
+                        );
+                    if !pan_mapped && pan_changed {
                         strip_track_mut(state, kind).pan = pan;
                         if let Some(u_idx) = user_idx {
                             let m_idx = u_idx.saturating_sub(1);

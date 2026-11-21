@@ -37,9 +37,9 @@
   "summary": {
     "areas": 18,
     "features": 645,
-    "done": 308,
+    "done": 310,
     "in_progress": 17,
-    "planned": 320,
+    "planned": 318,
     "bugs": 1,
     "parity_percent": 48
   },
@@ -315,7 +315,9 @@
         {
           "id": "ar-21",
           "name": "Clip gain envelope",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_core/src/audio_expressions.rs, crates/hikaru_gui/src/views/audio_detail_editor.rs",
+          "note": "Per-clip Gain expression curve with tension nodes and real-time audio engine evaluation."
         },
         {
           "id": "ar-22",
@@ -3571,7 +3573,9 @@
         {
           "id": "at-03",
           "name": "Clip automation envelopes",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_core/src/audio_expressions.rs, crates/hikaru_gui/src/views/audio_detail_editor.rs",
+          "note": "Audio clip expression curves (Gain, Pan, Pitch, Formant) with tension nodes and real-time playback evaluation."
         },
         {
           "id": "at-04",

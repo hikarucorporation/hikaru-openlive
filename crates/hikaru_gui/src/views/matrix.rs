@@ -2656,8 +2656,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         state.show_dsp_rack = !state.show_dsp_rack;
                     }
                 }
-                // Dragging horizontal GPU volume fader
-                if workspace_resp.dragged_by(egui::PointerButton::Primary)
+                // Dragging horizontal GPU volume fader (or click-to-map in Remote Mapping Mode)
+                if crate::views::remote_controls::is_mapping_active(state) {
+                    crate::views::remote_controls::paint_mappable_overlay(ui, slider_rect);
+                    if primary_clicked && slider_rect.expand(4.0).contains(pos) {
+                        crate::views::remote_controls::complete_mapping(
+                            state,
+                            crate::views::remote_controls::RemoteTarget::TrackVolume {
+                                track_idx: mixer_idx,
+                            },
+                        );
+                    }
+                } else if workspace_resp.dragged_by(egui::PointerButton::Primary)
                     && slider_rect.expand(4.0).contains(pos)
                 {
                     let new_vol =
@@ -2827,7 +2837,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             if primary_clicked {
                 state.selected_track_index = 0;
             }
-            if workspace_resp.dragged_by(egui::PointerButton::Primary)
+            if crate::views::remote_controls::is_mapping_active(state) {
+                crate::views::remote_controls::paint_mappable_overlay(ui, master_slider);
+                if primary_clicked && master_slider.expand(4.0).contains(pos) {
+                    crate::views::remote_controls::complete_mapping(
+                        state,
+                        crate::views::remote_controls::RemoteTarget::MasterVolume,
+                    );
+                }
+            } else if workspace_resp.dragged_by(egui::PointerButton::Primary)
                 && master_slider.expand(4.0).contains(pos)
             {
                 let nv = ((pos.x - master_slider.min.x) / master_slider.width()).clamp(0.0, 1.0);

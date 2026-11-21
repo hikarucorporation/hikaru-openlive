@@ -743,11 +743,20 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                                         BW_FADER_AMBER,
                                                         false,
                                                     );
-                                                    resp.on_hover_text(format!(
+                                                    resp.clone().on_hover_text(format!(
                                                         "{fx_name} Send ({})",
                                                         send_db_text(send_amt)
                                                     ));
-                                                    if changed {
+                                                    let mapped = crate::views::remote_controls::handle_mappable_widget(
+                                                        ui,
+                                                        state,
+                                                        &resp,
+                                                        crate::views::remote_controls::RemoteTarget::TrackSend {
+                                                            track_idx: idx,
+                                                            fx_idx: fx_i,
+                                                        },
+                                                    );
+                                                    if !mapped && changed {
                                                         state.tracks_mut()[idx]
                                                             .set_send_amount(target_id, send_amt);
                                                     }
@@ -757,7 +766,7 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                 }
 
                                 // GPU Bipolar Pan Bar
-                                if fader_horizontal_range(
+                                let (pan_resp, pan_changed) = fader_horizontal_range(
                                     ui,
                                     vec2(BOTTOM_MIXER_TRACK_WIDTH - 6.0, 13.0),
                                     &mut pan,
@@ -766,9 +775,18 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                     BW_FADER_AMBER,
                                     BW_FADER_ORANGE,
                                     true,
-                                )
-                                .1
-                                {
+                                );
+                                let pan_mapped = crate::views::remote_controls::handle_mappable_widget(
+                                    ui,
+                                    state,
+                                    &pan_resp,
+                                    if is_master {
+                                        crate::views::remote_controls::RemoteTarget::MasterPan
+                                    } else {
+                                        crate::views::remote_controls::RemoteTarget::TrackPan { track_idx: idx }
+                                    },
+                                );
+                                if !pan_mapped && pan_changed {
                                     state.tracks_mut()[idx].pan = pan;
                                 }
 
@@ -784,14 +802,23 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                             (peak * 1.01).min(1.0),
                                         ],
                                     );
-                                    if fader_vertical_track_vol(
+                                    let (vol_resp, vol_changed) = fader_vertical_track_vol(
                                         ui,
                                         vec2(36.0, fader_h),
                                         &mut vol,
                                         0.75,
-                                    )
-                                    .1
-                                    {
+                                    );
+                                    let vol_mapped = crate::views::remote_controls::handle_mappable_widget(
+                                        ui,
+                                        state,
+                                        &vol_resp,
+                                        if is_master {
+                                            crate::views::remote_controls::RemoteTarget::MasterVolume
+                                        } else {
+                                            crate::views::remote_controls::RemoteTarget::TrackVolume { track_idx: idx }
+                                        },
+                                    );
+                                    if !vol_mapped && vol_changed {
                                         state.tracks_mut()[idx].volume = vol;
                                         state.audio_proxy.send(GuiCommand::SetTrackVolume {
                                             track_idx: idx,
@@ -934,7 +961,7 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                 }
 
                                 // Pan
-                                if fader_horizontal_range(
+                                let (fx_pan_resp, fx_pan_changed) = fader_horizontal_range(
                                     ui,
                                     vec2(BOTTOM_MIXER_TRACK_WIDTH - 6.0, 13.0),
                                     &mut pan,
@@ -943,9 +970,14 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                     BW_FADER_AMBER,
                                     BW_FADER_ORANGE,
                                     true,
-                                )
-                                .1
-                                {
+                                );
+                                let fx_pan_mapped = crate::views::remote_controls::handle_mappable_widget(
+                                    ui,
+                                    state,
+                                    &fx_pan_resp,
+                                    crate::views::remote_controls::RemoteTarget::FxTrackPan { fx_idx },
+                                );
+                                if !fx_pan_mapped && fx_pan_changed {
                                     state.fx_tracks[fx_idx].pan = pan;
                                 }
 
@@ -956,14 +988,19 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                         vec2(VU_WIDTH, fader_h),
                                         [0.0, 0.0, 0.0, 0.0],
                                     );
-                                    if fader_vertical_track_vol(
+                                    let (fx_vol_resp, fx_vol_changed) = fader_vertical_track_vol(
                                         ui,
                                         vec2(36.0, fader_h),
                                         &mut vol,
                                         0.75,
-                                    )
-                                    .1
-                                    {
+                                    );
+                                    let fx_vol_mapped = crate::views::remote_controls::handle_mappable_widget(
+                                        ui,
+                                        state,
+                                        &fx_vol_resp,
+                                        crate::views::remote_controls::RemoteTarget::FxTrackVolume { fx_idx },
+                                    );
+                                    if !fx_vol_mapped && fx_vol_changed {
                                         state.fx_tracks[fx_idx].volume = vol;
                                     }
                                 });

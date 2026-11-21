@@ -137,7 +137,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Área | Features | Done | In progress | Planned | Bugs |
 |---|---:|---:|---:|---:|---:|
 | Clip Launcher | 25 | 21 | 0 | 4 | 0 |
-| Arranger | 26 | 15 | 2 | 9 | 0 |
+| Arranger | 26 | 16 | 2 | 8 | 0 |
 | Transport & Sync | 17 | 12 | 1 | 4 | 0 |
 | Group Tracks & Routing | 22 | 15 | 1 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
@@ -149,14 +149,14 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
 | Build & Platform | 13 | 8 | 2 | 3 | 1 |
-| Automation | 4 | 0 | 2 | 2 | 0 |
+| Automation | 4 | 1 | 2 | 1 | 0 |
 | VST3 & CLAP | 12 | 5 | 2 | 5 | 0 |
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 0 | 0 | 6 | 0 |
 | .bwtemplate | 4 | 0 | 0 | 4 | 0 |
-| **Total** | **645** | **308** | **17** | **320** | **1** |
+| **Total** | **645** | **310** | **17** | **318** | **1** |
 
-Paridad global: **308 / 645 = 48 %**.
+Paridad global: **310 / 645 = 48 %**.
 
 ### Bugs abiertos
 

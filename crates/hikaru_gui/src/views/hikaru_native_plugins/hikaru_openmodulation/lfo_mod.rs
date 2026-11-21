@@ -1147,6 +1147,26 @@ pub fn modulatable_rotary_knob(
     let span = (hi - lo).max(1.0e-6);
     let base_norm = ((*value - lo) / span).clamp(0.0, 1.0);
 
+    // Check if Remote Control Mapping Mode is active
+    if crate::views::remote_controls::is_global_remote_mapping_active() {
+        let (rect, response) = ui.allocate_exact_size(vec2(diameter, diameter), Sense::click());
+        let (_, _) = (base_norm, bipolar);
+        paint_rotary_knob(
+            ui.painter(),
+            rect,
+            base_norm,
+            Color32::from_rgb(0x36, 0x39, 0x41),
+            arc_color,
+            response.hovered(),
+            bipolar,
+        );
+        crate::views::remote_controls::paint_mappable_overlay(ui, rect);
+        if response.clicked() {
+            crate::views::remote_controls::request_global_knob_remote_map(track_idx, param);
+        }
+        return (response, false);
+    }
+
     // Check if Bitwig modulation mapping mode is active on this track
     if let Some(mod_src) = active_mapping_source_for_track(track_idx) {
         let (rect, response) =
