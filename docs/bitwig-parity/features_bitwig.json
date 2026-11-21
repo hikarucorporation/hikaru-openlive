@@ -37,11 +37,11 @@
   "summary": {
     "areas": 18,
     "features": 645,
-    "done": 311,
+    "done": 314,
     "in_progress": 17,
-    "planned": 317,
+    "planned": 314,
     "bugs": 1,
-    "parity_percent": 48
+    "parity_percent": 49
   },
   "areas": [
     {
@@ -3659,17 +3659,20 @@
         {
           "id": "bw-01",
           "name": "Binary container parser (.bwproject)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwproject.rs"
         },
         {
           "id": "bw-02",
           "name": "Tracks, groups & mixer routing",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwproject.rs"
         },
         {
           "id": "bw-03",
           "name": "Arranger & Clip Launcher clips",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwproject.rs"
         },
         {
           "id": "bw-04",

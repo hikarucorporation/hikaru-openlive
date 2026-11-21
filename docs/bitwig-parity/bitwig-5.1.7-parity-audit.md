@@ -152,11 +152,11 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Automation | 4 | 2 | 2 | 0 | 0 |
 | VST3 & CLAP | 12 | 5 | 2 | 5 | 0 |
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
-| .bwproject | 6 | 0 | 0 | 6 | 0 |
+| .bwproject | 6 | 3 | 0 | 3 | 0 |
 | .bwtemplate | 4 | 0 | 0 | 4 | 0 |
-| **Total** | **645** | **311** | **17** | **317** | **1** |
+| **Total** | **645** | **314** | **17** | **314** | **1** |
 
-Paridad global: **311 / 645 = 48 %**.
+Paridad global: **314 / 645 = 49 %**.
 
 ### Bugs abiertos
 
