@@ -67,6 +67,7 @@ use std::path::{Path, PathBuf};
 use crate::app::{AppMode, AppState};
 
 pub mod bwproject;
+pub mod bwtemplate;
 pub mod common;
 pub mod dawproject;
 pub mod openlive;
@@ -89,6 +90,9 @@ pub const DAWPROJECT_EXTENSION: &str = dawproject::EXTENSION;
 
 /// Extensión del formato Bitwig Project (`.bwproject`).
 pub const BWPROJECT_EXTENSION: &str = bwproject::EXTENSION;
+
+/// Extensión del formato Bitwig Template (`.bwtemplate`).
+pub const BWTEMPLATE_EXTENSION: &str = bwtemplate::EXTENSION;
 
 /// Etiqueta del filtro `rfd` de OpenLive.
 ///
@@ -216,6 +220,13 @@ pub fn load(state: &mut AppState, path: &Path) -> Result<(), ProjectError> {
     {
         return bwproject::load(state, path);
     }
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(BWTEMPLATE_EXTENSION))
+    {
+        return bwtemplate::load(state, path);
+    }
 
     let base_dir = path.parent().map(|p| p.to_path_buf());
     match format_of(path) {
@@ -301,18 +312,20 @@ pub fn ask_open_path(current: Option<&Path>) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title("Abrir proyecto Hikaru")
         .add_filter(
-            "Proyectos Hikaru / DAWproject / Bitwig (*.oplf, *.opsf, *.dawproject, *.bwproject)",
+            "Proyectos Hikaru / DAWproject / Bitwig (*.oplf, *.opsf, *.dawproject, *.bwproject, *.bwtemplate)",
             &[
                 OPENLIVE_EXTENSION,
                 OPENSTUDIO_EXTENSION,
                 DAWPROJECT_EXTENSION,
                 BWPROJECT_EXTENSION,
+                BWTEMPLATE_EXTENSION,
             ],
         )
         .add_filter(OPENLIVE_FILTER, OPENLIVE_EXTS)
         .add_filter(OPENSTUDIO_FILTER, OPENSTUDIO_EXTS)
         .add_filter(dawproject::FILE_FILTER, &[DAWPROJECT_EXTENSION])
-        .add_filter(bwproject::FILE_FILTER, &[BWPROJECT_EXTENSION]);
+        .add_filter(bwproject::FILE_FILTER, &[BWPROJECT_EXTENSION])
+        .add_filter(bwtemplate::FILE_FILTER, &[BWTEMPLATE_EXTENSION]);
     if let Some(current) = current.and_then(|p| p.parent()) {
         dialog = dialog.set_directory(current);
     }

@@ -93,6 +93,7 @@ const IC_PIN: VectorIcon = vi(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileMenuAction {
     NewProject,
+    NewFromTemplate,
     Open,
     Save,
     CollectAndSave,
@@ -121,12 +122,18 @@ struct MenuRow {
     action: FileMenuAction,
 }
 
-const SECTION_PROJECT: [MenuRow; 7] = [
+const SECTION_PROJECT: [MenuRow; 8] = [
     MenuRow {
         label: "New Project",
         shortcut: "Ctrl+N",
         icon: RowIcon::Vector(IC_NEW_PROJECT),
         action: FileMenuAction::NewProject,
+    },
+    MenuRow {
+        label: "New from Template (.bwtemplate)...",
+        shortcut: "",
+        icon: RowIcon::Vector(IC_SAVE_TEMPLATE),
+        action: FileMenuAction::NewFromTemplate,
     },
     MenuRow {
         label: "Open...",
@@ -468,6 +475,9 @@ pub fn execute_action(ctx: &Context, state: &mut AppState, action: FileMenuActio
     match action {
         FileMenuAction::NewProject => {
             menu_bar::new_project(state);
+        }
+        FileMenuAction::NewFromTemplate => {
+            new_from_template(state);
         }
         FileMenuAction::Open => {
             menu_bar::open_project(state);
@@ -969,6 +979,16 @@ fn export_dawproject(state: &mut AppState) {
     match project::dawproject::export_to_path(state, &target) {
         Ok(()) => println!("[EXPORT] DAWproject exportado: {}", target.display()),
         Err(err) => eprintln!("[EXPORT] no se pudo escribir DAWproject: {}", err),
+    }
+}
+
+fn new_from_template(state: &mut AppState) {
+    let Some(path) = project::bwtemplate::ask_template_path(state.project_path.as_deref()) else {
+        return;
+    };
+    match project::bwtemplate::new_from_template(state, &path) {
+        Ok(()) => println!("[TEMPLATE] proyecto nuevo desde plantilla: {}", path.display()),
+        Err(err) => eprintln!("[TEMPLATE] no se pudo cargar .bwtemplate: {}", err),
     }
 }
 
