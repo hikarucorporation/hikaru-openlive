@@ -979,7 +979,7 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Lee entradas de un archivo ZIP soportando STORE (0) y DEFLATE (8).
-fn read_zip_entries(data: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
+pub(crate) fn read_zip_entries(data: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
     let mut entries = HashMap::new();
 
     // Buscar End of Central Directory (0x06054b50) desde el final
@@ -1094,7 +1094,7 @@ fn find_eocd(data: &[u8]) -> Option<usize> {
 }
 
 /// Escritor ZIP (método STORE, sin compresión) estándar y autocontenido para `.dawproject`.
-fn build_zip_store(entries: &[(&str, &[u8])]) -> Vec<u8> {
+pub(crate) fn build_zip_store(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central_dir = Vec::new();
 

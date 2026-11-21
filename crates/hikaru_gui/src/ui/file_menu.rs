@@ -716,7 +716,7 @@ fn save_as_template(state: &mut AppState) {
         .is_some_and(|e| e.eq_ignore_ascii_case(project::BWTEMPLATE_EXTENSION));
 
     let result = if is_bwtemplate {
-        project::bwproject::export_to_path(state, &target).map(|()| target.clone())
+        project::bwtemplate::export_to_path(state, &target).map(|()| target.clone())
     } else {
         project::save(state, &target)
     };
@@ -1041,7 +1041,7 @@ fn export_bwtemplate(state: &mut AppState) {
     {
         target.set_extension(project::BWTEMPLATE_EXTENSION);
     }
-    match project::bwproject::export_to_path(state, &target) {
+    match project::bwtemplate::export_to_path(state, &target) {
         Ok(()) => {
             println!("[TEMPLATE] .bwtemplate guardado: {}", target.display());
             state.control_panel_state.status_notice =

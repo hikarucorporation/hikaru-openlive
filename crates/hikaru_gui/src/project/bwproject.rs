@@ -183,10 +183,7 @@ pub fn parse_bwproject_bytes(bytes: &[u8]) -> Result<ParsedBwProject, String> {
         return Err("archivo .bwproject demasiado corto".to_string());
     }
     if &bytes[0..4] == BITWIG_NATIVE_MAGIC {
-        return Err(
-            "archivo .bwproject nativo cifrado/propietario de Bitwig (BtWg): usa la versión estándar TLV o exporta desde Bitwig como .dawproject"
-                .to_string(),
-        );
+        return parse_native_bitwig_btwg(bytes);
     }
     if &bytes[0..8] != MAGIC {
         return Err("cabecera mágica inválida en archivo .bwproject".to_string());
@@ -498,7 +495,11 @@ pub fn load(state: &mut AppState, path: &Path) -> Result<(), ProjectError> {
     Ok(())
 }
 
-fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproject_path: &Path) {
+pub(crate) fn apply_parsed_bwproject(
+    state: &mut AppState,
+    parsed: &ParsedBwProject,
+    bwproject_path: &Path,
+) {
     state.transport.sample_count = 0;
     state.transport.playback_state = TransportPlaybackState::Stopped;
     state.transport.bpm = parsed.transport.bpm.clamp(20.0, 999.0);
@@ -787,6 +788,254 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
     pl.needs_full_sync = true;
     state.playlist_state = pl;
     state.matrix_state.next_clip_id = next_id;
+}
+
+/// Parser para el formato binario nativo de Bitwig Studio (`BtWg`).
+///
+/// Cabecera ASCII de 42 bytes:
+/// `BtWg` + version(4 hex) + type(4 hex) + rev(4 hex) + body_offset(8 hex) + ...
+///
+/// Extrae del cuerpo binario sin compresión:
+/// - BPM: campo `0x000002c8` + tag `0x07` + `f64 BE`
+/// - Pistas: campo `0x0000015b` + tag `0x08` + string `u32 BE` (opcionalmente
+///   seguido de color `0x0000054c` + tag `0x16` + `4 x f32 BE`)
+/// - Clips del Launcher: campo `0x00000286` + tag `0x08` + string `u32 BE`
+///   asociados a la pista inmediatamente anterior, con detección opcional de
+///   ruta de sample `0x00000d3a` + tag `0x08`.
+fn parse_native_bitwig_btwg(bytes: &[u8]) -> Result<ParsedBwProject, String> {
+    if bytes.len() < 42 {
+        return Err("cabecera BtWg truncada".to_string());
+    }
+    let body_offset = std::str::from_utf8(&bytes[16..24])
+        .ok()
+        .and_then(|s| usize::from_str_radix(s, 16).ok())
+        .filter(|&off| off >= 42 && off < bytes.len())
+        .unwrap_or(42);
+    let body = &bytes[body_offset..];
+
+    // 1. BPM: campo 0x000002c8 + tag 0x07 + f64 BE
+    let mut bpm = 120.0f64;
+    let bpm_pat = [0x00, 0x00, 0x02, 0xc8, 0x07];
+    let scan_end = body.len().min(16384);
+    if let Some(pos) = body[..scan_end]
+        .windows(bpm_pat.len())
+        .position(|w| w == bpm_pat)
+    {
+        if pos + 13 <= body.len() {
+            let val = f64::from_be_bytes([
+                body[pos + 5],
+                body[pos + 6],
+                body[pos + 7],
+                body[pos + 8],
+                body[pos + 9],
+                body[pos + 10],
+                body[pos + 11],
+                body[pos + 12],
+            ]);
+            if val.is_finite() && (20.0..=999.0).contains(&val) {
+                bpm = val;
+            }
+        }
+    }
+
+    // 2. Pistas: campo 0x0000015b + tag 0x08 + u32 BE len + UTF-8
+    //    Opcionalmente seguido de color 0x0000054c + tag 0x16 + 4 x f32 BE.
+    let trk_pat = [0x00, 0x00, 0x01, 0x5b, 0x08];
+    let col_pat = [0x00, 0x00, 0x05, 0x4c, 0x16];
+    let mut tracks: Vec<BwTrack> = Vec::new();
+    let mut track_offsets: Vec<(usize, String, Option<[u8; 4]>)> = Vec::new();
+    let mut pos = 0usize;
+    let mut next_trk_num = 1usize;
+
+    while pos + 9 <= body.len() {
+        let Some(rel) = body[pos..].windows(trk_pat.len()).position(|w| w == trk_pat) else {
+            break;
+        };
+        let i = pos + rel;
+        pos = i + 5;
+        if i + 9 > body.len() {
+            break;
+        }
+        let slen = u32::from_be_bytes([body[i + 5], body[i + 6], body[i + 7], body[i + 8]]) as usize;
+        if slen == 0 || slen > 128 || i + 9 + slen > body.len() {
+            continue;
+        }
+        let Ok(name) = std::str::from_utf8(&body[i + 9..i + 9 + slen]) else {
+            continue;
+        };
+        if name == "Project" || !name.chars().all(|c| !c.is_control()) {
+            continue;
+        }
+
+        let after_off = i + 9 + slen;
+        let mut color = None;
+        if after_off + 21 <= body.len() && body[after_off..after_off + 5] == col_pat {
+            let r = f32::from_be_bytes([
+                body[after_off + 5],
+                body[after_off + 6],
+                body[after_off + 7],
+                body[after_off + 8],
+            ]);
+            let g = f32::from_be_bytes([
+                body[after_off + 9],
+                body[after_off + 10],
+                body[after_off + 11],
+                body[after_off + 12],
+            ]);
+            let b = f32::from_be_bytes([
+                body[after_off + 13],
+                body[after_off + 14],
+                body[after_off + 15],
+                body[after_off + 16],
+            ]);
+            let a = f32::from_be_bytes([
+                body[after_off + 17],
+                body[after_off + 18],
+                body[after_off + 19],
+                body[after_off + 20],
+            ]);
+            if a > 0.01 {
+                color = Some([
+                    (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (a.clamp(0.0, 1.0) * 255.0).round() as u8,
+                ]);
+            }
+        }
+
+        let is_master = name.eq_ignore_ascii_case("Master");
+        // En BtWg, los buses FX (Mid Reverb, Delay) tienen color alpha=0; los
+        // omitimos de las pistas regulares del Launcher si no tienen color.
+        if !is_master && color.is_none() {
+            continue;
+        }
+        let id = if is_master {
+            "trk_0".to_string()
+        } else {
+            let s = format!("trk_{}", next_trk_num);
+            next_trk_num += 1;
+            s
+        };
+        if !is_master {
+            track_offsets.push((i, id.clone(), color));
+        }
+        tracks.push(BwTrack {
+            id,
+            name: name.to_string(),
+            is_master,
+            volume: 0.85,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            color,
+        });
+    }
+
+    if !tracks.iter().any(|t| t.is_master) {
+        tracks.insert(
+            0,
+            BwTrack {
+                id: "trk_0".to_string(),
+                name: "Master".to_string(),
+                is_master: true,
+                volume: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                color: None,
+            },
+        );
+    }
+
+    // 3. Clips del Launcher: campo 0x00000286 + tag 0x08 + u32 BE len + UTF-8
+    let clip_pat = [0x00, 0x00, 0x02, 0x86, 0x08];
+    let sample_pat = [0x00, 0x00, 0x0d, 0x3a, 0x08];
+    let mut clips: Vec<BwClip> = Vec::new();
+    let mut per_track_slot: HashMap<String, usize> = HashMap::new();
+    let mut cpos = 0usize;
+
+    while cpos + 9 <= body.len() {
+        let Some(rel) = body[cpos..].windows(clip_pat.len()).position(|w| w == clip_pat) else {
+            break;
+        };
+        let i = cpos + rel;
+        cpos = i + 5;
+        if i + 9 > body.len() {
+            break;
+        }
+        let slen = u32::from_be_bytes([body[i + 5], body[i + 6], body[i + 7], body[i + 8]]) as usize;
+        if slen == 0 || slen > 128 || i + 9 + slen > body.len() {
+            continue;
+        }
+        let Ok(cname) = std::str::from_utf8(&body[i + 9..i + 9 + slen]) else {
+            continue;
+        };
+        if !cname.chars().all(|c| !c.is_control()) {
+            continue;
+        }
+
+        // Asociar a la pista regular inmediatamente anterior por offset.
+        let owner = track_offsets.iter().rev().find(|(toff, _, _)| *toff < i);
+        let Some((_, track_id, track_color)) = owner else {
+            continue;
+        };
+
+        let slot_entry = per_track_slot.entry(track_id.clone()).or_insert(0);
+        let slot_index = *slot_entry;
+        *slot_entry += 1;
+
+        // Buscar si el clip referencia un sample cercano (`0x00000d3a 0x08`)
+        let search_limit = (i + 9 + slen + 2048).min(body.len());
+        let mut content = BwClipContent::Midi { notes: Vec::new() };
+        if let Some(srel) = body[i + 9 + slen..search_limit]
+            .windows(sample_pat.len())
+            .position(|w| w == sample_pat)
+        {
+            let si = i + 9 + slen + srel;
+            if si + 9 <= body.len() {
+                let plen =
+                    u32::from_be_bytes([body[si + 5], body[si + 6], body[si + 7], body[si + 8]])
+                        as usize;
+                if plen > 0 && plen < 256 && si + 9 + plen <= body.len() {
+                    if let Ok(spath) = std::str::from_utf8(&body[si + 9..si + 9 + plen]) {
+                        if spath.ends_with(".wav")
+                            || spath.ends_with(".flac")
+                            || spath.ends_with(".ogg")
+                            || spath.ends_with(".mp3")
+                        {
+                            content = BwClipContent::Audio {
+                                path: spath.to_string(),
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        clips.push(BwClip {
+            name: cname.to_string(),
+            track_id: track_id.clone(),
+            is_launcher: true,
+            slot_index,
+            start_beats: 0.0,
+            duration_beats: 4.0,
+            muted: false,
+            launch_legato: true,
+            color: *track_color,
+            content,
+        });
+    }
+
+    Ok(ParsedBwProject {
+        transport: BwTransport {
+            bpm,
+            beats_per_bar: 4,
+            beat_division: 4,
+        },
+        tracks,
+        clips,
+    })
 }
 
 fn resolve_path(base_dir: Option<&Path>, raw: &str) -> PathBuf {
