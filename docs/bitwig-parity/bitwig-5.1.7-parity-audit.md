@@ -149,14 +149,14 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
 | UI & Workflow | 30 | 20 | 0 | 10 | 0 |
 | Build & Platform | 13 | 8 | 2 | 3 | 1 |
-| Automation | 4 | 1 | 2 | 1 | 0 |
+| Automation | 4 | 2 | 2 | 0 | 0 |
 | VST3 & CLAP | 12 | 5 | 2 | 5 | 0 |
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 0 | 0 | 6 | 0 |
 | .bwtemplate | 4 | 0 | 0 | 4 | 0 |
-| **Total** | **645** | **310** | **17** | **318** | **1** |
+| **Total** | **645** | **311** | **17** | **317** | **1** |
 
-Paridad global: **310 / 645 = 48 %**.
+Paridad global: **311 / 645 = 48 %**.
 
 ### Bugs abiertos
 

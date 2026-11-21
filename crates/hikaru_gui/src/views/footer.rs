@@ -217,6 +217,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     .clicked()
                     {
                         state.panel_layout.show_automation = !state.panel_layout.show_automation;
+                        if state.panel_layout.show_automation {
+                            state.show_dsp_rack = false;
+                            state.show_piano_roll = false;
+                            state.clip_editor.show_editor = false;
+                            state.panel_layout.show_mixer = false;
+                        }
                     }
 
                     if flat_icon_toggle(
@@ -235,6 +241,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             state.show_piano_roll = false;
                             state.clip_editor.show_editor = false;
                             state.panel_layout.show_mixer = false;
+                            state.panel_layout.show_automation = false;
                         }
                     }
 

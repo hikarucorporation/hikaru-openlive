@@ -841,6 +841,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 } else {
                     let bpm_resp = ui.interact(bpm_top, ui.id().with("lcd_bpm_drag"), Sense::click_and_drag());
+                    if state.automation.has_tempo_automation() {
+                        ui.painter().circle_filled(
+                            pos2(bpm_top.min.x + 6.0, bpm_top.center().y),
+                            2.5,
+                            Color32::from_rgb(0x3A, 0xA8, 0xE0),
+                        );
+                    }
                     if crate::views::remote_controls::is_mapping_active(state) {
                         crate::views::remote_controls::paint_mappable_overlay(ui, bpm_top);
                         if bpm_resp.clicked() {

@@ -37,9 +37,9 @@
   "summary": {
     "areas": 18,
     "features": 645,
-    "done": 310,
+    "done": 311,
     "in_progress": 17,
-    "planned": 318,
+    "planned": 317,
     "bugs": 1,
     "parity_percent": 48
   },
@@ -3580,7 +3580,9 @@
         {
           "id": "at-04",
           "name": "Tempo automation",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/automation_editor.rs, crates/hikaru_gui/src/app.rs",
+          "note": "Master -> Transport -> Tempo automation curve (20.00..666.00 BPM) with live playback evaluation."
         }
       ]
     },

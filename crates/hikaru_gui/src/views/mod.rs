@@ -43,4 +43,5 @@ pub mod modal;
 pub mod clip_context_menu;
 pub mod popup_browser;
 pub mod remote_controls;
+pub mod automation_editor;
 pub mod hikaru_native_plugins;

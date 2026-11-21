@@ -162,8 +162,8 @@ pub enum PanMode {
     MidSide,
 }
 
-pub const BPM_MIN: f64 = 40.0;
-pub const BPM_MAX: f64 = 300.0;
+pub const BPM_MIN: f64 = 20.0;
+pub const BPM_MAX: f64 = 666.0;
 
 pub fn format_bpm(bpm: f64) -> String {
     if !bpm.is_finite() {
@@ -488,6 +488,7 @@ pub struct AppState {
     pub open_grid_editor: Option<(usize, usize)>,
     pub project_remotes: crate::views::remote_controls::RemoteControlsState,
     pub remote_mapping: Option<crate::views::remote_controls::ActiveRemoteMapping>,
+    pub automation: crate::views::automation_editor::AutomationEditorState,
 }
 
 impl AppState {
@@ -666,6 +667,7 @@ impl AppState {
             open_grid_editor: None,
             project_remotes: crate::views::remote_controls::RemoteControlsState::default(),
             remote_mapping: None,
+            automation: crate::views::automation_editor::AutomationEditorState::default(),
         };
         state.audio_proxy.send(GuiCommand::SetAppMode(false));
         state
@@ -1784,6 +1786,11 @@ impl HikaruApp {
             }
         }
 
+        if self.state.is_playing() {
+            let tick = self.state.piano_roll_state.playhead_tick;
+            crate::views::automation_editor::apply_automation_at_tick(&mut self.state, tick);
+        }
+
         if (self.state.transport.bpm - self.state.bpm_synced_to_engine).abs() > f64::EPSILON {
             self.state.bpm_synced_to_engine = self.state.transport.bpm;
             self.state.audio_proxy.send(GuiCommand::SetBpm(self.state.transport.bpm as f32));
@@ -2066,11 +2073,14 @@ impl eframe::App for HikaruApp {
                 || self.state.show_piano_roll
                 || self.state.show_dsp_rack
                 || self.state.panel_layout.show_mixer
+                || self.state.panel_layout.show_automation
         };
 
         if has_dock {
             let dock_h = if self.state.show_dsp_rack {
                 dsp_rack::RACK_HEIGHT + 6.0
+            } else if self.state.panel_layout.show_automation {
+                self.state.bottom_mixer_height.max(220.0)
             } else if self.state.panel_layout.show_mixer {
                 self.state.bottom_mixer_height.max(260.0)
             } else if self.state.show_piano_roll {
@@ -2087,6 +2097,8 @@ impl eframe::App for HikaruApp {
                 .show(ctx, |ui| {
                     if self.state.show_dsp_rack {
                         dsp_rack::render(ui, &mut self.state);
+                    } else if self.state.panel_layout.show_automation {
+                        crate::views::automation_editor::render(ui, &mut self.state);
                     } else if self.state.panel_layout.show_mixer {
                         mixer::render_bottom_panel(ui, &mut self.state);
                     } else if self.state.show_piano_roll || self.state.clip_editor.show_editor {
