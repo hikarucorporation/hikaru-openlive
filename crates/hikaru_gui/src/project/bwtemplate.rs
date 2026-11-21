@@ -177,7 +177,7 @@ mod tests {
             loop_start: 0,
             loop_end: 3840,
             loop_enabled: true,
-            launch_legato: false,
+            launch_legato: true,
             has_time_selection: false,
             peaks: Vec::new(),
             muted: false,
@@ -209,6 +209,10 @@ mod tests {
             loaded.loop_end >= 170_000,
             "expected audio loop_end in frames, got {}",
             loaded.loop_end
+        );
+        assert!(
+            loaded.launch_legato,
+            "launcher audio clip should preserve launch_legato = true"
         );
 
         let cmds: Vec<GuiCommand> = rx.try_iter().collect();

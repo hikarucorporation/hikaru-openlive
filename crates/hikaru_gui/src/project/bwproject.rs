@@ -79,6 +79,7 @@ pub struct BwClip {
     pub start_beats: f64,
     pub duration_beats: f64,
     pub muted: bool,
+    pub launch_legato: bool,
     pub color: Option<[u8; 4]>,
     pub content: BwClipContent,
 }
@@ -145,6 +146,7 @@ fn encode_bwproject(project: &ParsedBwProject) -> Result<Vec<u8>, String> {
                     "start_beats": c.start_beats,
                     "duration_beats": c.duration_beats,
                     "muted": c.muted,
+                    "launch_legato": c.launch_legato,
                     "color": c.color,
                     "content": content,
                 })
@@ -345,6 +347,10 @@ pub fn parse_bwproject_bytes(bytes: &[u8]) -> Result<ParsedBwProject, String> {
                         .and_then(|x| x.as_f64())
                         .unwrap_or(4.0),
                     muted: item.get("muted").and_then(|x| x.as_bool()).unwrap_or(false),
+                    launch_legato: item
+                        .get("launch_legato")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(true),
                     color,
                     content,
                 });
@@ -405,6 +411,7 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
             start_beats: clip.start_tick as f64 / ppqn,
             duration_beats: (clip.duration_ticks as f64 / ppqn).max(0.25),
             muted: false,
+            launch_legato: true,
             color: Some(clip.color.to_array()),
             content,
         });
@@ -450,6 +457,7 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
                     start_beats: 0.0,
                     duration_beats,
                     muted: mclip.muted,
+                    launch_legato: mclip.launch_legato,
                     color: mclip.color.map(|c| c.to_array()),
                     content,
                 });
@@ -636,7 +644,7 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                 loop_start: 0,
                 loop_end: initial_loop_end,
                 loop_enabled: true,
-                launch_legato: false,
+                launch_legato: pc.launch_legato,
                 has_time_selection: false,
                 peaks: Vec::new(),
                 muted: pc.muted,
@@ -834,6 +842,7 @@ mod tests {
                 start_beats: 0.0,
                 duration_beats: 4.0,
                 muted: false,
+                launch_legato: true,
                 color: None,
                 content: BwClipContent::Midi {
                     notes: vec![(0, 36, 100, 480), (480, 48, 90, 480)],
