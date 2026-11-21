@@ -129,6 +129,7 @@ fn discover_workspace_projects() -> Vec<PathBuf> {
                 if ext == project::OPENLIVE_EXTENSION
                     || ext == project::OPENSTUDIO_EXTENSION
                     || ext.eq_ignore_ascii_case(project::DAWPROJECT_EXTENSION)
+                    || ext.eq_ignore_ascii_case(project::BWPROJECT_EXTENSION)
                 {
                     found.push(path);
                 }

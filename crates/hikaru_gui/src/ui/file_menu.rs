@@ -102,6 +102,7 @@ pub enum FileMenuAction {
     ExportAudio,
     ExportMidi,
     ExportDawProject,
+    ExportBwProject,
     ShowDashboard,
     Settings,
     Quit,
@@ -165,7 +166,7 @@ const SECTION_PROJECT: [MenuRow; 7] = [
     },
 ];
 
-const SECTION_EXPORT: [MenuRow; 3] = [
+const SECTION_EXPORT: [MenuRow; 4] = [
     MenuRow {
         label: "Export Audio...",
         shortcut: "Ctrl+Shift+B",
@@ -183,6 +184,12 @@ const SECTION_EXPORT: [MenuRow; 3] = [
         shortcut: "",
         icon: RowIcon::Vector(IC_EXPORT_DAWPROJECT),
         action: FileMenuAction::ExportDawProject,
+    },
+    MenuRow {
+        label: "Export Bitwig Project (.bwproject)...",
+        shortcut: "",
+        icon: RowIcon::Vector(IC_EXPORT_DAWPROJECT),
+        action: FileMenuAction::ExportBwProject,
     },
 ];
 
@@ -488,6 +495,9 @@ pub fn execute_action(ctx: &Context, state: &mut AppState, action: FileMenuActio
         }
         FileMenuAction::ExportDawProject => {
             export_dawproject(state);
+        }
+        FileMenuAction::ExportBwProject => {
+            export_bwproject(state);
         }
         FileMenuAction::ShowDashboard => {
             state.control_panel_state.is_open = true;
@@ -959,5 +969,30 @@ fn export_dawproject(state: &mut AppState) {
     match project::dawproject::export_to_path(state, &target) {
         Ok(()) => println!("[EXPORT] DAWproject exportado: {}", target.display()),
         Err(err) => eprintln!("[EXPORT] no se pudo escribir DAWproject: {}", err),
+    }
+}
+
+fn export_bwproject(state: &mut AppState) {
+    let default_name = format!("{}.bwproject", project_stem(state));
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Export Bitwig Project (.bwproject)")
+        .set_file_name(&default_name)
+        .add_filter(
+            project::bwproject::FILE_FILTER,
+            &[project::BWPROJECT_EXTENSION],
+        );
+    if let Some(dir) = state.project_path.as_ref().and_then(|p| p.parent()) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(mut target) = dialog.save_file() else {
+        return;
+    };
+    if target.extension().is_none() {
+        target.set_extension(project::BWPROJECT_EXTENSION);
+    }
+
+    match project::bwproject::export_to_path(state, &target) {
+        Ok(()) => println!("[EXPORT] .bwproject exportado: {}", target.display()),
+        Err(err) => eprintln!("[EXPORT] no se pudo escribir .bwproject: {}", err),
     }
 }
