@@ -1759,7 +1759,23 @@ impl HikaruApp {
         };
         self.state.reconcile_queued_stops();
         self.state.playlist_state.ppqn = self.state.transport.ppqn();
-        let raw_tick = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
+        let raw_tick = if self.state.is_playing() && self.state.automation.has_tempo_automation() {
+            let sr = self.state.transport.sample_rate.get() as f64;
+            let bpm = self.state.transport.bpm;
+            let ppqn = self.state.transport.ppqn() as f64;
+            self.state.automation.advance_playhead_tick(
+                self.state.transport.sample_count,
+                sr,
+                bpm,
+                ppqn,
+            )
+        } else {
+            let t = self.state.transport.samples_to_ticks(self.state.transport.sample_count);
+            self.state
+                .automation
+                .reset_playhead_integrator(self.state.transport.sample_count, t);
+            t
+        };
         self.state.playlist_state.playhead_tick = raw_tick;
 
         if self.state.is_playing() {
@@ -1791,7 +1807,12 @@ impl HikaruApp {
             crate::views::automation_editor::apply_automation_at_tick(&mut self.state, tick);
         }
 
-        if (self.state.transport.bpm - self.state.bpm_synced_to_engine).abs() > f64::EPSILON {
+        let bpm_thresh = if self.state.is_playing() && self.state.automation.has_tempo_automation() {
+            0.25
+        } else {
+            f64::EPSILON
+        };
+        if (self.state.transport.bpm - self.state.bpm_synced_to_engine).abs() > bpm_thresh {
             self.state.bpm_synced_to_engine = self.state.transport.bpm;
             self.state.audio_proxy.send(GuiCommand::SetBpm(self.state.transport.bpm as f32));
         }

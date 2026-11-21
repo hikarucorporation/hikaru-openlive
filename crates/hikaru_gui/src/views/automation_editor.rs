@@ -191,6 +191,8 @@ pub struct AutomationEditorState {
     pub selected_point: Option<usize>,
     pub dragging_point: Option<usize>,
     pub scope_is_clip: bool,
+    pub last_sample_count: u64,
+    pub accum_tick_f64: f64,
 }
 
 impl Default for AutomationEditorState {
@@ -203,11 +205,39 @@ impl Default for AutomationEditorState {
             selected_point: None,
             dragging_point: None,
             scope_is_clip: false,
+            last_sample_count: 0,
+            accum_tick_f64: 0.0,
         }
     }
 }
 
 impl AutomationEditorState {
+    /// Smoothly integrates `delta_samples` into ticks using the instantaneous BPM so
+    /// changing tempo never causes the playhead to jump backwards or freeze.
+    pub fn advance_playhead_tick(
+        &mut self,
+        sample_count: u64,
+        sample_rate: f64,
+        current_bpm: f64,
+        ppqn: f64,
+    ) -> u64 {
+        if sample_count < self.last_sample_count || self.last_sample_count == 0 {
+            self.last_sample_count = sample_count;
+            let sr = sample_rate.max(1.0);
+            self.accum_tick_f64 = (sample_count as f64 / sr) * (current_bpm / 60.0) * ppqn;
+        } else {
+            let delta_samples = sample_count - self.last_sample_count;
+            self.last_sample_count = sample_count;
+            let sr = sample_rate.max(1.0);
+            self.accum_tick_f64 += (delta_samples as f64 / sr) * (current_bpm / 60.0) * ppqn;
+        }
+        self.accum_tick_f64.round().max(0.0) as u64
+    }
+
+    pub fn reset_playhead_integrator(&mut self, sample_count: u64, tick: u64) {
+        self.last_sample_count = sample_count;
+        self.accum_tick_f64 = tick as f64;
+    }
     pub fn active_target_for_track(&self, track_idx: usize) -> AutomationTarget {
         self.selected_target_by_track
             .get(&track_idx)
@@ -677,7 +707,8 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
         })
     });
 
-    if canvas_resp.double_clicked() {
+    let right_clicked = ui.input(|i| i.pointer.secondary_clicked());
+    if right_clicked {
         if let Some(idx) = hovered_node_idx {
             app.automation.lane_for_mut(&active_target).points.remove(idx);
             app.automation.selected_point = None;
@@ -849,10 +880,10 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
 
     if canvas_resp.hovered() {
         app.footer_context_cues = vec![
-            ("CLICK".to_string(), "Add / Select point".to_string()),
+            ("CLICK".to_string(), "Insert / Select point".to_string()),
             ("DRAG".to_string(), "Move point".to_string()),
+            ("RIGHT-CLICK".to_string(), "Delete point".to_string()),
             ("SHIFT".to_string(), "Free time".to_string()),
-            ("DOUBLE-CLICK".to_string(), "Delete point".to_string()),
         ];
     }
 }
