@@ -379,6 +379,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     };
                     spawn_stretch_jobs(&engine_for_commands, jobs);
                 }
+                GuiCommand::SetBpmLive(bpm) => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.transport.set_bpm(bpm as f64);
+                    }
+                }
                 GuiCommand::SetClipStretchBpm { clip_id, source_bpm } => {
                     let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_clip_source_bpm_deferred(clip_id, source_bpm);

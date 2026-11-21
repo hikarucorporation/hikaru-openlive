@@ -192,6 +192,9 @@ pub enum GuiCommand {
     },
     ToggleRecord,
     SetBpm(f32),
+    /// Lightweight live BPM update (for Tempo Automation playback) without
+    /// spawning per-frame WSOLA background re-stretch threads.
+    SetBpmLive(f32),
     SetClipStretchBpm {
         clip_id: usize,
         source_bpm: Option<f32>,

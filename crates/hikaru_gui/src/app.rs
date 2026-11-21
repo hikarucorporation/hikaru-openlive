@@ -1527,7 +1527,18 @@ impl AppState {
         let clamped = bpm.clamp(BPM_MIN, BPM_MAX);
         self.transport.bpm = clamped;
         self.bpm_input = format_bpm(clamped);
+        self.bpm_synced_to_engine = clamped;
         self.audio_proxy.send(GuiCommand::SetBpm(clamped as f32));
+    }
+
+    /// Live BPM update during Tempo Automation playback: updates transport
+    /// without triggering per-frame WSOLA background re-stretch jobs.
+    pub fn set_bpm_live(&mut self, bpm: f64) {
+        let clamped = bpm.clamp(BPM_MIN, BPM_MAX);
+        self.transport.bpm = clamped;
+        self.bpm_input = format_bpm(clamped);
+        self.bpm_synced_to_engine = clamped;
+        self.audio_proxy.send(GuiCommand::SetBpmLive(clamped as f32));
     }
 
     /// Registra un tap de tiempo (en segundos monotónicos) y, a partir del

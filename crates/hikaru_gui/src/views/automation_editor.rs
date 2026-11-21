@@ -279,8 +279,8 @@ impl AutomationEditorState {
 /// Applies all active automation lanes at `playhead_tick` during playback.
 pub fn apply_automation_at_tick(app: &mut AppState, tick: u64) {
     if let Some(bpm) = app.automation.evaluate_tempo_at_tick(tick) {
-        if (app.transport.bpm - bpm).abs() > 0.005 {
-            app.set_bpm(bpm);
+        if (app.transport.bpm - bpm).abs() > 0.02 {
+            app.set_bpm_live(bpm);
         }
     }
 
