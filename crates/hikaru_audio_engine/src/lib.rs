@@ -589,6 +589,377 @@ pub fn time_stretch_wsola_warped(
     out
 }
 
+/// FFT radix-2 in-place (Cooley-Tukey) sobre pares `(re, im)`. `buf.len()` debe ser potencia de 2.
+fn fft_radix2(buf: &mut [(f32, f32)], inverse: bool) {
+    let n = buf.len();
+    if n <= 1 {
+        return;
+    }
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            buf.swap(i, j);
+        }
+    }
+    let sign = if inverse { 1.0f32 } else { -1.0f32 };
+    let mut len = 2usize;
+    while len <= n {
+        let ang = sign * std::f32::consts::TAU / len as f32;
+        let (wlen_sin, wlen_cos) = ang.sin_cos();
+        let half = len >> 1;
+        let mut i = 0;
+        while i < n {
+            let (mut w_re, mut w_im) = (1.0f32, 0.0f32);
+            for k in 0..half {
+                let u = buf[i + k];
+                let v = buf[i + k + half];
+                let t_re = v.0 * w_re - v.1 * w_im;
+                let t_im = v.0 * w_im + v.1 * w_re;
+                buf[i + k] = (u.0 + t_re, u.1 + t_im);
+                buf[i + k + half] = (u.0 - t_re, u.1 - t_im);
+                let nw_re = w_re * wlen_cos - w_im * wlen_sin;
+                let nw_im = w_re * wlen_sin + w_im * wlen_cos;
+                w_re = nw_re;
+                w_im = nw_im;
+            }
+            i += len;
+        }
+        len <<= 1;
+    }
+    if inverse {
+        let inv_n = 1.0 / n as f32;
+        for s in buf.iter_mut() {
+            s.0 *= inv_n;
+            s.1 *= inv_n;
+        }
+    }
+}
+
+/// Desplaza la envolvente espectral (formantes) mediante STFT con ventana de Hann,
+/// preservando el pitch fundamental y la fase.
+pub fn apply_formant_curve_stft(
+    samples: &[f32],
+    channels: usize,
+    formant_curve: &hikaru_core::ExpressionCurve,
+) -> Vec<f32> {
+    let ch = channels.max(1);
+    let total_frames = samples.len() / ch;
+    if total_frames == 0 || !formant_curve.is_active(0.0) {
+        return samples.to_vec();
+    }
+    const N: usize = 1024;
+    const HOP: usize = 512;
+    const HALF: usize = N / 2;
+    const SMOOTH_RAD: usize = 6;
+
+    let mut win = vec![0.0f32; N];
+    for i in 0..N {
+        win[i] = 0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / N as f32).cos());
+    }
+
+    let mut out = vec![0.0f32; samples.len()];
+    let mut win_sum = vec![0.0f32; total_frames];
+    let mut fft_buf = vec![(0.0f32, 0.0f32); N];
+    let mut log_mag = vec![0.0f32; HALF + 1];
+    let mut env = vec![0.0f32; HALF + 1];
+
+    let mut frame_start = 0usize;
+    while frame_start < total_frames {
+        let u = (frame_start as f64 + (N as f64 * 0.5)) / total_frames.max(1) as f64;
+        let formant_st = formant_curve.evaluate(u.clamp(0.0, 1.0), 0.0).clamp(-24.0, 24.0);
+        let copy_len = N.min(total_frames - frame_start);
+
+        if formant_st.abs() < 0.02 {
+            for i in 0..copy_len {
+                let w = win[i];
+                win_sum[frame_start + i] += w;
+                for c in 0..ch {
+                    out[(frame_start + i) * ch + c] += samples[(frame_start + i) * ch + c] * w;
+                }
+            }
+            frame_start += HOP;
+            continue;
+        }
+
+        let ratio = 2.0f32.powf(formant_st / 12.0);
+        for i in 0..copy_len {
+            win_sum[frame_start + i] += win[i] * win[i];
+        }
+
+        for c in 0..ch {
+            for i in 0..N {
+                let s = if i < copy_len {
+                    samples[(frame_start + i) * ch + c] * win[i]
+                } else {
+                    0.0
+                };
+                fft_buf[i] = (s, 0.0);
+            }
+            fft_radix2(&mut fft_buf, false);
+
+            for k in 0..=HALF {
+                let (re, im) = fft_buf[k];
+                log_mag[k] = (re * re + im * im).sqrt().max(1e-6).ln();
+            }
+            for k in 0..=HALF {
+                let lo = k.saturating_sub(SMOOTH_RAD);
+                let hi = (k + SMOOTH_RAD).min(HALF);
+                let sum: f32 = log_mag[lo..=hi].iter().sum();
+                env[k] = sum / (hi - lo + 1) as f32;
+            }
+
+            for k in 1..HALF {
+                let src_k = k as f32 / ratio;
+                let warped_env = if src_k <= 0.0 {
+                    env[0]
+                } else if src_k >= HALF as f32 {
+                    env[HALF]
+                } else {
+                    let k0 = src_k.floor() as usize;
+                    let k1 = (k0 + 1).min(HALF);
+                    let frac = src_k - k0 as f32;
+                    env[k0] + (env[k1] - env[k0]) * frac
+                };
+                let gain = (warped_env - env[k]).exp().clamp(0.125, 6.0);
+                fft_buf[k].0 *= gain;
+                fft_buf[k].1 *= gain;
+                fft_buf[N - k] = (fft_buf[k].0, -fft_buf[k].1);
+            }
+
+            fft_radix2(&mut fft_buf, true);
+            for i in 0..copy_len {
+                let w = win[i];
+                out[(frame_start + i) * ch + c] += fft_buf[i].0 * w;
+            }
+        }
+
+        frame_start += HOP;
+    }
+
+    for f in 0..total_frames {
+        let ws = win_sum[f];
+        if ws > 1e-6 {
+            let inv = 1.0 / ws;
+            for c in 0..ch {
+                let v = out[f * ch + c] * inv;
+                out[f * ch + c] = if v.is_finite() { v } else { 0.0 };
+            }
+        }
+    }
+    out
+}
+
+/// Time-stretching WSOLA combinado con marcadores de warp, curva continua de `Pitch` (en semitonos)
+/// y curva opcional de `Formant` (en semitonos), manteniendo la duración exacta `total_out_frames`.
+pub fn time_stretch_and_pitch_wsola(
+    samples: &[f32],
+    channels: usize,
+    total_out_frames: usize,
+    warp_markers: &[(f64, f64)],
+    pitch_curve: &hikaru_core::ExpressionCurve,
+    formant_curve: &hikaru_core::ExpressionCurve,
+) -> Vec<f32> {
+    let ch = channels.max(1);
+    let in_frames = samples.len() / ch;
+    if in_frames == 0 || total_out_frames == 0 {
+        return Vec::new();
+    }
+
+    let has_pitch = pitch_curve.is_active(0.0);
+    let has_formant = formant_curve.is_active(0.0);
+    let clean = sanitize_warp_markers(warp_markers);
+
+    if !has_pitch {
+        let base = if clean.len() > 2 || in_frames != total_out_frames {
+            time_stretch_wsola_warped(samples, ch, total_out_frames, &clean)
+        } else {
+            samples.to_vec()
+        };
+        return if has_formant {
+            apply_formant_curve_stft(&base, ch, formant_curve)
+        } else {
+            base
+        };
+    }
+
+    const GRAIN: usize = 2048;
+    const HOP: usize = 1024;
+    const SEARCH: isize = 512;
+
+    if in_frames <= GRAIN + SEARCH as usize {
+        // Clips cortos (one-shots): acumulador de fase con curva de pitch y warp.
+        let mut out = vec![0.0f32; total_out_frames * ch];
+        let mut src_pos = 0.0f64;
+        let base_step = in_frames as f64 / total_out_frames.max(1) as f64;
+        for f in 0..total_out_frames {
+            let u = f as f64 / total_out_frames.max(1) as f64;
+            let st = pitch_curve.evaluate(u, 0.0).clamp(-24.0, 24.0) as f64;
+            let pitch_ratio = 2.0f64.powf(st / 12.0);
+            let clamped = src_pos.clamp(0.0, (in_frames - 1) as f64);
+            let i0 = clamped.floor() as usize;
+            let i1 = (i0 + 1).min(in_frames - 1);
+            let frac = (clamped - i0 as f64) as f32;
+            for c in 0..ch {
+                let a = samples[i0 * ch + c];
+                let b = samples[i1 * ch + c];
+                out[f * ch + c] = a + (b - a) * frac;
+            }
+            src_pos += base_step * pitch_ratio;
+        }
+        return if has_formant {
+            apply_formant_curve_stft(&out, ch, formant_curve)
+        } else {
+            out
+        };
+    }
+
+    let mut out = vec![0.0f32; total_out_frames * ch];
+    let mut win_sum = vec![0.0f32; total_out_frames];
+    let mut win = Vec::with_capacity(GRAIN);
+    for i in 0..GRAIN {
+        win.push((0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / GRAIN as f64).cos())) as f32);
+    }
+
+    let mut mono = Vec::with_capacity(in_frames);
+    if ch == 1 {
+        mono.extend_from_slice(samples);
+    } else {
+        for f in 0..in_frames {
+            let mut sum = 0.0f32;
+            for c in 0..ch {
+                sum += samples[f * ch + c];
+            }
+            mono.push(sum / ch as f32);
+        }
+    }
+
+    let max_src_start = (in_frames - GRAIN) as isize;
+    let mut prev_src_start: usize = 0;
+    let half_grain = GRAIN as f64 * 0.5;
+    let max_frame_f = (in_frames - 1) as f64;
+
+    let mut out_start = 0usize;
+    while out_start < total_out_frames {
+        let u = (out_start as f64 + half_grain) / total_out_frames.max(1) as f64;
+        let nom_src_start = (warp_out_to_src_norm(&clean, out_start as f64 / total_out_frames.max(1) as f64)
+            * in_frames as f64)
+            .round() as isize;
+
+        let best_src_start = if out_start == 0 {
+            0usize
+        } else {
+            let natural_next = prev_src_start + HOP;
+            let cmp_len = HOP.min(in_frames.saturating_sub(natural_next)).min(GRAIN);
+            if cmp_len >= 64 {
+                let mut e_ref = 0.0f64;
+                let mut i = 0;
+                while i < cmp_len {
+                    let r = mono[natural_next + i] as f64;
+                    e_ref += r * r;
+                    i += 4;
+                }
+                let min_cand = (nom_src_start - SEARCH).max(0);
+                let max_cand = (nom_src_start + SEARCH).min(max_src_start);
+                let score_cand = |cand: usize, step: usize| -> f64 {
+                    let mut dot = 0.0f64;
+                    let mut e_cand = 0.0f64;
+                    let mut idx = 0;
+                    while idx < cmp_len {
+                        let r = mono[natural_next + idx] as f64;
+                        let s = mono[cand + idx] as f64;
+                        dot += r * s;
+                        e_cand += s * s;
+                        idx += step;
+                    }
+                    let denom = (e_ref * e_cand).sqrt();
+                    if denom > 1e-12 { dot / denom } else { -1.0 }
+                };
+                let mut best_cand = nom_src_start.clamp(0, max_src_start) as usize;
+                let mut best_score = f64::NEG_INFINITY;
+                let mut cand = min_cand;
+                while cand <= max_cand {
+                    let sc = score_cand(cand as usize, 4);
+                    if sc > best_score {
+                        best_score = sc;
+                        best_cand = cand as usize;
+                    }
+                    cand += 4;
+                }
+                let fine_lo = (best_cand as isize - 4).max(min_cand);
+                let fine_hi = (best_cand as isize + 4).min(max_cand);
+                let mut fine_best = best_cand;
+                let mut fine_score = f64::NEG_INFINITY;
+                for c_pos in fine_lo..=fine_hi {
+                    let sc = score_cand(c_pos as usize, 2);
+                    if sc > fine_score {
+                        fine_score = sc;
+                        fine_best = c_pos as usize;
+                    }
+                }
+                fine_best
+            } else {
+                nom_src_start.clamp(0, max_src_start) as usize
+            }
+        };
+
+        let st = pitch_curve.evaluate(u.clamp(0.0, 1.0), 0.0).clamp(-24.0, 24.0) as f64;
+        let pitch_ratio = 2.0f64.powf(st / 12.0);
+        let grain_center = best_src_start as f64 + half_grain;
+
+        let copy_len = GRAIN.min(total_out_frames - out_start);
+        for i in 0..copy_len {
+            let w = win[i];
+            win_sum[out_start + i] += w;
+            let src_pos = (grain_center + (i as f64 - half_grain) * pitch_ratio).clamp(0.0, max_frame_f);
+            let i0 = src_pos.floor() as usize;
+            let i1 = (i0 + 1).min(in_frames - 1);
+            let frac = (src_pos - i0 as f64) as f32;
+            let dst_idx = (out_start + i) * ch;
+            for c in 0..ch {
+                let a = samples[i0 * ch + c];
+                let b = samples[i1 * ch + c];
+                out[dst_idx + c] += (a + (b - a) * frac) * w;
+            }
+        }
+
+        prev_src_start = best_src_start;
+        out_start += HOP;
+    }
+
+    for f in 0..total_out_frames {
+        let ws = win_sum[f];
+        if ws > 1e-6 {
+            let inv = 1.0 / ws;
+            for c in 0..ch {
+                out[f * ch + c] *= inv;
+            }
+        }
+    }
+
+    if has_formant {
+        apply_formant_curve_stft(&out, ch, formant_curve)
+    } else {
+        out
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StretchJob {
+    pub clip_id: usize,
+    pub samples: Vec<f32>,
+    pub channels: usize,
+    pub rate: f64,
+    pub warp_markers: Vec<(f64, f64)>,
+    pub pitch_curve: hikaru_core::ExpressionCurve,
+    pub formant_curve: hikaru_core::ExpressionCurve,
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioClipInstance {
     pub id: usize,
@@ -625,6 +996,10 @@ pub struct AudioClipInstance {
     /// Marcadores de warp por tramos `(out_norm, src_norm)` en `[0.0..1.0]`.
     pub warp_markers: Vec<(f64, f64)>,
     pub stretched_warp_markers: Vec<(f64, f64)>,
+    /// Curvas de expresión del clip (Gain, Pan, Pitch, Formant).
+    pub expressions: hikaru_core::AudioClipExpressions,
+    pub stretched_pitch: Vec<hikaru_core::ExpressionPoint>,
+    pub stretched_formant: Vec<hikaru_core::ExpressionPoint>,
 }
 
 impl AudioClipInstance {
@@ -698,12 +1073,17 @@ impl AudioClipInstance {
         false
     }
 
+    pub fn has_active_pitch_or_formant(&self) -> bool {
+        self.expressions.has_pitch_or_formant()
+    }
+
     /// Lee un frame estéreo en `out_frame` usando el buffer pre-estirado con WSOLA si coincide
     /// con `rate`, o fallback OLA cuando `rate != 1.0`.
     pub fn sample_stereo_stretched(&self, out_frame: u64, rate: f64) -> (f32, f32) {
         let ch = self.channels.max(1);
         let active_warp = self.has_active_warp();
-        if (rate - 1.0).abs() < 1e-4 && !active_warp {
+        let active_pf = self.has_active_pitch_or_formant();
+        if (rate - 1.0).abs() < 1e-4 && !active_warp && !active_pf {
             let total_frames = self.samples.len() / ch;
             if total_frames == 0 {
                 return (0.0, 0.0);
@@ -715,7 +1095,7 @@ impl AudioClipInstance {
             return (l, r);
         }
 
-        if !self.stretched_samples.is_empty() && (active_warp || (self.stretched_rate - rate).abs() < 0.05) {
+        if !self.stretched_samples.is_empty() && (active_warp || active_pf || (self.stretched_rate - rate).abs() < 0.05) {
             let total_stretched = self.stretched_samples.len() / ch;
             if total_stretched > 0 {
                 let f = (out_frame as usize).min(total_stretched - 1);
@@ -2187,10 +2567,12 @@ impl<'a> AudioEngine<'a> {
     pub fn set_clip_source_bpm_deferred(&mut self, clip_id: usize, source_bpm: Option<f32>) {
         if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
             c.source_bpm = source_bpm;
-            if source_bpm.is_none() && !c.has_active_warp() {
+            if source_bpm.is_none() && !c.has_active_warp() && !c.has_active_pitch_or_formant() {
                 c.stretched_samples.clear();
                 c.stretched_rate = 1.0;
                 c.stretched_warp_markers.clear();
+                c.stretched_pitch.clear();
+                c.stretched_formant.clear();
             }
         }
     }
@@ -2209,24 +2591,51 @@ impl<'a> AudioEngine<'a> {
                 Some(sbpm) if sbpm > 0.0 && bpm > 0.0 => (bpm / sbpm as f64).clamp(0.25, 4.0),
                 _ => 1.0,
             };
-            if (rate - 1.0).abs() < 1e-4 && !c.has_active_warp() {
+            if (rate - 1.0).abs() < 1e-4 && !c.has_active_warp() && !c.has_active_pitch_or_formant() {
                 c.stretched_samples.clear();
                 c.stretched_rate = 1.0;
                 c.stretched_warp_markers.clear();
+                c.stretched_pitch.clear();
+                c.stretched_formant.clear();
             }
         }
     }
 
-    /// Devuelve `(clip_id, samples, channels, rate, warp_markers)` para clips cuyo `source_bpm`
-    /// o `warp_markers` requiere recalcular WSOLA.
-    pub fn pending_stretch_jobs(&self) -> Vec<(usize, Vec<f32>, usize, f64, Vec<(f64, f64)>)> {
+    pub fn set_clip_expressions_deferred(
+        &mut self,
+        clip_id: usize,
+        expressions: hikaru_core::AudioClipExpressions,
+    ) {
+        let bpm = self.transport.bpm;
+        if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
+            c.expressions = expressions;
+            let rate = match c.source_bpm {
+                Some(sbpm) if sbpm > 0.0 && bpm > 0.0 => (bpm / sbpm as f64).clamp(0.25, 4.0),
+                _ => 1.0,
+            };
+            if (rate - 1.0).abs() < 1e-4 && !c.has_active_warp() && !c.has_active_pitch_or_formant() {
+                c.stretched_samples.clear();
+                c.stretched_rate = 1.0;
+                c.stretched_warp_markers.clear();
+                c.stretched_pitch.clear();
+                c.stretched_formant.clear();
+            }
+        }
+    }
+
+    /// Devuelve los trabajos de síntesis en segundo plano para clips cuyo `source_bpm`,
+    /// `warp_markers`, `pitch` o `formant` requiere recalcular WSOLA/STFT.
+    pub fn pending_stretch_jobs(&self) -> Vec<StretchJob> {
         let mut jobs = Vec::new();
         for c in &self.clips {
             let rate = c.tempo_rate(&self.transport);
             let active_warp = c.has_active_warp();
-            if (rate - 1.0).abs() >= 1e-4 || active_warp {
+            let active_pf = c.has_active_pitch_or_formant();
+            if (rate - 1.0).abs() >= 1e-4 || active_warp || active_pf {
                 let dirty = (rate - c.stretched_rate).abs() > 0.002
                     || c.warp_markers != c.stretched_warp_markers
+                    || c.expressions.pitch.points != c.stretched_pitch
+                    || c.expressions.formant.points != c.stretched_formant
                     || c.stretched_samples.is_empty();
                 if dirty {
                     let (src, ch) = if !c.samples.is_empty() {
@@ -2237,7 +2646,15 @@ impl<'a> AudioEngine<'a> {
                         continue;
                     };
                     if !src.is_empty() {
-                        jobs.push((c.id, src, ch, rate, c.warp_markers.clone()));
+                        jobs.push(StretchJob {
+                            clip_id: c.id,
+                            samples: src,
+                            channels: ch,
+                            rate,
+                            warp_markers: c.warp_markers.clone(),
+                            pitch_curve: c.expressions.pitch.clone(),
+                            formant_curve: c.expressions.formant.clone(),
+                        });
                     }
                 }
             }
@@ -2251,11 +2668,15 @@ impl<'a> AudioEngine<'a> {
         samples: Vec<f32>,
         rate: f64,
         warp_markers: Vec<(f64, f64)>,
+        pitch_points: Vec<hikaru_core::ExpressionPoint>,
+        formant_points: Vec<hikaru_core::ExpressionPoint>,
     ) {
         if let Some(c) = self.clips.iter_mut().find(|c| c.id == clip_id) {
             c.stretched_samples = samples;
             c.stretched_rate = rate;
             c.stretched_warp_markers = warp_markers;
+            c.stretched_pitch = pitch_points;
+            c.stretched_formant = formant_points;
         }
     }
 
@@ -2405,6 +2826,9 @@ impl<'a> AudioEngine<'a> {
             stretched_rate: 1.0,
             warp_markers: Vec::new(),
             stretched_warp_markers: Vec::new(),
+            expressions: hikaru_core::AudioClipExpressions::default(),
+            stretched_pitch: Vec::new(),
+            stretched_formant: Vec::new(),
         };
 
         let is_studio = self.mode == EngineMode::OpenStudio;
@@ -4425,14 +4849,16 @@ impl<'a> AudioEngine<'a> {
                     }
 
                     // ── Modo multi-evento: el pad mezcla sus regiones ──
+                    let has_rt_expr = clip.expressions.has_gain_or_pan();
                     if !clip.events.is_empty() {
                         let rate = clip.tempo_rate(&transport);
-                        if ((rate - 1.0).abs() >= 1e-4 || clip.has_active_warp())
+                        if ((rate - 1.0).abs() >= 1e-4 || clip.has_active_warp() || clip.has_active_pitch_or_formant())
                             && !clip.stretched_samples.is_empty()
                         {
                             let emission_out = ((emission as f64) / rate).round() as u64;
                             let loop_start_out = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
                             let loop_len = if has_loop { clip.quantized_loop_len(&transport) } else { 0 };
+                            let norm_denom = emission_out.max(1) as f64;
                             let mut clip_finished = false;
                             for f in 0..buffer_frames as usize {
                                 let elapsed = elapsed_start + f as u64;
@@ -4451,14 +4877,20 @@ impl<'a> AudioEngine<'a> {
                                     elapsed
                                 };
                                 let (l, r) = clip.sample_stereo_stretched(out_frame, rate);
-                                track_buf[f * 2] += l * gl;
-                                track_buf[f * 2 + 1] += r * gr;
+                                let (el, er) = if has_rt_expr {
+                                    clip.expressions.eval_rt_gain_pan((out_frame as f64 / norm_denom).clamp(0.0, 1.0))
+                                } else {
+                                    (1.0, 1.0)
+                                };
+                                track_buf[f * 2] += l * gl * el;
+                                track_buf[f * 2 + 1] += r * gr * er;
                             }
                             if clip_finished {
                                 clip.is_playing = false;
                             }
                             continue;
                         }
+                        let norm_denom = natural.max(1) as f64;
                         let mut clip_finished = false;
                         for f in 0..buffer_frames as usize {
                             let elapsed = elapsed_start + f as u64;
@@ -4467,8 +4899,13 @@ impl<'a> AudioEngine<'a> {
                                 break;
                             };
                             let (l, r) = clip.mix_events_at(clip_frame);
-                            track_buf[f * 2] += l * gl;
-                            track_buf[f * 2 + 1] += r * gr;
+                            let (el, er) = if has_rt_expr {
+                                clip.expressions.eval_rt_gain_pan((clip_frame as f64 / norm_denom).clamp(0.0, 1.0))
+                            } else {
+                                (1.0, 1.0)
+                            };
+                            track_buf[f * 2] += l * gl * el;
+                            track_buf[f * 2 + 1] += r * gr * er;
                         }
                         if clip_finished {
                             clip.is_playing = false;
@@ -4478,6 +4915,7 @@ impl<'a> AudioEngine<'a> {
 
                     let rate = clip.tempo_rate(&transport);
                     let emission_out = ((emission as f64) / rate).round() as u64;
+                    let norm_denom = emission_out.max(1) as f64;
                     let (loop_start, loop_len) = if has_loop {
                         let ls = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
                         // Longitud CUANTIZADA a beats: sin esto el wrap cae
@@ -4511,10 +4949,18 @@ impl<'a> AudioEngine<'a> {
                             elapsed as usize
                         };
 
-                        if (rate - 1.0).abs() >= 1e-4 || clip.has_active_warp() {
+                        let (el, er) = if has_rt_expr {
+                            clip.expressions.eval_rt_gain_pan((relative_frame as f64 / norm_denom).clamp(0.0, 1.0))
+                        } else {
+                            (1.0, 1.0)
+                        };
+                        let gl_f = gl * el;
+                        let gr_f = gr * er;
+
+                        if (rate - 1.0).abs() >= 1e-4 || clip.has_active_warp() || clip.has_active_pitch_or_formant() {
                             let (l, r) = clip.sample_stereo_stretched(relative_frame as u64, rate);
-                            track_buf[f * 2] += l * gl;
-                            track_buf[f * 2 + 1] += r * gr;
+                            track_buf[f * 2] += l * gl_f;
+                            track_buf[f * 2 + 1] += r * gr_f;
                             continue;
                         }
 
@@ -4535,18 +4981,18 @@ impl<'a> AudioEngine<'a> {
                             let out_gain = fade_pos as f32 / fade_total;
                             let in_gain = 1.0 - out_gain;
 
-                            let l_new = unsafe { *buf_ptr.add(idx) } * gl;
+                            let l_new = unsafe { *buf_ptr.add(idx) } * gl_f;
                             let r_new = if ch > 1 {
-                                (unsafe { *buf_ptr.add(idx + 1) }) * gr
+                                (unsafe { *buf_ptr.add(idx + 1) }) * gr_f
                             } else {
                                 l_new
                             };
 
                             let prev_idx = clip.prev_frame * ch;
                             let (l_old, r_old) = if prev_idx + ch <= src_len {
-                                let lo = unsafe { *buf_ptr.add(prev_idx) } * gl;
+                                let lo = unsafe { *buf_ptr.add(prev_idx) } * gl_f;
                                 let ro = if ch > 1 {
-                                    (unsafe { *buf_ptr.add(prev_idx + 1) }) * gr
+                                    (unsafe { *buf_ptr.add(prev_idx + 1) }) * gr_f
                                 } else {
                                     lo
                                 };
@@ -4559,9 +5005,9 @@ impl<'a> AudioEngine<'a> {
                             track_buf[f * 2 + 1] += r_old * in_gain + r_new * out_gain;
                             clip.xfade_remaining -= 1;
                         } else if idx + ch <= src_len {
-                            let l = unsafe { *buf_ptr.add(idx) } * gl;
+                            let l = unsafe { *buf_ptr.add(idx) } * gl_f;
                             let r = if ch > 1 {
-                                (unsafe { *buf_ptr.add(idx + 1) }) * gr
+                                (unsafe { *buf_ptr.add(idx + 1) }) * gr_f
                             } else {
                                 l
                             };
@@ -5934,5 +6380,50 @@ mod tests {
             engine.transport.playback_state,
             TransportPlaybackState::Playing
         );
+    }
+
+    #[test]
+    fn pitch_and_formant_wsola_preserve_length_and_shift_pitch() {
+        let sr = 44100.0f32;
+        let frames = 16384usize;
+        let freq = 220.0f32;
+        let mut mono = Vec::with_capacity(frames);
+        for i in 0..frames {
+            mono.push((std::f32::consts::TAU * freq * i as f32 / sr).sin() * 0.5);
+        }
+
+        // +12 semitonos (una octava arriba) manteniendo exacta duración
+        let mut pitch = hikaru_core::ExpressionCurve::default();
+        pitch.insert_point(0.0, 12.0);
+        pitch.insert_point(1.0, 12.0);
+        let flat = hikaru_core::ExpressionCurve::default();
+
+        let pitched = time_stretch_and_pitch_wsola(&mono, 1, frames, &[], &pitch, &flat);
+        assert_eq!(pitched.len(), frames);
+        assert!(pitched.iter().all(|s| s.is_finite()));
+
+        // Contar cruces por cero en la mitad estable: debería ~duplicarse para +12 st
+        let zc = |buf: &[f32]| -> usize {
+            buf[2048..14336]
+                .windows(2)
+                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+                .count()
+        };
+        let zc_orig = zc(&mono);
+        let zc_up = zc(&pitched);
+        assert!(
+            zc_up > (zc_orig as f32 * 1.7) as usize && zc_up < (zc_orig as f32 * 2.3) as usize,
+            "expected ~2x zero-crossings for +12st: orig={zc_orig}, up={zc_up}"
+        );
+
+        // Formant shift preserva longitud y produce muestras finitas con energía
+        let mut formant = hikaru_core::ExpressionCurve::default();
+        formant.insert_point(0.0, 4.0);
+        formant.insert_point(1.0, -4.0);
+        let formanted = apply_formant_curve_stft(&mono, 1, &formant);
+        assert_eq!(formanted.len(), frames);
+        assert!(formanted.iter().all(|s| s.is_finite()));
+        let energy: f32 = formanted.iter().map(|s| s * s).sum();
+        assert!(energy > 1.0, "formant output should retain signal energy");
     }
 }

@@ -12,6 +12,7 @@
 //  └──┴─────────────┴────────────────────────────────────────────────┘
 
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke, StrokeKind};
+use hikaru_core::{AudioClipExpressions, AudioExpressionKind, ExpressionPoint};
 
 use crate::app::AppState;
 use crate::theme;
@@ -59,19 +60,80 @@ pub enum AudioEditorTarget {
     Playlist { clip_id: usize },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AudioEditMode {
+    AudioEvents,
+    Comping,
+    Stretch,
+    Onsets,
+    Gain,
+    Pan,
+    Pitch,
+    Formant,
+}
+
+impl AudioEditMode {
+    fn active_expr(self) -> Option<AudioExpressionKind> {
+        match self {
+            AudioEditMode::Gain => Some(AudioExpressionKind::Gain),
+            AudioEditMode::Pan => Some(AudioExpressionKind::Pan),
+            AudioEditMode::Pitch => Some(AudioExpressionKind::Pitch),
+            AudioEditMode::Formant => Some(AudioExpressionKind::Formant),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ViewState {
     ppb: f32,
     scroll_beats: f64,
     key: Option<AudioEditorTarget>,
     auto_fades: bool,
-    gain: bool,
-    pan: bool,
-    pitch: bool,
-    formant: bool,
-    stretch: bool,
-    onsets: bool,
+    mode: AudioEditMode,
     snap_beats: f64,
+}
+
+#[derive(Clone, Default)]
+struct ExprClipData {
+    expressions: AudioClipExpressions,
+    selected: Vec<usize>,
+    dirty_engine: bool,
+}
+
+#[derive(Clone)]
+enum ExprDrag {
+    MovePoints {
+        orig_pos: egui::Pos2,
+        orig_points: Vec<(usize, f64, f32)>,
+    },
+    CurveTension {
+        seg_idx: usize,
+        orig_y: f32,
+        orig_curve: f32,
+    },
+    Marquee {
+        start: egui::Pos2,
+        cur: egui::Pos2,
+    },
+}
+
+const EXPR_PAD_Y: f32 = 10.0;
+
+fn expr_val_to_y(kind: AudioExpressionKind, val: f32, body: Rect) -> f32 {
+    let (lo, hi) = kind.range();
+    let t = ((val - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let top = body.min.y + EXPR_PAD_Y;
+    let bot = (body.max.y - EXPR_PAD_Y).max(top + 1.0);
+    bot - t * (bot - top)
+}
+
+fn expr_y_to_val(kind: AudioExpressionKind, y: f32, body: Rect) -> f32 {
+    let (lo, hi) = kind.range();
+    let top = body.min.y + EXPR_PAD_Y;
+    let bot = (body.max.y - EXPR_PAD_Y).max(top + 1.0);
+    let t = ((bot - y) / (bot - top)).clamp(0.0, 1.0);
+    lo + t * (hi - lo)
 }
 
 #[derive(Clone)]
@@ -441,12 +503,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         scroll_beats: -2.4,
         key: None,
         auto_fades: true,
-        gain: false,
-        pan: false,
-        pitch: false,
-        formant: false,
-        stretch: false,
-        onsets: false,
+        mode: AudioEditMode::AudioEvents,
         snap_beats: 0.25,
     });
     if v.key != Some(target) {
@@ -454,6 +511,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         v.ppb = DEFAULT_PPB;
         v.scroll_beats = -2.4;
     }
+
+    let expr_id = egui::Id::new("ade_expr").with(clip_id);
+    let mut expr_data: ExprClipData = ui.ctx().data(|d| d.get_temp(expr_id)).unwrap_or_default();
+    let mut expr_changed = false;
+    let mut expr_sync_now = false;
 
     // ── Regiones ──
     let strip = Rect::from_min_size(inner.min, vec2(STRIP_W, inner.height()));
@@ -529,21 +591,61 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         tui.spacing_mut().item_spacing = vec2(4.0, 3.0);
         let w = tui.available_width();
         tui.add_space(32.0);
-        let _ = tool_btn(&mut tui, "Audio Events", true, w, 22.0, 11.0);
-        let _ = tool_btn(&mut tui, "Comping", false, w, 22.0, 11.0);
+        let prev_mode = v.mode;
+        if tool_btn(&mut tui, "Audio Events", v.mode == AudioEditMode::AudioEvents, w, 22.0, 11.0).clicked() {
+            v.mode = AudioEditMode::AudioEvents;
+        }
+        if tool_btn(&mut tui, "Comping", v.mode == AudioEditMode::Comping, w, 22.0, 11.0).clicked() {
+            v.mode = AudioEditMode::Comping;
+        }
         tui.horizontal(|ui| {
             let hw = (w - 4.0) / 2.0;
-            if tool_btn(ui, "Stretch", v.stretch, hw, 22.0, 11.0).clicked() { v.stretch = !v.stretch; }
-            if tool_btn(ui, "Onsets", v.onsets, hw, 22.0, 11.0).clicked() { v.onsets = !v.onsets; }
+            if tool_btn(ui, "Stretch", v.mode == AudioEditMode::Stretch, hw, 22.0, 11.0).clicked() {
+                v.mode = if v.mode == AudioEditMode::Stretch { AudioEditMode::AudioEvents } else { AudioEditMode::Stretch };
+            }
+            if tool_btn(ui, "Onsets", v.mode == AudioEditMode::Onsets, hw, 22.0, 11.0).clicked() {
+                v.mode = if v.mode == AudioEditMode::Onsets { AudioEditMode::AudioEvents } else { AudioEditMode::Onsets };
+            }
         });
         tui.horizontal(|ui| {
             let bw = (w - 12.0) / 4.0;
-            if tool_btn(ui, "Gain", v.gain, bw + 3.0, 20.0, 10.0).clicked() { v.gain = !v.gain; }
-            if tool_btn(ui, "Pan", v.pan, bw - 2.0, 20.0, 10.0).clicked() { v.pan = !v.pan; }
-            if tool_btn(ui, "Pitch", v.pitch, bw, 20.0, 10.0).clicked() { v.pitch = !v.pitch; }
-            if tool_btn(ui, "Formant", v.formant, bw + 8.0, 20.0, 10.0).clicked() { v.formant = !v.formant; }
+            if tool_btn(ui, "Gain", v.mode == AudioEditMode::Gain, bw + 3.0, 20.0, 10.0).clicked() {
+                v.mode = if v.mode == AudioEditMode::Gain { AudioEditMode::AudioEvents } else { AudioEditMode::Gain };
+            }
+            if tool_btn(ui, "Pan", v.mode == AudioEditMode::Pan, bw - 2.0, 20.0, 10.0).clicked() {
+                v.mode = if v.mode == AudioEditMode::Pan { AudioEditMode::AudioEvents } else { AudioEditMode::Pan };
+            }
+            if tool_btn(ui, "Pitch", v.mode == AudioEditMode::Pitch, bw, 20.0, 10.0).clicked() {
+                v.mode = if v.mode == AudioEditMode::Pitch { AudioEditMode::AudioEvents } else { AudioEditMode::Pitch };
+            }
+            if tool_btn(ui, "Formant", v.mode == AudioEditMode::Formant, bw + 8.0, 20.0, 10.0).clicked() {
+                v.mode = if v.mode == AudioEditMode::Formant { AudioEditMode::AudioEvents } else { AudioEditMode::Formant };
+            }
         });
-        if v.stretch && ev_len > 1e-4 {
+        if v.mode != prev_mode {
+            expr_data.selected.clear();
+        }
+        if let Some(kind) = v.mode.active_expr() {
+            tui.add_space(2.0);
+            tui.horizontal(|ui| {
+                let n_pts = expr_data.expressions.curve(kind).points.len();
+                ui.label(
+                    egui::RichText::new(format!("{} ({})", kind.label(), n_pts))
+                        .size(10.0)
+                        .color(theme::TEXT_SECONDARY),
+                );
+                if tool_btn(ui, "Reset", false, 44.0, 18.0, 9.5)
+                    .on_hover_text("Limpiar curva de automatización activa")
+                    .clicked()
+                {
+                    expr_data.expressions.curve_mut(kind).points.clear();
+                    expr_data.selected.clear();
+                    expr_changed = true;
+                    expr_sync_now = true;
+                }
+            });
+        }
+        if v.mode == AudioEditMode::Stretch && ev_len > 1e-4 {
             tui.add_space(2.0);
             let mut cur_clip_bpm = ((stretch_data.stretch_beats * 60.0) / ev_len).clamp(20.0, 400.0);
             tui.horizontal(|ui| {
@@ -583,7 +685,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 }
             });
         }
-        if v.onsets {
+        if v.mode == AudioEditMode::Onsets {
             tui.add_space(2.0);
             let mut sens_pct = (onset_data.sensitivity * 100.0).clamp(0.0, 100.0);
             tui.horizontal(|ui| {
@@ -610,7 +712,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                         stretch_data.stretch_beats,
                         v.snap_beats,
                     );
-                    v.stretch = true;
+                    v.mode = AudioEditMode::Stretch;
                     stretch_changed = true;
                     engine_sync_now = true;
                 }
@@ -865,14 +967,21 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     let b2x = |b: f64| main.min.x + ((b - v.scroll_beats) * v.ppb as f64) as f32;
     let x2b = |x: f32| v.scroll_beats + ((x - main.min.x) / v.ppb) as f64;
 
-    // ── Interacción con Beat / Stretch Markers y Onsets (estilo Bitwig) ──
+    // ── Interacción con Beat / Stretch Markers, Onsets y Expresiones (estilo Bitwig) ──
+    let stretch_active = v.mode == AudioEditMode::Stretch;
+    let onsets_active = v.mode == AudioEditMode::Onsets;
+    let active_expr = v.mode.active_expr();
+
     let sdrag_id = vid.with("stretch_drag");
     let odrag_id = vid.with("onset_drag");
+    let edrag_id = vid.with("expr_drag");
     let mut active_sdrag: Option<StretchDrag> = ui.ctx().data(|d| d.get_temp(sdrag_id));
     let mut active_odrag: Option<OnsetDrag> = ui.ctx().data(|d| d.get_temp(odrag_id));
-    let (alt_held, shift_held_s, primary_down_s, hover_pos_s, press_origin_s, interact_pos_s, del_pressed) = ui.input(|i| (
+    let mut active_edrag: Option<ExprDrag> = ui.ctx().data(|d| d.get_temp(edrag_id));
+    let (alt_held, shift_held_s, ctrl_held_s, primary_down_s, hover_pos_s, press_origin_s, interact_pos_s, del_pressed) = ui.input(|i| (
         i.modifiers.alt,
         i.modifiers.shift,
+        i.modifiers.ctrl || i.modifiers.command,
         i.pointer.primary_down(),
         i.pointer.hover_pos(),
         i.pointer.press_origin(),
@@ -882,15 +991,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     if !primary_down_s {
         active_sdrag = None;
         active_odrag = None;
+        active_edrag = None;
         ui.ctx().data_mut(|d| {
             d.remove::<StretchDrag>(sdrag_id);
             d.remove::<OnsetDrag>(odrag_id);
+            d.remove::<ExprDrag>(edrag_id);
         });
     }
 
     let clip_vert_zone = |pos: egui::Pos2| pos.y >= hdr_top && pos.y <= wave_r.max.y && main.x_range().contains(pos.x);
     let hit_stretch_marker = |pos: egui::Pos2, markers: &[(f64, f64)]| -> Option<usize> {
-        if !v.stretch || !clip_vert_zone(pos) {
+        if !stretch_active || !clip_vert_zone(pos) {
             return None;
         }
         let mut best: Option<(usize, f32)> = None;
@@ -907,7 +1018,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     };
 
     let hit_onset_handle = |pos: egui::Pos2, onsets: &[f32], markers: &[(f64, f64)], cb: f64, allow_body: bool| -> Option<usize> {
-        if !v.onsets || !wave_r.contains(pos) {
+        if !onsets_active || !wave_r.contains(pos) {
             return None;
         }
         let in_top_band = pos.y >= wave_r.min.y && pos.y <= wave_r.min.y + 20.0;
@@ -929,7 +1040,224 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         best.map(|(i, _)| i)
     };
 
-    if v.onsets && del_pressed {
+    let expr_body = Rect::from_min_max(
+        pos2(b2x(start_beats), wave_top),
+        pos2(b2x(start_beats + clip_beats), wave_r.max.y),
+    );
+    let expr_pt_pos = |kind: AudioExpressionKind, pt: &ExpressionPoint, cb: f64| -> egui::Pos2 {
+        pos2(
+            b2x(start_beats + pt.norm_pos * cb),
+            expr_val_to_y(kind, pt.value, expr_body),
+        )
+    };
+    let hit_expr_point = |pos: egui::Pos2, kind: AudioExpressionKind, pts: &[ExpressionPoint], cb: f64| -> Option<usize> {
+        if !wave_r.contains(pos) {
+            return None;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, pt) in pts.iter().enumerate() {
+            let p = expr_pt_pos(kind, pt, cb);
+            let d = p.distance(pos);
+            if d <= 9.0 && best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((idx, d));
+            }
+        }
+        best.map(|(i, _)| i)
+    };
+    let hit_expr_segment = |pos: egui::Pos2, kind: AudioExpressionKind, pts: &[ExpressionPoint], cb: f64| -> Option<usize> {
+        if pts.len() < 2 || !wave_r.contains(pos) {
+            return None;
+        }
+        let norm = ((x2b(pos.x) - start_beats) / cb.max(1e-6)).clamp(0.0, 1.0);
+        for i in 0..(pts.len() - 1) {
+            if norm >= pts[i].norm_pos && norm <= pts[i + 1].norm_pos {
+                let span = (pts[i + 1].norm_pos - pts[i].norm_pos).max(1e-6);
+                let t = ((norm - pts[i].norm_pos) / span) as f32;
+                let shaped = if pts[i].curve.abs() < 1e-4 {
+                    t
+                } else {
+                    t.powf(2.0f32.powf(-pts[i].curve.clamp(-1.0, 1.0) * 3.0))
+                };
+                let val = pts[i].value + (pts[i + 1].value - pts[i].value) * shaped;
+                let cy = expr_val_to_y(kind, val, expr_body);
+                if (pos.y - cy).abs() <= 10.0 {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    };
+
+    if let Some(kind) = active_expr {
+        if del_pressed && !expr_data.selected.is_empty() && hover_pos_s.is_some_and(|p| main.contains(p)) {
+            let mut to_del = expr_data.selected.clone();
+            to_del.sort_unstable();
+            to_del.dedup();
+            let pts = &mut expr_data.expressions.curve_mut(kind).points;
+            for idx in to_del.into_iter().rev() {
+                if idx < pts.len() {
+                    pts.remove(idx);
+                }
+            }
+            expr_data.selected.clear();
+            expr_changed = true;
+            expr_sync_now = true;
+        }
+
+        if resp.clicked_by(egui::PointerButton::Primary) {
+            if let Some(pos) = hover_pos_s {
+                if wave_r.contains(pos) {
+                    let pts = &expr_data.expressions.curve(kind).points;
+                    if let Some(idx) = hit_expr_point(pos, kind, pts, clip_beats) {
+                        if ctrl_held_s {
+                            if let Some(p) = expr_data.selected.iter().position(|&s| s == idx) {
+                                expr_data.selected.remove(p);
+                            } else {
+                                expr_data.selected.push(idx);
+                            }
+                        } else {
+                            expr_data.selected = vec![idx];
+                        }
+                    } else if !ctrl_held_s {
+                        expr_data.selected.clear();
+                    }
+                }
+            }
+        }
+
+        if resp.double_clicked_by(egui::PointerButton::Primary) {
+            if let Some(pos) = hover_pos_s {
+                if wave_r.contains(pos) {
+                    let existing = hit_expr_point(pos, kind, &expr_data.expressions.curve(kind).points, clip_beats);
+                    if let Some(idx) = existing {
+                        let pts = &mut expr_data.expressions.curve_mut(kind).points;
+                        if idx < pts.len() {
+                            pts.remove(idx);
+                        }
+                        expr_data.selected.clear();
+                        expr_changed = true;
+                        expr_sync_now = true;
+                    } else {
+                        let snap_b = v.snap_beats;
+                        let raw_b = (x2b(pos.x) - start_beats).clamp(0.0, clip_beats);
+                        let snapped_b = if shift_held_s {
+                            raw_b
+                        } else {
+                            ((raw_b / snap_b).round() * snap_b).clamp(0.0, clip_beats)
+                        };
+                        let norm_pos = (snapped_b / clip_beats.max(1e-6)).clamp(0.0, 1.0);
+                        let val = kind.clamp(expr_y_to_val(kind, pos.y, expr_body));
+                        let idx = expr_data.expressions.curve_mut(kind).insert_point(norm_pos, val);
+                        expr_data.selected = vec![idx];
+                        expr_changed = true;
+                        expr_sync_now = true;
+                    }
+                }
+            }
+        }
+
+        if resp.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(orig) = press_origin_s {
+                if wave_r.contains(orig) {
+                    let pts = &expr_data.expressions.curve(kind).points;
+                    if let Some(idx) = hit_expr_point(orig, kind, pts, clip_beats) {
+                        if !expr_data.selected.contains(&idx) {
+                            expr_data.selected = vec![idx];
+                        }
+                        let orig_points: Vec<(usize, f64, f32)> = expr_data
+                            .selected
+                            .iter()
+                            .filter_map(|&si| pts.get(si).map(|p| (si, p.norm_pos, p.value)))
+                            .collect();
+                        let ed = ExprDrag::MovePoints { orig_pos: orig, orig_points };
+                        active_edrag = Some(ed.clone());
+                        ui.ctx().data_mut(|d| d.insert_temp(edrag_id, ed));
+                    } else if alt_held {
+                        if let Some(seg_idx) = hit_expr_segment(orig, kind, pts, clip_beats) {
+                            let ed = ExprDrag::CurveTension {
+                                seg_idx,
+                                orig_y: orig.y,
+                                orig_curve: pts[seg_idx].curve,
+                            };
+                            active_edrag = Some(ed.clone());
+                            ui.ctx().data_mut(|d| d.insert_temp(edrag_id, ed));
+                        }
+                    } else {
+                        let ed = ExprDrag::Marquee { start: orig, cur: orig };
+                        active_edrag = Some(ed.clone());
+                        ui.ctx().data_mut(|d| d.insert_temp(edrag_id, ed));
+                    }
+                }
+            }
+        }
+
+        if let (Some(ed), Some(cur)) = (active_edrag.clone(), interact_pos_s) {
+            if resp.dragged_by(egui::PointerButton::Primary) {
+                match ed {
+                    ExprDrag::MovePoints { orig_pos, orig_points } => {
+                        let (lo, hi) = kind.range();
+                        let span_y = ((expr_body.max.y - EXPR_PAD_Y) - (expr_body.min.y + EXPR_PAD_Y)).max(1.0);
+                        let dy_val = ((orig_pos.y - cur.y) / span_y) * (hi - lo) * if shift_held_s { 0.2 } else { 1.0 };
+                        let dx_beats = (cur.x - orig_pos.x) as f64 / v.ppb as f64;
+                        let snap_b = v.snap_beats;
+                        let pts = &mut expr_data.expressions.curve_mut(kind).points;
+                        for (idx, orig_norm, orig_val) in &orig_points {
+                            if let Some(pt) = pts.get_mut(*idx) {
+                                let target_b = (orig_norm * clip_beats + dx_beats).clamp(0.0, clip_beats);
+                                let snapped_b = if shift_held_s {
+                                    target_b
+                                } else {
+                                    ((target_b / snap_b).round() * snap_b).clamp(0.0, clip_beats)
+                                };
+                                pt.norm_pos = (snapped_b / clip_beats.max(1e-6)).clamp(0.0, 1.0);
+                                let mut new_val = kind.clamp(orig_val + dy_val);
+                                // Suave snap al valor 0 neutro cuando no se presiona Shift
+                                if !shift_held_s && (new_val - kind.default_value()).abs() < (hi - lo) * 0.012 {
+                                    new_val = kind.default_value();
+                                }
+                                pt.value = new_val;
+                            }
+                        }
+                        expr_changed = true;
+                        // Gain y Pan se aplican en RT sin coste; Pitch y Formant esperan al soltar.
+                        if matches!(kind, AudioExpressionKind::Gain | AudioExpressionKind::Pan) {
+                            expr_sync_now = true;
+                        }
+                    }
+                    ExprDrag::CurveTension { seg_idx, orig_y, orig_curve } => {
+                        let pts = &mut expr_data.expressions.curve_mut(kind).points;
+                        if seg_idx + 1 < pts.len() {
+                            let dir = if pts[seg_idx + 1].value >= pts[seg_idx].value { 1.0 } else { -1.0 };
+                            let delta = ((orig_y - cur.y) / 90.0) * dir;
+                            pts[seg_idx].curve = (orig_curve + delta).clamp(-1.0, 1.0);
+                            expr_changed = true;
+                            if matches!(kind, AudioExpressionKind::Gain | AudioExpressionKind::Pan) {
+                                expr_sync_now = true;
+                            }
+                        }
+                    }
+                    ExprDrag::Marquee { start, .. } => {
+                        let mrect = Rect::from_two_pos(start, cur);
+                        let pts = &expr_data.expressions.curve(kind).points;
+                        expr_data.selected = pts
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, p)| mrect.contains(expr_pt_pos(kind, p, clip_beats)).then_some(i))
+                            .collect();
+                        let updated = ExprDrag::Marquee { start, cur };
+                        active_edrag = Some(updated.clone());
+                        ui.ctx().data_mut(|d| d.insert_temp(edrag_id, updated));
+                    }
+                }
+            }
+        }
+
+        if expr_changed && !primary_down_s {
+            expr_data.expressions.curve_mut(kind).sort_points();
+        }
+    }
+
+    if onsets_active && del_pressed {
         if let Some(sel_idx) = onset_data.selected {
             if sel_idx < onset_data.onsets.len() && hover_pos_s.is_some_and(|p| main.contains(p)) {
                 onset_data.onsets.remove(sel_idx);
@@ -938,9 +1266,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         }
     }
 
-    if v.onsets && resp.secondary_clicked() {
+    if onsets_active && resp.secondary_clicked() {
         if let Some(pos) = hover_pos_s {
-            if let Some(oidx) = hit_onset_handle(pos, &onset_data.onsets, &stretch_data.markers, clip_beats, !v.stretch || alt_held) {
+            if let Some(oidx) = hit_onset_handle(pos, &onset_data.onsets, &stretch_data.markers, clip_beats, !stretch_active || alt_held) {
                 onset_data.onsets.remove(oidx);
                 onset_data.selected = None;
             }
@@ -950,7 +1278,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     if resp.double_clicked_by(egui::PointerButton::Primary) {
         if let Some(pos) = hover_pos_s {
             if wave_r.contains(pos) {
-                if v.stretch {
+                if stretch_active {
                     if let Some(idx) = hit_stretch_marker(pos, &stretch_data.markers) {
                         if idx > 0 && idx + 1 < stretch_data.markers.len() {
                             stretch_data.markers.remove(idx);
@@ -976,7 +1304,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                             engine_sync_now = true;
                         }
                     }
-                } else if v.onsets {
+                } else if onsets_active {
                     if let Some(oidx) = hit_onset_handle(pos, &onset_data.onsets, &stretch_data.markers, clip_beats, true) {
                         onset_data.onsets.remove(oidx);
                         onset_data.selected = None;
@@ -1006,10 +1334,10 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 };
                 active_sdrag = Some(sd);
                 ui.ctx().data_mut(|d| d.insert_temp(sdrag_id, sd));
-            } else if let Some(o_idx) = hit_onset_handle(orig, &onset_data.onsets, &stretch_data.markers, clip_beats, !v.stretch || alt_held) {
+            } else if let Some(o_idx) = hit_onset_handle(orig, &onset_data.onsets, &stretch_data.markers, clip_beats, !stretch_active || alt_held) {
                 onset_data.selected = Some(o_idx);
                 let orig_norm = onset_data.onsets[o_idx];
-                if !v.stretch || alt_held {
+                if !stretch_active || alt_held {
                     let od = OnsetDrag {
                         onset_idx: o_idx,
                         mode: OnsetDragMode::MoveOnset,
@@ -1031,7 +1359,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                     ui.ctx().data_mut(|d| d.insert_temp(odrag_id, od));
                     stretch_changed = true;
                 }
-            } else if v.stretch && alt_held && wave_r.contains(orig) {
+            } else if stretch_active && alt_held && wave_r.contains(orig) {
                 let sd = StretchDrag {
                     marker_idx: stretch_data.markers.len().saturating_sub(1),
                     orig_x: orig.x,
@@ -1152,9 +1480,24 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         stretch_data.dirty_engine = false;
     }
 
+    if expr_changed {
+        expr_data.dirty_engine = true;
+    }
+    if expr_data.dirty_engine && (expr_sync_now || !primary_down_s) {
+        if let Some(kind) = active_expr {
+            expr_data.expressions.curve_mut(kind).sort_points();
+        }
+        app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetClipExpressions {
+            clip_id,
+            expressions: expr_data.expressions.clone(),
+        });
+        expr_data.dirty_engine = false;
+    }
+
     ui.ctx().data_mut(|d| {
         d.insert_temp(stretch_id, stretch_data.clone());
         d.insert_temp(onset_id, onset_data.clone());
+        d.insert_temp(expr_id, expr_data.clone());
     });
 
     let mut loop_en = loop_en;
@@ -1294,9 +1637,16 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
             if active_sdrag.is_some() {
                 None
             } else {
-                hover_pos.and_then(|p| hit_onset_handle(p, &onset_data.onsets, &stretch_data.markers, clip_beats, !v.stretch || alt_held))
+                hover_pos.and_then(|p| hit_onset_handle(p, &onset_data.onsets, &stretch_data.markers, clip_beats, !stretch_active || alt_held))
             }
         });
+
+    let hovered_expr_pt = active_expr.and_then(|kind| {
+        match &active_edrag {
+            Some(ExprDrag::MovePoints { orig_points, .. }) => orig_points.last().map(|(i, _, _)| *i),
+            _ => hover_pos.and_then(|p| hit_expr_point(p, kind, &expr_data.expressions.curve(kind).points, clip_beats)),
+        }
+    });
 
     let hovered_handle = active_drag
         .map(|d| d.handle)
@@ -1326,9 +1676,32 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
         LoopHandle::None => {
             if zoom_pan_active {
                 crate::app::set_footer_cues(app, None, &[("DRAG", "Zoom & pan")]);
+            } else if hovered_expr_pt.is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                crate::app::set_footer_cues(
+                    app,
+                    None,
+                    &[
+                        ("CLICK", "Select point"),
+                        ("DRAG", "Move point"),
+                        ("CTRL+CLICK", "Remove from selection"),
+                        ("DOUBLE-CLICK", "Delete event"),
+                    ],
+                );
+            } else if active_expr.is_some() && hover_pos.is_some_and(|p| wave_r.contains(p)) {
+                crate::app::set_footer_cues(
+                    app,
+                    None,
+                    &[
+                        ("DRAG", "Rectangular selection"),
+                        ("ALT+DRAG", "Adjust curve"),
+                        ("DOUBLE-CLICK", "Insert event"),
+                        ("SHIFT", "Disable snapping"),
+                    ],
+                );
             } else if hovered_onset.is_some() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                if !v.stretch || alt_held {
+                if !stretch_active || alt_held {
                     crate::app::set_footer_cues(
                         app,
                         None,
@@ -1344,7 +1717,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
             } else if let Some(pos) = hover_pos {
                 if ruler.contains(pos) {
                     crate::app::set_footer_cues(app, None, &[("DRAG", "Zoom & pan")]);
-                } else if v.onsets && !v.stretch && wave_r.contains(pos) {
+                } else if onsets_active && !stretch_active && wave_r.contains(pos) {
                     crate::app::set_footer_cues(
                         app,
                         None,
@@ -1443,7 +1816,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
             }
         }
         // Stretch / Beat Markers (estilo Bitwig)
-        if v.stretch {
+        if stretch_active {
             let hovered_m = active_sdrag
                 .map(|sd| sd.marker_idx)
                 .or_else(|| hover_pos_s.and_then(|p| hit_stretch_marker(p, &stretch_data.markers)));
@@ -1481,7 +1854,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
             }
         }
         // Onsets (transientes interactivos estilo Bitwig)
-        if v.onsets {
+        if onsets_active {
             for (idx, &o) in onset_data.onsets.iter().enumerate() {
                 let x = b2x(start_beats + map_norm_to_beat(&stretch_data.markers, o as f64, clip_beats));
                 if x >= vis.min.x - 8.0 && x <= vis.max.x + 8.0 {
@@ -1512,6 +1885,130 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 }
             }
         }
+        // ── Curva de Expresión (Gain / Pan / Pitch / Formant) estilo Bitwig ──
+        if let Some(kind) = active_expr {
+            let zero_y = expr_val_to_y(kind, kind.default_value(), body);
+            // Línea de referencia neutra (0 / C) cruzando el clip
+            wp.line_segment(
+                [pos2(vis.min.x, zero_y), pos2(vis.max.x, zero_y)],
+                Stroke::new(1.0_f32, Color32::from_black_alpha(55)),
+            );
+            // Etiqueta "0" / "C" en el margen izquierdo del editor (estilo Bitwig)
+            let axis_x = main.min.x + 2.0;
+            mp.line_segment(
+                [pos2(axis_x, zero_y), pos2(axis_x + 22.0, zero_y)],
+                Stroke::new(1.0_f32, Color32::from_rgb(0x8A, 0x8A, 0x92)),
+            );
+            mp.text(
+                pos2(axis_x + 3.0, zero_y - 3.0),
+                Align2::LEFT_BOTTOM,
+                kind.zero_label(),
+                FontId::proportional(10.5),
+                Color32::from_rgb(0xC8, 0xC8, 0xD0),
+            );
+
+            let curve = expr_data.expressions.curve(kind);
+            if !curve.points.is_empty() {
+                let mut poly: Vec<egui::Pos2> = Vec::new();
+                // Extensión plana desde el inicio del clip hasta el primer punto
+                let first_p = &curve.points[0];
+                let first_x = b2x(start_beats + first_p.norm_pos * clip_beats);
+                let first_y = expr_val_to_y(kind, first_p.value, body);
+                if first_x > body.min.x + 0.5 {
+                    poly.push(pos2(body.min.x, first_y));
+                }
+                poly.push(pos2(first_x, first_y));
+
+                for w in curve.points.windows(2) {
+                    let a = &w[0];
+                    let b = &w[1];
+                    let steps = if a.curve.abs() > 1e-4 { 20usize } else { 1usize };
+                    for s in 1..=steps {
+                        let t = s as f64 / steps as f64;
+                        let u = a.norm_pos + (b.norm_pos - a.norm_pos) * t;
+                        let val = curve.evaluate(u, kind.default_value());
+                        poly.push(pos2(b2x(start_beats + u * clip_beats), expr_val_to_y(kind, val, body)));
+                    }
+                }
+
+                // Extensión plana desde el último punto hasta el final del clip
+                if let Some(last_p) = curve.points.last() {
+                    let last_x = b2x(start_beats + last_p.norm_pos * clip_beats);
+                    let last_y = expr_val_to_y(kind, last_p.value, body);
+                    if last_x < body.max.x - 0.5 {
+                        poly.push(pos2(body.max.x, last_y));
+                    }
+                }
+
+                // Relleno sutil entre la curva y la línea de referencia 0
+                let fill_col = Color32::from_rgba_unmultiplied(0xFF, 0x7A, 0x00, 26);
+                for seg in poly.windows(2) {
+                    let p0 = seg[0];
+                    let p1 = seg[1];
+                    if (p0.y - zero_y).abs() > 0.5 || (p1.y - zero_y).abs() > 0.5 {
+                        wp.add(Shape::convex_polygon(
+                            vec![pos2(p0.x, zero_y), p0, p1, pos2(p1.x, zero_y)],
+                            fill_col,
+                            Stroke::NONE,
+                        ));
+                    }
+                }
+
+                // Línea principal negra (estilo Bitwig)
+                wp.add(Shape::line(poly, Stroke::new(1.8_f32, Color32::from_rgb(0x10, 0x10, 0x10))));
+
+                // Nodos de control
+                for (idx, pt) in curve.points.iter().enumerate() {
+                    let p_pos = pos2(
+                        b2x(start_beats + pt.norm_pos * clip_beats),
+                        expr_val_to_y(kind, pt.value, body),
+                    );
+                    let is_sel = expr_data.selected.contains(&idx);
+                    let is_hot = hovered_expr_pt == Some(idx);
+                    let fill = if is_hot || is_sel { Color32::WHITE } else { accent };
+                    let rad = if is_hot || is_sel { 4.5 } else { 4.0 };
+                    mp.circle_filled(p_pos, rad, fill);
+                    mp.circle_stroke(p_pos, rad, Stroke::new(1.4_f32, Color32::from_rgb(0x10, 0x10, 0x10)));
+                }
+
+                // Tooltip flotante de valor estilo Bitwig (ej. "2.00")
+                if let Some(tip_idx) = hovered_expr_pt {
+                    if let Some(pt) = curve.points.get(tip_idx) {
+                        let p_pos = pos2(
+                            b2x(start_beats + pt.norm_pos * clip_beats),
+                            expr_val_to_y(kind, pt.value, body),
+                        );
+                        let text = kind.format_value(pt.value);
+                        let galley = ui.painter().layout_no_wrap(
+                            text,
+                            FontId::proportional(11.0),
+                            Color32::from_rgb(0xF0, 0xF0, 0xF5),
+                        );
+                        let pad = vec2(6.0, 3.0);
+                        let tip_size = galley.size() + pad * 2.0;
+                        let mut tip_min = p_pos + vec2(10.0, 8.0);
+                        if tip_min.x + tip_size.x > main.max.x - 4.0 {
+                            tip_min.x = p_pos.x - tip_size.x - 10.0;
+                        }
+                        if tip_min.y + tip_size.y > wave_r.max.y - 4.0 {
+                            tip_min.y = p_pos.y - tip_size.y - 8.0;
+                        }
+                        let tip_rect = Rect::from_min_size(tip_min, tip_size);
+                        mp.rect_filled(tip_rect, 2.0, Color32::from_rgb(0x1E, 0x1F, 0x23));
+                        mp.rect_stroke(tip_rect, 2.0, Stroke::new(1.0_f32, Color32::from_rgb(0x55, 0x56, 0x5E)), StrokeKind::Inside);
+                        mp.galley(tip_rect.min + pad, galley, Color32::WHITE);
+                    }
+                }
+            }
+
+            // Caja de selección rectangular (marquee)
+            if let Some(ExprDrag::Marquee { start, cur }) = active_edrag {
+                let mrect = Rect::from_two_pos(start, cur).intersect(wave_r);
+                mp.rect_filled(mrect, 0.0, Color32::from_rgba_unmultiplied(0xFF, 0x7A, 0x00, 36));
+                mp.rect_stroke(mrect, 0.0, Stroke::new(1.0_f32, accent), StrokeKind::Inside);
+            }
+        }
+
         // Bordes del clip
         mp.line_segment([pos2(cx0, hdr.min.y), pos2(cx0, body.max.y)], Stroke::new(1.0_f32, Color32::from_black_alpha(120)));
         mp.line_segment([pos2(cx1, hdr.min.y), pos2(cx1, body.max.y)], Stroke::new(1.0_f32, Color32::from_black_alpha(120)));
@@ -1712,5 +2209,19 @@ mod tests {
             assert!(w[1].0 > w[0].0);
             assert!(w[1].1 > w[0].1);
         }
+    }
+
+    #[test]
+    fn expr_val_y_roundtrip_and_zero_centering() {
+        let body = Rect::from_min_max(pos2(0.0, 100.0), pos2(400.0, 220.0));
+        for kind in AudioExpressionKind::ALL {
+            let y0 = expr_val_to_y(kind, kind.default_value(), body);
+            let v0 = expr_y_to_val(kind, y0, body);
+            assert!((v0 - kind.default_value()).abs() < 1e-3, "roundtrip failed for {:?}", kind);
+        }
+        // Pitch 0 debe estar exactamente en el centro vertical del body
+        let pitch_zero_y = expr_val_to_y(AudioExpressionKind::Pitch, 0.0, body);
+        assert!((pitch_zero_y - body.center().y).abs() < 1e-3);
+        assert_eq!(AudioExpressionKind::Pitch.format_value(2.0), "2.00");
     }
 }

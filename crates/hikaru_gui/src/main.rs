@@ -11,6 +11,40 @@ use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
 
 static DEFAULT_WAVETABLE: [f32; 2048] = [0.0; 2048];
 
+fn spawn_stretch_jobs(
+    engine: &Arc<Mutex<hikaru_audio_engine::AudioEngine<'static>>>,
+    jobs: Vec<hikaru_audio_engine::StretchJob>,
+) {
+    if jobs.is_empty() {
+        return;
+    }
+    let engine_clone = engine.clone();
+    std::thread::spawn(move || {
+        for job in jobs {
+            let in_frames = job.samples.len() / job.channels.max(1);
+            let total_out_frames = ((in_frames as f64) / job.rate).round().max(1.0) as usize;
+            let stretched = hikaru_audio_engine::time_stretch_and_pitch_wsola(
+                &job.samples,
+                job.channels,
+                total_out_frames,
+                &job.warp_markers,
+                &job.pitch_curve,
+                &job.formant_curve,
+            );
+            if let Ok(mut eng) = engine_clone.lock() {
+                eng.apply_stretched_samples(
+                    job.clip_id,
+                    stretched,
+                    job.rate,
+                    job.warp_markers,
+                    job.pitch_curve.points,
+                    job.formant_curve.points,
+                );
+            }
+        }
+    });
+}
+
 /// El punto de entrada del binario `hikaru_openlive`.
 ///
 /// Es un DISPATCHER: primero mira los argumentos y, si son un comando de
@@ -343,23 +377,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     } else {
                         Vec::new()
                     };
-                    if !jobs.is_empty() {
-                        let engine_clone = engine_for_commands.clone();
-                        std::thread::spawn(move || {
-                            for (clip_id, samples, channels, rate, warp_markers) in jobs {
-                                let in_frames = samples.len() / channels.max(1);
-                                let total_out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
-                                let stretched = if warp_markers.len() > 2 {
-                                    hikaru_audio_engine::time_stretch_wsola_warped(&samples, channels, total_out_frames, &warp_markers)
-                                } else {
-                                    hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate)
-                                };
-                                if let Ok(mut engine) = engine_clone.lock() {
-                                    engine.apply_stretched_samples(clip_id, stretched, rate, warp_markers);
-                                }
-                            }
-                        });
-                    }
+                    spawn_stretch_jobs(&engine_for_commands, jobs);
                 }
                 GuiCommand::SetClipStretchBpm { clip_id, source_bpm } => {
                     let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
@@ -368,23 +386,7 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     } else {
                         Vec::new()
                     };
-                    if !jobs.is_empty() {
-                        let engine_clone = engine_for_commands.clone();
-                        std::thread::spawn(move || {
-                            for (cid, samples, channels, rate, warp_markers) in jobs {
-                                let in_frames = samples.len() / channels.max(1);
-                                let total_out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
-                                let stretched = if warp_markers.len() > 2 {
-                                    hikaru_audio_engine::time_stretch_wsola_warped(&samples, channels, total_out_frames, &warp_markers)
-                                } else {
-                                    hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate)
-                                };
-                                if let Ok(mut engine) = engine_clone.lock() {
-                                    engine.apply_stretched_samples(cid, stretched, rate, warp_markers);
-                                }
-                            }
-                        });
-                    }
+                    spawn_stretch_jobs(&engine_for_commands, jobs);
                 }
                 GuiCommand::SetClipWarpMarkers { clip_id, source_bpm, warp_markers } => {
                     let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
@@ -393,23 +395,16 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     } else {
                         Vec::new()
                     };
-                    if !jobs.is_empty() {
-                        let engine_clone = engine_for_commands.clone();
-                        std::thread::spawn(move || {
-                            for (cid, samples, channels, rate, markers) in jobs {
-                                let in_frames = samples.len() / channels.max(1);
-                                let total_out_frames = ((in_frames as f64) / rate).round().max(1.0) as usize;
-                                let stretched = if markers.len() > 2 {
-                                    hikaru_audio_engine::time_stretch_wsola_warped(&samples, channels, total_out_frames, &markers)
-                                } else {
-                                    hikaru_audio_engine::time_stretch_wsola(&samples, channels, rate)
-                                };
-                                if let Ok(mut engine) = engine_clone.lock() {
-                                    engine.apply_stretched_samples(cid, stretched, rate, markers);
-                                }
-                            }
-                        });
-                    }
+                    spawn_stretch_jobs(&engine_for_commands, jobs);
+                }
+                GuiCommand::SetClipExpressions { clip_id, expressions } => {
+                    let jobs = if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_clip_expressions_deferred(clip_id, expressions);
+                        engine.pending_stretch_jobs()
+                    } else {
+                        Vec::new()
+                    };
+                    spawn_stretch_jobs(&engine_for_commands, jobs);
                 }
                 GuiCommand::SetTrackVolume { track_idx, volume_db } => {
                     if let Ok(engine) = engine_for_commands.try_lock() {

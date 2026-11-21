@@ -201,6 +201,10 @@ pub enum GuiCommand {
         source_bpm: Option<f32>,
         warp_markers: Vec<(f64, f64)>,
     },
+    SetClipExpressions {
+        clip_id: usize,
+        expressions: hikaru_core::AudioClipExpressions,
+    },
     TriggerScene { 
         scene_idx: usize 
     },
