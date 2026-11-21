@@ -153,10 +153,10 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | VST3 & CLAP | 12 | 5 | 2 | 5 | 0 |
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 3 | 0 | 3 | 0 |
-| .bwtemplate | 4 | 0 | 0 | 4 | 0 |
-| **Total** | **645** | **314** | **17** | **314** | **1** |
+| .bwtemplate | 4 | 2 | 0 | 2 | 0 |
+| **Total** | **645** | **316** | **17** | **312** | **1** |
 
-Paridad global: **314 / 645 = 49 %**.
+Paridad global: **316 / 645 = 49 %**.
 
 ### Bugs abiertos
 

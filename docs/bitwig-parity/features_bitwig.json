@@ -37,9 +37,9 @@
   "summary": {
     "areas": 18,
     "features": 645,
-    "done": 314,
+    "done": 316,
     "in_progress": 17,
-    "planned": 314,
+    "planned": 312,
     "bugs": 1,
     "parity_percent": 49
   },
@@ -3700,7 +3700,7 @@
         {
           "id": "bt-01",
           "name": "Template file parser (.bwtemplate)",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "bt-02",
@@ -3715,7 +3715,7 @@
         {
           "id": "bt-04",
           "name": "New project from template workflow",
-          "status": "planned"
+          "status": "done"
         }
       ]
     }
