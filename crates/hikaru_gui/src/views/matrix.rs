@@ -2611,6 +2611,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             }
         }
 
+        if crate::views::remote_controls::is_mapping_active(state) {
+            crate::views::remote_controls::paint_mappable_overlay_painter(&tracks_painter, slider_rect);
+        }
+
         // Hit testing on Track Header
         if let Some(pos) = pointer_pos {
             if tracks_col_rect.contains(pos) && row_rect.contains(pos) {
@@ -2832,6 +2836,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         master_slider_hov,
         false,
     );
+    if crate::views::remote_controls::is_mapping_active(state) {
+        crate::views::remote_controls::paint_mappable_overlay_painter(&painter, master_slider);
+    }
     if let Some(pos) = pointer_pos {
         if master_header_rect.contains(pos) {
             if primary_clicked {

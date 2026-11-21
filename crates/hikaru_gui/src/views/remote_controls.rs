@@ -791,19 +791,23 @@ pub fn complete_mapping(app: &mut AppState, target: RemoteTarget) {
 }
 
 /// Paints Bitwig's cyan translucent mapping highlight over any mappable control.
-pub fn paint_mappable_overlay(ui: &Ui, rect: Rect) {
-    let p = ui.painter();
+pub fn paint_mappable_overlay_painter(p: &Painter, rect: Rect) {
     p.rect_filled(
         rect,
         2.0,
-        Color32::from_rgba_unmultiplied(0x2E, 0xC5, 0xE8, 56),
+        Color32::from_rgba_unmultiplied(0x2E, 0xC5, 0xE8, 72),
     );
     p.rect_stroke(
         rect,
         2.0,
-        Stroke::new(1.2_f32, REMOTE_CYAN),
+        Stroke::new(1.3_f32, REMOTE_CYAN),
         egui::StrokeKind::Inside,
     );
+}
+
+/// Paints Bitwig's cyan translucent mapping highlight over any mappable control.
+pub fn paint_mappable_overlay(ui: &Ui, rect: Rect) {
+    paint_mappable_overlay_painter(ui.painter(), rect);
 }
 
 /// Highlights a mappable widget when Remote Mapping Mode is active and completes
