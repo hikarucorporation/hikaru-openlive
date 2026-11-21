@@ -1886,8 +1886,17 @@ fn render_channel_strip(
                             &mut vol,
                             0.75,
                         );
-                        vol_resp.on_hover_text("Volume Fader (double-click for 0.0 dB)");
-                        if vol_changed {
+                        vol_resp.clone().on_hover_text("Volume Fader (double-click for 0.0 dB)");
+                        if !is_fx && crate::views::remote_controls::is_mapping_active(state) {
+                            crate::views::remote_controls::paint_mappable_overlay(ui, vol_resp.rect);
+                            if vol_resp.clicked() {
+                                let target = match user_idx {
+                                    Some(ti) => crate::views::remote_controls::RemoteTarget::TrackVolume { track_idx: ti },
+                                    None => crate::views::remote_controls::RemoteTarget::MasterVolume,
+                                };
+                                crate::views::remote_controls::complete_mapping(state, target);
+                            }
+                        } else if vol_changed {
                             strip_track_mut(state, kind).volume = vol;
                             if !is_fx {
                                 let eng_idx = user_idx.map_or(0, |i| i.saturating_sub(1));

@@ -841,7 +841,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 } else {
                     let bpm_resp = ui.interact(bpm_top, ui.id().with("lcd_bpm_drag"), Sense::click_and_drag());
-                    if bpm_resp.double_clicked() {
+                    if crate::views::remote_controls::is_mapping_active(state) {
+                        crate::views::remote_controls::paint_mappable_overlay(ui, bpm_top);
+                        if bpm_resp.clicked() {
+                            crate::views::remote_controls::complete_mapping(
+                                state,
+                                crate::views::remote_controls::RemoteTarget::ProjectTempo,
+                            );
+                        }
+                    } else if bpm_resp.double_clicked() {
                         state.editing_bpm = true;
                         state.bpm_input = format!("{:.2}", state.transport.bpm);
                         state.bpm_input_first_key = true;

@@ -593,10 +593,82 @@ fn paint_vertical_strip_label(
 // Shared 2×4 Remote Controls Grid Renderer
 // =============================================================================
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RemoteScope {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteScope {
     Project,
     Track(usize),
+}
+
+/// Active Bitwig-style click-to-map session for a Remote Control slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveRemoteMapping {
+    pub scope: RemoteScope,
+    pub page_idx: usize,
+    pub slot_idx: usize,
+}
+
+pub fn is_mapping_active(app: &AppState) -> bool {
+    app.remote_mapping.is_some()
+}
+
+pub fn start_or_toggle_mapping(
+    app: &mut AppState,
+    scope: RemoteScope,
+    page_idx: usize,
+    slot_idx: usize,
+) {
+    let next = ActiveRemoteMapping {
+        scope,
+        page_idx,
+        slot_idx,
+    };
+    if app.remote_mapping == Some(next) {
+        app.remote_mapping = None;
+    } else {
+        app.remote_mapping = Some(next);
+    }
+}
+
+pub fn complete_mapping(app: &mut AppState, target: RemoteTarget) {
+    let Some(mapping) = app.remote_mapping.take() else {
+        return;
+    };
+    let cur = read_target_normalized(app, &target).unwrap_or_else(|| default_norm_for_target(&target));
+    let def = default_norm_for_target(&target);
+    match mapping.scope {
+        RemoteScope::Project => {
+            if let Some(page) = app.project_remotes.pages.get_mut(mapping.page_idx) {
+                if let Some(slot) = page.slots.get_mut(mapping.slot_idx) {
+                    slot.assign(target, cur, def);
+                }
+            }
+        }
+        RemoteScope::Track(ti) => {
+            if let Some(t) = app.current_tracks_mut().get_mut(ti) {
+                if let Some(page) = t.remotes.pages.get_mut(mapping.page_idx) {
+                    if let Some(slot) = page.slots.get_mut(mapping.slot_idx) {
+                        slot.assign(target, cur, def);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Paints Bitwig's cyan translucent mapping highlight over any mappable control.
+pub fn paint_mappable_overlay(ui: &Ui, rect: Rect) {
+    let p = ui.painter();
+    p.rect_filled(
+        rect,
+        2.0,
+        Color32::from_rgba_unmultiplied(0x2E, 0xC5, 0xE8, 56),
+    );
+    p.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.2_f32, REMOTE_CYAN),
+        egui::StrokeKind::Inside,
+    );
 }
 
 fn render_remotes_body(
@@ -605,6 +677,10 @@ fn render_remotes_body(
     app: &mut AppState,
     scope: RemoteScope,
 ) {
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.remote_mapping = None;
+    }
+
     let p = ui.painter();
     p.rect_filled(rect, 2.0, Color32::from_rgb(0x2B, 0x2D, 0x33));
 
@@ -835,13 +911,35 @@ fn render_remotes_body(
             }
 
             let knob_r = (cell_w.min(cell_h - 14.0) * 0.36).clamp(9.0, 14.0);
-            let knob_c = pos2(cell_rect.center().x, cell_rect.min.y + cell_h * 0.42);
+            let knob_c = pos2(cell_rect.center().x, cell_rect.min.y + cell_h * 0.45);
             paint_remote_knob(ui.painter(), knob_c, knob_r, new_norm, REMOTE_ORANGE);
+
+            // Live Bitwig-style value badge above knob when dragging or hovering
+            if resp.dragged() || resp.hovered() {
+                let badge_rect = Rect::from_center_size(
+                    pos2(cell_rect.center().x, cell_rect.min.y + 7.0),
+                    vec2(cell_rect.width() - 2.0, 12.0),
+                );
+                ui.painter()
+                    .rect_filled(badge_rect, 2.0, Color32::from_rgb(0x16, 0x18, 0x1D));
+                ui.painter().text(
+                    badge_rect.center(),
+                    Align2::CENTER_CENTER,
+                    &val_text,
+                    fonts::regular(8.0),
+                    Color32::from_rgb(0xE8, 0xEC, 0xF2),
+                );
+                app.footer_context_help = Some((label.to_uppercase(), val_text.clone()));
+                app.footer_context_cues = vec![
+                    ("DRAG".to_string(), "Adjust value".to_string()),
+                    ("SHIFT".to_string(), "Fine adjust".to_string()),
+                ];
+            }
 
             ui.painter().text(
                 pos2(cell_rect.center().x, cell_rect.max.y - 8.0),
                 Align2::CENTER_CENTER,
-                truncate_label(&label, 7),
+                truncate_label(&label, 8),
                 fonts::regular(8.5),
                 if resp.hovered() || resp.dragged() {
                     Color32::WHITE
@@ -850,17 +948,19 @@ fn render_remotes_body(
                 },
             );
 
-            resp.clone()
-                .on_hover_text(format!("{}: {}\nDrag to adjust · Double-click to reset · Right-click to remap", label, val_text));
+            resp.clone().on_hover_text(format!(
+                "{}: {}\nDrag to adjust · Double-click to reset · Right-click for menu",
+                label, val_text
+            ));
 
             resp.context_menu(|ui| {
                 ui.label(RichText::new(format!("{}: {}", label, val_text)).strong());
                 ui.separator();
-                if ui.button("Reset to Default").clicked() {
+                if ui.button("Set To Default").clicked() {
                     write_target_normalized(app, &target, slot.default_value);
                     ui.close_menu();
                 }
-                if ui.button("Unmap Remote").clicked() {
+                if ui.button("Delete Remote Control").clicked() {
                     match scope {
                         RemoteScope::Project => {
                             app.project_remotes.active_page_mut().slots[slot_i].unmap();
@@ -875,25 +975,56 @@ fn render_remotes_body(
                 }
             });
         } else {
-            // Unassigned slot — Bitwig cyan wireless remote icon
+            // Unassigned slot — Bitwig cyan wireless remote icon (click enters Mapping Mode!)
+            let is_this_mapping = app.remote_mapping
+                == Some(ActiveRemoteMapping {
+                    scope,
+                    page_idx: active_page_idx,
+                    slot_idx: slot_i,
+                });
             let resp = ui.interact(cell_rect, slot_id, Sense::click());
-            let icon_col = if resp.hovered() {
+            if is_this_mapping {
+                let pulse = ((ui.input(|i| i.time) * 4.5).sin() * 0.5 + 0.5) as f32;
+                let alpha = (55.0 + pulse * 65.0) as u8;
+                ui.painter().rect_filled(
+                    cell_rect.shrink(3.0),
+                    3.0,
+                    Color32::from_rgba_unmultiplied(0x2E, 0xC5, 0xE8, alpha),
+                );
+                ui.painter().rect_stroke(
+                    cell_rect.shrink(3.0),
+                    3.0,
+                    Stroke::new(1.4_f32, REMOTE_CYAN),
+                    egui::StrokeKind::Inside,
+                );
+                ui.ctx().request_repaint();
+                app.footer_context_cues = vec![("CLICK".to_string(), "Stop mapping".to_string())];
+            } else if resp.hovered() {
+                ui.painter()
+                    .rect_filled(cell_rect.shrink(3.0), 3.0, Color32::from_rgb(0x2D, 0x31, 0x3A));
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let icon_col = if is_this_mapping {
+                Color32::WHITE
+            } else if resp.hovered() {
                 Color32::from_rgb(0x5E, 0xE2, 0xFF)
             } else {
                 REMOTE_CYAN
             };
-            if resp.hovered() {
-                ui.painter()
-                    .rect_filled(cell_rect.shrink(3.0), 3.0, Color32::from_rgb(0x2D, 0x31, 0x3A));
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
             paint_remote_wireless_icon(ui.painter(), cell_rect.center(), 9.0, icon_col);
 
-            if resp
-                .clone()
-                .on_hover_text("Click to assign Remote Control parameter")
-                .clicked()
-            {
+            let tip = if is_this_mapping {
+                "Mapping active — click any highlighted parameter (e.g. BPM or Volume), or click again / ESC to stop"
+            } else {
+                "Click to start Mapping Mode (Right-click to pick parameter from list)"
+            };
+            if resp.clone().on_hover_text(tip).clicked() {
+                start_or_toggle_mapping(app, scope, active_page_idx, slot_i);
+            }
+            // Right-click still opens the quick-assign menu as a fallback
+            if resp.secondary_clicked() {
                 ui.memory_mut(|m| m.toggle_popup(assign_popup_id));
             }
 
@@ -1160,6 +1291,10 @@ pub fn render_project_panel(ui: &mut Ui, app: &mut AppState, card_h: f32) {
         return;
     }
 
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.remote_mapping = None;
+    }
+
     let p = ui.painter();
     p.rect_filled(card_rect, 3.0, Color32::from_rgb(0x2B, 0x2D, 0x33));
     p.rect_stroke(
@@ -1349,6 +1484,10 @@ pub fn render_track_panel(
     } else {
         track_color
     };
+
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.remote_mapping = None;
+    }
 
     let p = ui.painter();
     p.rect_filled(card_rect, 3.0, Color32::from_rgb(0x2B, 0x2D, 0x33));

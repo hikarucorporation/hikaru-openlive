@@ -487,6 +487,7 @@ pub struct AppState {
     /// in the central workspace panel above the bottom DSP Rack.
     pub open_grid_editor: Option<(usize, usize)>,
     pub project_remotes: crate::views::remote_controls::RemoteControlsState,
+    pub remote_mapping: Option<crate::views::remote_controls::ActiveRemoteMapping>,
 }
 
 impl AppState {
@@ -664,6 +665,7 @@ impl AppState {
             synced_open_grid_revs: [None; 16],
             open_grid_editor: None,
             project_remotes: crate::views::remote_controls::RemoteControlsState::default(),
+            remote_mapping: None,
         };
         state.audio_proxy.send(GuiCommand::SetAppMode(false));
         state
