@@ -104,6 +104,7 @@ pub enum FileMenuAction {
     ExportMidi,
     ExportDawProject,
     ExportBwProject,
+    ExportBwTemplate,
     ShowDashboard,
     Settings,
     Quit,
@@ -173,7 +174,7 @@ const SECTION_PROJECT: [MenuRow; 8] = [
     },
 ];
 
-const SECTION_EXPORT: [MenuRow; 4] = [
+const SECTION_EXPORT: [MenuRow; 5] = [
     MenuRow {
         label: "Export Audio...",
         shortcut: "Ctrl+Shift+B",
@@ -197,6 +198,12 @@ const SECTION_EXPORT: [MenuRow; 4] = [
         shortcut: "",
         icon: RowIcon::Vector(IC_EXPORT_DAWPROJECT),
         action: FileMenuAction::ExportBwProject,
+    },
+    MenuRow {
+        label: "Export Bitwig Template (.bwtemplate)...",
+        shortcut: "",
+        icon: RowIcon::Vector(IC_SAVE_TEMPLATE),
+        action: FileMenuAction::ExportBwTemplate,
     },
 ];
 
@@ -508,6 +515,9 @@ pub fn execute_action(ctx: &Context, state: &mut AppState, action: FileMenuActio
         }
         FileMenuAction::ExportBwProject => {
             export_bwproject(state);
+        }
+        FileMenuAction::ExportBwTemplate => {
+            export_bwtemplate(state);
         }
         FileMenuAction::ShowDashboard => {
             state.control_panel_state.is_open = true;
@@ -1004,6 +1014,40 @@ fn new_from_template(state: &mut AppState) {
     match project::bwtemplate::new_from_template(state, &path) {
         Ok(()) => println!("[TEMPLATE] proyecto nuevo desde plantilla: {}", path.display()),
         Err(err) => eprintln!("[TEMPLATE] no se pudo cargar .bwtemplate: {}", err),
+    }
+}
+
+fn export_bwtemplate(state: &mut AppState) {
+    let dir = templates_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let default_name = format!("{}.bwtemplate", project_stem(state));
+    let Some(mut target) = rfd::FileDialog::new()
+        .set_title("Export Bitwig Template (.bwtemplate)")
+        .set_directory(&dir)
+        .set_file_name(&default_name)
+        .add_filter(
+            project::bwtemplate::FILE_FILTER,
+            &[project::BWTEMPLATE_EXTENSION],
+        )
+        .save_file()
+    else {
+        return;
+    };
+    if target
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| !e.eq_ignore_ascii_case(project::BWTEMPLATE_EXTENSION))
+        .unwrap_or(true)
+    {
+        target.set_extension(project::BWTEMPLATE_EXTENSION);
+    }
+    match project::bwproject::export_to_path(state, &target) {
+        Ok(()) => {
+            println!("[TEMPLATE] .bwtemplate guardado: {}", target.display());
+            state.control_panel_state.status_notice =
+                Some(format!("Plantilla .bwtemplate guardada: {}", target.display()));
+        }
+        Err(err) => eprintln!("[TEMPLATE] no se pudo escribir .bwtemplate: {}", err),
     }
 }
 

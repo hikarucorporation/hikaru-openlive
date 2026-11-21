@@ -413,18 +413,34 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
     for (t_idx, col) in state.matrix_state.grid.iter().enumerate() {
         let track_id = state
             .live_tracks
-            .get(t_idx + 1)
+            .iter()
+            .find(|t| !t.is_master && t.matrix_idx == Some(t_idx))
+            .or_else(|| state.live_tracks.iter().filter(|t| !t.is_master).nth(t_idx))
             .map(|t| format!("trk_{}", t.id))
             .unwrap_or_else(|| format!("trk_{}", t_idx + 1));
         for (s_idx, slot) in col.iter().enumerate() {
             if let Some(mclip) = &slot.clip {
                 let content = match &mclip.content {
-                    ClipData::Audio { .. } => BwClipContent::Audio {
-                        path: mclip.path.to_string_lossy().to_string(),
-                    },
+                    ClipData::Audio { events, .. } => {
+                        let audio_path = if !mclip.path.as_os_str().is_empty() {
+                            mclip.path.to_string_lossy().to_string()
+                        } else {
+                            events
+                                .iter()
+                                .find_map(|e| e.source_path.as_ref())
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_default()
+                        };
+                        BwClipContent::Audio { path: audio_path }
+                    }
                     ClipData::Midi { notes } => BwClipContent::Midi {
                         notes: notes.clone(),
                     },
+                };
+                let duration_beats = if mclip.duration_secs > 0.0 {
+                    (mclip.duration_secs * (bpm / 60.0)).max(0.25)
+                } else {
+                    beats_per_bar as f64
                 };
                 clips.push(BwClip {
                     name: mclip.name.clone(),
@@ -432,9 +448,9 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
                     is_launcher: true,
                     slot_index: s_idx,
                     start_beats: 0.0,
-                    duration_beats: beats_per_bar as f64,
-                    muted: false,
-                    color: None,
+                    duration_beats,
+                    muted: mclip.muted,
+                    color: mclip.color.map(|c| c.to_array()),
                     content,
                 });
             }
@@ -529,7 +545,25 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
     state.studio_tracks = all_tracks;
 
     let num_regular = state.live_tracks.len().saturating_sub(1).max(1);
-    let num_scenes = state.matrix_state.scenes.len().max(8);
+    let max_clip_slot = parsed
+        .clips
+        .iter()
+        .filter(|c| c.is_launcher)
+        .map(|c| c.slot_index + 1)
+        .max()
+        .unwrap_or(0);
+    let num_scenes = state.matrix_state.scenes.len().max(8).max(max_clip_slot);
+    while state.matrix_state.scenes.len() < num_scenes {
+        let idx = state.matrix_state.scenes.len() + 1;
+        state
+            .matrix_state
+            .scenes
+            .push(crate::views::matrix::SceneMeta {
+                name: format!("Scene {}", idx),
+                color: None,
+                launch_quantization: None,
+            });
+    }
     state.matrix_state.tracks = (0..num_regular)
         .map(|i| {
             let tr = &state.live_tracks[i + 1];
@@ -566,7 +600,8 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
         if pc.is_launcher {
             let m_idx = track_idx - 1;
             let s_idx = pc.slot_index.min(num_scenes - 1);
-            let dur_secs = pc.duration_beats * (60.0 / parsed.transport.bpm.max(1.0));
+            let bpm = parsed.transport.bpm.max(1.0);
+            let dur_secs = pc.duration_beats * (60.0 / bpm);
             let content = match &pc.content {
                 BwClipContent::Audio { .. } => ClipData::Audio {
                     events: Vec::new(),
@@ -583,11 +618,10 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                 BwClipContent::Audio { path } => resolve_path(base_dir, path),
                 _ => PathBuf::new(),
             };
-            state.matrix_state.grid[m_idx][s_idx].state = SlotState::Stopped;
-            state.matrix_state.grid[m_idx][s_idx].clip = Some(MatrixClip {
+            let mut mclip = MatrixClip {
                 id: next_id,
                 name: pc.name.clone(),
-                path,
+                path: path.clone(),
                 duration_secs: dur_secs,
                 content,
                 local_state: PlaylistState::default(),
@@ -601,7 +635,101 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
                 peaks: Vec::new(),
                 muted: pc.muted,
                 color: Some(color),
+            };
+
+            if matches!(mclip.content, ClipData::Audio { .. }) && !path.as_os_str().is_empty() {
+                if let Some((samples, channels, sr)) = crate::views::matrix::decode_audio_file(&path)
+                {
+                    let total_frames = samples.len() / channels.max(1);
+                    if sr > 0 && total_frames > 0 {
+                        mclip.duration_secs = total_frames as f64 / sr as f64;
+                    }
+                    let ev_name = path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let mut ev = crate::views::matrix::AudioEvent::new_full(
+                        mclip.alloc_event_id(),
+                        ev_name,
+                        samples,
+                        channels,
+                        sr,
+                        0.0,
+                    );
+                    ev.source_path = Some(path.clone());
+                    if let Some(events) = mclip.audio_events_mut() {
+                        events.push(ev);
+                    }
+                    mclip.refresh_preview();
+                }
+                mclip.peaks =
+                    crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
+                        &path.to_string_lossy(),
+                        MatrixClip::PEAK_BINS,
+                    );
+
+                // Registrar el clip en el motor de audio para que suene al disparar el pad.
+                state.audio_proxy.send(GuiCommand::LoadClip {
+                    clip_id: mclip.id,
+                    path: path.to_string_lossy().to_string(),
+                    position_secs: 0.0,
+                    duration_secs: 0.0,
+                    offset_secs: 0.0,
+                    track_index: m_idx,
+                    scene_index: s_idx,
+                    speed_ratio: crate::audio_proxy::compute_tempo_sync_ratio(&path, bpm),
+                });
+                if !mclip.audio_events().is_empty() {
+                    crate::views::matrix::sync_audio_events_to_engine(
+                        &mclip,
+                        &state.audio_proxy,
+                        m_idx,
+                        s_idx,
+                    );
+                }
+                let transport_ppqn = state.transport.ppqn();
+                state.audio_proxy.send(GuiCommand::SetClipLoop {
+                    track_idx: m_idx,
+                    scene_idx: s_idx,
+                    start_secs: crate::views::playlist::ticks_to_secs_precise(
+                        mclip.loop_start,
+                        transport_ppqn,
+                        bpm,
+                    ),
+                    end_secs: crate::views::playlist::ticks_to_secs_precise(
+                        mclip.loop_end,
+                        transport_ppqn,
+                        bpm,
+                    ),
+                    enabled: mclip.loop_enabled,
+                });
+            } else if let ClipData::Midi { notes } = &mclip.content {
+                state.audio_proxy.send(GuiCommand::UpdateMidiClipNotes {
+                    track_idx: m_idx,
+                    scene_idx: s_idx,
+                    notes: notes.clone(),
+                });
+                state.audio_proxy.send(GuiCommand::SetMidiClipLoop {
+                    track_idx: m_idx,
+                    scene_idx: s_idx,
+                    loop_start_ticks: mclip.loop_start,
+                    loop_end_ticks: mclip.loop_end.max(mclip.loop_start + 240),
+                });
+                state.audio_proxy.send(GuiCommand::SetMidiClipLoopEnabled {
+                    track_idx: m_idx,
+                    scene_idx: s_idx,
+                    enabled: mclip.loop_enabled,
+                });
+            }
+            state.audio_proxy.send(GuiCommand::SetClipLegato {
+                track_idx: m_idx,
+                scene_idx: s_idx,
+                legato: mclip.launch_legato,
             });
+
+            state.matrix_state.grid[m_idx][s_idx].state = SlotState::Stopped;
+            state.matrix_state.grid[m_idx][s_idx].clip = Some(mclip);
             next_id += 1;
         } else {
             let start_tick = (pc.start_beats * ppqn).round() as u64;
@@ -609,9 +737,17 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
             let clip_type = match &pc.content {
                 BwClipContent::Audio { path } => {
                     let p = resolve_path(base_dir, path);
+                    let peaks = if !p.as_os_str().is_empty() {
+                        crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
+                            &p.to_string_lossy(),
+                            MatrixClip::PEAK_BINS,
+                        )
+                    } else {
+                        Vec::new()
+                    };
                     ClipType::Audio {
                         sample_path: p.to_string_lossy().to_string(),
-                        peaks: Vec::new(),
+                        peaks,
                         sample_offset_ticks: 0,
                         total_sample_ticks: duration_ticks,
                     }
@@ -640,6 +776,7 @@ fn apply_parsed_bwproject(state: &mut AppState, parsed: &ParsedBwProject, bwproj
     pl.next_clip_id = next_id;
     pl.needs_full_sync = true;
     state.playlist_state = pl;
+    state.matrix_state.next_clip_id = next_id;
 }
 
 fn resolve_path(base_dir: Option<&Path>, raw: &str) -> PathBuf {

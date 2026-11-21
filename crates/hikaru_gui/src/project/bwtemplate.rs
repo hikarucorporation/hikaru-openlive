@@ -147,4 +147,80 @@ mod tests {
         assert!((state.live_tracks[0].volume - 2.0).abs() < 0.001);
         assert!((state.live_tracks[0].pan - (-1.0)).abs() < 0.001);
     }
+
+    #[test]
+    fn bwtemplate_round_trip_preserves_launcher_audio_clips_and_notifies_engine() {
+        use crate::audio_proxy::{AudioProxy, GuiCommand};
+        use crate::views::matrix::{ClipData, MatrixClip, SlotState};
+        use crate::views::playlist::PlaylistState;
+        use std::sync::atomic::{AtomicU32, AtomicU64};
+        use std::sync::mpsc::channel;
+        use std::sync::Arc;
+
+        let mut src = test_state();
+        let sample_path = PathBuf::from("/tmp/cymatics_test_loop.wav");
+        src.matrix_state.grid[0][0].state = SlotState::Stopped;
+        src.matrix_state.grid[0][0].clip = Some(MatrixClip {
+            id: 1,
+            name: "Cymatics - Energize".to_string(),
+            path: sample_path.clone(),
+            duration_secs: 4.0,
+            content: ClipData::Audio {
+                events: Vec::new(),
+                next_event_id: 1,
+                preview_mix: Vec::new(),
+                preview_sr: 44100,
+            },
+            local_state: PlaylistState::default(),
+            local_track: src.live_tracks[1].clone(),
+            local_bar: 0.0,
+            loop_start: 0,
+            loop_end: 3840,
+            loop_enabled: true,
+            launch_legato: false,
+            has_time_selection: false,
+            peaks: Vec::new(),
+            muted: false,
+            color: Some(egui::Color32::from_rgb(0xE0, 0x60, 0x20)),
+        });
+
+        let path = temp_template_path("audio_clips");
+        bwproject::export_to_path(&src, &path).expect("export template with audio clip");
+
+        let (tx, rx) = channel();
+        let mut dst = AppState::new(
+            AudioProxy::new(tx),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU32::new(0)),
+            None,
+        );
+
+        new_from_template(&mut dst, &path).expect("load template with audio clip");
+
+        let loaded = dst.matrix_state.grid[0][0]
+            .clip
+            .as_ref()
+            .expect("audio clip should be restored in slot [0][0]");
+        assert_eq!(loaded.name, "Cymatics - Energize");
+        assert_eq!(loaded.path, sample_path);
+        assert!(matches!(loaded.content, ClipData::Audio { .. }));
+
+        let cmds: Vec<GuiCommand> = rx.try_iter().collect();
+        let has_load_clip = cmds.iter().any(|c| {
+            matches!(
+                c,
+                GuiCommand::LoadClip {
+                    track_index: 0,
+                    scene_index: 0,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_load_clip,
+            "loading .bwtemplate must register audio clip in AudioEngine via GuiCommand::LoadClip"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
 }
