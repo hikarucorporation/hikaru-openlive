@@ -3,23 +3,23 @@
   "product": "Hikaru OpenLive",
   "reference": {
     "name": "Bitwig Studio",
-    "version": "5.1.7",
-    "revision": 143754,
-    "revision_id": "559a1bad96cc2565f28fbcefaeddec30e6fe4b53",
+    "version": "5.3.13",
+    "revision": 161983,
+    "revision_id": "4917385aae57c052754475b14b6f933fbfad52fd",
     "install_path": "/opt/bitwig-studio"
   },
   "audit": {
-    "date": "2026-11-17",
+    "date": "2026-11-22",
     "bitwig_catalog": {
-      "devices": 118,
+      "devices": 150,
       "modulators": 43,
-      "grid_modules": 218,
+      "grid_modules": 228,
       "controller_scripts": 46,
       "controller_vendor_families": 17,
       "themes": 1
     },
     "hikaru_workspace_version": "2.24.0",
-    "method": "Static audit of the local Bitwig 5.1.7 install and of every crate in the Hikaru OpenLive workspace."
+    "method": "Static audit of the local Bitwig 5.3.13 install and of every crate in the Hikaru OpenLive workspace."
   },
   "bugs_source": {
     "repository": "https://github.com/hikarucorporation/hikaru-openlive",
@@ -36,18 +36,18 @@
   },
   "summary": {
     "areas": 18,
-    "features": 645,
+    "features": 687,
     "done": 318,
     "in_progress": 17,
-    "planned": 310,
+    "planned": 352,
     "bugs": 1,
-    "parity_percent": 49
+    "parity_percent": 46
   },
   "areas": [
     {
       "id": "clip-launcher",
       "name": "Clip Launcher",
-      "bitwig_reference": "Clip Launcher, scenes, clip slots and launch quantization (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Clip Launcher, scenes, clip slots and launch quantization (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -201,7 +201,7 @@
     {
       "id": "arranger",
       "name": "Arranger",
-      "bitwig_reference": "Arranger timeline, clip editing, loop region and arrangement tools (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Arranger timeline, clip editing, loop region and arrangement tools (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -360,7 +360,7 @@
     {
       "id": "transport-sync",
       "name": "Transport & Sync",
-      "bitwig_reference": "Transport, tempo, musical time and synchronization (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Transport, tempo, musical time and synchronization (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -467,7 +467,7 @@
     {
       "id": "group-tracks-routing",
       "name": "Group Tracks & Routing",
-      "bitwig_reference": "Recursive group tracks, track types, monitoring and signal routing (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Recursive group tracks, track types, monitoring and signal routing (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -602,7 +602,7 @@
     {
       "id": "audio-warping",
       "name": "Time-stretching & Audio",
-      "bitwig_reference": "Audio playback, warping and time-stretching (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Audio playback, warping and time-stretching (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -753,7 +753,7 @@
     {
       "id": "builtin-devices-fx",
       "name": "Built-in Devices & FX",
-      "bitwig_reference": "All 118 native .bwdevice plug-ins shipped with Bitwig Studio 5.1.7 (instruments, audio FX, note FX, Grid and utilities).",
+      "bitwig_reference": "All 150 native .bwdevice plug-ins shipped with Bitwig Studio 5.3.13 (instruments, audio FX, note FX, Grid and utilities).",
       "bugs": 0,
       "features": [
         {
@@ -890,32 +890,32 @@
         },
         {
           "id": "dv-027",
-          "name": "E-Clap",
+          "name": "v1 Clap",
           "status": "planned"
         },
         {
           "id": "dv-028",
-          "name": "E-Cowbell",
+          "name": "v1 Cowbell",
           "status": "planned"
         },
         {
           "id": "dv-029",
-          "name": "E-Hat",
+          "name": "v1 Hat",
           "status": "planned"
         },
         {
           "id": "dv-030",
-          "name": "E-Kick",
+          "name": "v1 Kick",
           "status": "planned"
         },
         {
           "id": "dv-031",
-          "name": "E-Snare",
+          "name": "v1 Snare",
           "status": "planned"
         },
         {
           "id": "dv-032",
-          "name": "E-Tom",
+          "name": "v1 Tom",
           "status": "planned"
         },
         {
@@ -1360,13 +1360,173 @@
           "id": "dv-118",
           "name": "XY Instrument",
           "status": "planned"
+        },
+        {
+          "id": "dv-119",
+          "name": "Compressor+",
+          "status": "planned"
+        },
+        {
+          "id": "dv-120",
+          "name": "Focus",
+          "status": "planned"
+        },
+        {
+          "id": "dv-121",
+          "name": "Freq Shifter+",
+          "status": "planned"
+        },
+        {
+          "id": "dv-122",
+          "name": "Over",
+          "status": "planned"
+        },
+        {
+          "id": "dv-123",
+          "name": "Sculpt",
+          "status": "planned"
+        },
+        {
+          "id": "dv-124",
+          "name": "Stepwise",
+          "status": "planned"
+        },
+        {
+          "id": "dv-125",
+          "name": "Tilt",
+          "status": "planned"
+        },
+        {
+          "id": "dv-126",
+          "name": "v0 Cymbal",
+          "status": "planned"
+        },
+        {
+          "id": "dv-127",
+          "name": "v0 Hat",
+          "status": "planned"
+        },
+        {
+          "id": "dv-128",
+          "name": "v0 Kick",
+          "status": "planned"
+        },
+        {
+          "id": "dv-129",
+          "name": "v0 Snare",
+          "status": "planned"
+        },
+        {
+          "id": "dv-130",
+          "name": "v0 Tom",
+          "status": "planned"
+        },
+        {
+          "id": "dv-131",
+          "name": "v0 Zap Kick",
+          "status": "planned"
+        },
+        {
+          "id": "dv-132",
+          "name": "v8 Clap",
+          "status": "planned"
+        },
+        {
+          "id": "dv-133",
+          "name": "v8 Claves",
+          "status": "planned"
+        },
+        {
+          "id": "dv-134",
+          "name": "v8 Cowbell",
+          "status": "planned"
+        },
+        {
+          "id": "dv-135",
+          "name": "v8 Cymbal",
+          "status": "planned"
+        },
+        {
+          "id": "dv-136",
+          "name": "v8 Hat",
+          "status": "planned"
+        },
+        {
+          "id": "dv-137",
+          "name": "v8 Kick",
+          "status": "planned"
+        },
+        {
+          "id": "dv-138",
+          "name": "v8 Maracas",
+          "status": "planned"
+        },
+        {
+          "id": "dv-139",
+          "name": "v8 Rimshot",
+          "status": "planned"
+        },
+        {
+          "id": "dv-140",
+          "name": "v8 Snare",
+          "status": "planned"
+        },
+        {
+          "id": "dv-141",
+          "name": "v8 Tom",
+          "status": "planned"
+        },
+        {
+          "id": "dv-142",
+          "name": "v9 Clap",
+          "status": "planned"
+        },
+        {
+          "id": "dv-143",
+          "name": "v9 Crash",
+          "status": "planned"
+        },
+        {
+          "id": "dv-144",
+          "name": "v9 Hat Closed",
+          "status": "planned"
+        },
+        {
+          "id": "dv-145",
+          "name": "v9 Hat Open",
+          "status": "planned"
+        },
+        {
+          "id": "dv-146",
+          "name": "v9 Kick",
+          "status": "planned"
+        },
+        {
+          "id": "dv-147",
+          "name": "v9 Ride",
+          "status": "planned"
+        },
+        {
+          "id": "dv-148",
+          "name": "v9 Rimshot",
+          "status": "planned"
+        },
+        {
+          "id": "dv-149",
+          "name": "v9 Snare",
+          "status": "planned"
+        },
+        {
+          "id": "dv-150",
+          "name": "v9 Tom",
+          "status": "planned"
         }
       ]
     },
     {
       "id": "modulators",
       "name": "Modulators",
-      "bitwig_reference": "All 43 native .bwmodulator modules shipped with Bitwig Studio 5.1.7.",
+      "bitwig_reference": "All 43 native .bwmodulator modules shipped with Bitwig Studio 5.3.13.",
       "bugs": 0,
       "features": [
         {
@@ -1593,7 +1753,7 @@
     {
       "id": "grid-devices",
       "name": "Grid Devices",
-      "bitwig_reference": "218 native Grid modules (.bwmodule) from Bitwig Studio 5.1.7 (Poly Grid / FX Grid / Note Grid).",
+      "bitwig_reference": "228 native Grid modules (.bwmodule) from Bitwig Studio 5.3.13 (Poly Grid / FX Grid / Note Grid).",
       "bugs": 0,
       "features": [
         {
@@ -2782,13 +2942,63 @@
           "id": "gd-218",
           "name": "Zero Crossings",
           "status": "planned"
+        },
+        {
+          "id": "gd-219",
+          "name": "Accents",
+          "status": "planned"
+        },
+        {
+          "id": "gd-220",
+          "name": "All-pass Delay",
+          "status": "planned"
+        },
+        {
+          "id": "gd-221",
+          "name": "CV Pitch In",
+          "status": "planned"
+        },
+        {
+          "id": "gd-222",
+          "name": "Crossover-2",
+          "status": "planned"
+        },
+        {
+          "id": "gd-223",
+          "name": "Crossover-3",
+          "status": "planned"
+        },
+        {
+          "id": "gd-224",
+          "name": "Dome",
+          "status": "planned"
+        },
+        {
+          "id": "gd-225",
+          "name": "Freq Shift+",
+          "status": "planned"
+        },
+        {
+          "id": "gd-226",
+          "name": "Pitch Shift",
+          "status": "planned"
+        },
+        {
+          "id": "gd-227",
+          "name": "Shift Register",
+          "status": "planned"
+        },
+        {
+          "id": "gd-228",
+          "name": "Step Access",
+          "status": "planned"
         }
       ]
     },
     {
       "id": "mixer-io",
       "name": "Mixer & I/O",
-      "bitwig_reference": "Mixer channel strips, master section, routing and audio device I/O (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Mixer channel strips, master section, routing and audio device I/O (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -2950,7 +3160,7 @@
     {
       "id": "browser-files",
       "name": "Browser & Files",
-      "bitwig_reference": "Pop-up browser, content filters, file explorer, presets and project files (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Pop-up browser, content filters, file explorer, presets and project files (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -3095,7 +3305,7 @@
     {
       "id": "midi-controllers",
       "name": "MIDI & Controllers",
-      "bitwig_reference": "MIDI editing, hardware controllers, MIDI learn, MPE and sync (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "MIDI editing, hardware controllers, MIDI learn, MPE and sync (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -3217,7 +3427,7 @@
     {
       "id": "ui-workflow",
       "name": "UI & Workflow",
-      "bitwig_reference": "Look, layout, panels, menus and workflow of Bitwig Studio 5.1.7.",
+      "bitwig_reference": "Look, layout, panels, menus and workflow of Bitwig Studio 5.3.13.",
       "bugs": 0,
       "features": [
         {
@@ -3395,7 +3605,7 @@
     {
       "id": "build-platform",
       "name": "Build & Platform",
-      "bitwig_reference": "Platform support, packaging and release engineering expected from a Bitwig Studio 5.1.7 replacement.",
+      "bitwig_reference": "Platform support, packaging and release engineering expected from a Bitwig Studio 5.3.13 replacement.",
       "bugs": 1,
       "features": [
         {
@@ -3478,7 +3688,7 @@
     {
       "id": "plugins-vst3-clap",
       "name": "VST3 & CLAP",
-      "bitwig_reference": "VST3 and CLAP plugin hosting: scanning, audio/MIDI processing, native editor embedding, parameter automation, polyphonic modulation, sidechain routing and sandboxing (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "VST3 and CLAP plugin hosting: scanning, audio/MIDI processing, native editor embedding, parameter automation, polyphonic modulation, sidechain routing and sandboxing (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -3553,7 +3763,7 @@
     {
       "id": "automation",
       "name": "Automation",
-      "bitwig_reference": "Automation lanes, envelopes, write modes (touch/latch/write), clip automation and tempo automation (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Automation lanes, envelopes, write modes (touch/latch/write), clip automation and tempo automation (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -3589,7 +3799,7 @@
     {
       "id": "dawproject",
       "name": ".DAWproject",
-      "bitwig_reference": "Open DAWproject (.dawproject) interchange format: ZIP container, transport, tracks, audio/MIDI clips, automation, devices and scenes (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Open DAWproject (.dawproject) interchange format: ZIP container, transport, tracks, audio/MIDI clips, automation, devices and scenes (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -3653,7 +3863,7 @@
     {
       "id": "bwproject",
       "name": ".bwproject",
-      "bitwig_reference": "Native Bitwig Studio project file (.bwproject) import/compatibility (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Native Bitwig Studio project file (.bwproject) import/compatibility (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {
@@ -3694,7 +3904,7 @@
     {
       "id": "bwtemplate",
       "name": ".bwtemplate",
-      "bitwig_reference": "Native Bitwig Studio project template (.bwtemplate) import/compatibility (Bitwig Studio 5.1.7).",
+      "bitwig_reference": "Native Bitwig Studio project template (.bwtemplate) import/compatibility (Bitwig Studio 5.3.13).",
       "bugs": 0,
       "features": [
         {

@@ -1,8 +1,8 @@
-# Auditoría de paridad — Hikaru OpenLive vs Bitwig Studio 5.1.7
+# Auditoría de paridad — Hikaru OpenLive vs Bitwig Studio 5.3.13
 
-Fecha de auditoría: **2026-11-17**
-Referencia instalada: **Bitwig Studio 5.1.7**, revisión **143754**
-(`559a1bad96cc2565f28fbcefaeddec30e6fe4b53`), en `/opt/bitwig-studio`.
+Fecha de auditoría: **2026-11-22**
+Referencia instalada: **Bitwig Studio 5.3.13**, revisión **161983**
+(`4917385aae57c052754475b14b6f933fbfad52fd`), en `/opt/bitwig-studio`.
 
 Este documento es la evidencia que respalda `features_bitwig.json`. El
 porcentaje del gráfico mide **paridad funcional sobre un catálogo de features**,
@@ -10,47 +10,52 @@ no igualdad binaria ni cobertura línea por línea del producto propietario.
 
 ---
 
-## 1. Instalación de Bitwig Studio 5.1.7
+## 1. Instalación de Bitwig Studio 5.3.13
 
 Datos leídos de `dpkg`, `/opt/bitwig-studio/resources/build-info.sh` y del
 árbol `Library/` de la instalación local:
 
 | Dato | Valor |
 |---|---|
-| Paquete | `bitwig-studio` 5.1.7 amd64 |
-| Revisión | 143754 |
-| Tamaño instalado | ~605 MB |
-| Dispositivos nativos (`.bwdevice`) | **118** |
+| Paquete | `bitwig-studio` 5.3.13 amd64 |
+| Revisión | 161983 |
+| Tamaño instalado | ~291 MB |
+| Dispositivos nativos (`.bwdevice`) | **150** |
 | Moduladores nativos (`.bwmodulator`) | **43** |
-| Módulos de Grid (`.bwmodule`) | **218** |
+| Módulos de Grid (`.bwmodule`) | **228** |
 | Scripts de controlador (`.control.js`) | **46** |
 | Familias/vendors de controladores | **17** (más `api`, `doc` y `template`) |
 | Temas instalados | **1** (`default.theme`) |
-| Extensión de controladores | `Controllers.bwextension` + 16 extensiones de fabricante |
+| Extensión de controladores | `Controllers.bwextension` + 19 extensiones de fabricante |
 
-### Catálogo de dispositivos (118)
+### Catálogo de dispositivos (150)
 
 `Amp`, `Arpeggiator`, `Audio MOD`, `Audio Receiver`, `Bend`, `Bit-8`, `Blur`,
 `Chain`, `Channel Filter`, `Channel Map`, `Chorus+`, `Chorus`, `Comb`,
-`Compressor`, `Convolution`, `DC Offset`, `De-Esser`, `Delay-1`, `Delay-2`,
-`Delay-4`, `Delay+`, `Distortion`, `Dribble`, `Drum Machine`, `Dual Pan`,
-`Dynamics`, `Echo`, `E-Clap`, `E-Cowbell`, `E-Hat`, `E-Kick`, `EQ-2`, `EQ-5`,
-`EQ+`, `EQ-DJ`, `E-Snare`, `E-Tom`, `Filter+`, `Filter`, `Flanger+`, `Flanger`,
-`FM-4`, `Freq Shifter`, `Freq Split`, `FX Grid`, `FX Layer`, `FX Selector`,
-`Gate`, `Harmonic Split`, `Harmonize`, `Humanize`, `HW Clock Out`,
-`HW CV Instrument`, `HW CV Out`, `HW FX`, `HW Instrument`, `Instrument Layer`,
+`Compressor+`, `Compressor`, `Convolution`, `DC Offset`, `De-Esser`, `Delay-1`,
+`Delay-2`, `Delay-4`, `Delay+`, `Distortion`, `Dribble`, `Drum Machine`,
+`Dual Pan`, `Dynamics`, `Echo`, `EQ-2`, `EQ-5`, `EQ+`, `EQ-DJ`, `Filter+`,
+`Filter`, `Flanger+`, `Flanger`, `FM-4`, `Focus`, `Freq Shifter+`,
+`Freq Shifter`, `Freq Split`, `FX Grid`, `FX Layer`, `FX Selector`, `Gate`,
+`Harmonic Split`, `Harmonize`, `Humanize`, `HW Clock Out`, `HW CV Instrument`,
+`HW CV Out`, `HW FX`, `HW Instrument`, `Instrument Layer`,
 `Instrument Selector`, `Key Filter`, `Ladder`, `Latch`, `LFO MOD`, `Loud Split`,
 `Micro-pitch`, `MIDI CC`, `MIDI Program Change`, `MIDI Song Select`,
 `Mid-Side Split`, `Multiband FX-2`, `Multiband FX-3`, `Multi-note`,
 `Note Delay`, `Note Filter`, `Note FX Layer`, `Note FX Selector`, `Note Grid`,
 `Note Length`, `Note MOD`, `Note Receiver`, `Note Repeats`, `Note Transpose`,
-`Organ`, `Oscilloscope`, `Peak Limiter`, `Phase-4`, `Phaser+`, `Phaser`,
+`Organ`, `Oscilloscope`, `Over`, `Peak Limiter`, `Phase-4`, `Phaser+`, `Phaser`,
 `Pitch Shifter`, `Poly Grid`, `Polymer`, `Polysynth`, `Quantize`, `Randomize`,
 `Replacer`, `Resonator Bank`, `Reverb`, `Ricochet`, `Ring-Mod`, `Rotary`,
-`Sampler`, `Saturator`, `Spectrum`, `Step MOD`, `Stereo Split`, `Strum`,
-`Sweep`, `Test Tone`, `Time Shift`, `Tool`, `Transient Control`,
-`Transient Split`, `Transpose Map`, `Treemonster`, `Tremolo`, `Velocity Curve`,
-`Vocoder`, `XY FX`, `XY Instrument`.
+`Sampler`, `Saturator`, `Sculpt`, `Spectrum`, `Step MOD`, `Stepwise`,
+`Stereo Split`, `Strum`, `Sweep`, `Test Tone`, `Tilt`, `Time Shift`, `Tool`,
+`Transient Control`, `Transient Split`, `Transpose Map`, `Treemonster`,
+`Tremolo`, `Velocity Curve`, `Vocoder`, `XY FX`, `XY Instrument`, `v0 Cymbal`,
+`v0 Hat`, `v0 Kick`, `v0 Snare`, `v0 Tom`, `v0 Zap Kick`, `v1 Clap`,
+`v1 Cowbell`, `v1 Hat`, `v1 Kick`, `v1 Snare`, `v1 Tom`, `v8 Clap`,
+`v8 Claves`, `v8 Cowbell`, `v8 Cymbal`, `v8 Hat`, `v8 Kick`, `v8 Maracas`,
+`v8 Rimshot`, `v8 Snare`, `v8 Tom`, `v9 Clap`, `v9 Crash`, `v9 Hat Closed`,
+`v9 Hat Open`, `v9 Kick`, `v9 Ride`, `v9 Rimshot`, `v9 Snare`, `v9 Tom`.
 
 ### Catálogo de moduladores (43)
 
@@ -66,7 +71,7 @@ Datos leídos de `dpkg`, `/opt/bitwig-studio/resources/build-info.sh` y del
 ### Capacidades de referencia relevantes
 
 Observadas en la arquitectura de la instalación y en el modelo de producto
-5.1.7:
+5.3.13:
 
 - **Pistas**: instrumento, audio, híbrida, grupo, FX y master; grupos
   recursivos con plegado, color, entrada/salida de grupo y enrutamiento.
@@ -77,7 +82,7 @@ Observadas en la arquitectura de la instalación y en el modelo de producto
   lanes, marcadores, automatización, tempo y compás.
 - **Audio**: warp markers, time-stretching en tiempo real, modos de warp,
   preservación de formantes, congelado/render y edición de onsets.
-- **Dispositivos**: 118 dispositivos nativos, racks, capas, selectores,
+- **Dispositivos**: 150 dispositivos nativos, racks, capas, selectores,
   multiband splits y los tres Grids (Poly/FX/Note).
 - **Modulación**: 43 moduladores, macros, modulación por voz, audio-rate,
   sidechain, CV y MPE.
@@ -130,7 +135,7 @@ Método: lectura estática de todos los crates, sus módulos, tests y documentos
 
 ## 3. Base de datos de paridad
 
-`features_bitwig.json` contiene 18 áreas y 645 features. Cada feature tiene
+`features_bitwig.json` contiene 18 áreas y 687 features. Cada feature tiene
 `id`, `name` y `status` (`done`, `in_progress`, `planned`); las features
 implementadas o parciales incluyen `evidence` con la ruta del código.
 
@@ -141,9 +146,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Transport & Sync | 17 | 12 | 1 | 4 | 0 |
 | Group Tracks & Routing | 22 | 15 | 1 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
-| Built-in Devices & FX | 118 | 9 | 3 | 106 | 0 |
+| Built-in Devices & FX | 150 | 9 | 3 | 138 | 0 |
 | Modulators | 43 | 43 | 0 | 0 | 0 |
-| Grid Devices | 218 | 97 | 0 | 121 | 0 |
+| Grid Devices | 228 | 97 | 0 | 131 | 0 |
 | Mixer & I/O | 27 | 19 | 0 | 8 | 0 |
 | Browser & Files | 24 | 15 | 2 | 7 | 0 |
 | MIDI & Controllers | 21 | 9 | 0 | 12 | 0 |
@@ -154,9 +159,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 3 | 0 | 3 | 0 |
 | .bwtemplate | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **645** | **318** | **17** | **310** | **1** |
+| **Total** | **687** | **318** | **17** | **352** | **1** |
 
-Paridad global: **318 / 645 = 49 %**.
+Paridad global: **318 / 687 = 46 %**.
 
 ### Bugs abiertos
 
@@ -177,7 +182,7 @@ labels `area:` en el repositorio, así que el mapeo a área es manual.
 
 - Bitwig Studio es software cerrado: no se auditó su código fuente, sólo su
   instalación, catálogo de dispositivos/moduladores y comportamiento público.
-- Los 118 dispositivos y los 43 moduladores se cuentan **uno por uno** porque
+- Los 150 dispositivos y los 43 moduladores se cuentan **uno por uno** porque
   son artefactos reales del producto de referencia. Hikaru implementa
   equivalentes funcionales parciales (p. ej. `Polymer` ≈ Hikaru OpenPoly,
   `Drum Machine` ≈ OpenDMS), no binarios.

@@ -1,7 +1,7 @@
-# Paridad con Bitwig Studio 5.1.7
+# Paridad con Bitwig Studio 5.3.13
 
 Este directorio es la **fuente de verdad** del gráfico de paridad de Hikaru
-OpenLive frente a **Bitwig Studio 5.1.7** (revisión `143754`). Todo lo que
+OpenLive frente a **Bitwig Studio 5.3.13** (revisión `161983`). Todo lo que
 alimenta el SVG vive acá: el catálogo de features, el generador y la evidencia
 de la auditoría.
 
@@ -9,20 +9,20 @@ de la auditoría.
 
 | Archivo | Qué es |
 |---|---|
-| [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 14 áreas y 616 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
+| [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 18 áreas y 687 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
 | [`generate_status.py`](generate_status.py) | Generador autocontenido (sólo stdlib de Python). Lee el JSON y produce `status.svg` y `parity-detail.svg`; refresca el `summary` del JSON y la tabla de paridad de la auditoría para que nunca se desincronicen. |
 | [`status.svg`](status.svg) | Squarified treemap oscuro de 680×480, con leyenda, porcentaje global, barras de estado y badges de bugs. Es el archivo que muestra el `README.md` raíz. |
-| [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 616 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
-| [`bitwig-5.1.7-parity-audit.md`](bitwig-5.1.7-parity-audit.md) | Auditoría completa: instalación local de Bitwig, catálogo de 118 dispositivos y 43 moduladores, crates de Hikaru y metodología. |
+| [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 687 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
+| [`bitwig-5.3.13-parity-audit.md`](bitwig-5.3.13-parity-audit.md) | Auditoría completa: instalación local de Bitwig, catálogo de 150 dispositivos, 43 moduladores y 228 módulos de Grid, crates de Hikaru y metodología. |
 | `README.md` | Este índice. |
 
 ## Estado actual
 
-- **297 / 616** features `done` → **48 % de paridad**.
+- **318 / 687** features `done` → **46 % de paridad**.
 - **17** en `in_progress`.
-- **302** `planned`.
+- **352** `planned`.
 - **1** bug abierto ([issue #1](https://github.com/hikarucorporation/hikaru-openlive/issues/1), mapeado a `Build & Platform`).
-- El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 616 chips con nombre, estado y evidencia.
+- El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 687 chips con nombre, estado y evidencia.
 
 ## Regenerar
 
@@ -33,7 +33,7 @@ python3 docs/bitwig-parity/generate_status.py
 ```
 
 El script resuelve `features_bitwig.json`, `status.svg`, `parity-detail.svg` y
-`bitwig-5.1.7-parity-audit.md` relativos a su propia ubicación, así que no
+`bitwig-5.3.13-parity-audit.md` relativos a su propia ubicación, así que no
 depende del `cwd`. También se pueden pasar rutas explícitas:
 
 ```bash
@@ -74,7 +74,7 @@ Cada área tiene esta forma:
 {
   "id": "clip-launcher",
   "name": "Clip Launcher",
-  "bitwig_reference": "Clip Launcher, scenes, clip slots and launch quantization (Bitwig Studio 5.1.7).",
+  "bitwig_reference": "Clip Launcher, scenes, clip slots and launch quantization (Bitwig Studio 5.3.13).",
   "bugs": 0,
   "features": [
     {
@@ -99,7 +99,7 @@ Cada área tiene esta forma:
 El workflow [`.github/workflows/update-status.yml`](../../.github/workflows/update-status.yml)
 se ejecuta en cada push a `main` (y manualmente con `workflow_dispatch`). Corre
 el generador, valida el resultado y commitea `status.svg`, `parity-detail.svg`,
-`bitwig-5.1.7-parity-audit.md` + `features_bitwig.json` si cambiaron.
+`bitwig-5.3.13-parity-audit.md` + `features_bitwig.json` si cambiaron.
 
 ## Criterio de medición
 
@@ -113,4 +113,4 @@ equivalencias con dispositivos de Hikaru son funcionales, no binarias. En el
 póster, cada chip lleva el nombre completo y la ruta de `evidence` en su
 `<title>`, y los grupos de estado se ordenan en progreso → hecho → pendiente.
 Los detalles y límites están en
-[`bitwig-5.1.7-parity-audit.md`](bitwig-5.1.7-parity-audit.md).
+[`bitwig-5.3.13-parity-audit.md`](bitwig-5.3.13-parity-audit.md).

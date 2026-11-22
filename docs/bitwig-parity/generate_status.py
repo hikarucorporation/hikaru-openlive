@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Hikaru OpenLive vs Bitwig Studio 5.1.7 status figures.
+"""Generate the Hikaru OpenLive vs Bitwig Studio 5.3.13 status figures.
 
 Two figures are produced from the same database:
 
@@ -23,7 +23,7 @@ Usage:
     python3 docs/bitwig-parity/generate_status.py --check
 
 When the file is generated, the ``summary`` object in the JSON is refreshed and
-the parity table in ``bitwig-5.1.7-parity-audit.md`` is rewritten from the same
+the parity table in ``bitwig-5.3.13-parity-audit.md`` is rewritten from the same
 counts, so the database, the document and both figures can never disagree.
 """
 
@@ -1121,7 +1121,7 @@ def main(argv: list[str]) -> int:
     audit_path = (
         args[3]
         if len(args) > 3
-        else os.path.join(os.path.dirname(features_path), "bitwig-5.1.7-parity-audit.md")
+        else os.path.join(os.path.dirname(features_path), "bitwig-5.3.13-parity-audit.md")
     )
 
     if watch:
@@ -1152,7 +1152,7 @@ def main(argv: list[str]) -> int:
             with open(audit_path, "r", encoding="utf-8") as handle:
                 audit_original = handle.read()
             if sync_audit_markdown(audit_original, document) != audit_original:
-                problems.append("parity table in bitwig-5.1.7-parity-audit.md is stale")
+                problems.append("parity table in bitwig-5.3.13-parity-audit.md is stale")
         if problems:
             for problem in problems:
                 print(f"error: {problem}", file=sys.stderr)
