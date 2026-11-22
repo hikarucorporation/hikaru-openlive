@@ -2276,8 +2276,8 @@ impl<'a> AudioEngine<'a> {
         let chain = &mut self.track_effects[track_idx];
 
         // Reemplazar si ya hay un plugin en ese slot.
-        if slot_idx < chain.len() {
-            chain.remove(slot_idx);
+        if let Some(pos) = chain.iter().position(|n| n.slot_idx == slot_idx) {
+            chain.remove(pos);
         }
 
         let mut instance: Box<dyn PluginInstance> = match descriptor.format {
@@ -2311,17 +2311,13 @@ impl<'a> AudioEngine<'a> {
             descriptor.name.clone(),
             category,
             instance,
-        );
+        )
+        .with_slot_idx(slot_idx);
 
         // Cinta hacia la ventana del editor nativo, si algún día se abre. Se
         // registra acá y no cuando se abre la ventana porque el registro tiene
         // que existir del lado del motor (que publica) y del lado de la GUI (que
         // busca), y el orden de apertura es al revés.
-        //
-        // La tasa va en el tap porque el hilo de la GUI la necesita para
-        // configurar su instancia propia: sin ella el `setupProcessing` del
-        // VST3 de la ventana sella 44100 y el display se dibuja a la frecuencia
-        // equivocada.
         let tap = std::sync::Arc::new(hikaru_plugin_host::PluginTap::new(
             self.sample_rate,
             hikaru_plugin_host::scratch::MAX_BLOCK_FRAMES,
@@ -2329,7 +2325,11 @@ impl<'a> AudioEngine<'a> {
         hikaru_plugin_host::tap::register((track_idx, slot_idx), std::sync::Arc::clone(&tap));
         node.set_tap(Some(tap));
 
-        chain.insert(slot_idx.min(chain.len()), node);
+        let insert_pos = chain
+            .iter()
+            .position(|n| n.slot_idx > slot_idx)
+            .unwrap_or(chain.len());
+        chain.insert(insert_pos, node);
 
         println!(
             "[AudioEngine] Plugin '{}' cargado en pista {} slot {}",
@@ -2350,8 +2350,8 @@ impl<'a> AudioEngine<'a> {
         hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
 
         let chain = &mut self.track_effects[track_idx];
-        if slot_idx < chain.len() {
-            chain.remove(slot_idx);
+        if let Some(pos) = chain.iter().position(|n| n.slot_idx == slot_idx) {
+            chain.remove(pos);
         } else if chain.iter().any(|n| n.name == name) {
             return Ok(());
         }
@@ -2367,8 +2367,13 @@ impl<'a> AudioEngine<'a> {
             name.to_string(),
             hikaru_dsp::PluginCategory::Vst3Fx,
             instance,
-        );
-        chain.insert(slot_idx.min(chain.len()), node);
+        )
+        .with_slot_idx(slot_idx);
+        let insert_pos = chain
+            .iter()
+            .position(|n| n.slot_idx > slot_idx)
+            .unwrap_or(chain.len());
+        chain.insert(insert_pos, node);
         println!(
             "[AudioEngine] Efecto nativo '{}' cargado en pista {} slot {}",
             name, track_idx, slot_idx
@@ -2376,23 +2381,50 @@ impl<'a> AudioEngine<'a> {
         Ok(())
     }
 
-    /// Quita un plugin externo de un slot.
+    /// Quita un plugin externo de un slot y desplaza los `slot_idx` posteriores
+    /// para mantener la correspondencia exacta con `Track::effects` en la GUI.
     pub fn remove_external_plugin(&mut self, track_idx: usize, slot_idx: usize) {
+        if track_idx >= 16 {
+            return;
+        }
+        let chain = &mut self.track_effects[track_idx];
+        // Limpiar todos los taps viejos de esta pista antes de re-indexar.
+        for n in chain.iter() {
+            hikaru_plugin_host::tap::unregister((track_idx, n.slot_idx));
+        }
         hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
-        if track_idx < 16 && slot_idx < self.track_effects[track_idx].len() {
-            self.track_effects[track_idx].remove(slot_idx);
+
+        if let Some(pos) = chain.iter().position(|n| n.slot_idx == slot_idx) {
+            chain.remove(pos);
             println!(
                 "[AudioEngine] Plugin removido de pista {} slot {}",
                 track_idx, slot_idx
             );
         }
+        for n in chain.iter_mut() {
+            if n.slot_idx > slot_idx {
+                n.slot_idx -= 1;
+            }
+            if let Some(tap) = &n.tap {
+                hikaru_plugin_host::tap::register((track_idx, n.slot_idx), std::sync::Arc::clone(tap));
+            }
+        }
+    }
+
+    /// Activa o desactiva (bypass) un plugin externo sin destruirlo.
+    pub fn set_external_plugin_active(&mut self, track_idx: usize, slot_idx: usize, active: bool) {
+        if track_idx >= 16 {
+            return;
+        }
+        if let Some(node) = self.track_effects[track_idx]
+            .iter_mut()
+            .find(|n| n.slot_idx == slot_idx)
+        {
+            node.is_active = active;
+        }
     }
 
     /// Mueve un plugin externo de una pista/slot a otra pista/slot.
-    ///
-    /// Desvincula el nodo DSP de la fuente original, reubica los taps y lo
-    /// inserta en la cadena de audio de destino sin alocaciones peligrosas
-    /// ni excepciones de memoria.
     pub fn move_external_plugin(
         &mut self,
         from_track: usize,
@@ -2403,44 +2435,59 @@ impl<'a> AudioEngine<'a> {
         if from_track >= 16 || to_track >= 16 {
             return false;
         }
-        if from_slot >= self.track_effects[from_track].len() {
+        let Some(pos) = self.track_effects[from_track]
+            .iter()
+            .position(|n| n.slot_idx == from_slot)
+            .or_else(|| (from_slot < self.track_effects[from_track].len()).then_some(from_slot))
+        else {
             return false;
+        };
+
+        for n in &self.track_effects[from_track] {
+            hikaru_plugin_host::tap::unregister((from_track, n.slot_idx));
         }
+        let mut node = self.track_effects[from_track].remove(pos);
 
-        hikaru_plugin_host::tap::unregister((from_track, from_slot));
-        let node = self.track_effects[from_track].remove(from_slot);
-
-        // Re-registrar taps en la pista origen
-        hikaru_plugin_host::tap::unregister((from_track, self.track_effects[from_track].len()));
-        for (idx, n) in self.track_effects[from_track].iter().enumerate() {
+        // Desplazar slots en pista origen y re-registrar taps
+        for n in self.track_effects[from_track].iter_mut() {
+            if n.slot_idx > from_slot {
+                n.slot_idx -= 1;
+            }
             if let Some(tap) = &n.tap {
-                hikaru_plugin_host::tap::register((from_track, idx), std::sync::Arc::clone(tap));
+                hikaru_plugin_host::tap::register((from_track, n.slot_idx), std::sync::Arc::clone(tap));
             }
         }
 
-        let dest_slot = to_slot.min(self.track_effects[to_track].len());
-        self.track_effects[to_track].insert(dest_slot, node);
+        // Desplazar slots en pista destino >= to_slot e insertar el nodo movido
+        for n in &self.track_effects[to_track] {
+            hikaru_plugin_host::tap::unregister((to_track, n.slot_idx));
+        }
+        for n in self.track_effects[to_track].iter_mut() {
+            if n.slot_idx >= to_slot {
+                n.slot_idx += 1;
+            }
+        }
+        node.slot_idx = to_slot;
+        let insert_pos = self.track_effects[to_track]
+            .iter()
+            .position(|n| n.slot_idx > to_slot)
+            .unwrap_or(self.track_effects[to_track].len());
+        self.track_effects[to_track].insert(insert_pos, node);
 
-        // Re-registrar taps en la pista destino
-        for (idx, n) in self.track_effects[to_track].iter().enumerate() {
+        for n in self.track_effects[to_track].iter() {
             if let Some(tap) = &n.tap {
-                hikaru_plugin_host::tap::register((to_track, idx), std::sync::Arc::clone(tap));
+                hikaru_plugin_host::tap::register((to_track, n.slot_idx), std::sync::Arc::clone(tap));
             }
         }
 
         println!(
             "[AudioEngine] Plugin movido de pista {} slot {} a pista {} slot {}",
-            from_track, from_slot, to_track, dest_slot
+            from_track, from_slot, to_track, to_slot
         );
         true
     }
 
     /// Actualiza un parámetro de un plugin externo en la cadena.
-    ///
-    /// `slot_idx` es el índice dentro de la cadena de efectos de la pista.
-    /// El cambio viaja por el anillo lock-free de la instancia (VST3) o
-    /// por el mecanismo de parámetros de CLAP, así que nunca bloquea el
-    /// hilo de audio.
     pub fn set_external_plugin_param(
         &mut self,
         track_idx: usize,
@@ -2449,7 +2496,12 @@ impl<'a> AudioEngine<'a> {
         value: f32,
     ) {
         if track_idx < 16 {
-            if slot_idx < self.track_effects[track_idx].len() {
+            if let Some(node) = self.track_effects[track_idx]
+                .iter_mut()
+                .find(|n| n.slot_idx == slot_idx)
+            {
+                node.set_param_normalized(param_id, value);
+            } else if slot_idx < self.track_effects[track_idx].len() {
                 let node = &mut self.track_effects[track_idx][slot_idx];
                 node.set_param_normalized(param_id, value);
             } else if let Some(node) = self.track_effects[track_idx]
@@ -2461,20 +2513,42 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    /// Aplica modulación no destructiva (CLAP `ParamModEvent`) a un parámetro
+    /// de plugin externo.
+    pub fn set_external_plugin_param_mod(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        param_id: u32,
+        delta: f32,
+    ) {
+        if track_idx < 16 {
+            if let Some(node) = self.track_effects[track_idx]
+                .iter_mut()
+                .find(|n| n.slot_idx == slot_idx)
+            {
+                node.set_param_modulation(param_id, delta);
+            }
+        }
+    }
+
     /// Sincroniza parámetros pendientes (dirty) de un slot con el motor.
-    ///
-    /// Lo llama el hilo de control con lo que drenó de
-    /// `DspSlot::take_dirty_external_params`. Cada cambio viaja por el
-    /// anillo lock-free de la instancia.
     pub fn sync_external_plugin_params(
         &mut self,
         track_idx: usize,
         slot_idx: usize,
         params: &[(u32, f32)],
     ) {
-        if track_idx < 16 && slot_idx < self.track_effects[track_idx].len() {
-            let node = &mut self.track_effects[track_idx][slot_idx];
-            node.sync_params(params);
+        if track_idx < 16 {
+            if let Some(node) = self.track_effects[track_idx]
+                .iter_mut()
+                .find(|n| n.slot_idx == slot_idx)
+            {
+                node.sync_params(params);
+            } else if slot_idx < self.track_effects[track_idx].len() {
+                let node = &mut self.track_effects[track_idx][slot_idx];
+                node.sync_params(params);
+            }
         }
     }
 
@@ -2484,8 +2558,12 @@ impl<'a> AudioEngine<'a> {
         track_idx: usize,
         slot_idx: usize,
     ) -> Option<Vec<(u32, String, f32)>> {
-        if track_idx < 16 && slot_idx < self.track_effects[track_idx].len() {
-            let node = &mut self.track_effects[track_idx][slot_idx];
+        if track_idx < 16 {
+            let pos = self.track_effects[track_idx]
+                .iter()
+                .position(|n| n.slot_idx == slot_idx)
+                .unwrap_or(slot_idx);
+            let node = self.track_effects[track_idx].get_mut(pos)?;
             let mut result = Vec::new();
             for i in 0..node.instance.param_count() {
                 if let Some(info) = node.instance.param_info(i) {

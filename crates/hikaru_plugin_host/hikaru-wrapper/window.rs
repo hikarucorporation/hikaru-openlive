@@ -337,7 +337,15 @@ impl HikaruWrapperWindow {
             applied_root_frame: None,
             host_visible: true,
             mapped: false,
-            frame: FrameMetrics::default(),
+            frame: if config.override_redirect() {
+                FrameMetrics::default()
+            } else {
+                // Con `WrapperStyle::Decorated` el gestor de ventanas del
+                // escritorio dibuja el titlebar nativo (igual que `XcbPluginWindow`
+                // de Bitwig 5.3.13); dibujar un segundo marco interno dejaría
+                // doble barra de título y desplazaría los clics del editor.
+                FrameMetrics::frameless()
+            },
             paint: None,
             title: title.to_string(),
             drag: None,
@@ -377,16 +385,32 @@ impl HikaruWrapperWindow {
         Ok(me)
     }
 
-    /// `_NET_WM_NAME` y `WM_CLASS`. Best-effort: si fallan, la ventana sigue
-    /// válida, sólo sale sin nombre en la barra de tareas.
+    /// `WM_NAME`, `_NET_WM_NAME` y `WM_CLASS`. Best-effort: si fallan, la ventana
+    /// sigue válida, sólo sale sin nombre en la barra de título.
     fn init_metadata(&mut self, title: &str) -> Result<(), String> {
+        let _ = self.conn.change_property(
+            PropMode::REPLACE,
+            self.window,
+            u32::from(AtomEnum::WM_NAME),
+            u32::from(AtomEnum::STRING),
+            8,
+            title.len() as u32,
+            title.as_bytes(),
+        );
         if let Ok(cookie) = self.conn.intern_atom(false, b"_NET_WM_NAME") {
             if let Ok(reply) = cookie.reply() {
+                let utf8_type = self
+                    .conn
+                    .intern_atom(false, b"UTF8_STRING")
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                    .map(|r| r.atom)
+                    .unwrap_or_else(|| u32::from(AtomEnum::STRING));
                 let _ = self.conn.change_property(
                     PropMode::REPLACE,
                     self.window,
                     reply.atom,
-                    u32::from(AtomEnum::STRING),
+                    utf8_type,
                     8,
                     title.len() as u32,
                     title.as_bytes(),
@@ -708,6 +732,23 @@ impl HikaruWrapperWindow {
         let _ = self.conn.unmap_window(self.window);
         let _ = self.conn.flush();
         self.mapped = false;
+    }
+
+    /// Cambia el tamaño de la ventana del envoltorio para alojar una vista de
+    /// editor de `(width, height)` píxeles, sumando los insets del marco.
+    pub fn resize_for_editor(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let fw = u16::try_from(width)
+            .unwrap_or(DEFAULT_WIDTH)
+            .saturating_add(self.frame.horizontal_inset())
+            .max(self.frame.min_size().0);
+        let fh = u16::try_from(height)
+            .unwrap_or(DEFAULT_HEIGHT)
+            .saturating_add(self.frame.vertical_inset())
+            .max(self.frame.min_size().1);
+        self.resize(fw, fh);
     }
 
     /// Cambia el tamaño de la ventana del envoltorio.

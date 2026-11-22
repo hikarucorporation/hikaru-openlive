@@ -625,6 +625,16 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.set_external_plugin_param(track_idx, slot_idx, param_id, value);
                     }
                 }
+                GuiCommand::SetExternalPluginActive { track_idx, slot_idx, active } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_external_plugin_active(track_idx, slot_idx, active);
+                    }
+                }
+                GuiCommand::SetExternalPluginMod { track_idx, slot_idx, param_id, delta } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_external_plugin_param_mod(track_idx, slot_idx, param_id, delta);
+                    }
+                }
                 GuiCommand::LoadNativeEffect { track_idx, slot_idx, name } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         let _ = engine.load_native_effect(track_idx, slot_idx, &name);

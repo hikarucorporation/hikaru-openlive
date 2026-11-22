@@ -605,15 +605,23 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
     match state.popup_browser.mode {
         BrowserTargetMode::NewInstrumentTrack => {
             state.matrix_state.add_track();
+            state.audio_proxy.send(GuiCommand::AddTrack);
             let new_idx = state.matrix_state.tracks.len();
-            let track_name = format!("Inst {new_idx}");
+            let track_name = match &item.payload {
+                BrowserPayload::External(desc) => desc.name.clone(),
+                _ => format!("Inst {new_idx}"),
+            };
             if let Some(last) = state.matrix_state.tracks.last_mut() {
                 last.name = track_name.clone();
             }
             let mut tr = Track::new(new_idx, track_name, false);
             tr.matrix_idx = Some(new_idx - 1);
-            let slot = build_slot(item);
+            let mut slot = build_slot(item);
             let slot_name = slot.name.clone();
+            let ext_desc = slot.external.clone();
+            if ext_desc.is_some() {
+                slot.engine_loaded = true;
+            }
             tr.effects.push(slot);
 
             state.live_tracks.push(tr.clone());
@@ -626,7 +634,17 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
             state.show_dsp_rack = true;
             state.project_dirty = true;
 
-            if slot_name == "Hikaru Ultracomb" {
+            if let Some(desc) = ext_desc {
+                hikaru_openmodulation::ensure_empty_bay_for_slot(mixer_idx, 0);
+                if let Some(et_idx) = mixer_idx.checked_sub(1) {
+                    state.audio_proxy.send(GuiCommand::LoadExternalPlugin {
+                        track_idx: et_idx,
+                        slot_idx: 0,
+                        descriptor: desc.clone(),
+                    });
+                }
+                state.request_external_params(&desc);
+            } else if slot_name == "Hikaru Ultracomb" {
                 if let Some(et_idx) = mixer_idx.checked_sub(1) {
                     state.audio_proxy.send(GuiCommand::LoadNativeEffect {
                         track_idx: et_idx,
@@ -637,17 +655,35 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
             }
         }
         BrowserTargetMode::InsertDevice { track_idx } => {
-            let slot = build_slot(item);
+            let mut slot = build_slot(item);
             let slot_name = slot.name.clone();
+            let ext_desc = slot.external.clone();
+            if ext_desc.is_some() {
+                slot.engine_loaded = true;
+            }
+            let mut inserted_slot: Option<usize> = None;
             if let Some(track) = state.current_tracks_mut().get_mut(track_idx) {
                 let new_slot_idx = track.effects.len();
                 track.effects.push(slot);
+                inserted_slot = Some(new_slot_idx);
+            }
+            if let Some(new_slot_idx) = inserted_slot {
                 state.selected_track_index = track_idx;
                 state.selected_slot_index = new_slot_idx;
                 state.show_dsp_rack = true;
                 state.project_dirty = true;
 
-                if slot_name == "Hikaru Ultracomb" {
+                if let Some(desc) = ext_desc {
+                    hikaru_openmodulation::ensure_empty_bay_for_slot(track_idx, new_slot_idx);
+                    if let Some(et_idx) = track_idx.checked_sub(1) {
+                        state.audio_proxy.send(GuiCommand::LoadExternalPlugin {
+                            track_idx: et_idx,
+                            slot_idx: new_slot_idx,
+                            descriptor: desc.clone(),
+                        });
+                    }
+                    state.request_external_params(&desc);
+                } else if slot_name == "Hikaru Ultracomb" {
                     if let Some(et_idx) = track_idx.checked_sub(1) {
                         state.audio_proxy.send(GuiCommand::LoadNativeEffect {
                             track_idx: et_idx,
@@ -674,6 +710,14 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
 pub fn render(ctx: &Context, state: &mut AppState) {
     if !state.popup_browser.open {
         return;
+    }
+
+    // Auto-scan VST3/CLAP plugins the first time the Pop-up Browser is opened
+    if !state.plugin_settings_state.has_scanned_once
+        && !state.plugin_settings_state.is_scanning
+        && !matches!(state.popup_browser.mode, BrowserTargetMode::InsertModulator { .. })
+    {
+        state.plugin_settings_state.start_scan();
     }
 
     // Escape closes the browser

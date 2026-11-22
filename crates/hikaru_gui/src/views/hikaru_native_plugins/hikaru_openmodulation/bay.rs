@@ -1939,7 +1939,7 @@ impl ModulatorSlotState {
             .filter(|r| r.target != ModulationTarget::None && r.amount.abs() >= 0.005)
             .map(|r| ModulatorRouteParams {
                 out_idx: r.out_idx,
-                target: r.target.label().to_string(),
+                target: r.target.save_key(),
                 amount: r.amount,
             })
             .collect();
@@ -2744,12 +2744,86 @@ pub fn clear_bay_for_slot(track_idx: usize, slot_idx: usize) {
     map.remove(&(track_idx, slot_idx));
 }
 
+/// Inicializa el Device Modulator Bay de `(track_idx, slot_idx)` vacío (3 celdas `+`
+/// como Bitwig en plugins externos VST3/CLAP) si todavía no existe entrada en el mapa.
+pub fn ensure_empty_bay_for_slot(track_idx: usize, slot_idx: usize) {
+    let mut map = bay_state_map().lock().unwrap();
+    map.entry((track_idx, slot_idx))
+        .or_insert_with(DeviceModulatorBay::empty);
+}
+
 pub fn bay_width_for_slot(track_idx: usize, slot_idx: usize) -> f32 {
     let mut map = bay_state_map().lock().unwrap();
     let entry = map
         .entry((track_idx, slot_idx))
         .or_insert_with(DeviceModulatorBay::default);
     entry.width_px()
+}
+
+pub fn get_bay_route_amount_target(
+    track_idx: usize,
+    slot_idx: usize,
+    mod_id: u32,
+    out_idx: u8,
+    target: ModulationTarget,
+) -> f32 {
+    let map = bay_state_map().lock().unwrap();
+    map.get(&(track_idx, slot_idx))
+        .and_then(|bay| bay.slots.iter().find(|s| s.id == mod_id))
+        .map(|s| s.route_amount(out_idx, target))
+        .unwrap_or(0.0)
+}
+
+pub fn set_bay_route_amount_target(
+    track_idx: usize,
+    slot_idx: usize,
+    mod_id: u32,
+    out_idx: u8,
+    target: ModulationTarget,
+    amount: f32,
+) {
+    update_bay_state(track_idx, slot_idx, |bay| {
+        if let Some(s) = bay.slots.iter_mut().find(|s| s.id == mod_id) {
+            s.set_route(out_idx, target, amount);
+        }
+    });
+}
+
+pub fn clear_bay_routes_for_target(track_idx: usize, target: ModulationTarget) {
+    let project_slot = crate::views::remote_controls::PROJECT_MODULATOR_SLOT;
+    let mut map = bay_state_map().lock().unwrap();
+    for (&(tr, sl), bay) in map.iter_mut() {
+        if tr != track_idx && !(tr == 0 && sl == project_slot) {
+            continue;
+        }
+        for s in &mut bay.slots {
+            s.routes.retain(|r| r.target != target);
+        }
+    }
+}
+
+/// Devuelve `true` si algún modulador habilitado en la pista o en el Project Bay
+/// está modulando algún parámetro del plugin externo en `(track_idx, slot_idx)`.
+pub fn has_active_external_modulations(track_idx: usize, slot_idx: usize) -> bool {
+    let project_slot = crate::views::remote_controls::PROJECT_MODULATOR_SLOT;
+    let map = bay_state_map().lock().unwrap();
+    for (&(tr, sl), bay) in map.iter() {
+        if tr != track_idx && !(tr == 0 && sl == project_slot) {
+            continue;
+        }
+        for m in &bay.slots {
+            if !m.enabled || m.routes.is_empty() {
+                continue;
+            }
+            if m.routes.iter().any(|r| {
+                matches!(r.target, ModulationTarget::ExternalParam { slot_idx: s, .. } if s == slot_idx)
+                    && r.amount.abs() >= 0.005
+            }) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub fn get_bay_route_amount(
@@ -2763,11 +2837,7 @@ pub fn get_bay_route_amount(
     let Some(target) = ModulationTarget::from_device_and_param(device, param) else {
         return 0.0;
     };
-    let map = bay_state_map().lock().unwrap();
-    map.get(&(track_idx, slot_idx))
-        .and_then(|bay| bay.slots.iter().find(|s| s.id == mod_id))
-        .map(|s| s.route_amount(out_idx, target))
-        .unwrap_or(0.0)
+    get_bay_route_amount_target(track_idx, slot_idx, mod_id, out_idx, target)
 }
 
 pub fn set_bay_route_amount(
@@ -2782,11 +2852,7 @@ pub fn set_bay_route_amount(
     let Some(target) = ModulationTarget::from_device_and_param(device, param) else {
         return;
     };
-    update_bay_state(track_idx, slot_idx, |bay| {
-        if let Some(s) = bay.slots.iter_mut().find(|s| s.id == mod_id) {
-            s.set_route(out_idx, target, amount);
-        }
-    });
+    set_bay_route_amount_target(track_idx, slot_idx, mod_id, out_idx, target, amount);
 }
 
 /// Captura los parámetros del bay para persistencia en `.oplf`/`.opsf`/`.hdp`.
@@ -2904,16 +2970,13 @@ pub fn notify_bay_audio_level(track_idx: usize, peak: f32, rms: f32) {
 }
 
 /// Suma las contribuciones de todos los moduladores de bay activos en `track_idx`
-/// para un parámetro `(device, param)`. Devuelve `(matched, sum_raw, sum_delta, sum_amount, last_phase)`.
-pub fn evaluate_bay_modulation_for_track(
+/// (y en el Project Modulator Bay) para `target`. Devuelve `(matched, sum_raw, sum_delta, sum_amount, last_phase)`.
+pub fn evaluate_bay_modulation_for_target(
     track_idx: usize,
-    device: &str,
-    param: &str,
+    target: ModulationTarget,
     transport: &LfoTransportState,
 ) -> (bool, f32, f32, f32, f32) {
-    let Some(target) = ModulationTarget::from_device_and_param(device, param) else {
-        return (false, 0.0, 0.0, 0.0, 0.0);
-    };
+    let project_slot = crate::views::remote_controls::PROJECT_MODULATOR_SLOT;
     let time_secs = clock_time_secs();
     let mut map = bay_state_map().lock().unwrap();
 
@@ -2923,8 +2986,8 @@ pub fn evaluate_bay_modulation_for_track(
     let mut sum_amount = 0.0_f32;
     let mut last_phase = 0.0_f32;
 
-    for (&(tr, _slot), bay) in map.iter_mut() {
-        if tr != track_idx {
+    for (&(tr, sl), bay) in map.iter_mut() {
+        if tr != track_idx && !(tr == 0 && sl == project_slot) {
             continue;
         }
         for m in &mut bay.slots {
@@ -2967,4 +3030,18 @@ pub fn evaluate_bay_modulation_for_track(
     }
 
     (matched, sum_raw, sum_delta, sum_amount, last_phase)
+}
+
+/// Suma las contribuciones de todos los moduladores de bay activos en `track_idx`
+/// para un parámetro `(device, param)`. Devuelve `(matched, sum_raw, sum_delta, sum_amount, last_phase)`.
+pub fn evaluate_bay_modulation_for_track(
+    track_idx: usize,
+    device: &str,
+    param: &str,
+    transport: &LfoTransportState,
+) -> (bool, f32, f32, f32, f32) {
+    let Some(target) = ModulationTarget::from_device_and_param(device, param) else {
+        return (false, 0.0, 0.0, 0.0, 0.0);
+    };
+    evaluate_bay_modulation_for_target(track_idx, target, transport)
 }

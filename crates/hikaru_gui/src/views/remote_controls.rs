@@ -350,6 +350,7 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
             {
                 if let Some(p) = slot.cached_params.get_mut(*param_idx) {
                     p.value = v;
+                    p.display_text = None;
                     p.pending_to_engine = true;
                 }
             }
@@ -606,7 +607,7 @@ fn paint_remote_wireless_icon(painter: &Painter, center: Pos2, radius: f32, colo
 }
 
 /// Draws the small Bitwig orange knob-dot toggle icon on the vertical strip.
-fn paint_remote_toggle_icon(painter: &Painter, center: Pos2, active: bool, hovered: bool) {
+pub(crate) fn paint_remote_toggle_icon(painter: &Painter, center: Pos2, active: bool, hovered: bool) {
     let r = 5.0_f32;
     let ring_col = if active {
         REMOTE_ORANGE
@@ -635,7 +636,7 @@ fn paint_remote_toggle_icon(painter: &Painter, center: Pos2, active: bool, hover
 }
 
 /// Draws the small Bitwig `o->` modulator toggle icon on the vertical strip.
-fn paint_mod_toggle_icon(painter: &Painter, center: Pos2, active: bool, hovered: bool) {
+pub(crate) fn paint_mod_toggle_icon(painter: &Painter, center: Pos2, active: bool, hovered: bool) {
     let col = if active {
         REMOTE_CYAN
     } else if hovered {
@@ -732,6 +733,7 @@ fn paint_vertical_strip_label(
 pub enum RemoteScope {
     Project,
     Track(usize),
+    Device { track_idx: usize, slot_idx: usize },
 }
 
 /// Active Bitwig-style click-to-map session for a Remote Control slot.
@@ -764,12 +766,31 @@ pub fn start_or_toggle_mapping(
     }
 }
 
+fn resolve_default_norm(app: &AppState, target: &RemoteTarget) -> f32 {
+    if let RemoteTarget::DeviceParam {
+        track_idx,
+        slot_idx,
+        param_idx,
+    } = target
+    {
+        if let Some(p) = app
+            .current_tracks()
+            .get(*track_idx)
+            .and_then(|t| t.effects.get(*slot_idx))
+            .and_then(|s| s.cached_params.get(*param_idx))
+        {
+            return p.info.default_value.clamp(0.0, 1.0);
+        }
+    }
+    default_norm_for_target(target)
+}
+
 pub fn complete_mapping(app: &mut AppState, target: RemoteTarget) {
     let Some(mapping) = app.remote_mapping.take() else {
         return;
     };
-    let cur = read_target_normalized(app, &target).unwrap_or_else(|| default_norm_for_target(&target));
-    let def = default_norm_for_target(&target);
+    let def = resolve_default_norm(app, &target);
+    let cur = read_target_normalized(app, &target).unwrap_or(def);
     match mapping.scope {
         RemoteScope::Project => {
             if let Some(page) = app.project_remotes.pages.get_mut(mapping.page_idx) {
@@ -781,6 +802,22 @@ pub fn complete_mapping(app: &mut AppState, target: RemoteTarget) {
         RemoteScope::Track(ti) => {
             if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                 if let Some(page) = t.remotes.pages.get_mut(mapping.page_idx) {
+                    if let Some(slot) = page.slots.get_mut(mapping.slot_idx) {
+                        slot.assign(target, cur, def);
+                    }
+                }
+            }
+        }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            if let Some(dev) = app
+                .current_tracks_mut()
+                .get_mut(track_idx)
+                .and_then(|t| t.effects.get_mut(slot_idx))
+            {
+                if let Some(page) = dev.remotes.pages.get_mut(mapping.page_idx) {
                     if let Some(slot) = page.slots.get_mut(mapping.slot_idx) {
                         slot.assign(target, cur, def);
                     }
@@ -859,6 +896,26 @@ pub fn request_global_knob_remote_map(track_idx: usize, param: &str) {
     }
 }
 
+/// Renderiza el cuerpo 2×4 de Device Remote Controls (estilo Bitwig Screenshot 3:
+/// cabecera `📁 init` + `Perform ▾` + 8 slots de mapeo inalámbrico cian / knobs naranjas).
+pub fn render_device_remotes_body(
+    ui: &mut Ui,
+    rect: Rect,
+    app: &mut AppState,
+    track_idx: usize,
+    slot_idx: usize,
+) {
+    render_remotes_body(
+        ui,
+        rect,
+        app,
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        },
+    );
+}
+
 fn render_remotes_body(
     ui: &mut Ui,
     rect: Rect,
@@ -872,7 +929,7 @@ fn render_remotes_body(
     let p = ui.painter();
     p.rect_filled(rect, 2.0, Color32::from_rgb(0x2B, 0x2D, 0x33));
 
-    // Header (Title + "Perform" + vector caret page dropdown)
+    // Header (Title or Device Preset `📁 init` + "Perform" + vector caret page dropdown)
     let header_h = 44.0;
     let header_rect = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
     p.rect_filled(header_rect, 2.0, Color32::from_rgb(0x36, 0x39, 0x41));
@@ -884,17 +941,61 @@ fn render_remotes_body(
         Stroke::new(1.0_f32, Color32::from_rgb(0x1C, 0x1E, 0x22)),
     );
 
-    let title = match scope {
-        RemoteScope::Project => "Project Remotes",
-        RemoteScope::Track(_) => "Track Remotes",
-    };
-    p.text(
-        pos2(header_rect.min.x + 10.0, header_rect.min.y + 13.0),
-        Align2::LEFT_CENTER,
-        title,
-        fonts::semibold(11.0),
-        Color32::from_rgb(0x9E, 0xA2, 0xAC),
-    );
+    match scope {
+        RemoteScope::Project => {
+            p.text(
+                pos2(header_rect.min.x + 10.0, header_rect.min.y + 13.0),
+                Align2::LEFT_CENTER,
+                "Project Remotes",
+                fonts::semibold(11.0),
+                Color32::from_rgb(0x9E, 0xA2, 0xAC),
+            );
+        }
+        RemoteScope::Track(_) => {
+            p.text(
+                pos2(header_rect.min.x + 10.0, header_rect.min.y + 13.0),
+                Align2::LEFT_CENTER,
+                "Track Remotes",
+                fonts::semibold(11.0),
+                Color32::from_rgb(0x9E, 0xA2, 0xAC),
+            );
+        }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            let preset_name = app
+                .current_tracks()
+                .get(track_idx)
+                .and_then(|t| t.effects.get(slot_idx))
+                .map(|s| {
+                    if s.preset_name.trim().is_empty() {
+                        "init".to_string()
+                    } else {
+                        s.preset_name.clone()
+                    }
+                })
+                .unwrap_or_else(|| "init".to_string());
+            let fld_r = Rect::from_center_size(
+                pos2(header_rect.min.x + 13.0, header_rect.min.y + 13.0),
+                vec2(11.0, 10.0),
+            );
+            icons::paint_icon(
+                p,
+                fld_r,
+                icons::FOLDER,
+                Color32::from_rgb(0xC8, 0xCC, 0xD4),
+                1.4,
+            );
+            p.text(
+                pos2(header_rect.min.x + 23.0, header_rect.min.y + 13.0),
+                Align2::LEFT_CENTER,
+                truncate_label(&preset_name, 22),
+                fonts::semibold(10.5),
+                Color32::from_rgb(0xD8, 0xDC, 0xE4),
+            );
+        }
+    }
 
     // Page selector row ("● Perform ▾")
     let (active_page_idx, page_names) = match scope {
@@ -912,6 +1013,22 @@ fn render_remotes_body(
                 (0, vec!["Perform".to_string()])
             }
         }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            if let Some(dev) = app
+                .current_tracks_mut()
+                .get_mut(track_idx)
+                .and_then(|t| t.effects.get_mut(slot_idx))
+            {
+                let idx = dev.remotes.ensure_valid_page();
+                let names: Vec<String> = dev.remotes.pages.iter().map(|pg| pg.name.clone()).collect();
+                (idx, names)
+            } else {
+                (0, vec!["Perform".to_string()])
+            }
+        }
     };
     let page_name = page_names
         .get(active_page_idx)
@@ -922,9 +1039,13 @@ fn render_remotes_body(
         pos2(header_rect.min.x + 6.0, header_rect.min.y + 23.0),
         vec2(header_rect.width() - 12.0, 17.0),
     );
-    let page_salt = match scope {
-        RemoteScope::Project => ("proj_remote_page", 0usize),
-        RemoteScope::Track(ti) => ("trk_remote_page", ti),
+    let page_salt: (&str, usize, usize) = match scope {
+        RemoteScope::Project => ("proj_remote_page", 0, 0),
+        RemoteScope::Track(ti) => ("trk_remote_page", ti, 0),
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => ("dev_remote_page", track_idx, slot_idx),
     };
     let page_resp = ui.interact(page_btn_rect, ui.id().with(page_salt), Sense::click());
     if page_resp.hovered() {
@@ -977,6 +1098,18 @@ fn render_remotes_body(
                                 t.remotes.active_page = pi;
                             }
                         }
+                        RemoteScope::Device {
+                            track_idx,
+                            slot_idx,
+                        } => {
+                            if let Some(dev) = app
+                                .current_tracks_mut()
+                                .get_mut(track_idx)
+                                .and_then(|t| t.effects.get_mut(slot_idx))
+                            {
+                                dev.remotes.active_page = pi;
+                            }
+                        }
                     }
                     ui.close_menu();
                 }
@@ -992,6 +1125,18 @@ fn render_remotes_body(
                             t.remotes.add_page();
                         }
                     }
+                    RemoteScope::Device {
+                        track_idx,
+                        slot_idx,
+                    } => {
+                        if let Some(dev) = app
+                            .current_tracks_mut()
+                            .get_mut(track_idx)
+                            .and_then(|t| t.effects.get_mut(slot_idx))
+                        {
+                            dev.remotes.add_page();
+                        }
+                    }
                 }
                 ui.close_menu();
             }
@@ -1001,6 +1146,18 @@ fn render_remotes_body(
                     RemoteScope::Track(ti) => {
                         if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                             t.remotes.active_page_mut().clear();
+                        }
+                    }
+                    RemoteScope::Device {
+                        track_idx,
+                        slot_idx,
+                    } => {
+                        if let Some(dev) = app
+                            .current_tracks_mut()
+                            .get_mut(track_idx)
+                            .and_then(|t| t.effects.get_mut(slot_idx))
+                        {
+                            dev.remotes.active_page_mut().clear();
                         }
                     }
                 }
@@ -1034,6 +1191,15 @@ fn render_remotes_body(
             .current_tracks()
             .get(ti)
             .map(|t| t.remotes.active_page_ref().slots.clone())
+            .unwrap_or_else(|| std::array::from_fn(|_| RemoteControlSlot::default())),
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => app
+            .current_tracks()
+            .get(track_idx)
+            .and_then(|t| t.effects.get(slot_idx))
+            .map(|d| d.remotes.active_page_ref().slots.clone())
             .unwrap_or_else(|| std::array::from_fn(|_| RemoteControlSlot::default())),
     };
 
@@ -1089,6 +1255,18 @@ fn render_remotes_body(
                     RemoteScope::Track(ti) => {
                         if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                             t.remotes.active_page_mut().slots[slot_i].value = new_norm;
+                        }
+                    }
+                    RemoteScope::Device {
+                        track_idx,
+                        slot_idx,
+                    } => {
+                        if let Some(dev) = app
+                            .current_tracks_mut()
+                            .get_mut(track_idx)
+                            .and_then(|t| t.effects.get_mut(slot_idx))
+                        {
+                            dev.remotes.active_page_mut().slots[slot_i].value = new_norm;
                         }
                     }
                 }
@@ -1158,6 +1336,18 @@ fn render_remotes_body(
                                 t.remotes.active_page_mut().slots[slot_i].unmap();
                             }
                         }
+                        RemoteScope::Device {
+                            track_idx,
+                            slot_idx,
+                        } => {
+                            if let Some(dev) = app
+                                .current_tracks_mut()
+                                .get_mut(track_idx)
+                                .and_then(|t| t.effects.get_mut(slot_idx))
+                            {
+                                dev.remotes.active_page_mut().slots[slot_i].unmap();
+                            }
+                        }
                     }
                     ui.close_menu();
                 }
@@ -1189,7 +1379,8 @@ fn render_remotes_body(
                 app.footer_context_cues = vec![("CLICK".to_string(), "Stop mapping".to_string())];
             } else if resp.hovered() {
                 ui.painter()
-                    .rect_filled(cell_rect.shrink(3.0), 3.0, Color32::from_rgb(0x2D, 0x31, 0x3A));
+                    .rect_filled(cell_rect.shrink(3.0), 3.0, Color32::from_rgb(0x0E, 0x10, 0x14));
+                app.footer_context_cues = vec![("CLICK".to_string(), "Start mapping".to_string())];
             }
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1230,8 +1421,8 @@ fn render_remotes_body(
 }
 
 fn assign_slot(app: &mut AppState, scope: RemoteScope, slot_i: usize, target: RemoteTarget) {
-    let cur = read_target_normalized(app, &target).unwrap_or_else(|| default_norm_for_target(&target));
-    let def = default_norm_for_target(&target);
+    let def = resolve_default_norm(app, &target);
+    let cur = read_target_normalized(app, &target).unwrap_or(def);
     match scope {
         RemoteScope::Project => {
             app.project_remotes.active_page_mut().slots[slot_i].assign(target, cur, def);
@@ -1239,6 +1430,18 @@ fn assign_slot(app: &mut AppState, scope: RemoteScope, slot_i: usize, target: Re
         RemoteScope::Track(ti) => {
             if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                 t.remotes.active_page_mut().slots[slot_i].assign(target, cur, def);
+            }
+        }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            if let Some(dev) = app
+                .current_tracks_mut()
+                .get_mut(track_idx)
+                .and_then(|t| t.effects.get_mut(slot_idx))
+            {
+                dev.remotes.active_page_mut().slots[slot_i].assign(target, cur, def);
             }
         }
     }
@@ -1445,6 +1648,53 @@ fn render_assign_target_menu(ui: &mut Ui, app: &mut AppState, scope: RemoteScope
                         });
                     }
                 }
+            }
+        }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            let (dev_name, params): (String, Vec<(usize, String)>) = app
+                .current_tracks()
+                .get(track_idx)
+                .and_then(|tr| tr.effects.get(slot_idx))
+                .map(|sl| {
+                    let ps = sl
+                        .cached_params
+                        .iter()
+                        .enumerate()
+                        .map(|(pi, p)| (pi, p.info.name.clone()))
+                        .collect();
+                    (sl.name.clone(), ps)
+                })
+                .unwrap_or_else(|| ("Plugin".to_string(), Vec::new()));
+
+            ui.label(
+                RichText::new(format!("Assign {} Remote", dev_name))
+                    .strong()
+                    .size(11.0),
+            );
+            ui.separator();
+            if params.is_empty() {
+                ui.label(
+                    RichText::new("No public parameters cached yet.")
+                        .size(10.0)
+                        .color(theme::TEXT_MUTED),
+                );
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for (pi, pname) in params {
+                            if ui.button(pname).clicked() {
+                                chosen = Some(RemoteTarget::DeviceParam {
+                                    track_idx,
+                                    slot_idx,
+                                    param_idx: pi,
+                                });
+                            }
+                        }
+                    });
             }
         }
     }
@@ -1879,5 +2129,34 @@ mod tests {
             let back = norm_to_bpm(norm);
             assert!((back - bpm).abs() < 1e-3, "bpm {bpm} -> {norm} -> {back}");
         }
+    }
+
+    #[test]
+    fn device_remote_scope_assigns_external_param_slot() {
+        let scope = RemoteScope::Device {
+            track_idx: 1,
+            slot_idx: 0,
+        };
+        let mapping = ActiveRemoteMapping {
+            scope,
+            page_idx: 0,
+            slot_idx: 3,
+        };
+        assert_eq!(
+            mapping.scope,
+            RemoteScope::Device {
+                track_idx: 1,
+                slot_idx: 0
+            }
+        );
+        let mut state = RemoteControlsState::default();
+        let target = RemoteTarget::DeviceParam {
+            track_idx: 1,
+            slot_idx: 0,
+            param_idx: 5,
+        };
+        state.active_page_mut().slots[3].assign(target.clone(), 0.75, 0.5);
+        assert_eq!(state.active_page_ref().slots[3].target, Some(target));
+        assert!((state.active_page_ref().slots[3].value - 0.75).abs() < 1e-6);
     }
 }

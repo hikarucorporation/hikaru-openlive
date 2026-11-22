@@ -18,6 +18,12 @@ pub struct DspPluginNode {
     pub category: PluginCategory,
     pub instance: Box<dyn PluginInstance + Send>,
     pub is_active: bool,
+    /// Índice de slot en `Track::effects` de la GUI.
+    ///
+    /// Las pistas mezclan dispositivos nativos (`OpenPoly`, `OpenEQ3`) y plugins
+    /// externos; guardar el `slot_idx` real garantiza que `SetExternalPluginParam`,
+    /// modulación y bypass siempre peguen al nodo correcto aunque haya nativos antes.
+    pub slot_idx: usize,
     /// A dónde se publica el buffer ya procesado.
     ///
     /// Lo consume la ventana del editor nativo, que corre en otro hilo con
@@ -37,8 +43,14 @@ impl DspPluginNode {
             category,
             instance,
             is_active: true,
+            slot_idx: 0,
             tap: None,
         }
+    }
+
+    pub fn with_slot_idx(mut self, slot_idx: usize) -> Self {
+        self.slot_idx = slot_idx;
+        self
     }
 
     /// Conecta (o desconecta) la cinta hacia el editor nativo.
@@ -46,11 +58,17 @@ impl DspPluginNode {
         self.tap = tap;
     }
 
-    pub fn process(&mut self, buffer: &mut AudioBuffer, _midi_events: &[MidiEvent]) {
+    pub fn process(&mut self, buffer: &mut AudioBuffer, midi_events: &[MidiEvent]) {
         if !self.is_active {
             return;
         }
-        
+
+        // Entregamos las notas MIDI de la pista al plugin antes de renderizar
+        // el bloque (lock-free vía anillo SPSC en VST3 y CLAP).
+        for ev in midi_events {
+            let _ = self.instance.queue_midi_event(ev.status, ev.data1, ev.data2);
+        }
+
         // Ejecuta el buffer a través de la instancia del VST3 o CLAP
         self.instance.process(buffer);
 
@@ -79,6 +97,11 @@ impl DspPluginNode {
     /// hacia el audio (anillo en VST3, cola en CLAP).
     pub fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
         self.instance.set_param_normalized(id, value)
+    }
+
+    /// Aplica un desplazamiento de modulación no destructivo (CLAP `ParamModEvent`).
+    pub fn set_param_modulation(&mut self, id: u32, delta_normalized: f32) -> bool {
+        self.instance.set_param_modulation(id, delta_normalized)
     }
 
     /// Info de un parámetro por id (para la UI del rack).

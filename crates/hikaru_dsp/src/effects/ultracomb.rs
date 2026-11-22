@@ -287,6 +287,7 @@ impl hikaru_plugin_host::PluginInstance for UltracombFilter {
                 max: 100.0,
                 step_count: 0,
                 can_automate: true,
+                is_modulatable: true,
             }),
             1 => Some(hikaru_plugin_host::PluginParamInfo {
                 id: 1,
@@ -297,6 +298,7 @@ impl hikaru_plugin_host::PluginInstance for UltracombFilter {
                 max: 100.0,
                 step_count: 0,
                 can_automate: true,
+                is_modulatable: true,
             }),
             _ => None,
         }

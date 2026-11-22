@@ -521,6 +521,7 @@ impl PluginInstance for Vst3Instance {
 
     fn param_info(&mut self, index: usize) -> Option<PluginParamInfo> {
         let p = self.params.get(index)?;
+        let automatable = p.can_automate && !p.is_read_only;
         Some(PluginParamInfo {
             id: p.id,
             name: p.name.clone(),
@@ -531,8 +532,63 @@ impl PluginInstance for Vst3Instance {
             max: 1.0,
             default_value: p.default.clamp(0.0, 1.0) as f32,
             step_count: p.step_count,
-            can_automate: p.can_automate && !p.is_read_only,
+            can_automate: automatable,
+            // En VST3 no hay evento separado de modulación; el host aplica
+            // modulación aditiva sobre cualquier parámetro automatizable.
+            is_modulatable: automatable,
         })
+    }
+
+    fn queue_midi_event(&mut self, status: u8, data1: u8, data2: u8) -> bool {
+        use vst3_host::midi::{MidiChannel, MidiEvent as VstMidi};
+        let kind = status & 0xF0;
+        let ch = MidiChannel::from_index(status & 0x0F).unwrap_or(MidiChannel::Ch1);
+        let ev = match kind {
+            0x90 if data2 > 0 => VstMidi::NoteOn {
+                channel: ch,
+                note: data1.min(127),
+                velocity: data2.min(127),
+            },
+            0x90 | 0x80 => VstMidi::NoteOff {
+                channel: ch,
+                note: data1.min(127),
+                velocity: data2.min(127),
+            },
+            0xB0 => VstMidi::ControlChange {
+                channel: ch,
+                controller: data1.min(127),
+                value: data2.min(127),
+            },
+            0xE0 => {
+                let value = ((data2 as u16) << 7) | (data1 as u16 & 0x7F);
+                VstMidi::PitchBend { channel: ch, value }
+            }
+            0xD0 => VstMidi::ChannelAftertouch {
+                channel: ch,
+                pressure: data1.min(127),
+            },
+            0xA0 => VstMidi::PolyAftertouch {
+                channel: ch,
+                note: data1.min(127),
+                pressure: data2.min(127),
+            },
+            _ => return false,
+        };
+        self.control.send_midi(ev)
+    }
+
+    fn save_state(&mut self) -> Result<Vec<u8>, String> {
+        self.runner
+            .plugin()
+            .save_state()
+            .map_err(|e| format!("[VST3] save_state: {e}"))
+    }
+
+    fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        self.runner
+            .plugin_mut()
+            .load_state(data)
+            .map_err(|e| format!("[VST3] load_state: {e}"))
     }
 
     fn get_param_normalized(&mut self, id: u32) -> Option<f32> {
@@ -575,7 +631,7 @@ impl PluginInstance for Vst3Instance {
         Some((w, h))
     }
 
-    fn format_param_value(&self, id: u32, normalized: f32) -> Option<String> {
+    fn format_param_value(&mut self, id: u32, normalized: f32) -> Option<String> {
         self.runner
             .plugin()
             .format_parameter(id, normalized.clamp(0.0, 1.0) as f64)

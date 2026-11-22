@@ -27,6 +27,11 @@ pub enum AutomationTarget {
     MixerVolume { track_idx: usize },
     MixerPan { track_idx: usize },
     TrackSend { track_idx: usize, fx_idx: usize },
+    ExternalPluginParam {
+        track_idx: usize,
+        slot_idx: usize,
+        param_id: u32,
+    },
 }
 
 impl AutomationTarget {
@@ -36,6 +41,7 @@ impl AutomationTarget {
             AutomationTarget::MixerVolume { .. }
             | AutomationTarget::MixerPan { .. }
             | AutomationTarget::TrackSend { .. } => "Mixer",
+            AutomationTarget::ExternalPluginParam { .. } => "Plugin",
         }
     }
 
@@ -49,6 +55,24 @@ impl AutomationTarget {
                 .get(*fx_idx)
                 .map(|f| format!("Send: {}", f.name))
                 .unwrap_or_else(|| format!("Send {}", fx_idx + 1)),
+            AutomationTarget::ExternalPluginParam {
+                track_idx,
+                slot_idx,
+                param_id,
+            } => app
+                .current_tracks()
+                .get(*track_idx)
+                .and_then(|t| t.effects.get(*slot_idx))
+                .map(|slot| {
+                    let pname = slot
+                        .cached_params
+                        .iter()
+                        .find(|p| p.info.id == *param_id)
+                        .map(|p| p.info.name.as_str())
+                        .unwrap_or("Param");
+                    format!("{}: {}", slot.name, pname)
+                })
+                .unwrap_or_else(|| format!("Plugin P{}", param_id)),
         }
     }
 
@@ -70,6 +94,17 @@ impl AutomationTarget {
                 .get(*track_idx)
                 .map(|t| t.send_amount(ROUTE_FX_BASE + *fx_idx).clamp(0.0, 1.0))
                 .unwrap_or(0.0),
+            AutomationTarget::ExternalPluginParam {
+                track_idx,
+                slot_idx,
+                param_id,
+            } => app
+                .current_tracks()
+                .get(*track_idx)
+                .and_then(|t| t.effects.get(*slot_idx))
+                .and_then(|s| s.cached_params.iter().find(|p| p.info.id == *param_id))
+                .map(|p| p.value.clamp(0.0, 1.0))
+                .unwrap_or(0.5),
         }
     }
 
@@ -89,8 +124,46 @@ impl AutomationTarget {
                 }
             }
             AutomationTarget::TrackSend { .. } => mixer::send_db_text(n),
+            AutomationTarget::ExternalPluginParam { .. } => format!("{:.1}%", n * 100.0),
         }
     }
+
+    pub fn format_norm_with_app(&self, app: &AppState, norm: f32) -> String {
+        if let AutomationTarget::ExternalPluginParam {
+            track_idx,
+            slot_idx,
+            param_id,
+        } = self
+        {
+            if let Some(p) = app
+                .current_tracks()
+                .get(*track_idx)
+                .and_then(|t| t.effects.get(*slot_idx))
+                .and_then(|s| s.cached_params.iter().find(|p| p.info.id == *param_id))
+            {
+                return p.format_value(norm);
+            }
+        }
+        self.format_norm(norm)
+    }
+}
+
+/// Abre el panel de automatización centrado en un parámetro público de un plugin externo.
+pub fn open_external_param_automation(
+    app: &mut AppState,
+    track_idx: usize,
+    slot_idx: usize,
+    param_id: u32,
+) {
+    let target = AutomationTarget::ExternalPluginParam {
+        track_idx,
+        slot_idx,
+        param_id,
+    };
+    app.selected_track_index = track_idx;
+    app.automation.set_active_target_for_track(track_idx, target);
+    app.show_dsp_rack = false;
+    app.panel_layout.show_automation = true;
 }
 
 pub fn bpm_to_norm(bpm: f64) -> f32 {
@@ -323,6 +396,25 @@ pub fn apply_automation_at_tick(app: &mut AppState, tick: u64) {
                     tr.set_send_amount(ROUTE_FX_BASE + fx_idx, val);
                 }
             }
+            AutomationTarget::ExternalPluginParam {
+                track_idx,
+                slot_idx,
+                param_id,
+            } => {
+                if let Some(p) = app
+                    .current_tracks_mut()
+                    .get_mut(track_idx)
+                    .and_then(|tr| tr.effects.get_mut(slot_idx))
+                    .and_then(|sl| sl.cached_params.iter_mut().find(|p| p.info.id == param_id))
+                {
+                    let clamped = val.clamp(0.0, 1.0);
+                    if (p.value - clamped).abs() > 1e-4 {
+                        p.value = clamped;
+                        p.display_text = None;
+                        p.pending_to_engine = true;
+                    }
+                }
+            }
             AutomationTarget::TransportTempo => {}
         }
     }
@@ -516,6 +608,25 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
     }
 
     let fx_names: Vec<String> = app.fx_tracks.iter().map(|f| f.name.clone()).collect();
+    let ext_plugins: Vec<(usize, String, Vec<(u32, String)>)> = app
+        .current_tracks()
+        .get(track_idx)
+        .map(|tr| {
+            tr.effects
+                .iter()
+                .enumerate()
+                .filter(|(_, sl)| sl.external.is_some() && !sl.cached_params.is_empty())
+                .map(|(si, sl)| {
+                    let params = sl
+                        .cached_params
+                        .iter()
+                        .map(|p| (p.info.id, p.info.name.clone()))
+                        .collect();
+                    (si, sl.name.clone(), params)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     egui::popup_below_widget(
         ui,
         dd_popup_id,
@@ -558,6 +669,27 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
                     ui.close_menu();
                 }
             });
+            for (slot_idx, plug_name, params) in &ext_plugins {
+                ui.menu_button(plug_name, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(240.0)
+                        .show(ui, |ui| {
+                            for (param_id, pname) in params {
+                                if ui.button(pname).clicked() {
+                                    app.automation.set_active_target_for_track(
+                                        track_idx,
+                                        AutomationTarget::ExternalPluginParam {
+                                            track_idx,
+                                            slot_idx: *slot_idx,
+                                            param_id: *param_id,
+                                        },
+                                    );
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                });
+            }
             if app.automation.lane_for(&active_target).is_some_and(|l| !l.points.is_empty()) {
                 ui.separator();
                 if ui.button("Clear Lane Automation").clicked() {
@@ -865,7 +997,7 @@ pub fn render(ui: &mut Ui, app: &mut AppState) {
             if let Some(active_idx) = app.automation.dragging_point.or(hovered_node_idx) {
                 if let Some(pt) = points_snapshot.get(active_idx) {
                     let node_pos = pos2(tick_to_x(pt.tick), val_to_y(pt.value));
-                    let txt = active_target.format_norm(pt.value);
+                    let txt = active_target.format_norm_with_app(app, pt.value);
                     let badge_w = 72.0;
                     let badge_h = 18.0;
                     let bx = (node_pos.x + 10.0).min(canvas_rect.max.x - badge_w - 4.0);
@@ -931,5 +1063,22 @@ mod tests {
         assert!((start_bpm - 20.0).abs() < 0.05);
         assert!((mid_bpm - 343.0).abs() < 0.1);
         assert!((end_bpm - 666.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn external_plugin_param_automation_lane_interpolates() {
+        let target = AutomationTarget::ExternalPluginParam {
+            track_idx: 1,
+            slot_idx: 0,
+            param_id: 7,
+        };
+        assert_eq!(target.category_name(), "Plugin");
+        assert_eq!(target.format_norm(0.5), "50.0%");
+
+        let mut lane = AutomationLane::new(target);
+        lane.insert_point(0, 0.2);
+        lane.insert_point(960, 0.8);
+        let mid = lane.evaluate_at_tick(480).unwrap();
+        assert!((mid - 0.5).abs() < 1e-4);
     }
 }

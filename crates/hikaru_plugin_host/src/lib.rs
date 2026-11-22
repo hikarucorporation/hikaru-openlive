@@ -128,6 +128,7 @@ pub struct PluginParamInfo {
     pub default_value: f32,
     pub step_count: i32,
     pub can_automate: bool,
+    pub is_modulatable: bool,
 }
 
 impl PluginParamInfo {
@@ -316,9 +317,39 @@ pub trait PluginInstance: Send {
         false
     }
 
+    /// Aplica un desplazamiento de modulación no destructivo en espacio
+    /// normalizado (`-1.0..=1.0`, equivalente a `CLAP_EVENT_PARAM_MOD` en
+    /// Bitwig).
+    ///
+    /// En CLAP los parámetros que declaran `IS_MODULATABLE` reciben el offset
+    /// por separado sin mover su valor base. En VST3 devuelve `false` para que
+    /// el llamador aplique la modulación aditiva sobre el valor efectivo.
+    fn set_param_modulation(&mut self, _id: u32, _delta_normalized: f32) -> bool {
+        false
+    }
+
+    /// Encola un evento MIDI crudo (3 bytes: status, data1, data2) hacia el
+    /// próximo bloque de audio de forma lock-free.
+    ///
+    /// Permite tocar instrumentos VST3/CLAP desde el Piano Roll, la Session
+    /// Matrix y el teclado virtual.
+    fn queue_midi_event(&mut self, _status: u8, _data1: u8, _data2: u8) -> bool {
+        false
+    }
+
+    /// Serializa el estado interno del plugin (preset/patch) en bytes opacos.
+    fn save_state(&mut self) -> Result<Vec<u8>, String> {
+        Err("Este formato no soporta guardado de estado todavía".to_string())
+    }
+
+    /// Restaura el estado interno del plugin desde bytes previamente guardados.
+    fn load_state(&mut self, _data: &[u8]) -> Result<(), String> {
+        Err("Este formato no soporta carga de estado todavía".to_string())
+    }
+
     /// Texto exacto del plugin para un valor ("440.00 Hz"). `None` = usar
     /// `PluginParamInfo::display_value` (aproximación honesta).
-    fn format_param_value(&self, _id: u32, _normalized: f32) -> Option<String> {
+    fn format_param_value(&mut self, _id: u32, _normalized: f32) -> Option<String> {
         None
     }
 
@@ -346,6 +377,23 @@ pub trait PluginInstance: Send {
             list.retain(|(info, _)| info.can_automate);
         }
         list
+    }
+
+    /// Foto `(info, valor, texto_formateado)` de todos los parámetros públicos.
+    ///
+    /// Pregunta al propio plugin por el texto exacto (`format_param_value`) y
+    /// cae a `PluginParamInfo::display_value` cuando el plugin no lo formatea.
+    fn snapshot_params_with_display(&mut self) -> Vec<(PluginParamInfo, f32, String)> {
+        let raw = self.snapshot_params();
+        raw.into_iter()
+            .map(|(info, value)| {
+                let text = self
+                    .format_param_value(info.id, value)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| info.display_value(value));
+                (info, value, text)
+            })
+            .collect()
     }
 }
 
@@ -437,6 +485,7 @@ mod tests {
             default_value: 0.5,
             step_count: 0,
             can_automate: true,
+            is_modulatable: true,
         }
     }
 

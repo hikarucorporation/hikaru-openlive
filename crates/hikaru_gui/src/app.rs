@@ -330,7 +330,7 @@ impl ParamDragState {
 
 pub struct ParamProbeResult {
     pub descriptor_id: String,
-    pub params: Vec<(hikaru_plugin_host::PluginParamInfo, f32)>,
+    pub params: Vec<(hikaru_plugin_host::PluginParamInfo, f32, String)>,
     pub error: Option<String>,
     pub has_gui: bool,
 }
@@ -368,7 +368,7 @@ fn probe_external_params(descriptor: &hikaru_plugin_host::PluginDescriptor) -> P
         };
     }
 
-    let params = instance.snapshot_params();
+    let params = instance.snapshot_params_with_display();
     ParamProbeResult {
         descriptor_id: descriptor.id.clone(),
         params,
@@ -1247,10 +1247,14 @@ impl AppState {
     pub fn drain_param_probes(&mut self) {
         while let Ok(res) = self.param_probe_rx.try_recv() {
             self.param_probing.remove(&res.descriptor_id);
-            for track in self.tracks_mut() {
-                for slot in &mut track.effects {
+            for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+                for (sl_idx, slot) in track.effects.iter_mut().enumerate() {
                     if let Some(ref ext) = slot.external {
                         if ext.id == res.descriptor_id {
+                            slot.has_gui = Some(res.has_gui);
+                            crate::views::hikaru_native_plugins::hikaru_openmodulation::ensure_empty_bay_for_slot(
+                                tr_idx, sl_idx,
+                            );
                             if let Some(ref err) = res.error {
                                 slot.params_status = mixer::ExternalParamsStatus::Error(err.clone());
                             } else {
@@ -1258,10 +1262,13 @@ impl AppState {
                                     .params
                                     .iter()
                                     .cloned()
-                                    .map(|(info, val)| mixer::ExternalParamState {
+                                    .map(|(info, val, text)| mixer::ExternalParamState {
                                         info,
                                         value: val,
+                                        display_text: Some(text),
                                         pending_to_engine: false,
+                                        last_sent_effective: None,
+                                        last_sent_mod: 0.0,
                                     })
                                     .collect();
                                 slot.params_status = mixer::ExternalParamsStatus::Ready;
@@ -1273,20 +1280,111 @@ impl AppState {
         }
     }
 
+    /// Garantiza que todo plugin externo VST3/CLAP presente en las pistas
+    /// (incluidos los recién cargados desde `.oplf`/`.opsf`/`.hdp`) esté
+    /// instanciado en el motor de audio y tenga sus parámetros sondeados.
+    pub fn ensure_external_plugins_loaded(&mut self) {
+        let mut to_load: Vec<(usize, usize, bool, hikaru_plugin_host::PluginDescriptor)> = Vec::new();
+        let mut to_probe: Vec<hikaru_plugin_host::PluginDescriptor> = Vec::new();
+
+        for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+            let Some(eng_track) = tr_idx.checked_sub(1) else {
+                continue;
+            };
+            for (sl_idx, slot) in track.effects.iter_mut().enumerate() {
+                if let Some(ext) = slot.external.clone() {
+                    if !slot.engine_loaded {
+                        slot.engine_loaded = true;
+                        to_load.push((eng_track, sl_idx, slot.active, ext.clone()));
+                        crate::views::hikaru_native_plugins::hikaru_openmodulation::ensure_empty_bay_for_slot(
+                            tr_idx, sl_idx,
+                        );
+                    }
+                    if slot.cached_params.is_empty()
+                        && matches!(slot.params_status, mixer::ExternalParamsStatus::Idle)
+                    {
+                        to_probe.push(ext);
+                    }
+                }
+            }
+        }
+
+        for (eng_track, sl_idx, active, desc) in to_load {
+            self.audio_proxy.send(GuiCommand::LoadExternalPlugin {
+                track_idx: eng_track,
+                slot_idx: sl_idx,
+                descriptor: desc,
+            });
+            if !active {
+                self.audio_proxy.send(GuiCommand::SetExternalPluginActive {
+                    track_idx: eng_track,
+                    slot_idx: sl_idx,
+                    active: false,
+                });
+            }
+        }
+        for desc in to_probe {
+            self.request_external_params(&desc);
+        }
+    }
+
     pub fn apply_param_feedback(
         &mut self,
         feedback: Vec<crate::views::external_plugins_settings::ParamFeedbackEvent>,
     ) -> bool {
+        use hikaru_plugin_host::hikaru_wrapper::FeedbackOrigin;
         let mut changed = false;
         for ev in feedback {
-            for track in self.tracks_mut() {
-                for slot in &mut track.effects {
-                    if let Some(ref ext) = slot.external {
-                        if ext.id == ev.descriptor_id {
-                            for &(param_id, val) in &ev.changes {
-                                if let Some(p) = slot.cached_params.iter_mut().find(|p| p.info.id == param_id) {
-                                    p.value = val;
+            let is_editor = ev.origin == FeedbackOrigin::Editor;
+            let mut matched_by_key = false;
+
+            for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+                for (sl_idx, slot) in track.effects.iter_mut().enumerate() {
+                    if slot.external.is_some()
+                        && external_plugins_settings::slot_window_key(tr_idx, sl_idx)
+                            == ev.window_key
+                    {
+                        matched_by_key = true;
+                        for &(param_id, val) in &ev.changes {
+                            if let Some(p) =
+                                slot.cached_params.iter_mut().find(|p| p.info.id == param_id)
+                            {
+                                let clamped = val.clamp(0.0, 1.0);
+                                if (p.value - clamped).abs() > 1e-6 {
+                                    p.value = clamped;
+                                    p.display_text = None;
+                                    if is_editor {
+                                        p.pending_to_engine = true;
+                                    }
                                     changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !matched_by_key {
+                for track in self.tracks_mut() {
+                    for slot in &mut track.effects {
+                        if let Some(ref ext) = slot.external {
+                            if ext.id == ev.descriptor_id {
+                                for &(param_id, val) in &ev.changes {
+                                    if let Some(p) = slot
+                                        .cached_params
+                                        .iter_mut()
+                                        .find(|p| p.info.id == param_id)
+                                    {
+                                        let clamped = val.clamp(0.0, 1.0);
+                                        if (p.value - clamped).abs() > 1e-6 {
+                                            p.value = clamped;
+                                            p.display_text = None;
+                                            if is_editor {
+                                                p.pending_to_engine = true;
+                                            }
+                                            changed = true;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1298,26 +1396,106 @@ impl AppState {
     }
 
     pub fn flush_pending_external_params(&mut self) {
-        for (tr_idx, track) in self.tracks().iter().enumerate() {
-            let Some(eng_track) = tr_idx.checked_sub(1) else { continue };
-            for (sl_idx, slot) in track.effects.iter().enumerate() {
-                for p in &slot.cached_params {
+        use crate::views::hikaru_native_plugins::hikaru_openmodulation;
+        use hikaru_plugin_host::PluginFormat;
+
+        let mut engine_cmds: Vec<GuiCommand> = Vec::new();
+        let mut win_param_cmds: Vec<(String, Option<String>, u32, f32)> = Vec::new();
+        let mut win_mod_cmds: Vec<(String, Option<String>, u32, f32)> = Vec::new();
+
+        for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+            let Some(eng_track) = tr_idx.checked_sub(1) else {
+                continue;
+            };
+            for (sl_idx, slot) in track.effects.iter_mut().enumerate() {
+                let Some(ext) = slot.external.as_ref() else {
+                    continue;
+                };
+                let format = ext.format;
+                let plug_name = Some(ext.name.clone());
+                let wkey = external_plugins_settings::slot_window_key(tr_idx, sl_idx);
+
+                for p in &mut slot.cached_params {
                     if p.pending_to_engine {
-                        self.audio_proxy.send(GuiCommand::SetExternalPluginParam {
+                        engine_cmds.push(GuiCommand::SetExternalPluginParam {
                             track_idx: eng_track,
                             slot_idx: sl_idx,
                             param_id: p.info.id,
                             value: p.value,
                         });
+                        win_param_cmds.push((wkey.clone(), plug_name.clone(), p.info.id, p.value));
+                        p.last_sent_effective = Some(p.value);
+                        p.pending_to_engine = false;
+                    }
+
+                    if !slot.active {
+                        continue;
+                    }
+
+                    let active_mod = hikaru_openmodulation::get_external_param_modulation(
+                        tr_idx, sl_idx, p.info.id,
+                    );
+                    if format == PluginFormat::CLAP && p.info.is_modulatable {
+                        let target_delta = active_mod.map(|m| m.delta).unwrap_or(0.0);
+                        if (target_delta - p.last_sent_mod).abs() > 1e-4 {
+                            engine_cmds.push(GuiCommand::SetExternalPluginMod {
+                                track_idx: eng_track,
+                                slot_idx: sl_idx,
+                                param_id: p.info.id,
+                                delta: target_delta,
+                            });
+                            win_mod_cmds.push((
+                                wkey.clone(),
+                                plug_name.clone(),
+                                p.info.id,
+                                target_delta,
+                            ));
+                            p.last_sent_mod = target_delta;
+                        }
+                    } else if let Some(m) = active_mod {
+                        let eff = (p.value + m.delta).clamp(0.0, 1.0);
+                        if p.last_sent_effective
+                            .is_none_or(|prev| (prev - eff).abs() > 1e-4)
+                        {
+                            engine_cmds.push(GuiCommand::SetExternalPluginParam {
+                                track_idx: eng_track,
+                                slot_idx: sl_idx,
+                                param_id: p.info.id,
+                                value: eff,
+                            });
+                            win_param_cmds.push((wkey.clone(), plug_name.clone(), p.info.id, eff));
+                            p.last_sent_effective = Some(eff);
+                        }
+                        p.last_sent_mod = m.delta;
+                    } else if p.last_sent_mod.abs() > 1e-4 {
+                        // La modulación se desconectó: restaurar el valor base del knob
+                        engine_cmds.push(GuiCommand::SetExternalPluginParam {
+                            track_idx: eng_track,
+                            slot_idx: sl_idx,
+                            param_id: p.info.id,
+                            value: p.value,
+                        });
+                        win_param_cmds.push((wkey.clone(), plug_name.clone(), p.info.id, p.value));
+                        p.last_sent_effective = Some(p.value);
+                        p.last_sent_mod = 0.0;
                     }
                 }
             }
         }
-        for track in self.tracks_mut() {
-            for slot in &mut track.effects {
-                for p in &mut slot.cached_params {
-                    p.pending_to_engine = false;
-                }
+
+        for cmd in engine_cmds {
+            self.audio_proxy.send(cmd);
+        }
+        for (wkey, alt_name, id, val) in win_param_cmds {
+            self.plugin_settings_state.send_param_to_window(&wkey, id, val);
+            if let Some(name) = alt_name {
+                self.plugin_settings_state.send_param_to_window(&name, id, val);
+            }
+        }
+        for (wkey, alt_name, id, delta) in win_mod_cmds {
+            self.plugin_settings_state.send_param_mod_to_window(&wkey, id, delta);
+            if let Some(name) = alt_name {
+                self.plugin_settings_state.send_param_mod_to_window(&name, id, delta);
             }
         }
     }
@@ -1753,6 +1931,7 @@ impl HikaruApp {
     pub fn sync_frame(&mut self, ctx: &egui::Context) {
         self.state.plugin_settings_state.poll_updates();
         self.state.drain_param_probes();
+        self.state.ensure_external_plugins_loaded();
         let param_feedback = self.state.plugin_settings_state.take_param_feedback();
         let _feedback_changed = self.state.apply_param_feedback(param_feedback);
         self.state.flush_pending_external_params();
@@ -1828,21 +2007,28 @@ impl HikaruApp {
             self.state.audio_proxy.send(GuiCommand::SetBpm(self.state.transport.bpm as f32));
         }
 
-        let has_active_lfo = self.state.current_tracks().iter().any(|tr| {
-            tr.effects.iter().any(|slot| {
+        let has_active_lfo = self.state.current_tracks().iter().enumerate().any(|(tr_idx, tr)| {
+            tr.effects.iter().enumerate().any(|(sl_idx, slot)| {
                 slot.active
-                    && matches!(
+                    && (matches!(
                         slot.name.as_str(),
                         "OpenLFO MOD"
                             | "Hikaru OpenLFO MOD"
                             | "LFO MOD"
                             | "OpenModulation"
                             | "Hikaru OpenModulation"
-                    )
+                    ) || (slot.external.is_some()
+                        && crate::views::hikaru_native_plugins::hikaru_openmodulation::has_active_external_modulations(
+                            tr_idx, sl_idx,
+                        )))
             })
         });
 
-        if self.state.is_playing() || has_active_lfo {
+        if self.state.is_playing()
+            || has_active_lfo
+            || self.state.plugin_settings_state.any_plugin_open()
+            || self.state.plugin_settings_state.is_scanning
+        {
             ctx.request_repaint();
         }
 

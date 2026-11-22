@@ -19,17 +19,25 @@ pub fn capture_host_parent() -> HostParentKind {
     HostParentKind::Unknown
 }
 
+/// Clave única de ventana para una instancia de plugin en un slot del rack.
+/// Permite abrir múltiples instancias del mismo VST3/CLAP en paralelo sin
+/// colisionar por nombre.
+pub fn slot_window_key(track_idx: usize, slot_idx: usize) -> String {
+    format!("slot:{track_idx}:{slot_idx}")
+}
+
 /// Lo que el editor nativo movió por su cuenta, hacia la UI.
 ///
 /// Lo produce el hilo de la ventana al bombear el editor y lo consume
 /// `AppState::apply_param_feedback` en el hilo principal, que mueve los knobs
-/// del rack para que no mientan. `descriptor_id` (estable entre escaneos)
-/// empareja con el slot aunque haya renombrados de por medio.
+/// del rack para que no mientan. `window_key` empareja exactamente con la
+/// instancia `(track_idx, slot_idx)` y `descriptor_id` sirve de fallback.
 ///
 /// `origin` distingue el eco del host de un cambio real del editor: ver
 /// [`FeedbackOrigin`].
 #[derive(Debug, Clone)]
 pub struct ParamFeedbackEvent {
+    pub window_key: String,
     pub descriptor_id: String,
     pub changes: Vec<(u32, f32)>,
     pub origin: FeedbackOrigin,
@@ -64,6 +72,7 @@ pub struct PluginSettingsState {
     pub custom_paths: Vec<String>,
     pub status_message: String,
     pub is_scanning: bool,
+    pub has_scanned_once: bool,
     /// Plugins encontrados en el último escaneo.
     pub discovered_plugins: Vec<DiscoveredPlugin>,
     /// Rutas que se saltaron o fallaron. No bloquean el escaneo: se muestran
@@ -110,6 +119,7 @@ impl Default for PluginSettingsState {
                 .collect(),
             status_message: "Listo para escanear.".to_string(),
             is_scanning: false,
+            has_scanned_once: false,
             discovered_plugins: Vec::new(),
             scan_errors: Vec::new(),
             tx,
@@ -139,6 +149,7 @@ impl PluginSettingsState {
         }
 
         self.is_scanning = true;
+        self.has_scanned_once = true;
         self.discovered_plugins.clear();
         self.scan_errors.clear();
         self.status_message = "Iniciando escaneo de plugins...".to_string();
@@ -233,6 +244,14 @@ impl PluginSettingsState {
         self.open_plugins.contains_key(name)
     }
 
+    pub fn is_window_open(&self, key: &str) -> bool {
+        self.open_plugins.contains_key(key)
+    }
+
+    pub fn is_window_opening(&self, key: &str) -> bool {
+        self.opening.contains(key)
+    }
+
     /// Si hay **alguna** ventana de plugin abierta.
     ///
     /// Existe para las rutas calientes del arrastre de un knob: clonar el
@@ -254,8 +273,18 @@ impl PluginSettingsState {
     /// cayó el error se ignora (la caché del slot, que sí guarda todo,
     /// manda para el motor).
     pub fn send_param_to_open_plugin(&self, name: &str, id: u32, value: f32) {
-        if let Some(tx) = self.cmd_tx.get(name) {
+        self.send_param_to_window(name, id, value);
+    }
+
+    pub fn send_param_to_window(&self, key: &str, id: u32, value: f32) {
+        if let Some(tx) = self.cmd_tx.get(key) {
             let _ = tx.send(PluginWindowCommand::SetParam { id, value });
+        }
+    }
+
+    pub fn send_param_mod_to_window(&self, key: &str, id: u32, delta: f32) {
+        if let Some(tx) = self.cmd_tx.get(key) {
+            let _ = tx.send(PluginWindowCommand::SetParamMod { id, delta });
         }
     }
 
@@ -268,52 +297,48 @@ impl PluginSettingsState {
         self.gui_errors.remove(name);
     }
 
-    /// Abre el editor nativo en su propio hilo con el padre del DAW.
-    ///
-    /// Vuelve de inmediato: el `dlopen`, la creación X11 y el embebido corren
-    /// en el hilo hijo, así el hilo principal nunca se cuelga aunque el
-    /// plugin tarde (o muera) al abrir. `parent` es el handle nativo de la
-    /// ventana de GPUI capturado en el click.
-    ///
-    /// La envoltura de ventana ([`WrapperConfig`], con los defaults tipo
-    /// Fruity Wrapper) se arma acá y viaja al hilo hijo: `always_on_top` y
-    /// `keep_focused_with_parent` son lo que hace que la ventana del plugin no
-    /// desaparezca detrás del DAW cuando el usuario clickea cualquier parte de
-    /// la interfaz.
-    pub fn open_plugin(
+    /// Abre el editor nativo de una instancia específica del rack (`window_key`),
+    /// con título estilo Bitwig (`"Track / Plugin"`, p. ej. `"UZU / UZU"`) y
+    /// ventana flotante decorada por el WM (X11/XWayland).
+    pub fn open_plugin_for_slot(
         &mut self,
+        window_key: String,
+        window_title: String,
         plugin: &DiscoveredPlugin,
         parent: HostParentKind,
         tap_key: hikaru_plugin_host::tap::TapKey,
+        initial_params: Vec<(u32, f32)>,
     ) {
-        if self.open_plugins.contains_key(&plugin.name) || self.opening.contains(&plugin.name) {
-            println!(
-                "[PluginSettings] '{}' ya tiene una ventana abierta o en apertura",
-                plugin.name
-            );
+        if self.open_plugins.contains_key(&window_key) || self.opening.contains(&window_key) {
+            if let Some(tx) = self.cmd_tx.get(&window_key) {
+                let _ = tx.send(PluginWindowCommand::Raise);
+            }
             return;
         }
 
-        // Reintentar limpia el error anterior: era de otro intento y ya no
-        // aplica. Si vuelve a fallar, el hilo mandará uno nuevo.
-        self.gui_errors.remove(&plugin.name);
+        self.gui_errors.remove(&window_key);
 
         let plugin_path = plugin.path.clone();
-        let plugin_name = plugin.name.clone();
         let descriptor_id = plugin.id.clone();
         let format = plugin.format;
         let close_tx = self.close_tx.clone();
         let param_tx = self.param_tx.clone();
         let (cmd_tx, cmd_rx) = channel();
-        let wrapper_config = WrapperConfig::with_parent(parent);
+        let wrapper_config = WrapperConfig::bitwig_floating(parent);
 
-        self.opening.insert(plugin.name.clone());
-        self.cmd_tx.insert(plugin.name.clone(), cmd_tx);
+        for (id, value) in initial_params {
+            let _ = cmd_tx.send(PluginWindowCommand::SetParam { id, value });
+        }
 
+        self.opening.insert(window_key.clone());
+        self.cmd_tx.insert(window_key.clone(), cmd_tx);
+
+        let thread_key = window_key.clone();
         let handle = std::thread::spawn(move || {
             run_plugin_window(
                 plugin_path,
-                plugin_name,
+                thread_key,
+                window_title,
                 descriptor_id,
                 format,
                 wrapper_config,
@@ -324,7 +349,29 @@ impl PluginSettingsState {
             );
         });
 
-        self.open_plugins.insert(plugin.name.clone(), handle);
+        self.open_plugins.insert(window_key, handle);
+    }
+
+    /// Abre el editor nativo en su propio hilo con el padre del DAW (usado desde
+    /// el panel de ajustes de plugins externos).
+    pub fn open_plugin(
+        &mut self,
+        plugin: &DiscoveredPlugin,
+        parent: HostParentKind,
+        tap_key: hikaru_plugin_host::tap::TapKey,
+    ) {
+        self.open_plugin_for_slot(
+            plugin.name.clone(),
+            plugin.name.clone(),
+            plugin,
+            parent,
+            tap_key,
+            Vec::new(),
+        );
+    }
+
+    pub fn close_window(&mut self, key: &str) {
+        self.close_plugin(key);
     }
 
     /// Re-eleva todas las ventanas de plugin abiertas, sin robarles el foco.
@@ -386,9 +433,11 @@ impl PluginSettingsState {
 ///
 /// Todo fallo manda `PluginClosedNotification { error: Some(..) }`; el cierre
 /// normal del usuario manda `error: None`.
+#[allow(clippy::too_many_arguments)]
 fn run_plugin_window(
     plugin_path: PathBuf,
-    plugin_name: String,
+    window_key: String,
+    window_title: String,
     descriptor_id: String,
     format: PluginFormat,
     wrapper_config: WrapperConfig,
@@ -399,7 +448,7 @@ fn run_plugin_window(
 ) {
     let notify = |error: Option<String>| {
         let _ = close_tx.send(PluginClosedNotification {
-            name: plugin_name.clone(),
+            name: window_key.clone(),
             error,
         });
     };
@@ -411,7 +460,7 @@ fn run_plugin_window(
     let open_result = HikaruWrapper::open(
         &plugin_path,
         format,
-        &format!("{}", plugin_name),
+        &window_title,
         wrapper_config,
         WrapperRuntime::default(),
         cmd_rx,
@@ -423,7 +472,7 @@ fn run_plugin_window(
         Ok(wrapper) => wrapper,
         Err(e) => {
             let message = e.to_string();
-            eprintln!("[PluginWindow] '{}': {}", plugin_name, message);
+            eprintln!("[PluginWindow] '{}': {}", window_title, message);
             notify(Some(message));
             return;
         }
@@ -431,16 +480,15 @@ fn run_plugin_window(
 
     println!(
         "[PluginWindow] '{}' abierto: {} (hija del DAW: {}, sin decoraciones: {})",
-        plugin_name,
+        window_title,
         wrapper.plugin_name(),
         wrapper.is_child_of_daw(),
         wrapper.is_borderless()
     );
 
-    // El feedback se reenvía con el id del descriptor para que el hilo
-    // principal sepa a qué slot pertenece. Va en su propio hilo porque el
-    // canal del bucle no lo consume nadie más y sin drainedor se llenaría: los
-    // temporizadores de CLAP y los analizadores generan cambios a 60 Hz.
+    // El feedback se reenvía con `window_key` y el id del descriptor para que el
+    // hilo principal sepa exactamente a qué instancia del rack pertenece.
+    let fb_window_key = window_key.clone();
     let feedback_forwarder = std::thread::Builder::new()
         .name("hikaru-plugin-feedback".into())
         .spawn(move || {
@@ -449,6 +497,7 @@ fn run_plugin_window(
                     continue;
                 }
                 let _ = param_tx.send(ParamFeedbackEvent {
+                    window_key: fb_window_key.clone(),
                     descriptor_id: descriptor_id.clone(),
                     changes: feedback.changes,
                     origin: feedback.origin,

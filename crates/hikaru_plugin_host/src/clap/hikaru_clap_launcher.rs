@@ -7,11 +7,12 @@ use crate::scratch::{NUM_CHANNELS, PlanarScratch};
 use crate::{PluginInstance, PluginParamInfo};
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, HostGuiImpl, PluginGui, Window};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
-use clack_extensions::params::PluginParams;
+use clack_extensions::params::{ParamInfoFlags, PluginParams};
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
-use clack_host::events::event_types::ParamValueEvent;
+use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent};
 use clack_host::events::io::{EventBuffer, OutputEvents};
+use clack_host::events::Match;
 use clack_host::prelude::*;
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
@@ -308,6 +309,85 @@ impl HostHandlers for HikaruClapHost {
     }
 }
 
+/// Metadatos cacheados de un parámetro CLAP para conversión plano ↔ normalizado O(1).
+///
+/// CLAP expresa los valores de parámetro en rango plano `[min, max]` (ej.
+/// `Speed: 0..100`, `Cutoff: 20..20000`), mientras que los knobs del rack y la
+/// automatización trabajan en `0.0..=1.0`. Guardar `(min, max)` en carga evita
+/// consultar al plugin por FFI dentro del hilo de audio.
+#[derive(Debug, Clone)]
+struct ClapParamMeta {
+    id: u32,
+    name: String,
+    min: f64,
+    max: f64,
+    default_plain: f64,
+    step_count: i32,
+    can_automate: bool,
+    is_modulatable: bool,
+}
+
+impl ClapParamMeta {
+    fn plain_to_norm(&self, plain: f64) -> f32 {
+        clap_plain_to_norm(plain, self.min, self.max)
+    }
+
+    fn norm_to_plain(&self, norm: f32) -> f64 {
+        clap_norm_to_plain(norm, self.min, self.max)
+    }
+
+    fn delta_norm_to_plain(&self, delta_norm: f32) -> f64 {
+        let span = self.max - self.min;
+        if span.is_finite() && span.abs() > 1e-12 {
+            (delta_norm.clamp(-1.0, 1.0) as f64) * span
+        } else {
+            0.0
+        }
+    }
+}
+
+pub(crate) fn clap_plain_to_norm(plain: f64, min: f64, max: f64) -> f32 {
+    let span = max - min;
+    if !span.is_finite() || span.abs() <= 1e-12 {
+        return 0.0;
+    }
+    ((plain - min) / span).clamp(0.0, 1.0) as f32
+}
+
+pub(crate) fn clap_norm_to_plain(norm: f32, min: f64, max: f64) -> f64 {
+    let n = if norm.is_finite() {
+        norm.clamp(0.0, 1.0) as f64
+    } else {
+        0.0
+    };
+    let span = max - min;
+    if !span.is_finite() || span.abs() <= 1e-12 {
+        min
+    } else {
+        min + n * span
+    }
+}
+
+pub(crate) fn clap_step_count(min: f64, max: f64, is_stepped: bool) -> i32 {
+    if !is_stepped {
+        return 0;
+    }
+    let span = (max - min).round();
+    if span >= 1.0 && span <= 1024.0 {
+        (span as i32) + 1
+    } else {
+        0
+    }
+}
+
+/// Evento encolado hacia el hilo de audio de CLAP (parámetro, modulación o MIDI).
+#[derive(Clone, Copy)]
+enum PendingClapEvent {
+    ParamValue { id: u32, plain: f64 },
+    ParamMod { id: u32, delta_plain: f64 },
+    Midi { status: u8, data1: u8, data2: u8 },
+}
+
 /// Instancia CLAP alojada por Hikaru.
 ///
 /// A diferencia de VST3, acá el plugin no se puede "poseer" en el hilo de audio
@@ -329,59 +409,33 @@ pub struct ClapInstance {
     gui: Option<PluginGui>,
     /// Extensión de parámetros CLAP. `None` si el plugin no la expone.
     params: Option<PluginParams>,
-    /// Cambios de parámetro que llegan del hilo de control y se entregan al
-    /// plugin como eventos en el próximo bloque de audio.
-    ///
-    /// CLAP no tiene una vía para cambiar un parámetro mientras el plugin
-    /// está sonando: `params.flush` exige el handle de hilo principal
-    /// *inactivo*, y un plugin que ya está sonando no lo tiene. La única vía
-    /// legítima es meter un `ParamValueEvent` en la cola de entrada que se le
-    /// pasa a `process()`. `set_param_normalized` publica acá y `process`
-    /// drena; el anillo no bloquea, así que el hilo de audio no se frena
-    /// esperando a que la GUI mueva un knob.
+    /// Lista ordenada de metadatos de parámetros cacheados en `load()`.
+    param_list: Vec<ClapParamMeta>,
+    /// Índice rápido `param_id -> índice en param_list` para conversión O(1).
+    param_index: HashMap<u32, usize>,
+    /// Cola lock-free SPSC de parámetros, modulaciones y MIDI hacia el audio.
     param_queue: ParamQueue,
     /// `EventBuffer` reusado para construir la cola de entrada de cada bloque.
     /// Vive en el hilo de audio y no se aloca por bloque.
     event_buffer: EventBuffer,
-    /// Último valor que el **host** le mandó al plugin, por parámetro.
-    ///
-    /// Es lo que permite distinguir "el usuario movió el knob del editor" de
-    /// "el host movió el knob del rack" en el sondeo por diferencia.
+    /// Último valor que el **host** le mandó al plugin, por parámetro (normalizado).
     host_sent: HashMap<u32, f32>,
-    /// Último valor leído del plugin, por parámetro.
-    ///
-    /// Base del sondeo por diferencia: CLAP no tiene un `performEdit` que
-    /// avise de los cambios que nacen en el editor del plugin, así que la
-    /// única forma de enterarse es leer los valores y compararlos.
+    /// Último valor leído del plugin, por parámetro (normalizado).
     seen: HashMap<u32, f32>,
+    /// Último pedido de resize de la GUI CLAP para que `HikaruWrapper` ajuste la ventana.
+    pending_editor_resize: Option<(u32, u32)>,
     window_attached: bool,
     #[cfg(target_os = "linux")]
     _x11_conn: Option<X11Connection>,
 }
 
-/// Capacidad del anillo de cambios de parámetro.
-///
-/// Un knob genera un cambio por evento de puntero; 1024 holgadamente cubre
-/// un barrido de automation entre dos bloques. Si se llena, el cambio se
-/// descarta y `set_param_normalized` devuelve `false` en vez de bloquear al
-/// hilo de GUI.
-const PARAM_QUEUE_CAPACITY: usize = 1024;
+/// Capacidad del anillo de cambios de parámetro y eventos MIDI/modulación.
+const PARAM_QUEUE_CAPACITY: usize = 2048;
 
-/// Anillo SPSC para cambios de parámetro hacia el hilo de audio.
-///
-/// Productor: hilo de control (`set_param_normalized`).
-/// Consumidor: hilo de audio (`process`).
+/// Anillo SPSC para eventos de control hacia el hilo de audio.
 pub struct ParamQueue {
-    tx: rtrb::Producer<PendingParam>,
-    rx: rtrb::Consumer<PendingParam>,
-}
-
-/// Un cambio de parámetro pendiente, en el formato que el host lo maneja:
-/// id crudo y valor normalizado 0..=1.
-#[derive(Clone, Copy)]
-struct PendingParam {
-    id: u32,
-    value: f32,
+    tx: rtrb::Producer<PendingClapEvent>,
+    rx: rtrb::Consumer<PendingClapEvent>,
 }
 
 impl ParamQueue {
@@ -390,13 +444,13 @@ impl ParamQueue {
         Self { tx, rx }
     }
 
-    /// Publica un cambio. `false` si la cola está llena (se lo descarta, no bloquea).
-    fn push(&mut self, param: PendingParam) -> bool {
-        self.tx.push(param).is_ok()
+    /// Publica un evento. `false` si la cola está llena (se lo descarta, no bloquea).
+    fn push(&mut self, ev: PendingClapEvent) -> bool {
+        self.tx.push(ev).is_ok()
     }
 
     /// Vacía la cola en el lado del audio. El iterator no aloca.
-    fn drain(&mut self) -> impl Iterator<Item = PendingParam> + '_ {
+    fn drain(&mut self) -> impl Iterator<Item = PendingClapEvent> + '_ {
         std::iter::from_fn(move || self.rx.pop().ok())
     }
 }
@@ -457,7 +511,7 @@ impl ClapInstance {
         let host_info = HostInfo::new("Hikaru", "Hikaru Corporation", "https://hikaru.dev", "0.1.0")
             .map_err(|e| format!("[CLAP] HostInfo: {}", e))?;
 
-        let plugin = clack_host::plugin::PluginInstance::<HikaruClapHost>::new(
+        let mut plugin = clack_host::plugin::PluginInstance::<HikaruClapHost>::new(
             |_| HikaruShared::new(),
             |shared| HikaruMainThread {
                 shared,
@@ -486,8 +540,45 @@ impl ClapInstance {
             );
         }
 
-        if params.is_some() {
+        let mut param_list = Vec::new();
+        let mut param_index = HashMap::new();
+        let mut seen = HashMap::new();
+
+        if let Some(params_ext) = params {
             println!("[CLAP] Params extension disponible para '{}'", plugin_name);
+            let mut plugin_handle = plugin.plugin_handle();
+            let count = params_ext.count(&mut plugin_handle);
+            let mut buffer = clack_extensions::params::ParamInfoBuffer::new();
+            for i in 0..count {
+                if let Some(info) = params_ext.get_info(&mut plugin_handle, i, &mut buffer) {
+                    let is_hidden = info.flags.contains(ParamInfoFlags::IS_HIDDEN);
+                    let is_readonly = info.flags.contains(ParamInfoFlags::IS_READONLY);
+                    let is_stepped = info.flags.contains(ParamInfoFlags::IS_STEPPED);
+                    let can_automate = info.flags.contains(ParamInfoFlags::IS_AUTOMATABLE)
+                        && !is_hidden
+                        && !is_readonly;
+                    let is_modulatable = info.flags.contains(ParamInfoFlags::IS_MODULATABLE)
+                        && !is_hidden
+                        && !is_readonly;
+                    let name = String::from_utf8_lossy(info.name).into_owned();
+                    let meta = ClapParamMeta {
+                        id: info.id.get(),
+                        name,
+                        min: info.min_value,
+                        max: info.max_value,
+                        default_plain: info.default_value,
+                        step_count: clap_step_count(info.min_value, info.max_value, is_stepped),
+                        can_automate,
+                        is_modulatable,
+                    };
+                    if let Some(cur_plain) = params_ext.get_value(&mut plugin_handle, info.id) {
+                        seen.insert(meta.id, meta.plain_to_norm(cur_plain));
+                    }
+                    let idx = param_list.len();
+                    param_index.insert(meta.id, idx);
+                    param_list.push(meta);
+                }
+            }
         }
 
         Ok(Self {
@@ -499,10 +590,13 @@ impl ClapInstance {
             last_error: None,
             gui,
             params,
+            param_list,
+            param_index,
             param_queue: ParamQueue::new(PARAM_QUEUE_CAPACITY),
             event_buffer: EventBuffer::with_capacity(PARAM_QUEUE_CAPACITY),
             host_sent: HashMap::new(),
-            seen: HashMap::new(),
+            seen,
+            pending_editor_resize: None,
             window_attached: false,
             #[cfg(target_os = "linux")]
             _x11_conn: None,
@@ -614,6 +708,7 @@ impl ClapInstance {
         if let Some(size) = requests.resize {
             if gui.can_resize(&handle) {
                 let _ = gui.set_size(&handle, size);
+                self.pending_editor_resize = Some((size.width, size.height));
             } else {
                 eprintln!(
                     "[CLAP] '{}' pidió un resize a {}x{} pero declara que no se redimensiona",
@@ -706,22 +801,54 @@ impl PluginInstance for ClapInstance {
                 ]),
             }]);
 
-            // Eventos de entrada: los cambios de parámetro que publicó el hilo
-            // de control, más lo que se enchufe más adelante (el MIDI del
-            // secuenciador todavía no entra). El `EventBuffer` es reutilizado y
-            // tiene capacidad de sobra, así que armarlo no aloca por bloque.
+            // Eventos de entrada: cambios de parámetro, modulación no destructiva
+            // (`CLAP_EVENT_PARAM_MOD`) y notas MIDI (`NoteOnEvent` / `NoteOffEvent`).
             event_buffer.clear();
             for pending in param_queue.drain() {
-                let Some(clap_id) = ClapId::from_raw(pending.id) else {
-                    continue;
-                };
-                let event = ParamValueEvent::new(
-                    0, // time
-                    clap_id,
-                    Pckn::match_all(),
-                    pending.value as f64,
-                );
-                event_buffer.push(&event);
+                match pending {
+                    PendingClapEvent::ParamValue { id, plain } => {
+                        let Some(clap_id) = ClapId::from_raw(id) else {
+                            continue;
+                        };
+                        let event = ParamValueEvent::new(
+                            0,
+                            clap_id,
+                            Pckn::match_all(),
+                            plain,
+                        );
+                        event_buffer.push(&event);
+                    }
+                    PendingClapEvent::ParamMod { id, delta_plain } => {
+                        let Some(clap_id) = ClapId::from_raw(id) else {
+                            continue;
+                        };
+                        let event = ParamModEvent::new(
+                            0,
+                            clap_id,
+                            Pckn::match_all(),
+                            delta_plain,
+                        );
+                        event_buffer.push(&event);
+                    }
+                    PendingClapEvent::Midi { status, data1, data2 } => {
+                        let kind = status & 0xF0;
+                        let channel = status & 0x0F;
+                        let key = data1.min(127);
+                        let velocity = (data2.min(127) as f64) / 127.0;
+                        let pckn = Pckn::new(0u16, channel as u16, key as u16, Match::All);
+                        match kind {
+                            0x90 if data2 > 0 => {
+                                let event = NoteOnEvent::new(0, pckn, velocity);
+                                event_buffer.push(&event);
+                            }
+                            0x90 | 0x80 => {
+                                let event = NoteOffEvent::new(0, pckn, velocity);
+                                event_buffer.push(&event);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
             let input_events = event_buffer.as_input();
 
@@ -918,77 +1045,81 @@ impl PluginInstance for ClapInstance {
         }
     }
 
+    fn poll_editor_resize(&mut self) -> Option<(u32, u32)> {
+        self.pending_editor_resize.take()
+    }
+
     fn params_supported(&self) -> bool {
         self.params.is_some()
     }
 
     fn param_count(&mut self) -> usize {
-        self.params
-            .as_ref()
-            .map(|params| {
-                let plugin_handle = self.plugin.plugin_handle();
-                params.count(&plugin_handle) as usize
-            })
-            .unwrap_or(0)
+        self.param_list.len()
     }
 
     fn param_info(&mut self, index: usize) -> Option<PluginParamInfo> {
-        let params = self.params.as_ref()?;
-        let plugin_handle = self.plugin.plugin_handle();
-        let mut buffer = clack_extensions::params::ParamInfoBuffer::new();
-        let info = params.get_info(&plugin_handle, index as u32, &mut buffer)?;
-
-        let name = String::from_utf8_lossy(info.name).into_owned();
-
+        let meta = self.param_list.get(index)?;
         Some(PluginParamInfo {
-            id: info.id.get(),
-            name,
+            id: meta.id,
+            name: meta.name.clone(),
             unit: String::new(),
-            min: info.min_value as f32,
-            max: info.max_value as f32,
-            default_value: info.default_value as f32,
-            step_count: 0,
-            can_automate: info.flags.contains(clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE),
+            min: meta.min as f32,
+            max: meta.max as f32,
+            default_value: meta.plain_to_norm(meta.default_plain),
+            step_count: meta.step_count,
+            can_automate: meta.can_automate,
+            is_modulatable: meta.is_modulatable,
         })
     }
 
     fn get_param_normalized(&mut self, id: u32) -> Option<f32> {
         let params = self.params.as_ref()?;
-        let plugin_handle = self.plugin.plugin_handle();
+        let meta = self.param_index.get(&id).and_then(|&i| self.param_list.get(i))?;
+        let mut plugin_handle = self.plugin.plugin_handle();
         let clap_id = clack_host::prelude::ClapId::from_raw(id)?;
-        let value = params.get_value(&plugin_handle, clap_id)?;
-        Some(value.clamp(0.0, 1.0) as f32)
+        let plain = params.get_value(&mut plugin_handle, clap_id)?;
+        Some(meta.plain_to_norm(plain))
     }
 
-    /// Publica un cambio de parámetro para el próximo bloque de audio.
-    ///
-    /// Dos caminos, según el estado del plugin:
-    ///
-    /// - **Inactivo** (aún no sonó): `params.flush` con el handle de hilo
-    ///   principal es la vía directa y el valor aplica al instante.
-    /// - **Activo** (sonando): CLAP no permite tocar la extensión de
-    ///   parámetros desde el hilo principal mientras el plugin corre; el
-    ///   handle inactivo no existe. El evento se encola y `process` lo
-    ///   entrega como `ParamValueEvent` en la cola de entrada del bloque.
-    ///
-    /// Antes este camino devolvía `true` sin hacer nada — el caller creía
-    /// que el knob se había movido y el DSP nunca se enteraba.
+    fn format_param_value(&mut self, id: u32, normalized: f32) -> Option<String> {
+        let params = self.params.as_ref()?;
+        let meta = self.param_index.get(&id).and_then(|&i| self.param_list.get(i))?;
+        let clap_id = ClapId::from_raw(id)?;
+        let plain = meta.norm_to_plain(normalized);
+        let mut buf = [0u8; 128];
+        let mut plugin_handle = self.plugin.plugin_handle();
+        params
+            .value_to_text(&mut plugin_handle, clap_id, plain, &mut buf)
+            .ok()
+            .map(|bytes| {
+                let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+            })
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Publica un cambio de parámetro (normalizado 0..=1 -> plano `[min, max]`)
+    /// para el próximo bloque de audio.
     fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
         if self.params.is_none() {
             return false;
         }
         let value = value.clamp(0.0, 1.0);
-        // Anota que el valor es del host: el sondeo por diferencia no debe
-        // devolverlo como si el usuario lo hubiera movido en el editor.
+        let plain = self
+            .param_index
+            .get(&id)
+            .and_then(|&i| self.param_list.get(i))
+            .map(|m| m.norm_to_plain(value))
+            .unwrap_or(value as f64);
+
         self.host_sent.insert(id, value);
-        let pending = PendingParam { id, value };
 
         // Camino directo para un plugin que todavía no está sonando.
         if let Some(mut inactive_handle) = self.plugin.inactive_plugin_handle() {
             let Some(clap_id) = ClapId::from_raw(id) else {
                 return false;
             };
-            let event = ParamValueEvent::new(0, clap_id, Pckn::match_all(), pending.value as f64);
+            let event = ParamValueEvent::new(0, clap_id, Pckn::match_all(), plain);
             let mut buffer = EventBuffer::with_capacity(1);
             buffer.push(&event);
             let mut output_buffer = EventBuffer::with_capacity(1);
@@ -1005,50 +1136,56 @@ impl PluginInstance for ClapInstance {
         }
 
         // Plugin sonando: que lo aplique el hilo de audio.
-        self.param_queue.push(pending)
+        self.param_queue
+            .push(PendingClapEvent::ParamValue { id, plain })
+    }
+
+    fn set_param_modulation(&mut self, id: u32, delta_normalized: f32) -> bool {
+        let Some(meta) = self.param_index.get(&id).and_then(|&i| self.param_list.get(i)) else {
+            return false;
+        };
+        if !meta.is_modulatable {
+            return false;
+        }
+        let delta_plain = meta.delta_norm_to_plain(delta_normalized);
+        self.param_queue
+            .push(PendingClapEvent::ParamMod { id, delta_plain })
+    }
+
+    fn queue_midi_event(&mut self, status: u8, data1: u8, data2: u8) -> bool {
+        self.param_queue
+            .push(PendingClapEvent::Midi { status, data1, data2 })
     }
 
     /// Lo que el editor nativo movió por su cuenta.
-    ///
-    /// # Por qué hay que sondear
-    ///
-    /// CLAP no tiene el equivalente de `IComponentHandler::performEdit`: no
-    /// existe un aviso de "el usuario movió el parámetro X". La única forma
-    /// de enterarse es **leer** los valores del plugin y compararlos con los
-    /// de la lectura anterior: si un valor se movió y no lo movió el host,
-    /// alguien lo movió — y ese alguien es el usuario, dentro del editor.
-    ///
-    /// Es el mismo mecanismo que usa el panel de plugins de REAPER para los
-    /// CLAP, y por eso el ritmo importa: se llama una vez por tick del
-    /// envoltorio (12 Hz por defecto), no en cada frame.
-    ///
-    /// Los valores que el propio host acaba de escribir (el rack movió un
-    /// knob) **no** se reportan: se comparan contra `host_sent` para no
-    /// devolverle al rack su propio eco.
     fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {
-        // `PluginParams` es `Copy`: se copia para no dejar prestado `self` y
-        // poder llamar a `&mut self` dentro del bucle.
         let Some(params) = self.params else {
             return Vec::new();
         };
 
-        let count = params.count(&self.plugin.plugin_handle()) as usize;
         let mut changes = Vec::new();
+        let ids: Vec<(u32, f64, f64)> = self
+            .param_list
+            .iter()
+            .filter(|m| m.can_automate)
+            .map(|m| (m.id, m.min, m.max))
+            .collect();
 
-        for index in 0..count {
-            let Some(info) = self.param_info(index) else {
+        for (id, min, max) in ids {
+            let Some(clap_id) = ClapId::from_raw(id) else {
                 continue;
             };
-            if !info.can_automate {
-                continue;
-            }
-            let Some(current) = self.get_param_normalized(info.id) else {
+            let plain = {
+                let mut plugin_handle = self.plugin.plugin_handle();
+                params.get_value(&mut plugin_handle, clap_id)
+            };
+            let Some(plain) = plain else {
                 continue;
             };
+            let current = clap_plain_to_norm(plain, min, max);
 
-            let previous = self.seen.insert(info.id, current);
+            let previous = self.seen.insert(id, current);
             let Some(previous) = previous else {
-                // Primera lectura de este parámetro: no hay con qué comparar.
                 continue;
             };
             if (previous - current).abs() <= PARAM_EPSILON {
@@ -1056,13 +1193,12 @@ impl PluginInstance for ClapInstance {
             }
             if self
                 .host_sent
-                .get(&info.id)
+                .get(&id)
                 .is_some_and(|sent| (sent - current).abs() <= PARAM_EPSILON)
             {
-                // Es el eco del host: el rack ya sabe este valor.
                 continue;
             }
-            changes.push((info.id, current));
+            changes.push((id, current));
         }
 
         changes
@@ -1123,5 +1259,33 @@ impl PluginInstance for ClapInstance {
 impl Drop for ClapInstance {
     fn drop(&mut self) {
         self.hide_gui();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clap_plain_norm_roundtrip_non_unit_ranges() {
+        // Speed 0..100 (como UZU): 50.0 -> 0.5 -> 50.0
+        assert!((clap_plain_to_norm(50.0, 0.0, 100.0) - 0.5).abs() < 1e-6);
+        assert!((clap_norm_to_plain(0.5, 0.0, 100.0) - 50.0).abs() < 1e-6);
+        assert!((clap_plain_to_norm(100.0, 0.0, 100.0) - 1.0).abs() < 1e-6);
+
+        // Rango bipolar -24..+24 dB: 0 dB -> 0.5
+        assert!((clap_plain_to_norm(0.0, -24.0, 24.0) - 0.5).abs() < 1e-6);
+        assert!((clap_norm_to_plain(0.25, -24.0, 24.0) - (-12.0)).abs() < 1e-6);
+
+        // Rango degenerado min == max no produce NaN
+        assert_eq!(clap_plain_to_norm(5.0, 5.0, 5.0), 0.0);
+        assert_eq!(clap_norm_to_plain(0.5, 5.0, 5.0), 5.0);
+    }
+
+    #[test]
+    fn clap_step_count_detects_boolean_and_stepped() {
+        assert_eq!(clap_step_count(0.0, 1.0, true), 2);
+        assert_eq!(clap_step_count(0.0, 4.0, true), 5);
+        assert_eq!(clap_step_count(0.0, 100.0, false), 0);
     }
 }

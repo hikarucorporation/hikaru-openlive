@@ -228,6 +228,24 @@ impl WrapperConfig {
         self
     }
 
+    /// Ventana flotante nativa estilo Bitwig 5.3.13 (`XcbPluginWindow`):
+    /// gestionada por el compositor X11/XWayland con titlebar real
+    /// (`"Track / Plugin"`), foco de teclado habilitado, `WM_TRANSIENT_FOR`
+    /// cuando hay padre X11 y apilada arriba del DAW sin doble marco.
+    pub fn bitwig_floating(parent: HostParentKind) -> Self {
+        Self {
+            parent,
+            always_on_top: true,
+            keep_focused_with_parent: true,
+            window_type: WrapperWindowType::Utility,
+            skip_taskbar: true,
+            want_keyboard_focus: true,
+            style: WrapperStyle::Decorated,
+            relation: HostRelation::Detached,
+            host_frame: None,
+        }
+    }
+
     /// XID al que hay que poner `WM_TRANSIENT_FOR`, o `None` si esta
     /// configuración no puede emparentarse.
     ///
@@ -388,6 +406,19 @@ mod tests {
         assert!(c.host_frame.is_none());
         assert!(!c.override_redirect());
         assert!(!c.strict_child());
+    }
+
+    #[test]
+    fn bitwig_floating_uses_decorated_wm_window_without_override_redirect() {
+        let c = WrapperConfig::bitwig_floating(HostParentKind::Xcb(0x4242));
+        let plan = plan_hints(&c);
+        assert_eq!(c.style, WrapperStyle::Decorated);
+        assert_eq!(c.relation, HostRelation::Detached);
+        assert!(!plan.override_redirect);
+        assert!(!plan.strict_child);
+        assert!(plan.always_on_top);
+        assert!(plan.keyboard_input);
+        assert_eq!(plan.transient_for, Some(0x4242));
     }
 
     #[test]

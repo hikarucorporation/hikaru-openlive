@@ -128,7 +128,7 @@ pub fn capture_track(t: &mixer::Track) -> Track {
                     .as_ref()
                     .map(|p| p.modulators_open)
                     .or_else(|| e.open_grid.as_ref().map(|g| g.modulators_open))
-                    .unwrap_or(false);
+                    .unwrap_or(e.modulators_open);
                 let modulator_bay =
                     crate::views::hikaru_native_plugins::hikaru_openmodulation::capture_bay_params(
                         t.id,
@@ -254,6 +254,7 @@ pub fn build_track(t: &Track) -> mixer::Track {
 
             // Reconstruir Device Modulator Bay acoplado al slot (si existe)
             if let Some(ref bay_params) = e.modulator_bay {
+                slot.modulators_open = bay_params.open;
                 crate::views::hikaru_native_plugins::hikaru_openmodulation::restore_bay_params(
                     t.id,
                     slot_idx,

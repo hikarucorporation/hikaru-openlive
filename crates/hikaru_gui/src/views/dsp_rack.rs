@@ -107,19 +107,65 @@ pub fn rack_title(track_name: &str, scene: Option<usize>) -> String {
     }
 }
 
-pub fn keep_plugin_editors_above(_app: &mut AppState) {}
+pub fn keep_plugin_editors_above(app: &mut AppState) {
+    app.plugin_settings_state.raise_open_plugins();
+}
+
+/// Elimina un dispositivo del rack limpiando su ventana nativa, su bay de
+/// moduladores y su instancia en el motor de audio (si es plugin externo).
+pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize) {
+    let removed_info = app
+        .current_tracks_mut()
+        .get_mut(track_idx)
+        .and_then(|track| {
+            if slot_idx < track.effects.len() {
+                let removed = track.effects.remove(slot_idx);
+                let new_len = track.effects.len();
+                Some((removed, new_len))
+            } else {
+                None
+            }
+        });
+
+    let Some((removed, new_len)) = removed_info else {
+        return;
+    };
+
+    if app.open_grid_editor == Some((track_idx, slot_idx)) {
+        app.open_grid_editor = None;
+    }
+
+    if app.selected_track_index == track_idx
+        && app.selected_slot_index >= new_len
+        && new_len > 0
+    {
+        app.selected_slot_index = new_len - 1;
+    }
+
+    hikaru_openmodulation::clear_bay_for_slot(track_idx, slot_idx);
+    let wkey = crate::views::external_plugins_settings::slot_window_key(track_idx, slot_idx);
+    app.plugin_settings_state.close_window(&wkey);
+
+    if removed.external.is_some()
+        || matches!(
+            removed.name.as_str(),
+            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
+        )
+    {
+        if let Some(eng_track) = track_idx.checked_sub(1) {
+            app.audio_proxy.send(crate::audio_proxy::GuiCommand::RemoveExternalPlugin {
+                track_idx: eng_track,
+                slot_idx,
+            });
+        }
+    }
+    app.project_dirty = true;
+}
 
 pub fn handle_delete_key(app: &mut AppState) {
     let track_idx = app.safe_track_index();
     let slot_idx = app.selected_slot_index;
-    if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
-        if slot_idx < track.effects.len() {
-            track.effects.remove(slot_idx);
-            if slot_idx >= track.effects.len() && !track.effects.is_empty() {
-                app.selected_slot_index = track.effects.len() - 1;
-            }
-        }
-    }
+    remove_device_slot(app, track_idx, slot_idx);
 }
 
 pub fn save_device_chain_dialog(app: &AppState, track_idx: usize) {
@@ -510,43 +556,47 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                         let Some(slot) = slot_info else { continue };
 
                         let is_selected = app.selected_slot_index == slot_idx;
-                        let card_w = match slot.name.as_str() {
-                            "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable" => {
-                                let mods_open = slot
-                                    .open_poly
-                                    .as_ref()
-                                    .map(|p| p.modulators_open)
-                                    .unwrap_or(true);
-                                if mods_open {
-                                    OPEN_POLY_COMPACT_CARD_WIDTH
-                                        + hikaru_openmodulation::bay_width_for_slot(
-                                            track_idx, slot_idx,
-                                        )
-                                } else {
-                                    OPEN_POLY_COMPACT_CARD_WIDTH
+                        let card_w = if slot.external.is_some() {
+                            crate::views::external_plugin_card::card_width(&slot, track_idx, slot_idx)
+                        } else {
+                            match slot.name.as_str() {
+                                "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable" => {
+                                    let mods_open = slot
+                                        .open_poly
+                                        .as_ref()
+                                        .map(|p| p.modulators_open)
+                                        .unwrap_or(true);
+                                    if mods_open {
+                                        OPEN_POLY_COMPACT_CARD_WIDTH
+                                            + hikaru_openmodulation::bay_width_for_slot(
+                                                track_idx, slot_idx,
+                                            )
+                                    } else {
+                                        OPEN_POLY_COMPACT_CARD_WIDTH
+                                    }
                                 }
-                            }
-                            "OpenGrid" | "Hikaru OpenGrid" | "Poly Grid" => {
-                                let mods_open = slot
-                                    .open_grid
-                                    .as_ref()
-                                    .map(|g| g.modulators_open)
-                                    .unwrap_or(true);
-                                if mods_open {
-                                    OPEN_GRID_COMPACT_CARD_WIDTH
-                                        + hikaru_openmodulation::bay_width_for_slot(
-                                            track_idx, slot_idx,
-                                        )
-                                } else {
-                                    OPEN_GRID_COMPACT_CARD_WIDTH
+                                "OpenGrid" | "Hikaru OpenGrid" | "Poly Grid" => {
+                                    let mods_open = slot
+                                        .open_grid
+                                        .as_ref()
+                                        .map(|g| g.modulators_open)
+                                        .unwrap_or(true);
+                                    if mods_open {
+                                        OPEN_GRID_COMPACT_CARD_WIDTH
+                                            + hikaru_openmodulation::bay_width_for_slot(
+                                                track_idx, slot_idx,
+                                            )
+                                    } else {
+                                        OPEN_GRID_COMPACT_CARD_WIDTH
+                                    }
                                 }
+                                "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
+                                "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
+                                "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
+                                "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH,
+                                "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
+                                _ => CARD_WIDTH,
                             }
-                            "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
-                            "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
-                            "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
-                            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH,
-                            "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
-                            _ => CARD_WIDTH,
                         };
                         let card_h = pill_h;
                         let (card_rect, _) =
@@ -562,8 +612,16 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 | "OpenModulation"
                                 | "Hikaru OpenModulation"
                         );
-                        let mod_scope_active = !is_lfo_mod_card
-                            && hikaru_openmodulation::active_mapping_for_track(track_idx).is_some();
+                        let mod_scope_active = if slot.external.is_some() {
+                            hikaru_openmodulation::active_mapping_source_for_external(
+                                track_idx, slot_idx,
+                            )
+                            .is_some()
+                        } else {
+                            !is_lfo_mod_card
+                                && hikaru_openmodulation::active_mapping_for_track(track_idx)
+                                    .is_some()
+                        };
                         p.rect_stroke(
                             card_rect,
                             3.5,
@@ -588,7 +646,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             p.rect_filled(bar_r, 1.0, hikaru_openmodulation::MOD_ARROW_CYAN);
                         }
 
-                        if slot.is_open_poly() {
+                        if slot.external.is_some() {
+                            crate::views::external_plugin_card::render_card(
+                                ui,
+                                app,
+                                card_rect,
+                                track_idx,
+                                slot_idx,
+                                is_selected,
+                                &mut slot_to_remove,
+                            );
+                        } else if slot.is_open_poly() {
                             let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
                             let sb_out = render_bitwig_device_sidebar(
                                 ui,
@@ -1286,11 +1354,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                     }
 
                     if let Some(idx) = slot_to_remove {
-                        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
-                            if idx < track.effects.len() {
-                                track.effects.remove(idx);
-                            }
-                        }
+                        remove_device_slot(app, track_idx, idx);
                     }
 
                     // Botón `+` centrado verticalmente estilo ranura de inserción Bitwig

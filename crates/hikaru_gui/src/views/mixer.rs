@@ -39,11 +39,37 @@ pub struct ExternalParamState {
     pub info: hikaru_plugin_host::PluginParamInfo,
     pub value: f32,
     pub pending_to_engine: bool,
+    /// Texto exacto formateado por el plugin (ej. `"50.0000000"`, `"440 Hz"`).
+    /// Si es `None` o si el valor cambió localmente sin re-formateo, cae a
+    /// `info.display_value(value)`.
+    pub display_text: Option<String>,
+    /// Último valor efectivo (`base + mod`) enviado al motor (para evitar spam
+    /// por frame cuando el modulador no cambió).
+    pub last_sent_effective: Option<f32>,
+    /// Último delta de modulación CLAP enviado al motor.
+    pub last_sent_mod: f32,
 }
 
 impl ExternalParamState {
     pub fn display(&self) -> String {
+        if let Some(ref text) = self.display_text {
+            if !text.trim().is_empty() {
+                return text.clone();
+            }
+        }
         self.info.display_value(self.value)
+    }
+
+    /// Valor formateado para mostrar un valor arbitrario (ej. valor modulado en vivo).
+    pub fn format_value(&self, norm: f32) -> String {
+        if (norm - self.value).abs() <= 1e-5 {
+            if let Some(ref text) = self.display_text {
+                if !text.trim().is_empty() {
+                    return text.clone();
+                }
+            }
+        }
+        self.info.display_value(norm)
     }
 }
 
@@ -76,6 +102,18 @@ pub struct DspSlot {
     pending_external_params: Vec<(u32, f32)>,
     pub params_status: ExternalParamsStatus,
     pub has_gui: Option<bool>,
+    /// Estado del Device Modulator Bay acoplado a este dispositivo (Bitwig `SHOW MODULATORS`).
+    pub modulators_open: bool,
+    /// Panel Device Remote Controls (2×4 slots, Bitwig `SHOW REMOTE CONTROLS`).
+    pub remotes: crate::views::remote_controls::RemoteControlsState,
+    /// Filtro de búsqueda en vivo de los parámetros públicos del plugin externo.
+    pub param_search: String,
+    /// Si la lista de parámetros públicos del plugin externo está expandida.
+    pub params_expanded: bool,
+    /// Nombre del preset actual del dispositivo (por defecto `"init"`, estilo Bitwig).
+    pub preset_name: String,
+    /// Si este slot ya envió `LoadExternalPlugin` al motor de audio.
+    pub engine_loaded: bool,
 }
 
 impl Default for DspSlot {
@@ -125,6 +163,12 @@ impl DspSlot {
             pending_external_params: Vec::new(),
             params_status: ExternalParamsStatus::Idle,
             has_gui: None,
+            modulators_open: false,
+            remotes: crate::views::remote_controls::RemoteControlsState::default(),
+            param_search: String::new(),
+            params_expanded: true,
+            preset_name: "init".to_string(),
+            engine_loaded: false,
         }
     }
 
@@ -146,7 +190,9 @@ impl DspSlot {
 
     pub fn has_editor(&self) -> bool {
         if self.external.is_some() {
-            return self.external.as_ref().is_some_and(|p| p.has_gui);
+            return self
+                .has_gui
+                .unwrap_or_else(|| self.external.as_ref().is_some_and(|p| p.has_gui));
         }
         matches!(
             self.name.as_str(),

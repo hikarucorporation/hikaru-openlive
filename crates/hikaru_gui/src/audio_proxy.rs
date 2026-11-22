@@ -372,6 +372,20 @@ pub enum GuiCommand {
         param_id: u32,
         value: f32,
     },
+    /// Activa o desactiva (bypass) un plugin externo sin descargarlo.
+    SetExternalPluginActive {
+        track_idx: usize,
+        slot_idx: usize,
+        active: bool,
+    },
+    /// Envía modulación no destructiva (CLAP `ParamModEvent`) a un parámetro de
+    /// plugin externo.
+    SetExternalPluginMod {
+        track_idx: usize,
+        slot_idx: usize,
+        param_id: u32,
+        delta: f32,
+    },
     /// Varios parámetros de un plugin externo, de una sola vez.
     ///
     /// Es la vía que usan los knobs del rack y el feedback del editor nativo:

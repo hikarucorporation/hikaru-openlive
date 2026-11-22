@@ -68,6 +68,11 @@ pub enum ModulationTarget {
     OpenEq3Low,
     OpenEq3Mid,
     OpenEq3High,
+    /// Parámetro público de un plugin externo VST3/CLAP en `(slot_idx, param_id)`.
+    ExternalParam {
+        slot_idx: usize,
+        param_id: u32,
+    },
     #[default]
     None,
 }
@@ -139,7 +144,26 @@ impl ModulationTarget {
             ModulationTarget::OpenEq3Low => "OpenEQ3: Low Gain",
             ModulationTarget::OpenEq3Mid => "OpenEQ3: Mid Gain",
             ModulationTarget::OpenEq3High => "OpenEQ3: High Gain",
+            ModulationTarget::ExternalParam { .. } => "Plugin Param",
             ModulationTarget::None => "Unassigned (None)",
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        match self {
+            ModulationTarget::ExternalParam { slot_idx, param_id } => {
+                format!("Plugin #{} · Param {}", slot_idx + 1, param_id)
+            }
+            _ => self.label().to_string(),
+        }
+    }
+
+    pub fn save_key(&self) -> String {
+        match self {
+            ModulationTarget::ExternalParam { slot_idx, param_id } => {
+                format!("ext:{slot_idx}:{param_id}")
+            }
+            _ => self.label().to_string(),
         }
     }
 
@@ -175,6 +199,7 @@ impl ModulationTarget {
             ModulationTarget::OpenEq3Low
             | ModulationTarget::OpenEq3Mid
             | ModulationTarget::OpenEq3High => "OpenEQ3",
+            ModulationTarget::ExternalParam { .. } => "ExternalPlugin",
             ModulationTarget::None => "",
         }
     }
@@ -211,6 +236,7 @@ impl ModulationTarget {
             ModulationTarget::OpenEq3Low => "Low Gain",
             ModulationTarget::OpenEq3Mid => "Mid Gain",
             ModulationTarget::OpenEq3High => "High Gain",
+            ModulationTarget::ExternalParam { .. } => "",
             ModulationTarget::None => "",
         }
     }
@@ -247,6 +273,14 @@ impl ModulationTarget {
     }
 
     pub(crate) fn parse_saved(label: &str, fallback: Self) -> Self {
+        if let Some(rest) = label.strip_prefix("ext:") {
+            let mut parts = rest.split(':');
+            if let (Some(sl), Some(pid)) = (parts.next(), parts.next()) {
+                if let (Ok(slot_idx), Ok(param_id)) = (sl.parse::<usize>(), pid.parse::<u32>()) {
+                    return ModulationTarget::ExternalParam { slot_idx, param_id };
+                }
+            }
+        }
         Self::ALL
             .iter()
             .find(|t| t.label().eq_ignore_ascii_case(label))
@@ -411,7 +445,7 @@ impl LfoChannelState {
         let saved_routes: Vec<(String, f32)> = self
             .active_routes_snapshot()
             .into_iter()
-            .map(|(t, a)| (t.label().to_string(), a))
+            .map(|(t, a)| (t.save_key(), a))
             .collect();
         LfoChannelParams {
             waveform: waveform_to_str(self.waveform).to_string(),
@@ -423,7 +457,7 @@ impl LfoChannelState {
             bipolar: self.bipolar,
             retrigger: self.retrigger,
             amount: self.amount,
-            target: self.target.label().to_string(),
+            target: self.target.save_key(),
             routes: saved_routes,
         }
     }
@@ -649,7 +683,7 @@ impl LfoModState {
             .lfo1
             .active_routes_snapshot()
             .into_iter()
-            .map(|(t, a)| (t.label().to_string(), a))
+            .map(|(t, a)| (t.save_key(), a))
             .collect();
         OpenModulationParams {
             waveform: waveform_to_str(self.lfo1.waveform).to_string(),
@@ -660,7 +694,7 @@ impl LfoModState {
             phase_deg: self.lfo1.phase_deg,
             bipolar: self.lfo1.bipolar,
             amount: self.lfo1.amount,
-            target: self.lfo1.target.label().to_string(),
+            target: self.lfo1.target.save_key(),
             retrigger: self.lfo1.retrigger,
             routes: routes1,
             lfo2: Some(self.lfo2.to_channel_params()),
@@ -930,6 +964,170 @@ pub fn get_modulation(track_idx: usize, device: &str, param: &str) -> Option<Act
     } else {
         None
     }
+}
+
+/// Evalúa todas las modulaciones activas (LFO MOD + Device Modulator Bay +
+/// Track Modulators + Project Modulators) dirigidas al parámetro público
+/// `(slot_idx, param_id)` de un plugin externo VST3/CLAP en `track_idx`.
+pub fn get_external_param_modulation(
+    track_idx: usize,
+    slot_idx: usize,
+    param_id: u32,
+) -> Option<ActiveModulation> {
+    let target = ModulationTarget::ExternalParam { slot_idx, param_id };
+    let transport = get_global_transport();
+
+    let mut matched = false;
+    let mut total_delta = 0.0_f32;
+    let mut total_raw = 0.0_f32;
+    let mut total_amount = 0.0_f32;
+    let mut last_phase = 0.0_f32;
+
+    {
+        let mut map = lfo_state_map().lock().unwrap();
+        for (&(tr, _slot), state) in map.iter_mut() {
+            if tr != track_idx {
+                continue;
+            }
+            let mix = state.mix.clamp(0.0, 1.0);
+            let amt1 = state.lfo1.route_amount(target);
+            if amt1.abs() > 1e-4 {
+                let (phase, raw, _) = state.lfo1.compute_live_sample_continuous(&transport);
+                matched = true;
+                total_raw += raw * mix;
+                total_delta += raw * amt1 * mix;
+                total_amount += amt1 * mix;
+                last_phase = phase;
+            }
+            let amt2 = state.lfo2.route_amount(target);
+            if amt2.abs() > 1e-4 {
+                let (phase, raw, _) = state.lfo2.compute_live_sample_continuous(&transport);
+                matched = true;
+                total_raw += raw * mix;
+                total_delta += raw * amt2 * mix;
+                total_amount += amt2 * mix;
+                last_phase = phase;
+            }
+        }
+    }
+
+    let (bay_matched, bay_raw, bay_delta, bay_amount, bay_phase) =
+        super::bay::evaluate_bay_modulation_for_target(track_idx, target, &transport);
+    if bay_matched {
+        matched = true;
+        total_raw += bay_raw;
+        total_delta += bay_delta;
+        total_amount += bay_amount;
+        if last_phase == 0.0 {
+            last_phase = bay_phase;
+        }
+    }
+
+    if matched {
+        Some(ActiveModulation {
+            raw_lfo: total_raw.clamp(-1.0, 1.0),
+            delta: total_delta.clamp(-1.0, 1.0),
+            amount: total_amount.clamp(-1.0, 1.0),
+            phase: last_phase,
+        })
+    } else {
+        None
+    }
+}
+
+/// Fuente de mapping activa aplicable a un plugin externo en `(track_idx, slot_idx)`:
+/// acepta el Device Modulator Bay del propio plugin, el Track Modulator Bay de la pista,
+/// el Project Modulator Bay (`(0, PROJECT_MODULATOR_SLOT)`) y cualquier OpenLFO MOD de la pista.
+pub fn active_mapping_source_for_external(track_idx: usize, slot_idx: usize) -> Option<ModSourceId> {
+    let active = *mapping_mode_active().lock().unwrap();
+    let src = active?;
+    match src {
+        ModSourceId::LfoMod { track_idx: tr, .. } if tr == track_idx => Some(src),
+        ModSourceId::DeviceBay {
+            track_idx: tr,
+            slot_idx: sl,
+            ..
+        } if (tr == track_idx
+            && (sl == slot_idx || sl == crate::views::remote_controls::TRACK_MODULATOR_SLOT))
+            || (tr == 0 && sl == crate::views::remote_controls::PROJECT_MODULATOR_SLOT) =>
+        {
+            Some(src)
+        }
+        _ => None,
+    }
+}
+
+/// Lee el monto de modulación (`-1.0..=1.0`) de `src` hacia un parámetro externo `(slot_idx, param_id)`.
+pub fn get_external_route_amount(src: ModSourceId, slot_idx: usize, param_id: u32) -> f32 {
+    let target = ModulationTarget::ExternalParam { slot_idx, param_id };
+    match src {
+        ModSourceId::LfoMod {
+            track_idx,
+            slot_idx: mod_slot,
+            channel_idx,
+        } => {
+            let st = get_lfo_state(track_idx, mod_slot);
+            if channel_idx == 0 {
+                st.lfo1.route_amount(target)
+            } else {
+                st.lfo2.route_amount(target)
+            }
+        }
+        ModSourceId::DeviceBay {
+            track_idx,
+            slot_idx: bay_slot,
+            mod_id,
+            out_idx,
+        } => super::bay::get_bay_route_amount_target(track_idx, bay_slot, mod_id, out_idx, target),
+    }
+}
+
+/// Fija (o borra si `|amount| < 0.005`) la ruta de modulación de `src` hacia `(slot_idx, param_id)`.
+pub fn set_external_route_amount(
+    src: ModSourceId,
+    slot_idx: usize,
+    param_id: u32,
+    amount: f32,
+) {
+    let target = ModulationTarget::ExternalParam { slot_idx, param_id };
+    match src {
+        ModSourceId::LfoMod {
+            track_idx,
+            slot_idx: mod_slot,
+            channel_idx,
+        } => {
+            update_lfo_state(track_idx, mod_slot, |st| {
+                if channel_idx == 0 {
+                    st.lfo1.set_route(target, amount);
+                } else {
+                    st.lfo2.set_route(target, amount);
+                }
+            });
+        }
+        ModSourceId::DeviceBay {
+            track_idx,
+            slot_idx: bay_slot,
+            mod_id,
+            out_idx,
+        } => super::bay::set_bay_route_amount_target(
+            track_idx, bay_slot, mod_id, out_idx, target, amount,
+        ),
+    }
+}
+
+/// Limpia todas las modulaciones dirigidas al parámetro externo `(slot_idx, param_id)` en `track_idx`.
+pub fn clear_external_param_routes(track_idx: usize, slot_idx: usize, param_id: u32) {
+    let target = ModulationTarget::ExternalParam { slot_idx, param_id };
+    {
+        let mut map = lfo_state_map().lock().unwrap();
+        for (&(tr, _), st) in map.iter_mut() {
+            if tr == track_idx {
+                st.lfo1.set_route(target, 0.0);
+                st.lfo2.set_route(target, 0.0);
+            }
+        }
+    }
+    super::bay::clear_bay_routes_for_target(track_idx, target);
 }
 
 /// Returns the active modulation mapping source on `track_idx` (either LFO MOD or Device Modulator Bay).

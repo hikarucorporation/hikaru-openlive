@@ -55,6 +55,9 @@ use super::window::{HikaruWrapperWindow, WindowEvent};
 pub enum WrapperCommand {
     /// Un knob del rack movió un parámetro (id, normalizado 0..1).
     SetParam { id: u32, value: f32 },
+    /// Desplazamiento de modulación en vivo hacia la instancia del editor
+    /// (`CLAP_EVENT_PARAM_MOD` cuando el plugin lo soporta).
+    SetParamMod { id: u32, delta: f32 },
     /// Cerrar la ventana (el usuario la cerró desde el DAW).
     Close,
     /// Re-elevar la ventana sin robarle el foco al DAW.
@@ -356,6 +359,9 @@ impl WrapperEventLoop {
                             );
                         }
                     }
+                    WrapperCommand::SetParamMod { id, delta } => {
+                        let _ = instance.set_param_modulation(id, delta);
+                    }
                     WrapperCommand::Close => close_requested = true,
                     // Se marca y se aplica después de drenar la cola, para no
                     // mandar N viajes al servidor si llegaron varios `Raise`.
@@ -383,6 +389,13 @@ impl WrapperEventLoop {
             //    la implementación no hace nada; CLAP sí tiene temporizadores
             //    declarados por el plugin y hay que dispararlos.
             instance.gui_tick();
+
+            // 3-a. Si el propio editor pidió cambiar de tamaño (VST3
+            //      `IPlugFrame::resizeView` o CLAP `host_gui.request_resize`),
+            //      ajustar la ventana del envoltorio para acompañarlo.
+            if let Some((w, h)) = instance.poll_editor_resize() {
+                self.window.resize_for_editor(w, h);
+            }
 
             // 3-bis. Cambios de parámetro que nacen dentro del editor del
             //       plugin (el usuario movió un knob de la GUI nativa).

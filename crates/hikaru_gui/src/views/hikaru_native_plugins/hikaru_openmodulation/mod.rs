@@ -10,20 +10,23 @@ pub mod bay_ui;
 pub mod lfo_mod;
 
 pub use bay::{
-    add_bay_modulator, bay_width_for_slot, capture_bay_params, clear_bay_for_slot, get_bay_state,
+    add_bay_modulator, bay_width_for_slot, capture_bay_params, clear_bay_for_slot,
+    ensure_empty_bay_for_slot, get_bay_state, has_active_external_modulations,
     notify_bay_audio_level, notify_bay_note_off, notify_bay_note_on, remove_bay_modulator,
     restore_bay_params, update_bay_state, DeviceModulatorBay, MathOp, ModulatorCategory,
     ModulatorKind, ModulatorMeta, ModulatorSlotState, MODULATOR_CATALOG,
 };
 pub use bay_ui::render_device_modulator_bay;
 pub use lfo_mod::{
-    active_mapping_for_track, active_mapping_source_for_track, clear_mapping_mode,
-    get_channel_route_amount, get_global_transport, get_lfo_state, get_modulation,
-    handle_knob_mapping_click, is_any_mapping_active_for_track, is_bay_mapping_active,
-    is_mapping_target, modulatable_rotary_knob, on_transport_pause_or_stop, on_transport_play,
-    render_module, render_preset_menu, set_channel_route_amount, toggle_bay_mapping_mode,
-    update_global_transport, update_lfo_state, ActiveModulation, LfoChannelState, LfoModState,
-    LfoTransportState, ModSourceId, ModulationTarget, MODULATION_CARD_WIDTH, MOD_ARROW_CYAN,
+    active_mapping_for_track, active_mapping_source_for_external, active_mapping_source_for_track,
+    clear_external_param_routes, clear_mapping_mode, get_channel_route_amount,
+    get_external_param_modulation, get_external_route_amount, get_global_transport, get_lfo_state,
+    get_modulation, handle_knob_mapping_click, is_any_mapping_active_for_track,
+    is_bay_mapping_active, is_mapping_target, modulatable_rotary_knob, on_transport_pause_or_stop,
+    on_transport_play, render_module, render_preset_menu, set_channel_route_amount,
+    set_external_route_amount, toggle_bay_mapping_mode, update_global_transport, update_lfo_state,
+    ActiveModulation, LfoChannelState, LfoModState, LfoTransportState, ModSourceId,
+    ModulationTarget, MODULATION_CARD_WIDTH, MOD_ARROW_CYAN,
 };
 
 #[cfg(test)]
@@ -753,5 +756,61 @@ mod tests {
         let r_cv = restored.slots.iter().find(|s| s.kind == ModulatorKind::HwCvIn).unwrap();
         assert_eq!(r_cv.cv_channel, 3);
         assert!((r_cv.cv_offset - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn external_plugin_param_modulation_routes_evaluate_persist_and_clear() {
+        let tr = 812usize;
+        let sl = 2usize;
+        let pid = 42u32;
+
+        clear_bay_for_slot(tr, sl);
+        ensure_empty_bay_for_slot(tr, sl);
+        let bay = get_bay_state(tr, sl);
+        assert!(bay.slots.is_empty(), "external plugin bay starts empty with 3 '+' cells");
+
+        let mod_id = add_bay_modulator(tr, sl, ModulatorKind::Macro);
+        update_bay_state(tr, sl, |b| {
+            let m = b.slots.iter_mut().find(|s| s.id == mod_id).unwrap();
+            m.macro_value = 0.8;
+            m.macro_bipolar = false;
+        });
+
+        let src = ModSourceId::DeviceBay {
+            track_idx: tr,
+            slot_idx: sl,
+            mod_id,
+            out_idx: 0,
+        };
+        set_external_route_amount(src, sl, pid, 0.5);
+        assert!((get_external_route_amount(src, sl, pid) - 0.5).abs() < 1e-4);
+        assert!(has_active_external_modulations(tr, sl));
+
+        let active = get_external_param_modulation(tr, sl, pid)
+            .expect("Macro routing should produce live modulation on external param");
+        assert!((active.delta - 0.4).abs() < 1e-3, "0.8 * 0.5 = 0.4, got {}", active.delta);
+        assert!((active.amount - 0.5).abs() < 1e-4);
+
+        // Save/restore roundtrip for ModulationTarget::ExternalParam
+        let target = ModulationTarget::ExternalParam {
+            slot_idx: sl,
+            param_id: pid,
+        };
+        let key = target.save_key();
+        assert_eq!(key, "ext:2:42");
+        assert_eq!(
+            ModulationTarget::parse_saved(&key, ModulationTarget::None),
+            target
+        );
+
+        let saved_bay = capture_bay_params(tr, sl, true).unwrap();
+        let mut restored = DeviceModulatorBay::empty();
+        restored.apply_project_params(&saved_bay);
+        assert_eq!(restored.slots[0].route_amount(0, target), 0.5);
+
+        clear_external_param_routes(tr, sl, pid);
+        assert!(get_external_param_modulation(tr, sl, pid).is_none());
+        assert!(!has_active_external_modulations(tr, sl));
+        clear_bay_for_slot(tr, sl);
     }
 }

@@ -251,53 +251,56 @@ pub fn render_device_modulator_bay(
         );
     }
 
-    // --- '+' Add Modulator Cell ---
-    let plus_idx = bay.slots.len();
-    let plus_col = plus_idx / BAY_SLOTS_PER_COL;
-    let plus_row = plus_idx % BAY_SLOTS_PER_COL;
-    let plus_rect = Rect::from_min_size(
-        pos2(
-            origin.x + plus_col as f32 * (BAY_COL_WIDTH + BAY_GAP),
-            origin.y + plus_row as f32 * (cell_h + BAY_GAP),
-        ),
-        vec2(BAY_COL_WIDTH, cell_h),
-    );
+    // --- '+' Add Modulator Cells (rellena las celdas vacías de la última columna como Bitwig) ---
+    let plus_start = bay.slots.len();
+    let total_grid_cells = bay.column_count() * BAY_SLOTS_PER_COL;
     let p = ui.painter().clone();
-    p.rect_filled(plus_rect, 3.0, CELL_BG);
-    p.rect_stroke(
-        plus_rect,
-        3.0,
-        Stroke::new(1.0_f32, CELL_BORDER),
-        egui::StrokeKind::Inside,
-    );
-    let plus_resp = ui
-        .interact(
-            plus_rect,
-            ui.id().with(("bay_add_mod", track_idx, slot_idx)),
-            Sense::click(),
-        )
-        .on_hover_text("Add Modulator (Pop-up Browser)");
-    if plus_resp.hovered() {
-        p.rect_filled(
-            plus_rect.shrink(1.0),
-            2.5,
-            Color32::from_rgb(0x32, 0x35, 0x3D),
+    for cell_idx in plus_start..total_grid_cells {
+        let plus_col = cell_idx / BAY_SLOTS_PER_COL;
+        let plus_row = cell_idx % BAY_SLOTS_PER_COL;
+        let plus_rect = Rect::from_min_size(
+            pos2(
+                origin.x + plus_col as f32 * (BAY_COL_WIDTH + BAY_GAP),
+                origin.y + plus_row as f32 * (cell_h + BAY_GAP),
+            ),
+            vec2(BAY_COL_WIDTH, cell_h),
         );
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-    p.text(
-        plus_rect.center(),
-        Align2::CENTER_CENTER,
-        "+",
-        fonts::semibold(16.0),
+        p.rect_filled(plus_rect, 3.0, CELL_BG);
+        p.rect_stroke(
+            plus_rect,
+            3.0,
+            Stroke::new(1.0_f32, CELL_BORDER),
+            egui::StrokeKind::Inside,
+        );
+        let plus_resp = ui
+            .interact(
+                plus_rect,
+                ui.id().with(("bay_add_mod", track_idx, slot_idx, cell_idx)),
+                Sense::click(),
+            )
+            .on_hover_text("Add Modulator (Pop-up Browser)");
         if plus_resp.hovered() {
-            Color32::WHITE
-        } else {
-            theme::TEXT_SECONDARY
-        },
-    );
-    if plus_resp.clicked() {
-        *request_open_browser = true;
+            p.rect_filled(
+                plus_rect.shrink(1.0),
+                2.5,
+                Color32::from_rgb(0x32, 0x35, 0x3D),
+            );
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        p.text(
+            plus_rect.center(),
+            Align2::CENTER_CENTER,
+            "+",
+            fonts::semibold(16.0),
+            if plus_resp.hovered() {
+                Color32::WHITE
+            } else {
+                theme::TEXT_SECONDARY
+            },
+        );
+        if plus_resp.clicked() {
+            *request_open_browser = true;
+        }
     }
 
     if let Some(id) = remove_id {
@@ -472,7 +475,7 @@ fn render_output_arrow_strip(
                 .routes
                 .iter()
                 .filter(|r| r.out_idx == out_u8)
-                .map(|r| format!("{} ({:+.0}%)", r.target.label(), r.amount * 100.0))
+                .map(|r| format!("{} ({:+.0}%)", r.target.display_label(), r.amount * 100.0))
                 .collect();
             format!(
                 "{out_title} → {}\nLeft-click: Map knobs • Right-click: Manage routes",
@@ -511,7 +514,7 @@ fn render_output_arrow_strip(
                     let mut amt = r.amount;
                     menu_ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(r.target.label())
+                            RichText::new(r.target.display_label())
                                 .font(fonts::regular(9.0))
                                 .color(MOD_ARROW_CYAN),
                         );
