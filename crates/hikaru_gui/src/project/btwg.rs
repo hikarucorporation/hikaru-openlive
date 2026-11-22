@@ -10,10 +10,96 @@
 // - Árbol binario de proyecto (`cls = 0x2e`) con tabla de referencias 1-based
 //   en pre-orden DFS (`REF1(id)` / `ref(id)`).
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app::AppState;
 use crate::views::matrix::ClipData;
+
+/// Metadatos de un archivo de audio embebido en `project/samples/` para el
+/// pool de samples (`0xd3c` -> `0x2c1` -> `0x4a6`/`0x4a9`) de Bitwig `BtWg`.
+#[derive(Debug, Clone)]
+pub struct BtWgSampleInfo {
+    pub src_path: PathBuf,
+    pub filename: String,
+    pub rel_path: String,
+    pub file_size: i32,
+    pub sample_rate: i32,
+    pub channels: u8,
+    pub duration_secs: f64,
+    pub hash16: [u8; 16],
+}
+
+/// Extrae `(sample_rate, channels, duration_secs)` de un buffer WAV PCM/float.
+pub fn parse_wav_metadata(bytes: &[u8], fallback_dur_secs: f64) -> (i32, u8, f64) {
+    let mut sr: i32 = 44100;
+    let mut ch: u8 = 2;
+    let mut bits_per_sample: u16 = 16;
+    let mut data_bytes: Option<u32> = None;
+
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
+        let mut pos = 12usize;
+        while pos + 8 <= bytes.len() {
+            let chunk_id = &bytes[pos..pos + 4];
+            let chunk_len = u32::from_le_bytes([
+                bytes[pos + 4],
+                bytes[pos + 5],
+                bytes[pos + 6],
+                bytes[pos + 7],
+            ]) as usize;
+            pos += 8;
+            if pos + chunk_len > bytes.len() {
+                break;
+            }
+            if chunk_id == b"fmt " && chunk_len >= 16 {
+                ch = u16::from_le_bytes([bytes[pos + 2], bytes[pos + 3]]).clamp(1, 8) as u8;
+                let parsed_sr = u32::from_le_bytes([
+                    bytes[pos + 4],
+                    bytes[pos + 5],
+                    bytes[pos + 6],
+                    bytes[pos + 7],
+                ]);
+                if (8000..=384000).contains(&parsed_sr) {
+                    sr = parsed_sr as i32;
+                }
+                bits_per_sample =
+                    u16::from_le_bytes([bytes[pos + 14], bytes[pos + 15]]).max(8);
+            } else if chunk_id == b"data" {
+                data_bytes = Some(chunk_len as u32);
+            }
+            pos += chunk_len + (chunk_len & 1);
+        }
+    }
+
+    let dur = if let Some(db) = data_bytes {
+        let bytes_per_frame = (ch as usize) * ((bits_per_sample as usize) / 8).max(1);
+        if bytes_per_frame > 0 && sr > 0 && db > 0 {
+            (db as f64 / bytes_per_frame as f64) / sr as f64
+        } else {
+            fallback_dur_secs.max(0.1)
+        }
+    } else {
+        fallback_dur_secs.max(0.1)
+    };
+    (sr, ch, dur)
+}
+
+/// Hash determinístico de 16 bytes para identificar el contenido de un sample.
+pub fn sample_hash16(bytes: &[u8]) -> [u8; 16] {
+    let mut h1: u64 = 0xcbf29ce484222325;
+    let mut h2: u64 = 0x84222325cbf29ce4;
+    for (i, &b) in bytes.iter().enumerate() {
+        h1 ^= b as u64;
+        h1 = h1.wrapping_mul(0x100000001b3);
+        h2 ^= (b as u64).wrapping_add(i as u64);
+        h2 = h2.wrapping_mul(0x9e3779b97f4a7c15);
+    }
+    let mut out = [0u8; 16];
+    out[0..8].copy_from_slice(&h1.to_be_bytes());
+    out[8..16].copy_from_slice(&h2.to_be_bytes());
+    out
+}
 
 // =========================================================================
 // ESCRITOR BINARIO `BtWg`
@@ -130,6 +216,13 @@ impl BtWgWriter {
         self.u32(fid);
         self.u8(0x08);
         self.raw_str(s);
+    }
+
+    pub fn field_bytes(&mut self, fid: u32, data: &[u8]) {
+        self.u32(fid);
+        self.u8(0x0d);
+        self.u32(data.len() as u32);
+        self.buf.extend_from_slice(data);
     }
 
     pub fn field_obj_header(&mut self, fid: u32, cls: u32) -> u32 {
@@ -298,7 +391,7 @@ pub fn encode_minimal_view_settings() -> Vec<u8> {
 // SERIALIZACIÓN DE `template.bwproject` (`BtWg0003000200b8`)
 // =========================================================================
 
-fn encode_structure_subdoc(track_names: &[String]) -> Vec<u8> {
+fn encode_structure_subdoc(tracks: &[(String, bool)]) -> Vec<u8> {
     let mut out = b"BtWg0003000200000000002b000000000000000001\n".to_vec();
     let mut w = BtWgWriter::new();
     w.begin_obj(0x285);
@@ -306,8 +399,9 @@ fn encode_structure_subdoc(track_names: &[String]) -> Vec<u8> {
     w.field_obj_header(0xad2, 0x283);
     w.field_str(0xad1, "Project");
     w.field_obj_list_start(0xace);
-    for name in track_names {
-        w.begin_obj(0x288);
+    for (name, is_audio) in tracks {
+        // En BtWg structure: 0x287 = Audio Track, 0x288 = Instrument Track
+        w.begin_obj(if *is_audio { 0x287 } else { 0x288 });
         w.field_str(0xad1, name);
         w.end_obj();
     }
@@ -478,6 +572,200 @@ fn write_grid_settings(w: &mut BtWgWriter, fid: u32) {
     w.field_i8(0x120c, 4);
     w.field_i8(0x11ff, 1);
     w.end_obj();
+}
+
+fn write_audio_launcher_clip(
+    w: &mut BtWgWriter,
+    clip: &crate::views::matrix::MatrixClip,
+    bpm: f64,
+    time_sig_packed: i32,
+    sample_info: &BtWgSampleInfo,
+    stream_ref_id: u32,
+) {
+    let dur_secs = if sample_info.duration_secs > 0.0 {
+        sample_info.duration_secs
+    } else {
+        clip.duration_secs.max(0.25)
+    };
+    let dur_beats = (dur_secs * (bpm / 60.0)).max(0.25);
+    let color = clip
+        .color
+        .map(color32_to_rgba_f32)
+        .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+
+    // Audio Launcher Clip (`0xee`)
+    w.field_obj_header(0x240, 0xee);
+    w.field_f64(0x2af, 0.0);
+    w.field_f64(0x26, dur_beats);
+    w.field_bool(0x10f8, clip.muted);
+
+    // Contenido de Audio Clip (`0x105`)
+    w.field_obj_header(0x288, 0x105);
+    w.field_i8(0x1fd, 0);
+
+    w.field_obj_header(0x98f, 0x267);
+    w.field_i8(0x1fd, 0);
+    w.field_empty_obj_list(0x21f);
+    w.field_bool(0x991, clip.loop_enabled);
+    w.field_obj_header(0x992, 0x58);
+    w.field_f64(0x2af, 0.0);
+    w.field_f64(0x26, dur_beats);
+    w.end_obj();
+    w.field_obj_header(0x98c, 0x269);
+    w.field_f64(0x2af, 0.0);
+    w.end_obj();
+    w.field_obj_header(0x98d, 0x268);
+    w.field_f64(0x2af, dur_beats);
+    w.end_obj();
+    w.end_obj(); // 0x267
+
+    w.field_empty_obj_list(0x49d);
+    w.field_empty_obj_list(0xbac);
+    w.field_empty_obj_list(0xbad);
+    w.field_bool(0x281, true);
+    w.field_f64(0x940, 0.0);
+    w.field_i32(0x1d4b, time_sig_packed);
+
+    // Contenedor de Audio Events (`0x6ce` -> `0xce` -> `0xd4`)
+    w.field_obj_header(0x49c, 0x6ce);
+    w.field_i8(0x1fd, 0);
+    w.field_obj_list_start(0x18cb);
+    w.begin_obj(0xce);
+    w.field_i8(0x1fd, 0);
+    w.field_obj_list_start(0x21f);
+
+    // Audio Event (`0xd4`)
+    w.begin_obj(0xd4);
+    w.field_f64(0x2af, 0.0);
+    w.field_f64(0x26, dur_beats);
+    w.field_bool(0x10f8, false);
+
+    // Sample Playback (`0x9f`)
+    w.field_obj_header(0x288, 0x9f);
+    w.field_i8(0x1fd, 0);
+    w.field_null(0xc33);
+    w.field_null(0xc34);
+    w.field_null(0xc35);
+    w.field_obj_header(0x20d, 0x1db);
+    w.field_ref(0x4b4, stream_ref_id);
+    w.end_obj();
+    w.field_bool(0x10ad, false);
+    w.field_i8(0x4b0, 3);
+    w.field_i8(0xecc, 1);
+    w.field_i8(0x25bf, 0);
+    w.field_i8(0x1424, 1);
+    w.field_i8(0x25cb, 2);
+    w.field_bool(0xa09, false);
+    w.field_bool(0x1d26, true);
+    w.field_i16(0x1d27, 128);
+
+    // Warp / Stretch markers (`0x192` -> `0x8b` -> `0x43`)
+    w.field_obj_header(0x192, 0x8b);
+    w.field_i8(0x1fd, 0);
+    w.field_obj_list_start(0x21f);
+    w.begin_obj(0x43);
+    w.field_f64(0x2af, 0.0);
+    w.field_f64(0xa6, 0.0);
+    w.end_obj();
+    w.begin_obj(0x43);
+    w.field_f64(0x2af, dur_beats);
+    w.field_f64(0xa6, dur_secs);
+    w.end_obj();
+    w.obj_list_end();
+    w.end_obj();
+
+    // Onsets container (`0x10ea` -> `0x36b` -> `0xb6`)
+    w.field_obj_header(0x10ea, 0x36b);
+    w.field_obj_header(0x10e9, 0xb6);
+    w.field_i8(0x1fd, 0);
+    w.field_empty_obj_list(0x21f);
+    w.end_obj();
+    w.end_obj();
+
+    w.field_null(0x1cd9);
+    w.end_obj(); // 0x9f
+
+    w.field_f64(0xc04, 0.0);
+    w.field_bool(0x2e04, true);
+    w.field_f64(0x2dfc, 1.0);
+    w.field_bool(0x2e05, true);
+    w.field_i8(0x2dfe, 0);
+    w.field_bool(0x2e06, true);
+    w.field_i8(0x2e02, 8);
+    w.field_bool(0x2e5c, true);
+    w.field_i8(0x2e5e, 0);
+    w.field_f64(0x2e6d, 0.0);
+    w.field_f64(0xc05, dur_secs);
+    w.field_f64(0x1c0a, 0.0);
+    w.field_f64(0x1259, 0.0);
+    w.field_f64(0x125a, 0.0);
+    w.field_f64(0x19f7, 1.0);
+    w.field_f64(0x19f8, 1.0);
+    w.field_i8(0x19f9, 1);
+    w.field_i8(0x19fa, 1);
+    w.field_f64(0x2f59, 0.215443469);
+    w.end_obj(); // 0xd4
+
+    w.obj_list_end();
+    w.field_i8(0xee, 0);
+    w.field_str(0x18ca, "");
+    w.end_obj(); // 0xce
+    w.obj_list_end();
+    w.end_obj(); // 0x6ce
+
+    w.field_null(0x1aa5);
+    w.field_bool(0x1aa6, false);
+    w.field_empty_obj_list(0x2d52);
+    w.field_empty_obj_list(0x2df2);
+    w.field_obj_header(0x2db7, 0xf89);
+    w.field_i8(0x1fd, 0);
+    w.field_empty_obj_list(0x21f);
+    w.end_obj();
+    w.field_f64(0x1d56, 0.02);
+    w.end_obj(); // 0x105
+
+    w.field_str(0x286, &clip.name);
+    w.field_color(0x280, color);
+    w.field_i8(0x4a2, 0);
+    w.field_bool(0x3776, false);
+    w.field_bool(0xbe1, clip.launch_legato);
+    w.field_bool(0x3771, true);
+    w.field_i8(0x3772, 1);
+    w.field_f64(0x4a3, dur_beats);
+    w.field_i8(0x2845, 255);
+    w.field_i8(0x36db, 255);
+    w.field_i8(0x36da, 255);
+    w.field_i8(0x36dc, 255);
+    w.field_i8(0x94b, 0);
+    w.field_i8(0x36dd, 0);
+
+    w.field_obj_header(0x1d5b, 0x812);
+    w.field_bool(0x1d61, false);
+    w.field_f64(0x1d5e, 0.01);
+    w.field_i8(0x1d5f, 255);
+    write_grid_settings(w, 0x1d60);
+    w.field_obj_header(0x1d5c, 0xc1);
+    w.field_i8(0xc1d, 255);
+    w.field_f64(0xc1e, 10.0);
+    w.field_i8(0x955, 0);
+    w.end_obj();
+    w.field_obj_header(0x1d5d, 0x2a6);
+    w.field_i8(0xc1d, 255);
+    w.field_f64(0xc1e, 12.0);
+    w.end_obj();
+    w.end_obj(); // 0x812
+
+    w.field_i8(0x2ed4, 0);
+    w.field_f64(0x1709, -1.0);
+    w.field_str(0xb8e, "");
+    w.field_null(0x11ae);
+    w.field_f64(0x1947, 0.0);
+    w.field_f64(0x1948, 0.0);
+    w.field_f64(0x19fd, 1.0);
+    w.field_f64(0x19fe, 1.0);
+    w.field_i8(0x19ff, 1);
+    w.field_i8(0x1a00, 1);
+    w.end_obj(); // 0xee
 }
 
 fn write_launcher_clip(
@@ -882,7 +1170,7 @@ fn write_audio_editor_pane(w: &mut BtWgWriter, fid: u32, cls: u32, with_mode: bo
 pub fn encode_state_to_btwg(
     state: &AppState,
     title: &str,
-    sample_map: &std::collections::HashMap<std::path::PathBuf, String>,
+    samples: &[BtWgSampleInfo],
 ) -> Vec<u8> {
     let bpm = state.transport.bpm.clamp(20.0, 999.0);
     let beats_per_bar = state.transport.beats_per_bar.clamp(1, 32);
@@ -913,13 +1201,41 @@ pub fn encode_state_to_btwg(
     }
 
     let num_scenes = state.matrix_state.scenes.len().max(5);
-    let track_names: Vec<String> = regular_tracks.iter().map(|t| t.name.clone()).collect();
-    let mut used_files: Vec<String> = sample_map.values().cloned().collect();
+
+    // Determinar si cada pista regular es de Audio (`0x927 = 1`) o Instrumento (`0x927 = 0`)
+    let track_is_audio: Vec<bool> = regular_tracks
+        .iter()
+        .enumerate()
+        .map(|(t_idx, tr)| {
+            let m_idx = tr.matrix_idx.unwrap_or(t_idx);
+            let mut has_audio = false;
+            let mut has_midi = false;
+            if let Some(col) = state.matrix_state.grid.get(m_idx) {
+                for slot in col {
+                    if let Some(mclip) = &slot.clip {
+                        match &mclip.content {
+                            ClipData::Audio { .. } => has_audio = true,
+                            ClipData::Midi { .. } => has_midi = true,
+                        }
+                    }
+                }
+            }
+            has_audio && !has_midi
+        })
+        .collect();
+
+    let structure_tracks: Vec<(String, bool)> = regular_tracks
+        .iter()
+        .zip(track_is_audio.iter())
+        .map(|(t, &is_audio)| (t.name.clone(), is_audio))
+        .collect();
+
+    let mut used_files: Vec<String> = samples.iter().map(|s| s.rel_path.clone()).collect();
     used_files.sort();
     used_files.dedup();
 
     // ---- 1. Construir sección `meta` (cls = 4, "meta") ----
-    let structure_bytes = encode_structure_subdoc(&track_names);
+    let structure_bytes = encode_structure_subdoc(&structure_tracks);
     let mut meta_w = BtWgWriter::new();
     meta_w.u32(4);
     meta_w.raw_str("meta");
@@ -1019,6 +1335,52 @@ pub fn encode_state_to_btwg(
     w.field_bool(0x1c8, false);
     w.end_obj();
 
+    // Pool de samples del proyecto (`0xd3c` -> `0x2c1` -> `0x4e: [0x4a6 -> 0x4a9]`)
+    let mut sample_stream_ids: HashMap<PathBuf, (u32, usize)> = HashMap::new();
+    if !samples.is_empty() {
+        w.field_obj_header(0xd3c, 0x2c1);
+        w.field_obj_list_start(0x4e);
+        for (idx, sinfo) in samples.iter().enumerate() {
+            let file_id = w.begin_obj(0x4a6);
+            w.field_str(0x512, &sinfo.filename);
+            w.field_str(0xd3a, &sinfo.rel_path);
+            w.field_str(0xcd4, "");
+            w.field_obj_header(0xd3b, 0x2a);
+            w.field_str(0x38, "HIKARU");
+            w.field_str(0x4cd, "");
+            w.field_str(0x3a, "");
+            w.field_str(0x3b, &sinfo.src_path.to_string_lossy());
+            w.end_obj();
+            w.field_obj_header(0x15, 0x2b4);
+            w.field_empty_obj_list(0xc5b);
+            w.end_obj();
+            w.field_obj_header(0x513, 0x1e2);
+            w.field_bytes(0x16, &sinfo.hash16);
+            w.end_obj();
+            w.field_i32(0x17, sinfo.file_size);
+            w.field_obj_list_start(0x129c);
+            let stream_id = w.begin_obj(0x4a9);
+            w.field_str(0x129f, &sinfo.filename);
+            w.field_ref(0x129e, file_id);
+            w.field_str(0xfb8, "");
+            w.field_i32(0x94, sinfo.sample_rate);
+            w.field_f64(0x95, sinfo.duration_secs);
+            w.field_i8(0x96, sinfo.channels);
+            w.field_bool(0x8bd, false);
+            w.field_f64(0x8be, 0.0);
+            w.field_f64(0x8bf, 0.0);
+            w.field_i8(0x8c0, 255);
+            w.field_f64(0x8c1, 0.0);
+            w.field_bool(0x299f, false);
+            w.end_obj(); // 0x4a9
+            w.obj_list_end();
+            w.end_obj(); // 0x4a6
+            sample_stream_ids.insert(sinfo.src_path.clone(), (stream_id, idx));
+        }
+        w.obj_list_end();
+        w.end_obj(); // 0x2c1
+    }
+
     w.field_bool(0x29a4, false);
     write_f64_param(&mut w, 0x29a5, 0xdb7, "", 1.0);
     write_volume_param(&mut w, 0x29a6, "CUE_LEVEL", 1.0);
@@ -1100,7 +1462,8 @@ pub fn encode_state_to_btwg(
         w.field_bool(0x162, true);
         write_track_controls(&mut w, 300 + t_idx as u64);
         w.field_bool(0x1aa0, false);
-        w.field_i8(0x927, 0);
+        let is_audio_track = track_is_audio[t_idx];
+        w.field_i8(0x927, if is_audio_track { 1 } else { 0 });
 
         // Arranger lane (`0x15d`)
         w.field_obj_header(0x15d, 0xe1);
@@ -1113,9 +1476,13 @@ pub fn encode_state_to_btwg(
         w.field_empty_obj_list(0x239);
         w.end_obj();
 
-        // Audio In (`0x896`)
+        // Input (`0x896`)
         w.field_obj_header(0x896, 0x240);
-        w.field_obj_key_ref(0x89a, project_id, "82");
+        if is_audio_track {
+            w.field_null(0x89a);
+        } else {
+            w.field_obj_key_ref(0x89a, project_id, "82");
+        }
         w.field_null(0x1178);
         w.end_obj();
 
@@ -1152,8 +1519,29 @@ pub fn encode_state_to_btwg(
                 .and_then(|col| col.get(s_idx))
                 .and_then(|slot| slot.clip.as_ref());
             if let Some(mclip) = maybe_clip {
-                let rel = sample_map.get(&mclip.path).map(|s| s.as_str());
-                write_launcher_clip(&mut w, mclip, bpm, rel);
+                let audio_lookup = match &mclip.content {
+                    ClipData::Audio { events, .. } => {
+                        let p = if !mclip.path.as_os_str().is_empty() {
+                            Some(mclip.path.clone())
+                        } else {
+                            events.iter().find_map(|e| e.source_path.clone())
+                        };
+                        p.and_then(|src| sample_stream_ids.get(&src).copied())
+                    }
+                    ClipData::Midi { .. } => None,
+                };
+                if let Some((stream_id, s_idx_info)) = audio_lookup {
+                    write_audio_launcher_clip(
+                        &mut w,
+                        mclip,
+                        bpm,
+                        time_sig_packed,
+                        &samples[s_idx_info],
+                        stream_id,
+                    );
+                } else {
+                    write_launcher_clip(&mut w, mclip, bpm, None);
+                }
             } else {
                 w.field_null(0x240);
             }

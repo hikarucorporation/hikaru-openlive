@@ -2,7 +2,6 @@
 // GNU AGPLv3
 // crates/hikaru_gui/src/project/bwtemplate.rs
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::app::AppState;
@@ -29,12 +28,13 @@ pub fn export_to_path(state: &AppState, path: &Path) -> Result<(), ProjectError>
         .unwrap_or("Hikaru Template");
 
     // 1. Recolectar samples de audio del Launcher y Arranger para embeber en `project/samples/`
-    let mut sample_map: HashMap<PathBuf, String> = HashMap::new();
+    let mut seen_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut sample_infos: Vec<btwg::BtWgSampleInfo> = Vec::new();
     let mut embedded_samples: Vec<(String, Vec<u8>)> = Vec::new();
     let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let mut register_sample = |src: &Path| {
-        if src.as_os_str().is_empty() || sample_map.contains_key(src) {
+    let mut register_sample = |src: &Path, fallback_dur: f64| {
+        if src.as_os_str().is_empty() || !seen_paths.insert(src.to_path_buf()) {
             return;
         }
         if let Ok(bytes) = std::fs::read(src) {
@@ -51,7 +51,19 @@ pub fn export_to_path(state: &AppState, path: &Path) -> Result<(), ProjectError>
             }
             let rel_in_project = format!("samples/{}", unique);
             let zip_entry = format!("project/{}", rel_in_project);
-            sample_map.insert(src.to_path_buf(), rel_in_project);
+            let (sample_rate, channels, duration_secs) =
+                btwg::parse_wav_metadata(&bytes, fallback_dur);
+            let hash16 = btwg::sample_hash16(&bytes);
+            sample_infos.push(btwg::BtWgSampleInfo {
+                src_path: src.to_path_buf(),
+                filename: unique,
+                rel_path: rel_in_project,
+                file_size: bytes.len() as i32,
+                sample_rate,
+                channels,
+                duration_secs,
+                hash16,
+            });
             embedded_samples.push((zip_entry, bytes));
         }
     };
@@ -61,11 +73,11 @@ pub fn export_to_path(state: &AppState, path: &Path) -> Result<(), ProjectError>
             if let Some(mclip) = &slot.clip {
                 if let ClipData::Audio { events, .. } = &mclip.content {
                     if !mclip.path.as_os_str().is_empty() {
-                        register_sample(&mclip.path);
+                        register_sample(&mclip.path, mclip.duration_secs);
                     } else if let Some(ev_path) =
                         events.iter().find_map(|e| e.source_path.as_ref())
                     {
-                        register_sample(ev_path);
+                        register_sample(ev_path, mclip.duration_secs);
                     }
                 }
             }
@@ -74,14 +86,14 @@ pub fn export_to_path(state: &AppState, path: &Path) -> Result<(), ProjectError>
     for (_, pclip) in &state.playlist_state.clips {
         if let ClipType::Audio { sample_path, .. } = &pclip.clip_type {
             if !sample_path.is_empty() {
-                register_sample(Path::new(sample_path));
+                register_sample(Path::new(sample_path), 4.0);
             }
         }
     }
 
     // 2. Construir entradas del ZIP
     let template_info = btwg::encode_template_info(title);
-    let template_bwproject = btwg::encode_state_to_btwg(state, title, &sample_map);
+    let template_bwproject = btwg::encode_state_to_btwg(state, title, &sample_infos);
     let view_settings = btwg::encode_minimal_view_settings();
     let hikaru_tlv = bwproject::build_bwproject_bytes(state)
         .map_err(|msg| ProjectError::Io(std::io::Error::other(msg)))?;
