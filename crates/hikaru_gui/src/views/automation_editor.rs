@@ -374,11 +374,12 @@ pub fn apply_automation_at_tick(app: &mut AppState, tick: u64) {
                         tr.volume = val;
                         if track_idx == 0 {
                             app.audio_proxy.send(GuiCommand::SetMasterVolume { volume_db: val });
+                        } else {
+                            app.audio_proxy.send(GuiCommand::SetTrackVolume {
+                                track_idx: track_idx.saturating_sub(1),
+                                volume_db: val,
+                            });
                         }
-                        app.audio_proxy.send(GuiCommand::SetTrackVolume {
-                            track_idx,
-                            volume_db: val,
-                        });
                     }
                 }
             }

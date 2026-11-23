@@ -415,20 +415,27 @@ pub fn push_track_mix_to_engine(state: &crate::app::AppState) {
     // Sólo el set del modo activo suena: el motor tiene un solo set de
     // canales y el otro modo está en silencio.
     for (idx, track) in state.tracks().iter().enumerate() {
+        if track.is_master || idx == 0 {
+            state.audio_proxy.send(GuiCommand::SetMasterVolume {
+                volume_db: track.volume,
+            });
+            continue;
+        }
+        let eng_idx = idx.saturating_sub(1);
         state.audio_proxy.send(GuiCommand::SetTrackVolume {
-            track_idx: idx,
+            track_idx: eng_idx,
             volume_db: track.volume,
         });
         state.audio_proxy.send(GuiCommand::SetTrackPan {
-            track_idx: idx,
+            track_idx: eng_idx,
             pan: track.pan,
         });
         state.audio_proxy.send(GuiCommand::SetTrackMute {
-            track_idx: idx,
+            track_idx: eng_idx,
             mute: track.mute,
         });
         state.audio_proxy.send(GuiCommand::SetTrackSolo {
-            track_idx: idx,
+            track_idx: eng_idx,
             solo: track.solo,
         });
     }

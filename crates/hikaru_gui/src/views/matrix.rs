@@ -2864,8 +2864,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 if let Some(mt) = state.live_tracks.first_mut() {
                     mt.volume = nv;
                 }
-                state.audio_proxy.send(GuiCommand::SetTrackVolume {
-                    track_idx: 0,
+                state.audio_proxy.send(GuiCommand::SetMasterVolume {
                     volume_db: nv,
                 });
             }

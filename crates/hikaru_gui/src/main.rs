@@ -412,27 +412,27 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                     spawn_stretch_jobs(&engine_for_commands, jobs);
                 }
                 GuiCommand::SetTrackVolume { track_idx, volume_db } => {
-                    if let Ok(engine) = engine_for_commands.try_lock() {
+                    if let Ok(engine) = engine_for_commands.lock() {
                         engine.set_track_volume(track_idx, volume_db);
                     }
                 }
                 GuiCommand::SetTrackPan { track_idx, pan } => {
-                    if let Ok(engine) = engine_for_commands.try_lock() {
+                    if let Ok(engine) = engine_for_commands.lock() {
                         engine.set_track_pan(track_idx, pan);
                     }
                 }
                 GuiCommand::SetTrackMute { track_idx, mute } => {
-                    if let Ok(engine) = engine_for_commands.try_lock() {
+                    if let Ok(engine) = engine_for_commands.lock() {
                         engine.set_track_mute(track_idx, mute);
                     }
                 }
                 GuiCommand::SetTrackSolo { track_idx, solo } => {
-                    if let Ok(engine) = engine_for_commands.try_lock() {
+                    if let Ok(engine) = engine_for_commands.lock() {
                         engine.set_track_solo(track_idx, solo);
                     }
                 }
                 GuiCommand::SetMasterVolume { volume_db } => {
-                    if let Ok(engine) = engine_for_commands.try_lock() {
+                    if let Ok(engine) = engine_for_commands.lock() {
                         engine.set_master_gain(volume_db);
                     }
                 }

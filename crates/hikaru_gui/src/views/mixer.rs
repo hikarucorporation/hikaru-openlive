@@ -874,10 +874,16 @@ pub fn render_bottom_panel(ui: &mut Ui, state: &mut AppState) {
                                     );
                                     if !vol_mapped && vol_changed {
                                         state.tracks_mut()[idx].volume = vol;
-                                        state.audio_proxy.send(GuiCommand::SetTrackVolume {
-                                            track_idx: idx,
-                                            volume_db: vol,
-                                        });
+                                        if is_master {
+                                            state.audio_proxy.send(GuiCommand::SetMasterVolume {
+                                                volume_db: vol,
+                                            });
+                                        } else {
+                                            state.audio_proxy.send(GuiCommand::SetTrackVolume {
+                                                track_idx: idx.saturating_sub(1),
+                                                volume_db: vol,
+                                            });
+                                        }
                                     }
                                 });
 

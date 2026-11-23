@@ -1937,12 +1937,14 @@ fn render_channel_strip(
                             }
                         } else if vol_changed {
                             strip_track_mut(state, kind).volume = vol;
-                            if !is_fx {
-                                let eng_idx = user_idx.map_or(0, |i| i.saturating_sub(1));
-                                if user_idx.is_some() {
-                                    if let Some(mt) = state.matrix_state.tracks.get_mut(eng_idx) {
-                                        mt.volume = vol;
-                                    }
+                            if is_master {
+                                state.audio_proxy.send(GuiCommand::SetMasterVolume {
+                                    volume_db: vol,
+                                });
+                            } else if let Some(u_idx) = user_idx {
+                                let eng_idx = u_idx.saturating_sub(1);
+                                if let Some(mt) = state.matrix_state.tracks.get_mut(eng_idx) {
+                                    mt.volume = vol;
                                 }
                                 state.audio_proxy.send(GuiCommand::SetTrackVolume {
                                     track_idx: eng_idx,

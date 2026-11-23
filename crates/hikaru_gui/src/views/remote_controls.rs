@@ -303,27 +303,26 @@ pub fn write_target_normalized(app: &mut AppState, target: &RemoteTarget, norm: 
                 t.volume = v;
             }
             app.audio_proxy.send(GuiCommand::SetMasterVolume { volume_db: v });
-            app.audio_proxy.send(GuiCommand::SetTrackVolume {
-                track_idx: 0,
-                volume_db: v,
-            });
         }
         RemoteTarget::MasterPan => {
             let pan = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
             if let Some(t) = app.current_tracks_mut().first_mut() {
                 t.pan = pan;
             }
-            app.audio_proxy.send(GuiCommand::SetTrackPan { track_idx: 0, pan });
         }
         RemoteTarget::TrackVolume { track_idx } => {
             let ti = *track_idx;
             if let Some(t) = app.current_tracks_mut().get_mut(ti) {
                 t.volume = v;
             }
-            app.audio_proxy.send(GuiCommand::SetTrackVolume {
-                track_idx: ti,
-                volume_db: v,
-            });
+            if ti == 0 {
+                app.audio_proxy.send(GuiCommand::SetMasterVolume { volume_db: v });
+            } else {
+                app.audio_proxy.send(GuiCommand::SetTrackVolume {
+                    track_idx: ti.saturating_sub(1),
+                    volume_db: v,
+                });
+            }
         }
         RemoteTarget::TrackPan { track_idx } => {
             let ti = *track_idx;
