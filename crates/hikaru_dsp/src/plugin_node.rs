@@ -58,6 +58,20 @@ impl DspPluginNode {
         self.tap = tap;
     }
 
+    /// Latencia reportada por este nodo en samples (`0` cuando está en bypass).
+    pub fn latency_samples(&self) -> u32 {
+        if self.is_active {
+            self.instance.latency_samples()
+        } else {
+            0
+        }
+    }
+
+    /// Actualiza el transporte musical del host antes de procesar el bloque.
+    pub fn set_transport(&mut self, transport: hikaru_plugin_host::HostTransportInfo) {
+        self.instance.set_transport(transport);
+    }
+
     pub fn process(&mut self, buffer: &mut AudioBuffer, midi_events: &[MidiEvent]) {
         if !self.is_active {
             return;

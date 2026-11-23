@@ -53,7 +53,7 @@ version = "2.24.0"
 
 [workspace.dependencies]
 clack-host = "0.2"
-clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log", "params"] }
+clack-extensions = { version = "0.2", features = ["gui", "clack-host", "raw-window-handle_06", "timer", "posix-fd", "log", "params", "latency"] }
 vst3-host = "0.1"
 # La consola de `hikaru_openlive` (ver crates/hikaru_cli). `clap` parsea los
 # argumentos; `serde_json` arma la salida JSON que consumen los agentes de IA;

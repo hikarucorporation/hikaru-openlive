@@ -2134,6 +2134,139 @@ pub struct AudioEngine<'a> {
     dms_scratch_r: Vec<f32>,
     fx_scratch_buf: Vec<f32>,
     track_midi_events: Vec<Vec<hikaru_midi::MidiEvent>>,
+    track_pdc_delays: Vec<PdcDelayLine>,
+    dms_pdc_delay: PdcDelayLine,
+    current_pdc_latency: u32,
+}
+
+/// Máximo de frames estéreo que soporta la compensación automática de latencia
+/// (PDC): ~2.7 s a 48 kHz, sobrado para phasers espectrales FFT, limitadores
+/// lookahead y cadenas largas de VST3/CLAP.
+const MAX_PDC_DELAY_FRAMES: usize = 131_072;
+
+/// Línea de retardo estéreo interleaved para Plugin Delay Compensation (PDC).
+///
+/// Cuando `delay_frames == 0` es un passthrough sin trabajo ni memoria.
+/// Cuando alguna pista tiene plugins con latencia `L > 0`, las pistas más rápidas
+/// se retardan exactamente `max_latency - track_latency` samples para que los
+/// clips de audio, sintetizadores y baterías lleguen alineados al sample en el
+/// bus Master.
+#[derive(Clone)]
+struct PdcDelayLine {
+    buf: Vec<f32>,
+    cap_frames: usize,
+    write_pos: usize,
+    last_delay: usize,
+}
+
+impl PdcDelayLine {
+    fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            cap_frames: 0,
+            write_pos: 0,
+            last_delay: 0,
+        }
+    }
+
+    fn ensure_capacity(&mut self, delay_frames: usize) {
+        let needed = delay_frames.min(MAX_PDC_DELAY_FRAMES);
+        if needed == 0 || self.cap_frames > needed {
+            return;
+        }
+        let new_cap = (needed + 1).next_power_of_two().max(4096).min(MAX_PDC_DELAY_FRAMES + 1);
+        self.buf.clear();
+        self.buf.resize(new_cap * 2, 0.0);
+        self.cap_frames = new_cap;
+        self.write_pos = 0;
+    }
+
+    fn clear(&mut self) {
+        if !self.buf.is_empty() {
+            self.buf.fill(0.0);
+        }
+        self.write_pos = 0;
+    }
+
+    fn process_interleaved(&mut self, samples: &mut [f32], delay_frames: usize) {
+        let delay = delay_frames.min(MAX_PDC_DELAY_FRAMES);
+        if delay == 0 {
+            if self.last_delay != 0 {
+                self.clear();
+                self.last_delay = 0;
+            }
+            return;
+        }
+        if self.cap_frames <= delay {
+            self.ensure_capacity(delay);
+        } else if self.last_delay == 0 {
+            self.clear();
+        }
+        self.last_delay = delay;
+
+        let cap = self.cap_frames;
+        let frames = samples.len() / 2;
+        let mut wp = self.write_pos;
+        for f in 0..frames {
+            let rp = if wp >= delay { wp - delay } else { wp + cap - delay };
+            let r_idx = rp * 2;
+            let w_idx = wp * 2;
+            let out_l = self.buf[r_idx];
+            let out_r = self.buf[r_idx + 1];
+            self.buf[w_idx] = samples[f * 2];
+            self.buf[w_idx + 1] = samples[f * 2 + 1];
+            samples[f * 2] = out_l;
+            samples[f * 2 + 1] = out_r;
+            wp += 1;
+            if wp >= cap {
+                wp = 0;
+            }
+        }
+        self.write_pos = wp;
+    }
+}
+
+fn build_host_transport(
+    transport: &TransportPosition,
+    frame_start: u64,
+    upstream_latency: u32,
+) -> hikaru_plugin_host::HostTransportInfo {
+    let sr = (transport.sample_rate.get() as f64).max(1.0);
+    let bpm = transport.bpm.max(1.0);
+    let spb = (sr * 60.0) / bpm;
+    let effective_sample = frame_start as i64 - upstream_latency as i64;
+    let beats_position = if spb > 0.0 {
+        effective_sample as f64 / spb
+    } else {
+        0.0
+    };
+    let bpb = transport.beats_per_bar.max(1) as f64;
+    let bar_number = (beats_position / bpb).floor() as i32;
+    let bar_start_beats = (bar_number as f64) * bpb;
+    let loop_start_beats = if spb > 0.0 {
+        transport.loop_start_samples as f64 / spb
+    } else {
+        0.0
+    };
+    let loop_end_beats = if spb > 0.0 {
+        transport.loop_end_samples as f64 / spb
+    } else {
+        0.0
+    };
+    hikaru_plugin_host::HostTransportInfo {
+        is_playing: transport.playback_state == TransportPlaybackState::Playing,
+        tempo: bpm,
+        sample_rate: sr,
+        sample_position: effective_sample,
+        beats_position,
+        bar_start_beats,
+        bar_number,
+        time_sig_num: transport.beats_per_bar.clamp(1, u16::MAX as u32) as u16,
+        time_sig_den: transport.beat_division.clamp(1, u16::MAX as u32) as u16,
+        loop_enabled: transport.has_valid_loop(),
+        loop_start_beats,
+        loop_end_beats,
+    }
 }
 
 impl<'a> AudioEngine<'a> {
@@ -2206,7 +2339,53 @@ impl<'a> AudioEngine<'a> {
             dms_scratch_r: vec![0.0; MAX_TRACK_BUF],
             fx_scratch_buf: vec![0.0; MAX_TRACK_BUF],
             track_midi_events: (0..16).map(|_| Vec::with_capacity(128)).collect(),
+            track_pdc_delays: (0..16).map(|_| PdcDelayLine::new()).collect(),
+            dms_pdc_delay: PdcDelayLine::new(),
+            current_pdc_latency: 0,
         }
+    }
+
+    /// Latencia global compensada actualmente por PDC (en samples).
+    pub fn pdc_latency_samples(&self) -> u32 {
+        self.current_pdc_latency
+    }
+
+    /// Limpia las líneas de retardo PDC (al detener o hacer seek) para evitar colas viejas.
+    fn clear_pdc_delays(&mut self) {
+        for d in &mut self.track_pdc_delays {
+            d.clear();
+        }
+        self.dms_pdc_delay.clear();
+    }
+
+    /// Pre-asigna en el hilo de control los ring buffers PDC según la latencia
+    /// actual de los plugins cargados (evita allocaciones en el audio thread).
+    fn prepare_pdc_buffers(&mut self) {
+        let mut any_plugin = false;
+        let mut max_lat = 0usize;
+        for chain in &self.track_effects {
+            if !chain.is_empty() {
+                any_plugin = true;
+            }
+            let sum: u32 = chain
+                .iter()
+                .filter(|n| n.is_active)
+                .map(|n| n.latency_samples())
+                .fold(0u32, |acc, x| acc.saturating_add(x));
+            max_lat = max_lat.max(sum as usize);
+        }
+        // Si hay algún plugin cargado, pre-reservamos al menos 8192 frames por
+        // pista en el hilo de control porque muchos VST3/CLAP recién definen su
+        // latencia real (p. ej. FFT 1024/2048/4096) tras `activate()`/`start_processing()`
+        // en el primer bloque de audio.
+        let prealloc = if any_plugin { max_lat.max(8192) } else { max_lat };
+        if prealloc > 0 {
+            for d in &mut self.track_pdc_delays {
+                d.ensure_capacity(prealloc);
+            }
+            self.dms_pdc_delay.ensure_capacity(prealloc);
+        }
+        self.current_pdc_latency = max_lat.min(MAX_PDC_DELAY_FRAMES) as u32;
     }
 
     pub fn output_peak(&self) -> f32 {
@@ -2330,10 +2509,11 @@ impl<'a> AudioEngine<'a> {
             .position(|n| n.slot_idx > slot_idx)
             .unwrap_or(chain.len());
         chain.insert(insert_pos, node);
+        self.prepare_pdc_buffers();
 
         println!(
-            "[AudioEngine] Plugin '{}' cargado en pista {} slot {}",
-            descriptor.name, track_idx, slot_idx
+            "[AudioEngine] Plugin '{}' cargado en pista {} slot {} (PDC max={} samples)",
+            descriptor.name, track_idx, slot_idx, self.current_pdc_latency
         );
         Ok(())
     }
@@ -3104,6 +3284,7 @@ impl<'a> AudioEngine<'a> {
     pub fn stop(&mut self) {
         self.transport.playback_state = TransportPlaybackState::Stopped;
         self.transport.sample_count = 0;
+        self.clear_pdc_delays();
         self.pending_scene_launch = None;
         self.pending_scene_index_atomic.store(-1, Ordering::Relaxed);
         self.pending_track_stops.clear();
@@ -3373,6 +3554,7 @@ impl<'a> AudioEngine<'a> {
 
     pub fn seek(&mut self, position_secs: f32) {
         self.transport.sample_count = (position_secs * self.sample_rate) as u64;
+        self.clear_pdc_delays();
     }
 
     /// Disparo legato de la Session Matrix: el loopeo entre pads es continuo.
@@ -4761,10 +4943,10 @@ impl<'a> AudioEngine<'a> {
                     &dms_gain_r,
                     self.sample_rate,
                 );
-            }
-            for i in 0..buf_frames {
-                samples[i * 2] += self.dms_scratch_l[i];
-                samples[i * 2 + 1] += self.dms_scratch_r[i];
+                for i in 0..buf_frames {
+                    samples[i * 2] += self.dms_scratch_l[i];
+                    samples[i * 2 + 1] += self.dms_scratch_r[i];
+                }
             }
         }
 
@@ -5102,48 +5284,74 @@ impl<'a> AudioEngine<'a> {
                 }
             }
 
+            // Paso 1: procesar cadenas de efectos externos (VST3/CLAP) in-place sobre
+            // `track_output_bufs[t]`, pasando el transporte real del proyecto (BPM,
+            // posición en beats/samples, compás, firma y loop) a cada plugin.
             for t in 0..16 {
-                let track_buf = &self.track_output_bufs[t];
-                let mut track_peak = 0.0f32;
-
-                // Cadena de efectos externos (VST3/CLAP) de esta pista.
-                // Se procesa ANTES de sumar al output: la señal de los clips
-                // pasa por cada plugin en orden. El `process()` de cada nodo
-                // es lock-free hacia el hilo de audio (anillo de comandos).
-                if !self.track_effects[t].is_empty() {
-                    // Copiamos el buffer de la pista en el scratch prealocado para que los plugins
-                    // procesen una copia y no modifiquen el original
-                    // (que se usa para el cálculo de picos), sin allocar en RT.
-                    if self.fx_scratch_buf.len() < buf_len {
-                        self.fx_scratch_buf.resize(buf_len, 0.0);
-                    }
-                    self.fx_scratch_buf[..buf_len].copy_from_slice(&track_buf[..buf_len]);
-                    let mut audio_buffer = AudioBuffer::new(&mut self.fx_scratch_buf[..buf_len]);
-                    for node in self.track_effects[t].iter_mut() {
-                        if node.is_active {
-                            node.process(&mut audio_buffer, &self.track_midi_events[t]);
-                        }
-                    }
-                    // Sumamos la salida procesada al output.
-                    for i in 0..buf_len {
-                        let v = self.fx_scratch_buf[i];
-                        let a = if v.is_finite() { v.abs() } else { 0.0 };
-                        if a > track_peak {
-                            track_peak = a;
-                        }
-                        samples[i] += v;
-                    }
-                } else {
-                    for i in 0..buf_len {
-                        let v = track_buf[i];
-                        let a = if v.is_finite() { v.abs() } else { 0.0 };
-                        if a > track_peak {
-                            track_peak = a;
-                        }
-                        samples[i] += v;
+                if self.track_effects[t].is_empty() {
+                    continue;
+                }
+                let mut upstream_latency = 0u32;
+                let mut audio_buffer = AudioBuffer::new(&mut self.track_output_bufs[t][..buf_len]);
+                for node in self.track_effects[t].iter_mut() {
+                    if node.is_active {
+                        let host_t = build_host_transport(&transport, frame_start, upstream_latency);
+                        node.set_transport(host_t);
+                        node.process(&mut audio_buffer, &self.track_midi_events[t]);
+                        upstream_latency = upstream_latency.saturating_add(node.latency_samples());
                     }
                 }
+            }
 
+            // Paso 2: calcular la latencia total por pista y el máximo global (PDC).
+            // Se evalúa después de `process()` para que el bloque #0 (tras `activate` /
+            // `start_processing`) y cualquier cambio de tamaño FFT queden alineados al instante.
+            let mut track_latency = [0u32; 16];
+            let mut max_latency = 0u32;
+            for t in 0..16 {
+                let mut sum = 0u32;
+                for node in &self.track_effects[t] {
+                    if node.is_active {
+                        sum = sum.saturating_add(node.latency_samples());
+                    }
+                }
+                let clamped = sum.min(MAX_PDC_DELAY_FRAMES as u32);
+                track_latency[t] = clamped;
+                if clamped > max_latency {
+                    max_latency = clamped;
+                }
+            }
+            self.current_pdc_latency = max_latency;
+
+            // Paso 3: compensación automática de latencia (PDC) en DMS y en todas las pistas
+            // más rápidas antes de mezclar al bus Master.
+            if self.fx_scratch_buf.len() < buf_len {
+                self.fx_scratch_buf.resize(buf_len, 0.0);
+            }
+            let dms_frames = buffer_frames as usize;
+            for f in 0..dms_frames {
+                self.fx_scratch_buf[f * 2] = self.dms_scratch_l[f];
+                self.fx_scratch_buf[f * 2 + 1] = self.dms_scratch_r[f];
+            }
+            self.dms_pdc_delay
+                .process_interleaved(&mut self.fx_scratch_buf[..buf_len], max_latency as usize);
+            for i in 0..buf_len {
+                samples[i] += self.fx_scratch_buf[i];
+            }
+
+            for t in 0..16 {
+                let comp_delay = max_latency.saturating_sub(track_latency[t]) as usize;
+                let track_buf = &mut self.track_output_bufs[t][..buf_len];
+                self.track_pdc_delays[t].process_interleaved(track_buf, comp_delay);
+                let mut track_peak = 0.0f32;
+                for i in 0..buf_len {
+                    let v = track_buf[i];
+                    let a = if v.is_finite() { v.abs() } else { 0.0 };
+                    if a > track_peak {
+                        track_peak = a;
+                    }
+                    samples[i] += v;
+                }
                 self.track_peak_bits[t].store(track_peak.to_bits(), Ordering::Relaxed);
             }
 
@@ -5292,6 +5500,7 @@ impl<'a> AudioEngine<'a> {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
+    use std::sync::Mutex;
 
     static TABLE: [f32; 2048] = [0.0; 2048];
 
@@ -6503,5 +6712,158 @@ mod tests {
         assert!(formanted.iter().all(|s| s.is_finite()));
         let energy: f32 = formanted.iter().map(|s| s * s).sum();
         assert!(energy > 1.0, "formant output should retain signal energy");
+    }
+
+    struct MockLatencyPlugin {
+        latency: u32,
+        delay: PdcDelayLine,
+        seen_transports: Arc<Mutex<Vec<hikaru_plugin_host::HostTransportInfo>>>,
+    }
+
+    impl MockLatencyPlugin {
+        fn new(
+            latency: u32,
+            seen_transports: Arc<Mutex<Vec<hikaru_plugin_host::HostTransportInfo>>>,
+        ) -> Self {
+            Self {
+                latency,
+                delay: PdcDelayLine::new(),
+                seen_transports,
+            }
+        }
+    }
+
+    impl PluginInstance for MockLatencyPlugin {
+        fn process(&mut self, buffer: &mut AudioBuffer) {
+            self.delay.process_interleaved(buffer.samples, self.latency as usize);
+        }
+        fn latency_samples(&self) -> u32 {
+            self.latency
+        }
+        fn set_transport(&mut self, transport: hikaru_plugin_host::HostTransportInfo) {
+            if let Ok(mut guard) = self.seen_transports.lock() {
+                guard.push(transport);
+            }
+        }
+        fn show_gui_embedded(&mut self, _: hikaru_plugin_host::RawWindowHandle) -> Result<(), String> {
+            Ok(())
+        }
+        fn show_gui_floating(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+        fn hide_gui(&mut self) {}
+        fn get_name(&self) -> &str {
+            "MockLatency"
+        }
+    }
+
+    #[test]
+    fn pdc_aligns_latency_plugin_track_with_dry_drum_track() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(150.0);
+
+        // Track 0: audio clip with an impulse at frame 0 + FFT plugin reporting 1024 samples latency
+        let mut track0_samples = vec![0.0f32; 4096 * 2];
+        track0_samples[0] = 0.25;
+        track0_samples[1] = 0.25;
+        engine.add_clip(1, 0, 0, track0_samples, 0.0, 0.0, 0.0, 2, false);
+
+        // Track 1: dry dubstep drum loop with an impulse at frame 0 (0 plugins)
+        let mut track1_samples = vec![0.0f32; 4096 * 2];
+        track1_samples[0] = 0.25;
+        track1_samples[1] = 0.25;
+        engine.add_clip(2, 1, 0, track1_samples, 0.0, 0.0, 0.0, 2, false);
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let plugin = Box::new(MockLatencyPlugin::new(1024, Arc::clone(&log)));
+        let node = hikaru_dsp::DspPluginNode::new(
+            "MockUZU".to_string(),
+            hikaru_dsp::PluginCategory::Vst3Fx,
+            plugin,
+        );
+        engine.track_effects[0].push(node);
+
+        engine.play();
+        engine.trigger_scene(0);
+
+        // Render 4 blocks of 512 frames (total 2048 frames)
+        let mut rendered_l = Vec::new();
+        for _ in 0..4 {
+            let mut raw = vec![0.0f32; 512 * 2];
+            let mut buf = AudioBuffer::new(&mut raw);
+            engine.process(&mut buf);
+            for f in 0..512 {
+                rendered_l.push(raw[f * 2]);
+            }
+        }
+
+        assert_eq!(engine.pdc_latency_samples(), 1024);
+        // Sample 0 must be silent (both tracks wait for the 1024-sample plugin latency)
+        assert!(rendered_l[0].abs() < 1e-6, "frame 0 should be silent, got {}", rendered_l[0]);
+        // Sample 1024 must receive BOTH impulses aligned (tanh(0.25 + 0.25) = tanh(0.5))
+        let expected = (0.5f32).tanh();
+        assert!(
+            (rendered_l[1024] - expected).abs() < 1e-5,
+            "both tracks must land on exact frame 1024: got {}, expected {}",
+            rendered_l[1024],
+            expected
+        );
+        // No ghost/flam impulse anywhere else
+        for (idx, &v) in rendered_l.iter().enumerate() {
+            if idx != 1024 {
+                assert!(v.abs() < 1e-6, "unexpected flam at frame {idx}: {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn pdc_updates_when_plugin_bypassed_and_syncs_project_tempo() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        engine.transport.set_bpm(150.0);
+
+        let log1 = Arc::new(Mutex::new(Vec::new()));
+        let log2 = Arc::new(Mutex::new(Vec::new()));
+        engine.track_effects[0].push(
+            hikaru_dsp::DspPluginNode::new(
+                "Up".to_string(),
+                hikaru_dsp::PluginCategory::ClapFx,
+                Box::new(MockLatencyPlugin::new(512, Arc::clone(&log1))),
+            )
+            .with_slot_idx(0),
+        );
+        engine.track_effects[0].push(
+            hikaru_dsp::DspPluginNode::new(
+                "Down".to_string(),
+                hikaru_dsp::PluginCategory::Vst3Fx,
+                Box::new(MockLatencyPlugin::new(256, Arc::clone(&log2))),
+            )
+            .with_slot_idx(1),
+        );
+
+        engine.play();
+        run_frames(&mut engine, 512);
+        run_frames(&mut engine, 512);
+
+        assert_eq!(engine.pdc_latency_samples(), 768);
+        let t1 = log1.lock().unwrap();
+        let t2 = log2.lock().unwrap();
+        assert_eq!(t1.len(), 2);
+        assert!((t1[0].tempo - 150.0).abs() < 1e-6);
+        assert!(t1[0].is_playing);
+        assert_eq!(t1[0].sample_position, 0);
+        assert_eq!(t1[1].sample_position, 512);
+        assert!(t1[1].beats_position > t1[0].beats_position);
+        // Downstream plugin sees timeline offset by upstream plugin's 512-sample latency
+        assert_eq!(t2[1].sample_position, 0);
+        drop(t1);
+        drop(t2);
+
+        // Bypass both plugins -> PDC drops back to 0 immediately
+        engine.set_external_plugin_active(0, 0, false);
+        engine.set_external_plugin_active(0, 1, false);
+        run_frames(&mut engine, 256);
+        assert_eq!(engine.pdc_latency_samples(), 0);
     }
 }

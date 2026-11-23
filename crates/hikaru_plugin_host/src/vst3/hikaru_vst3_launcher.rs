@@ -390,6 +390,25 @@ impl PluginInstance for Vst3Instance {
         self.apply_audio_config();
     }
 
+    fn latency_samples(&self) -> u32 {
+        self.runner.plugin().latency_samples()
+    }
+
+    fn set_transport(&mut self, transport: crate::HostTransportInfo) {
+        self.runner.set_transport(vst3_host::audio::HostTransport {
+            is_playing: transport.is_playing,
+            tempo: transport.tempo,
+            sample_position: transport.sample_position,
+            beats_position: transport.beats_position,
+            bar_start_beats: transport.bar_start_beats,
+            time_sig_num: transport.time_sig_num,
+            time_sig_den: transport.time_sig_den,
+            loop_enabled: transport.loop_enabled,
+            loop_start_beats: transport.loop_start_beats,
+            loop_end_beats: transport.loop_end_beats,
+        });
+    }
+
     fn has_gui(&self) -> bool {
         self.runner.plugin().info().has_gui
     }
@@ -522,10 +541,15 @@ impl PluginInstance for Vst3Instance {
     fn param_info(&mut self, index: usize) -> Option<PluginParamInfo> {
         let p = self.params.get(index)?;
         let automatable = p.can_automate && !p.is_read_only;
+        let clean_unit = if p.unit.trim().eq_ignore_ascii_case("unknown") {
+            String::new()
+        } else {
+            p.unit.clone()
+        };
         Some(PluginParamInfo {
             id: p.id,
             name: p.name.clone(),
-            unit: p.unit.clone(),
+            unit: clean_unit,
             // VST3 vive en normalizado: el rango plano es privado del
             // plugin (ver `format_param_value` para texto exacto).
             min: 0.0,
@@ -636,6 +660,17 @@ impl PluginInstance for Vst3Instance {
             .plugin()
             .format_parameter(id, normalized.clamp(0.0, 1.0) as f64)
             .ok()
+            .map(|s| {
+                let trimmed = s.trim();
+                if let Some(stripped) = trimmed.strip_suffix(" Unknown") {
+                    stripped.trim().to_string()
+                } else if let Some(stripped) = trimmed.strip_suffix(" unknown") {
+                    stripped.trim().to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            })
+            .filter(|s| !s.is_empty())
     }
 
     /// Lo que el editor nativo movió por su cuenta (el usuario arrastró un

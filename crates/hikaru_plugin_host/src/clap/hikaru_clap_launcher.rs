@@ -4,21 +4,25 @@
 // crates/hikaru_plugin_host/src/clap/hikaru_clap_launcher.rs
 
 use crate::scratch::{NUM_CHANNELS, PlanarScratch};
-use crate::{PluginInstance, PluginParamInfo};
+use crate::{HostTransportInfo, PluginInstance, PluginParamInfo};
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, HostGuiImpl, PluginGui, Window};
+use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{ParamInfoFlags, PluginParams};
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
-use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent};
+use clack_host::events::event_types::{
+    NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent, TransportFlags,
+};
 use clack_host::events::io::{EventBuffer, OutputEvents};
-use clack_host::events::Match;
+use clack_host::events::{EventFlags, EventHeader, Match};
 use clack_host::prelude::*;
+use clack_host::utils::{BeatTime, SecondsTime};
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
@@ -54,6 +58,8 @@ struct HikaruShared {
     /// plugin que pedía callback y no lo recibía se quedaba con el editor
     /// congelado esperando un mensaje que nunca llegaba.
     main_thread_callback: AtomicBool,
+    /// El plugin avisó vía `CLAP_EXT_LATENCY` que su latencia cambió y hay que releerla.
+    latency_dirty: AtomicBool,
     /// Peticiones de GUI pendientes de atender en el tick.
     gui: Mutex<GuiRequests>,
 }
@@ -63,6 +69,7 @@ impl HikaruShared {
         Self {
             log_to_stdout: true,
             main_thread_callback: AtomicBool::new(false),
+            latency_dirty: AtomicBool::new(false),
             gui: Mutex::new(GuiRequests::default()),
         }
     }
@@ -273,6 +280,12 @@ impl HostPosixFdImpl for HikaruMainThread<'_> {
     }
 }
 
+impl HostLatencyImpl for HikaruMainThread<'_> {
+    fn changed(&self) {
+        self.shared.latency_dirty.store(true, Ordering::Release);
+    }
+}
+
 /// Estado que el host guarda del lado del hilo de audio.
 ///
 /// CLAP obliga a declarar un tipo concreto como `AudioProcessor`: es el valor
@@ -305,7 +318,8 @@ impl HostHandlers for HikaruClapHost {
             .register::<HostLog>()
             .register::<HostGui>()
             .register::<HostTimer>()
-            .register::<HostPosixFd>();
+            .register::<HostPosixFd>()
+            .register::<HostLatency>();
     }
 }
 
@@ -407,6 +421,14 @@ pub struct ClapInstance {
     sample_rate: f32,
     last_error: Option<String>,
     gui: Option<PluginGui>,
+    /// Extensión de latencia CLAP (`CLAP_EXT_LATENCY`) para PDC.
+    latency_ext: Option<PluginLatency>,
+    /// Latencia reportada en samples (cacheada lock-free para el hilo de audio).
+    cached_latency: AtomicU32,
+    /// Último snapshot del transporte musical del host (tempo, beats, compás, loop).
+    transport: HostTransportInfo,
+    /// Reloj monotónico en samples (`steady_time`) requerido por `clap_process`.
+    steady_time: u64,
     /// Extensión de parámetros CLAP. `None` si el plugin no la expone.
     params: Option<PluginParams>,
     /// Lista ordenada de metadatos de parámetros cacheados en `load()`.
@@ -529,6 +551,7 @@ impl ClapInstance {
         let shared_handle = plugin.plugin_shared_handle();
 
         let gui = shared_handle.get_extension::<PluginGui>();
+        let latency_ext = shared_handle.get_extension::<PluginLatency>();
         let params = shared_handle.get_extension::<PluginParams>();
 
         if gui.is_some() {
@@ -581,6 +604,13 @@ impl ClapInstance {
             }
         }
 
+        let initial_latency = latency_ext
+            .map(|lat| {
+                let plugin_handle = plugin.plugin_handle();
+                lat.get(&plugin_handle)
+            })
+            .unwrap_or(0);
+
         Ok(Self {
             name: plugin_name,
             plugin,
@@ -589,6 +619,10 @@ impl ClapInstance {
             sample_rate: 48_000.0,
             last_error: None,
             gui,
+            latency_ext,
+            cached_latency: AtomicU32::new(initial_latency),
+            transport: HostTransportInfo::default(),
+            steady_time: 0,
             params,
             param_list,
             param_index,
@@ -614,7 +648,20 @@ impl ClapInstance {
     /// `load()` todavía no sabemos el del host de audio (el motor lo fija más
     /// tarde, cuando abre el stream). También evita activar plugins que el
     /// usuario nunca llegó a procesar.
-    fn ensure_processor(&mut self, frames: usize) -> bool {
+    /// Relee la latencia reportada por el plugin vía `CLAP_EXT_LATENCY` y la
+    /// guarda en `cached_latency` (lock-free para `AudioEngine` PDC).
+    fn refresh_latency(&mut self) {
+        if let Some(lat_ext) = self.latency_ext {
+            let plugin_handle = self.plugin.plugin_handle();
+            let lat = lat_ext.get(&plugin_handle);
+            self.cached_latency.store(lat, Ordering::Release);
+        }
+        let _ = self.plugin.access_shared_handler(|shared| {
+            shared.latency_dirty.store(false, Ordering::Release);
+        });
+    }
+
+    fn ensure_processor(&mut self, _frames: usize) -> bool {
         if self.processor.is_some() {
             // Ya activado: sólo falta arrancar el procesamiento.
             let Some(processor) = self.processor.as_mut() else {
@@ -634,16 +681,19 @@ impl ClapInstance {
         let config = PluginAudioConfiguration {
             sample_rate: self.sample_rate as f64,
             // Declaramos un mínimo de 1 y un máximo igual a la capacidad del
-            // scratch: el host tiene que poder entregar cualquier tamaño de
-            // bloque que le llegue del stream de audio.
+            // scratch para aceptar bloques variables sin fallar si crece el quantum.
             min_frames_count: 1,
-            max_frames_count: self.scratch.capacity().min(frames) as u32,
+            max_frames_count: self.scratch.capacity() as u32,
         };
 
         let sample_rate = self.sample_rate;
         match self.plugin.activate(|_, _| ClapAudioProcessor { sample_rate }, config) {
             Ok(processor) => {
                 self.processor = Some(processor.into());
+                // La especificación CLAP indica que la latencia real queda
+                // definida tras `activate()`. La leemos aquí mismo para que el
+                // bloque #0 ya entre compensado por PDC.
+                self.refresh_latency();
 
                 // `activate()` entrega el processor en estado `Stopped`. El
                 // primer `start_processing()` es lo que lo pone en
@@ -761,8 +811,49 @@ impl PluginInstance for ClapInstance {
                 processor,
                 param_queue,
                 event_buffer,
+                transport,
+                steady_time,
+                sample_rate,
                 ..
             } = self;
+
+            let sr = (*sample_rate as f64).max(1.0);
+            let tempo = transport.tempo.max(1.0);
+            let mut t_flags = TransportFlags::HAS_TEMPO
+                | TransportFlags::HAS_BEATS_TIMELINE
+                | TransportFlags::HAS_SECONDS_TIMELINE
+                | TransportFlags::HAS_TIME_SIGNATURE;
+            if transport.is_playing {
+                t_flags |= TransportFlags::IS_PLAYING;
+            }
+            if transport.loop_enabled && transport.loop_end_beats > transport.loop_start_beats {
+                t_flags |= TransportFlags::IS_LOOP_ACTIVE;
+            }
+            let secs_per_beat = 60.0 / tempo;
+            let clap_transport = TransportEvent {
+                header: EventHeader::new_core(0, EventFlags::empty()),
+                flags: t_flags,
+                song_pos_beats: BeatTime::from_float(transport.beats_position),
+                song_pos_seconds: SecondsTime::from_float(
+                    transport.sample_position.max(0) as f64 / sr,
+                ),
+                tempo,
+                tempo_inc: 0.0,
+                loop_start_beats: BeatTime::from_float(transport.loop_start_beats),
+                loop_end_beats: BeatTime::from_float(transport.loop_end_beats),
+                loop_start_seconds: SecondsTime::from_float(
+                    transport.loop_start_beats * secs_per_beat,
+                ),
+                loop_end_seconds: SecondsTime::from_float(
+                    transport.loop_end_beats * secs_per_beat,
+                ),
+                bar_start: BeatTime::from_float(transport.bar_start_beats),
+                bar_number: transport.bar_number,
+                time_signature_numerator: transport.time_sig_num.max(1),
+                time_signature_denominator: transport.time_sig_den.max(1),
+            };
+            let current_steady = *steady_time;
+            *steady_time = steady_time.saturating_add(frames as u64);
 
             // Un solo puerto estéreo (dos canales). Es lo que espera la
             // mayoría de los efectos; un plugin con más puertos se
@@ -863,8 +954,8 @@ impl PluginInstance for ClapInstance {
                         &mut output_audio,
                         &input_events,
                         &mut output_events,
-                        None,
-                        None,
+                        Some(current_steady),
+                        Some(&clap_transport),
                     )
                     .map(|_| ())
                     .map_err(|e| format!("[CLAP] process: {e:?}")),
@@ -878,6 +969,16 @@ impl PluginInstance for ClapInstance {
         match outcome {
             Ok(()) => self.scratch.reinterleave_stereo(buffer.samples, frames),
             Err(e) => self.last_error = Some(e),
+        }
+
+        // Si el plugin anunció un cambio de latencia (p. ej. cambio de FFT en
+        // caliente al procesar un ParamValueEvent), refrescamos la caché antes
+        // de que `AudioEngine` consulte `latency_samples()` para PDC.
+        let latency_changed = self
+            .plugin
+            .access_shared_handler(|s| s.latency_dirty.swap(false, Ordering::AcqRel));
+        if latency_changed {
+            self.refresh_latency();
         }
     }
 
@@ -893,6 +994,14 @@ impl PluginInstance for ClapInstance {
             );
         }
         self.sample_rate = sample_rate;
+    }
+
+    fn latency_samples(&self) -> u32 {
+        self.cached_latency.load(Ordering::Relaxed)
+    }
+
+    fn set_transport(&mut self, transport: HostTransportInfo) {
+        self.transport = transport;
     }
 
     fn has_gui(&self) -> bool {
@@ -1135,7 +1244,14 @@ impl PluginInstance for ClapInstance {
             return true;
         }
 
-        // Plugin sonando: que lo aplique el hilo de audio.
+        // Plugin sonando: que lo aplique el hilo de audio. Si el plugin avisó
+        // cambio de latencia (p. ej. cambio de tamaño FFT), actualizamos la caché.
+        let latency_changed = self
+            .plugin
+            .access_shared_handler(|s| s.latency_dirty.swap(false, Ordering::AcqRel));
+        if latency_changed {
+            self.refresh_latency();
+        }
         self.param_queue
             .push(PendingClapEvent::ParamValue { id, plain })
     }
@@ -1253,6 +1369,14 @@ impl PluginInstance for ClapInstance {
 
         // 3. Peticiones de GUI.
         self.service_gui_requests();
+
+        // 4. Cambios de latencia reportados vía `CLAP_EXT_LATENCY` (hilo principal).
+        let latency_changed = self
+            .plugin
+            .access_shared_handler(|shared| shared.latency_dirty.swap(false, Ordering::AcqRel));
+        if latency_changed {
+            self.refresh_latency();
+        }
     }
 }
 

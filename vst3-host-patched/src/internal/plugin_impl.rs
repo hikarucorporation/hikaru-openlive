@@ -1,7 +1,7 @@
 //! Internal VST3 plugin implementation
 
 use crate::{
-    audio::AudioBuffers,
+    audio::{AudioBuffers, HostTransport},
     error::{Error, Result},
     midi::{MidiChannel, MidiEvent},
     parameters::{Parameter, ParameterChange},
@@ -43,6 +43,8 @@ pub struct PluginImpl {
     is_processing: bool,
     sample_rate: f64,
     block_size: usize,
+    transport: HostTransport,
+    continuous_samples: i64,
 
     // Host data structures
     process_data: Option<Box<HostProcessData>>,
@@ -299,6 +301,8 @@ impl PluginImpl {
                 is_processing: false,
                 sample_rate: 44100.0,
                 block_size: 512,
+                transport: HostTransport::default(),
+                continuous_samples: 0,
                 process_data: None,
                 component_handler: Some(component_handler),
                 pending_param_changes: Vec::new(),
@@ -822,6 +826,40 @@ impl PluginInternal for PluginImpl {
                 // prepare_buffers (buffer addresses are stable), so there's nothing to rebuild
                 // here — keeping the steady-state path allocation-free.
 
+                // Update ProcessContext with the host's real musical transport (tempo,
+                // beats, bar start, time signature, playing/cycle flags) every block so
+                // tempo-synced VST3 plugins stay locked to the DAW timeline.
+                let t = self.transport;
+                data.process_context.sampleRate = self.sample_rate;
+                data.process_context.tempo = t.tempo.max(1.0);
+                data.process_context.timeSigNumerator = t.time_sig_num.max(1) as i32;
+                data.process_context.timeSigDenominator = t.time_sig_den.max(1) as i32;
+                data.process_context.projectTimeSamples = t.sample_position;
+                data.process_context.continousTimeSamples = self.continuous_samples;
+                data.process_context.projectTimeMusic = t.beats_position;
+                data.process_context.barPositionMusic = t.bar_start_beats;
+                data.process_context.cycleStartMusic = t.loop_start_beats;
+                data.process_context.cycleEndMusic = t.loop_end_beats;
+                #[allow(clippy::unnecessary_cast)]
+                {
+                    let mut flags = (ProcessContext_::StatesAndFlags_::kTempoValid
+                        | ProcessContext_::StatesAndFlags_::kTimeSigValid
+                        | ProcessContext_::StatesAndFlags_::kProjectTimeMusicValid
+                        | ProcessContext_::StatesAndFlags_::kBarPositionValid
+                        | ProcessContext_::StatesAndFlags_::kContTimeValid)
+                        as u32;
+                    if t.is_playing {
+                        flags |= ProcessContext_::StatesAndFlags_::kPlaying as u32;
+                    }
+                    if t.loop_enabled && t.loop_end_beats > t.loop_start_beats {
+                        flags |= (ProcessContext_::StatesAndFlags_::kCycleValid
+                            | ProcessContext_::StatesAndFlags_::kCycleActive)
+                            as u32;
+                    }
+                    data.process_context.state = flags;
+                }
+                self.continuous_samples = self.continuous_samples.saturating_add(frames as i64);
+
                 // Process
                 let result = self.processor.process(&mut data.process_data);
                 if result != kResultOk {
@@ -891,7 +929,33 @@ impl PluginInternal for PluginImpl {
         self.process_data = None;
 
         if self.is_processing {
+            unsafe {
+                let _ = self.processor.setProcessing(0);
+                self.is_processing = false;
+                if self.is_active {
+                    let _ = self.component.setActive(0);
+                    self.is_active = false;
+                }
+            }
             self.setup_processing()?;
+            unsafe {
+                let act = self.component.setActive(1);
+                if act != kResultOk && act != kNotImplemented {
+                    return Err(Error::Other(format!(
+                        "Failed to reactivate after audio config change: {:#x}",
+                        act
+                    )));
+                }
+                self.is_active = true;
+                let proc_res = self.processor.setProcessing(1);
+                if proc_res != kResultOk && proc_res != kNotImplemented {
+                    return Err(Error::Other(format!(
+                        "Failed to restart processing after audio config change: {:#x}",
+                        proc_res
+                    )));
+                }
+                self.is_processing = true;
+            }
         }
         Ok(())
     }
@@ -992,19 +1056,28 @@ impl PluginInternal for PluginImpl {
 
     fn start_processing(&mut self) -> Result<()> {
         unsafe {
-            // Component should already be activated during initialization
-            // But activate it if somehow it's not active
-            if !self.is_active {
-                log::warn!("Component not active, attempting to activate");
-                let result = self.component.setActive(1);
-                if result != kResultOk {
-                    return Err(Error::Other(format!("Failed to activate: {:#x}", result)));
-                }
-                self.is_active = true;
+            // VST3 spec requires `setupProcessing()` to be called while the
+            // component is INACTIVE, followed by `setActive(1)` (where plugins
+            // such as JUCE/NIH-plug/iPlug2 run `prepareToPlay` with the real
+            // sample rate and compute their true `getLatencySamples()`), and
+            // finally `setProcessing(1)`.
+            if self.is_active {
+                let _ = self.component.setActive(0);
+                self.is_active = false;
             }
 
-            // Setup processing
+            // Setup processing in the legal Inactive state
             self.setup_processing()?;
+
+            // Activate component with the newly configured sample rate / block size
+            let act_result = self.component.setActive(1);
+            if act_result != kResultOk && act_result != kNotImplemented {
+                return Err(Error::Other(format!(
+                    "Failed to activate: {:#x}",
+                    act_result
+                )));
+            }
+            self.is_active = true;
 
             // Start processing. `setProcessing` is an optional notification — a plugin
             // may return kNotImplemented (e.g. u-he), which is not an error: it simply
@@ -1339,6 +1412,14 @@ impl PluginInternal for PluginImpl {
             }
             Ok(())
         }
+    }
+
+    fn latency_samples(&self) -> u32 {
+        unsafe { self.processor.getLatencySamples() }
+    }
+
+    fn set_transport(&mut self, transport: HostTransport) {
+        self.transport = transport;
     }
 }
 

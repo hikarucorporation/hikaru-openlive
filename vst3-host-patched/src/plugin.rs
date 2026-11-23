@@ -134,6 +134,12 @@ pub(crate) trait PluginInternal: Send {
     fn output_channel_count(&self) -> usize {
         2
     }
+    /// Processing latency introduced by the plugin, in samples (`IAudioProcessor::getLatencySamples`).
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+    /// Update the host musical transport snapshot applied to `ProcessContext` on the next block.
+    fn set_transport(&mut self, _transport: crate::audio::HostTransport) {}
 }
 
 impl Plugin {
@@ -360,6 +366,21 @@ impl Plugin {
         self.sample_rate = sample_rate;
         self.block_size = block_size;
         Ok(())
+    }
+
+    /// Update the host musical transport snapshot fed to the plugin's `ProcessContext`.
+    pub fn set_transport(&mut self, transport: crate::audio::HostTransport) {
+        if let Some(internal) = self.internal.as_mut() {
+            internal.set_transport(transport);
+        }
+    }
+
+    /// Processing latency reported by the plugin, in samples (`IAudioProcessor::getLatencySamples`).
+    pub fn latency_samples(&self) -> u32 {
+        self.internal
+            .as_ref()
+            .map(|i| i.latency_samples())
+            .unwrap_or(0)
     }
 
     /// Process audio buffers

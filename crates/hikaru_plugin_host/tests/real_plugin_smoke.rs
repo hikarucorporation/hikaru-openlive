@@ -241,3 +241,107 @@ fn vst3_processes_the_whole_hikaru_block() {
         energy(second_half)
     );
 }
+
+/// Verifica que los plugins reales VST3/CLAP instalados reporten su latencia
+/// tras `start_processing()`/`activate()` y acepten `HostTransportInfo` a 150 BPM.
+#[test]
+fn real_plugins_report_latency_and_accept_host_transport() {
+    let report = hikaru_plugin_host::registry::scan_standard_paths();
+    if report.plugins.is_empty() {
+        eprintln!("[smoke] sin plugins instalados; skip");
+        return;
+    }
+
+    for desc in &report.plugins {
+        let name_lower = desc.name.to_ascii_lowercase();
+        if !name_lower.contains("uzu")
+            && !name_lower.contains("frequency shifter")
+            && !name_lower.contains("spectral gate")
+            && !name_lower.contains("dragonflyhall")
+        {
+            continue;
+        }
+        eprintln!(
+            "[smoke] probando latencia/transporte en {:?}: {} ({})",
+            desc.format,
+            desc.name,
+            desc.path.display()
+        );
+        let mut inst: Box<dyn PluginInstance> = match desc.format {
+            hikaru_plugin_host::PluginFormat::VST3 => match Vst3Instance::load(&desc.path) {
+                Ok(i) => Box::new(i),
+                Err(e) => panic!("[smoke] load error: {e}"),
+            },
+            hikaru_plugin_host::PluginFormat::CLAP => match ClapInstance::load(&desc.path) {
+                Ok(i) => Box::new(i),
+                Err(e) => panic!("[smoke] load error: {e}"),
+            },
+        };
+        inst.set_sample_rate(48_000.0);
+        let lat_before = inst.latency_samples();
+
+        // Activamos efecto distinto de neutro en Frequency Shifter.
+        for (p, _) in inst.snapshot_params() {
+            let pn = p.name.to_ascii_lowercase();
+            if pn == "frequency shift" {
+                inst.set_param_normalized(p.id, 0.75);
+            }
+        }
+        // Enviamos un burst de 2048 samples de seno (440 Hz) empezando en frame 512,
+        // seguido de silencio, y medimos dónde empieza la señal de salida vs entrada.
+        let burst_start = 512usize;
+        let burst_len = 2048usize;
+        let mut in_l = Vec::new();
+        let mut out_l = Vec::new();
+        for blk in 0..8usize {
+            let mut raw = vec![0.0f32; HIKARU_BLOCK_FRAMES * NUM_CHANNELS];
+            for f in 0..HIKARU_BLOCK_FRAMES {
+                let g = blk * HIKARU_BLOCK_FRAMES + f;
+                let s = if g >= burst_start && g < burst_start + burst_len {
+                    0.8 * (std::f32::consts::TAU * 440.0 * (g - burst_start) as f32 / 48_000.0).sin()
+                } else {
+                    0.0
+                };
+                raw[f * 2] = s;
+                raw[f * 2 + 1] = s;
+                in_l.push(s);
+            }
+            inst.set_transport(hikaru_plugin_host::HostTransportInfo {
+                is_playing: true,
+                tempo: 150.0,
+                sample_rate: 48_000.0,
+                sample_position: (blk * HIKARU_BLOCK_FRAMES) as i64,
+                beats_position: (blk * HIKARU_BLOCK_FRAMES) as f64 / (48_000.0 * 60.0 / 150.0),
+                bar_start_beats: 0.0,
+                bar_number: 0,
+                time_sig_num: 4,
+                time_sig_den: 4,
+                loop_enabled: false,
+                loop_start_beats: 0.0,
+                loop_end_beats: 0.0,
+            });
+            let mut buf = AudioBuffer::new(&mut raw);
+            inst.process(&mut buf);
+            for f in 0..HIKARU_BLOCK_FRAMES {
+                out_l.push(raw[f * 2]);
+            }
+        }
+        let lat_after = inst.latency_samples();
+        let first_out = out_l.iter().position(|&v| v.abs() > 1e-3);
+        let diff_energy: f32 = in_l.iter().zip(out_l.iter()).map(|(a, b)| (a - b) * (a - b)).sum();
+        eprintln!(
+            "[smoke] {} ({:?}): lat_before={}, lat_after={}, first_out={:?} (burst_start={}), diff_energy={:.4}",
+            desc.name, desc.format, lat_before, lat_after, first_out, burst_start, diff_energy
+        );
+        for (p, v) in inst.snapshot_params() {
+            let fmt = inst.format_param_value(p.id, v);
+            assert!(
+                !p.unit.eq_ignore_ascii_case("unknown")
+                    && !fmt.as_deref().unwrap_or("").ends_with("Unknown"),
+                "param {} should not expose Unknown unit: unit='{}' fmt={:?}",
+                p.name, p.unit, fmt
+            );
+        }
+        assert!(out_l.iter().all(|s| s.is_finite()));
+    }
+}

@@ -1,5 +1,47 @@
 //! Audio types and utilities for VST3 host
 
+/// Musical transport snapshot delivered to VST3 plugins via `ProcessContext`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostTransport {
+    /// Whether the DAW transport is currently playing.
+    pub is_playing: bool,
+    /// Project tempo in beats per minute (BPM).
+    pub tempo: f64,
+    /// Project timeline position at the start of the block, in samples.
+    pub sample_position: i64,
+    /// Project timeline position at the start of the block, in quarter notes (beats).
+    pub beats_position: f64,
+    /// Start position of the current bar, in quarter notes (beats).
+    pub bar_start_beats: f64,
+    /// Time signature numerator (e.g. 4 in 4/4).
+    pub time_sig_num: u16,
+    /// Time signature denominator (e.g. 4 in 4/4).
+    pub time_sig_den: u16,
+    /// Whether the host loop/cycle region is currently active.
+    pub loop_enabled: bool,
+    /// Start of the host loop region, in quarter notes (beats).
+    pub loop_start_beats: f64,
+    /// End of the host loop region, in quarter notes (beats).
+    pub loop_end_beats: f64,
+}
+
+impl Default for HostTransport {
+    fn default() -> Self {
+        Self {
+            is_playing: false,
+            tempo: 120.0,
+            sample_position: 0,
+            beats_position: 0.0,
+            bar_start_beats: 0.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            loop_enabled: false,
+            loop_start_beats: 0.0,
+            loop_end_beats: 0.0,
+        }
+    }
+}
+
 /// Audio buffers for plugin processing
 #[derive(Debug)]
 pub struct AudioBuffers {

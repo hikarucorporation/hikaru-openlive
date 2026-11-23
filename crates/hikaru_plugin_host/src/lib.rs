@@ -74,6 +74,44 @@ pub enum PluginFormat {
     CLAP,
 }
 
+/// Estado del transporte musical del host entregado a cada plugin VST3/CLAP
+/// antes de procesar cada bloque de audio (tempo real en BPM, posición en
+/// beats/samples, inicio de compás, firma de tiempo y región de loop).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostTransportInfo {
+    pub is_playing: bool,
+    pub tempo: f64,
+    pub sample_rate: f64,
+    pub sample_position: i64,
+    pub beats_position: f64,
+    pub bar_start_beats: f64,
+    pub bar_number: i32,
+    pub time_sig_num: u16,
+    pub time_sig_den: u16,
+    pub loop_enabled: bool,
+    pub loop_start_beats: f64,
+    pub loop_end_beats: f64,
+}
+
+impl Default for HostTransportInfo {
+    fn default() -> Self {
+        Self {
+            is_playing: false,
+            tempo: 120.0,
+            sample_rate: 48_000.0,
+            sample_position: 0,
+            beats_position: 0.0,
+            bar_start_beats: 0.0,
+            bar_number: 0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            loop_enabled: false,
+            loop_start_beats: 0.0,
+            loop_end_beats: 0.0,
+        }
+    }
+}
+
 /// Handle nativo del DAW, capturado en el hilo de la GUI y enviado al hilo
 /// de la ventana del plugin.
 ///
@@ -204,10 +242,18 @@ pub trait PluginInstance: Send {
     }
 
     /// Latencia introducida por el plugin, en samples. La reporta el host para
-    /// compensarla contra el resto de la señal.
+    /// compensarla contra el resto de la señal (PDC).
     fn latency_samples(&self) -> u32 {
         0
     }
+
+    /// Entrega el estado actual del transporte musical del DAW (tempo en BPM,
+    /// posición en beats/samples, compás, firma y loop) para sincronizar LFOs,
+    /// delays, phasers y moduladores internos del plugin con el proyecto.
+    ///
+    /// Contrato RT: sin alocaciones ni locks; se llama desde el hilo de audio
+    /// inmediatamente antes de [`Self::process`].
+    fn set_transport(&mut self, _transport: HostTransportInfo) {}
 
     /// Incrusta el editor del plugin en una ventana nativa ya existente.
     ///

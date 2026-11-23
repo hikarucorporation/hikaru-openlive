@@ -75,6 +75,13 @@ impl RealtimePluginRunner {
         self.plugin.stop_processing()
     }
 
+    /// Update the musical transport snapshot applied to `ProcessContext` on the next block.
+    ///
+    /// Lock-free and allocation-free: call from the audio thread right before [`Self::process`].
+    pub fn set_transport(&mut self, transport: crate::audio::HostTransport) {
+        self.plugin.set_transport(transport);
+    }
+
     /// Drain all queued control commands and render one block.
     ///
     /// Call this from the audio thread (e.g. inside your device callback). It performs only
