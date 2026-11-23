@@ -522,6 +522,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         state.selected_slot_index = new_slot_idx;
                                         state.show_dsp_rack = true;
                                         if plugin.name == "Hikaru Ultracomb"
+                                            || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(plugin.name)
                                             || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(plugin.name)
                                         {
                                             if let Some(et_idx) = t_idx.checked_sub(1) {

@@ -21,7 +21,15 @@ pub mod phaselock {
     pub use super::openspectral_phaser::*;
 }
 
-pub use bit8::{Bit8Effect, Bit8Params};
+pub use bit8::{
+    Bit8Effect, Bit8Params, Bit8QuantizeMode, Bit8Rectify, Bit8ShapeMode,
+    BIT8_PARAM_ANTI_ALIAS, BIT8_PARAM_CHANCE, BIT8_PARAM_CLOCK_HZ, BIT8_PARAM_COUNT,
+    BIT8_PARAM_GATE_DB, BIT8_PARAM_GATE_ON, BIT8_PARAM_JITTER, BIT8_PARAM_MIX,
+    BIT8_PARAM_QUANTIZE_DB, BIT8_PARAM_QUANTIZE_MODE, BIT8_PARAM_QUANTIZE_ON,
+    BIT8_PARAM_RECTIFY, BIT8_PARAM_SHAPE_DRIVE_DB, BIT8_PARAM_SHAPE_MODE, BIT8_PARAM_SHAPE_ON,
+    BIT8_PARAM_SQUARED_DOMAIN, BIT8_PARAM_WET_GAIN_DB, BIT8_PARAM_WET_HP_HZ,
+    BIT8_PARAM_WET_LP_HZ, BIT8_PARAM_WIDTH,
+};
 pub use dc_offset::{DcOffsetEffect, DcOffsetParams};
 pub use dual_pan::{DualPanEffect, DualPanParams};
 pub use filter::StateVariableFilter;

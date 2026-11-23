@@ -352,7 +352,7 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
-                "Bitcrusher and sample-rate clock reducer.",
+                "Bitwig-style digital degrader: Clock/Jitter/Chance, Gate, Shape, Quantize, Anti-alias & Wet FX.",
             ),
             _ => (
                 BrowserRailTab::AudioFx,
@@ -693,6 +693,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 }
                 state.request_external_params(&desc);
             } else if slot_name == "Hikaru Ultracomb"
+                || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
             {
                 if let Some(et_idx) = mixer_idx.checked_sub(1) {
@@ -734,6 +735,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                     }
                     state.request_external_params(&desc);
                 } else if slot_name == "Hikaru Ultracomb"
+                || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
             {
                     if let Some(et_idx) = track_idx.checked_sub(1) {

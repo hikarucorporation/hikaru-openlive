@@ -2567,12 +2567,20 @@ impl<'a> AudioEngine<'a> {
             _ => return Err(format!("Efecto nativo desconocido: {name}")),
         };
 
-        let node = hikaru_dsp::DspPluginNode::new(
+        let mut node = hikaru_dsp::DspPluginNode::new(
             name.to_string(),
             hikaru_dsp::PluginCategory::Vst3Fx,
             instance,
         )
         .with_slot_idx(slot_idx);
+        if matches!(name, "Bit-8" | "Bit 8" | "Hikaru Bit-8") {
+            let tap = std::sync::Arc::new(hikaru_plugin_host::PluginTap::new(
+                self.sample_rate,
+                hikaru_plugin_host::scratch::MAX_BLOCK_FRAMES,
+            ));
+            hikaru_plugin_host::tap::register((track_idx, slot_idx), std::sync::Arc::clone(&tap));
+            node.set_tap(Some(tap));
+        }
         let insert_pos = chain
             .iter()
             .position(|n| n.slot_idx > slot_idx)

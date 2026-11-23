@@ -272,39 +272,6 @@ const RING_MOD_PARAMS: &[ParamDesc] = &[
     },
 ];
 
-const BIT8_PARAMS: &[ParamDesc] = &[
-    ParamDesc {
-        name: "Bits",
-        default_norm: 7.0 / 15.0,
-        kind: ParamKind::Knob {
-            min: 1.0,
-            max: 16.0,
-            unit: "bit",
-            log_freq: false,
-        },
-    },
-    ParamDesc {
-        name: "Clock",
-        default_norm: 0.0,
-        kind: ParamKind::Knob {
-            min: 1.0,
-            max: 64.0,
-            unit: "x",
-            log_freq: false,
-        },
-    },
-    ParamDesc {
-        name: "Mix",
-        default_norm: 1.0,
-        kind: ParamKind::Knob {
-            min: 0.0,
-            max: 100.0,
-            unit: "%",
-            log_freq: false,
-        },
-    },
-];
-
 fn spec_for(name: &str) -> Option<DeviceSpec> {
     match name {
         "Tool" | "Hikaru Tool" => Some(DeviceSpec {
@@ -348,12 +315,6 @@ fn spec_for(name: &str) -> Option<DeviceSpec> {
             card_width: 196.0,
             accent: theme::ACCENT_ORANGE,
             params: RING_MOD_PARAMS,
-        }),
-        "Bit-8" | "Bit 8" | "Hikaru Bit-8" => Some(DeviceSpec {
-            canonical_name: "Bit-8",
-            card_width: 196.0,
-            accent: theme::ACCENT_ORANGE,
-            params: BIT8_PARAMS,
         }),
         _ => None,
     }
