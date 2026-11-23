@@ -393,6 +393,13 @@ pub trait PluginInstance: Send {
         Err("Este formato no soporta carga de estado todavía".to_string())
     }
 
+    /// Devuelve `true` (y limpia la bandera) si el plugin avisó que su estado
+    /// interno cambió (p. ej. `CLAP_EXT_STATE::mark_dirty` al elegir un preset
+    /// o cambiar una wavetable/modulación desde su editor nativo).
+    fn take_state_dirty(&mut self) -> bool {
+        false
+    }
+
     /// Texto exacto del plugin para un valor ("440.00 Hz"). `None` = usar
     /// `PluginParamInfo::display_value` (aproximación honesta).
     fn format_param_value(&mut self, _id: u32, _normalized: f32) -> Option<String> {

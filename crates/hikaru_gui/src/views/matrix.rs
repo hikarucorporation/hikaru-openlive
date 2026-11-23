@@ -2292,6 +2292,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     let mut create_midi_slot_action: Option<(usize, usize)> = None;
     let mut add_group_action = false;
     let mut add_fx_action = false;
+    let mut add_audio_action = false;
     let mut group_track_action: Option<usize> = None;
     let mut toggle_group_expand_action: Option<usize> = None;
     let mut trigger_group_scene_action: Option<(usize, usize)> = None; // (group_mixer_idx, scene_idx)
@@ -2725,6 +2726,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 }
                 Some(ctxm::MenuAction::AddInstrumentTrack) => {
                     add_track_action = true;
+                }
+                Some(ctxm::MenuAction::AddAudioTrack) => {
+                    add_audio_action = true;
                 }
                 Some(ctxm::MenuAction::AddFxTrack) => {
                     add_fx_action = true;
@@ -5063,6 +5067,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // =========================================================================
     // 5. DEFERRED ACTIONS (Clips, Drops, Track/Scene Mutations)
     // =========================================================================
+    if add_audio_action {
+        crate::ui::add_menu::execute_action(
+            state,
+            crate::ui::add_menu::AddMenuAction::AddAudioTrack,
+        );
+    }
     if add_fx_action {
         let fx_idx = state.add_fx_track();
         state.selected_fx_index = Some(fx_idx);

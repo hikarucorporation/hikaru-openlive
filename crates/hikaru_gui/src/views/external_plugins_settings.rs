@@ -41,6 +41,9 @@ pub struct ParamFeedbackEvent {
     pub descriptor_id: String,
     pub changes: Vec<(u32, f32)>,
     pub origin: FeedbackOrigin,
+    /// Snapshot binario (`save_state`) emitido en vivo al cambiar de preset o
+    /// editar estado interno en la ventana del plugin.
+    pub state: Option<Vec<u8>>,
 }
 
 enum ScanMessage {
@@ -233,8 +236,16 @@ impl PluginSettingsState {
             }
         }
 
-        while let Ok(event) = self.param_rx.try_recv() {
-            self.pending_param_feedback.push(event);
+        while let Ok(mut event) = self.param_rx.try_recv() {
+            if let Some(state) = event.state.take() {
+                if !state.is_empty() {
+                    self.pending_saved_states
+                        .push((event.window_key.clone(), state));
+                }
+            }
+            if !event.changes.is_empty() {
+                self.pending_param_feedback.push(event);
+            }
         }
     }
 
@@ -532,7 +543,7 @@ fn run_plugin_window(
         .name("hikaru-plugin-feedback".into())
         .spawn(move || {
             while let Ok(feedback) = feedback_rx.recv() {
-                if feedback.changes.is_empty() {
+                if feedback.changes.is_empty() && feedback.state.is_none() {
                     continue;
                 }
                 let _ = param_tx.send(ParamFeedbackEvent {
@@ -540,6 +551,7 @@ fn run_plugin_window(
                     descriptor_id: fb_descriptor_id.clone(),
                     changes: feedback.changes,
                     origin: feedback.origin,
+                    state: feedback.state,
                 });
             }
         });
@@ -555,6 +567,7 @@ fn run_plugin_window(
             descriptor_id,
             changes: final_params,
             origin: FeedbackOrigin::Editor,
+            state: None,
         });
     }
 

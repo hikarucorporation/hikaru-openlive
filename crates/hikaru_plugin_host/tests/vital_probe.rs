@@ -285,4 +285,8 @@ fn vital_clap_cross_thread_timer_does_not_deadlock() {
         .expect("DEADLOCK en ClapJuceWrapper::onTimer / MessageManagerLock desde otro hilo");
 
     drop(inst_a);
+    // Esperar a que el hilo global `JUCE Timer` de Vital despierte tras remover
+    // todas las instancias: sin retener `PluginEntry`, `dlclose()` desmapeaba
+    // `Vital.clap` y el hilo `JUCE Timer` terminaba en SIGSEGV.
+    std::thread::sleep(std::time::Duration::from_millis(120));
 }

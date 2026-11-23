@@ -136,6 +136,9 @@ struct HikaruShared {
     main_thread_callback: AtomicBool,
     /// El plugin avisó vía `CLAP_EXT_LATENCY` que su latencia cambió y hay que releerla.
     latency_dirty: AtomicBool,
+    /// El plugin avisó vía `CLAP_EXT_STATE::mark_dirty` que su estado interno cambió
+    /// (p. ej. cambio de preset, wavetable o matriz de modulación en el editor).
+    state_dirty: AtomicBool,
     /// Peticiones de GUI pendientes de atender en el tick.
     gui: Mutex<GuiRequests>,
 }
@@ -146,6 +149,7 @@ impl HikaruShared {
             log_to_stdout: true,
             main_thread_callback: AtomicBool::new(false),
             latency_dirty: AtomicBool::new(false),
+            state_dirty: AtomicBool::new(false),
             gui: Mutex::new(GuiRequests::default()),
         }
     }
@@ -363,7 +367,9 @@ impl HostLatencyImpl for HikaruMainThread<'_> {
 }
 
 impl HostStateImpl for HikaruMainThread<'_> {
-    fn mark_dirty(&self) {}
+    fn mark_dirty(&self) {
+        self.shared.state_dirty.store(true, Ordering::Release);
+    }
 }
 
 /// Estado que el host guarda del lado del hilo de audio.
@@ -532,6 +538,10 @@ pub struct ClapInstance {
     /// `EventBuffer` reusado para construir la cola de entrada de cada bloque.
     /// Vive en el hilo de audio y no se aloca por bloque.
     event_buffer: EventBuffer,
+    /// Descriptores `AudioPorts` pre-asignados (2 canales × 1 puerto) para
+    /// evitar 2 allocaciones en el heap por cada bloque de audio en `process()`.
+    input_audio_ports: AudioPorts,
+    output_audio_ports: AudioPorts,
     /// Último valor que el **host** le mandó al plugin, por parámetro (normalizado).
     host_sent: HashMap<u32, f32>,
     /// Último valor leído del plugin, por parámetro (normalizado).
@@ -572,6 +582,28 @@ impl ParamQueue {
 
 unsafe impl Send for ClapInstance {}
 
+/// Caché de `PluginEntry` CLAP retenidos durante toda la vida del proceso.
+///
+/// Evita que `clack-host` llame a `dlclose()` al remover la última instancia de
+/// un plugin del rack: wrappers como JUCE (Vital, Surge XT, etc.) dejan hilos
+/// globales vivos (`JUCE Timer`) incluso tras destruir todas las instancias, y
+/// desmapear el `.so`/`.clap` con `dlclose()` provoca un `SIGSEGV` cuando esos
+/// hilos despiertan sobre código ya desmapeado (mismo criterio que Bitwig,
+/// Reaper y Ardour).
+fn load_or_get_entry(path: &Path) -> Result<PluginEntry, String> {
+    static ENTRIES: OnceLock<Mutex<HashMap<std::path::PathBuf, PluginEntry>>> = OnceLock::new();
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let cache = ENTRIES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = guard.get(&canonical) {
+        return Ok(entry.clone());
+    }
+    let entry = unsafe { PluginEntry::load(path) }
+        .map_err(|e| format!("[CLAP] Fallo al cargar entry: {}", e))?;
+    guard.insert(canonical, entry.clone());
+    Ok(entry)
+}
+
 impl ClapInstance {
     pub fn load(path: &Path) -> Result<Self, String> {
         let path_buf = path.to_path_buf();
@@ -593,8 +625,7 @@ impl ClapInstance {
 
         println!("[CLAP] Cargando '{}'...", path.display());
 
-        let entry = unsafe { PluginEntry::load(path) }
-            .map_err(|e| format!("[CLAP] Fallo al cargar entry: {}", e))?;
+        let entry = load_or_get_entry(path)?;
 
         let plugin_factory = entry
             .get_plugin_factory()
@@ -728,6 +759,8 @@ impl ClapInstance {
             param_index,
             param_queue: ParamQueue::new(PARAM_QUEUE_CAPACITY),
             event_buffer: EventBuffer::with_capacity(PARAM_QUEUE_CAPACITY),
+            input_audio_ports: AudioPorts::with_capacity(2, 1),
+            output_audio_ports: AudioPorts::with_capacity(2, 1),
             host_sent: HashMap::new(),
             seen,
             pending_editor_resize: None,
@@ -915,6 +948,8 @@ impl PluginInstance for ClapInstance {
                 processor,
                 param_queue,
                 event_buffer,
+                input_audio_ports,
+                output_audio_ports,
                 transport,
                 steady_time,
                 sample_rate,
@@ -959,12 +994,8 @@ impl PluginInstance for ClapInstance {
             let current_steady = *steady_time;
             *steady_time = steady_time.saturating_add(frames as u64);
 
-            // Un solo puerto estéreo (dos canales). Es lo que espera la
-            // mayoría de los efectos; un plugin con más puertos se
-            // desalinearía en vez de recibir audio incorrecto.
-            let mut input_audio = AudioPorts::with_capacity(2, 1);
-            let mut output_audio = AudioPorts::with_capacity(2, 1);
-
+            // Un solo puerto estéreo (dos canales) usando los `AudioPorts`
+            // pre-asignados en `ClapInstance` (cero allocaciones por bloque).
             let (inputs, outputs) = scratch.channels_mut();
 
             // `split_at_mut` parte el slice en dos tramos disjuntos y así
@@ -974,7 +1005,7 @@ impl PluginInstance for ClapInstance {
             let (in_l, in_r) = inputs.split_at_mut(1);
             let (out_l, out_r) = outputs.split_at_mut(1);
 
-            let input_audio = input_audio.with_input_buffers([AudioPortBuffer {
+            let input_audio = input_audio_ports.with_input_buffers([AudioPortBuffer {
                 latency: 0,
                 channels: AudioPortBufferType::f32_input_only([
                     InputChannel {
@@ -988,7 +1019,7 @@ impl PluginInstance for ClapInstance {
                 ]),
             }]);
 
-            let mut output_audio = output_audio.with_output_buffers([AudioPortBuffer {
+            let mut output_audio = output_audio_ports.with_output_buffers([AudioPortBuffer {
                 latency: 0,
                 channels: AudioPortBufferType::f32_output_only([
                     &mut out_l[0][..frames],
@@ -1450,6 +1481,11 @@ impl PluginInstance for ClapInstance {
             this.refresh_latency();
             Ok(())
         })
+    }
+
+    fn take_state_dirty(&mut self) -> bool {
+        self.plugin
+            .access_shared_handler(|s| s.state_dirty.swap(false, Ordering::AcqRel))
     }
 
     /// Lo que el editor nativo movió por su cuenta.

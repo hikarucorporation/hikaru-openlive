@@ -246,6 +246,7 @@ fn el_ciclo_de_parametros_cierra_en_ambos_sentidos() {
         .send(ParamFeedback {
             changes: vec![(7, 0.5)],
             origin: FeedbackOrigin::Host,
+            state: None,
         })
         .unwrap();
     let fb = fb_rx.try_recv().unwrap();

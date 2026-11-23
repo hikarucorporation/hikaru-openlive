@@ -38,7 +38,7 @@
 //! otro hilo está copiando es una lectura a medio escribir.
 
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU64, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::scratch::NUM_CHANNELS;
@@ -51,13 +51,16 @@ use crate::scratch::NUM_CHANNELS;
 const DEFAULT_CAPACITY: usize = 8;
 
 /// Capacidad del anillo de retorno de monitoreo (ventana -> motor de audio),
-/// en samples interleaved. 8192 frames estéreo (~170 ms a 48 kHz), potencia de 2.
-const MONITOR_CAPACITY_SAMPLES: usize = 8192 * NUM_CHANNELS;
+/// en samples interleaved. 16384 frames estéreo (~340 ms a 48 kHz), potencia de 2.
+const MONITOR_CAPACITY_SAMPLES: usize = 16384 * NUM_CHANNELS;
 const MONITOR_MASK: usize = MONITOR_CAPACITY_SAMPLES - 1;
-/// Tope de latencia de monitoreo (~64 ms a 48 kHz): si el motor estuvo detenido
+/// Tope de latencia de monitoreo (~85 ms a 48 kHz): si el motor estuvo detenido
 /// y se acumuló más que esto, se avanza el puntero de lectura para mantener el
 /// teclado de la ventana con respuesta inmediata.
-const MONITOR_MAX_LAG_SAMPLES: usize = 3072 * NUM_CHANNELS;
+const MONITOR_MAX_LAG_SAMPLES: usize = 4096 * NUM_CHANNELS;
+/// Longitud del fade-out anti-clic (en frames estéreo) cuando el anillo de
+/// monitoreo llega al final de una cola o sufre un underrun real.
+const MONITOR_UNDERRUN_FADE_FRAMES: usize = 64;
 
 /// Identifica el slot `(pista del motor, índice de la cadena)` al que pertenece
 /// un tap.
@@ -136,6 +139,10 @@ pub struct PluginTap {
     monitor_ring: UnsafeCell<Box<[f32]>>,
     monitor_write: AtomicUsize,
     monitor_read: AtomicUsize,
+    /// Histéresis de pre-buffer del monitoreo: evita que el consumidor drene
+    /// bloques parciales (p. ej. 800 frames dentro de un callback de 1024) que
+    /// producirían huecos de silencio periódicos (~47 Hz de entrecorte).
+    monitor_primed: AtomicBool,
 }
 
 impl PluginTap {
@@ -171,6 +178,7 @@ impl PluginTap {
             monitor_ring: UnsafeCell::new(vec![0.0f32; MONITOR_CAPACITY_SAMPLES].into_boxed_slice()),
             monitor_write: AtomicUsize::new(0),
             monitor_read: AtomicUsize::new(0),
+            monitor_primed: AtomicBool::new(false),
         }
     }
 
@@ -315,14 +323,36 @@ impl PluginTap {
         self.monitor_write.store(w, Ordering::Release);
     }
 
+    /// Frames estéreo actualmente acumulados en el anillo de monitoreo.
+    pub fn monitor_buffered_frames(&self) -> usize {
+        let w = self.monitor_write.load(Ordering::Acquire);
+        let r = self.monitor_read.load(Ordering::Acquire);
+        w.wrapping_sub(r) / NUM_CHANNELS
+    }
+
     /// Mezcla (suma) audio de monitoreo proveniente de la ventana del editor
     /// dentro de `dst`. Hilo de audio (consumidor único, RT: sin locks ni allocs).
     pub fn mix_monitor_into(&self, dst: &mut [f32]) -> usize {
+        let wanted = dst.len() & !1;
+        if wanted < NUM_CHANNELS {
+            return 0;
+        }
         let w = self.monitor_write.load(Ordering::Acquire);
         let mut r = self.monitor_read.load(Ordering::Relaxed);
         let mut avail = w.wrapping_sub(r);
         if avail < NUM_CHANNELS {
+            self.monitor_primed.store(false, Ordering::Relaxed);
             return 0;
+        }
+        // Si todavía no arrancamos (o venimos de un underrun), esperar a tener
+        // al menos un bloque completo (`wanted`) antes de empezar a drenar:
+        // drenar 735-800 frames en un callback de 1024 dejaba 224-289 frames
+        // de silencio en cada bloque y sonaba entrecortado/tildado.
+        if !self.monitor_primed.load(Ordering::Relaxed) {
+            if avail < wanted {
+                return 0;
+            }
+            self.monitor_primed.store(true, Ordering::Relaxed);
         }
         // Mantener baja latencia si se acumuló audio viejo.
         if avail > MONITOR_MAX_LAG_SAMPLES {
@@ -330,19 +360,41 @@ impl PluginTap {
             r = r.wrapping_add(skip);
             avail = w.wrapping_sub(r);
         }
-        let to_read = (dst.len().min(avail)) & !1;
+        let underrun = avail < wanted;
+        let to_read = wanted.min(avail) & !1;
         if to_read == 0 {
+            self.monitor_primed.store(false, Ordering::Relaxed);
             return 0;
         }
+        let frames_read = to_read / NUM_CHANNELS;
+        let fade_frames = if underrun {
+            frames_read.min(MONITOR_UNDERRUN_FADE_FRAMES)
+        } else {
+            0
+        };
+        let fade_start = frames_read.saturating_sub(fade_frames);
         // SAFETY: consumidor único SPSC; estos índices ya fueron publicados con `Release`.
         unsafe {
             let ring = &*self.monitor_ring.get();
-            for sample_out in &mut dst[..to_read] {
-                *sample_out += ring[r & MONITOR_MASK];
+            for frame in 0..frames_read {
+                let gain = if fade_frames > 0 && frame >= fade_start {
+                    let rem = frames_read - frame;
+                    rem as f32 / (fade_frames as f32 + 1.0)
+                } else {
+                    1.0
+                };
+                let l = ring[r & MONITOR_MASK] * gain;
                 r = r.wrapping_add(1);
+                let r_s = ring[r & MONITOR_MASK] * gain;
+                r = r.wrapping_add(1);
+                dst[frame * NUM_CHANNELS] += l;
+                dst[frame * NUM_CHANNELS + 1] += r_s;
             }
         }
         self.monitor_read.store(r, Ordering::Release);
+        if underrun {
+            self.monitor_primed.store(false, Ordering::Relaxed);
+        }
         to_read
     }
 }
@@ -454,6 +506,37 @@ mod tests {
         assert!((engine_buf[2] - 0.6).abs() < 1e-6);
         assert!((engine_buf[3] - (-0.4)).abs() < 1e-6);
         // Una segunda lectura con el anillo vacío no altera el buffer.
+        assert_eq!(tap.mix_monitor_into(&mut engine_buf), 0);
+    }
+
+    #[test]
+    fn monitor_waits_for_full_block_before_draining_and_fades_on_underrun() {
+        let tap = PluginTap::new(48_000.0, 1024);
+        // La ventana produce 800 frames (1 tick de 60 Hz) pero CPAL pide 1024.
+        tap.push_monitor(&vec![0.5f32; 800 * NUM_CHANNELS]);
+        let mut engine_buf = vec![0.0f32; 1024 * NUM_CHANNELS];
+        assert_eq!(
+            tap.mix_monitor_into(&mut engine_buf),
+            0,
+            "no debe drenar un bloque parcial (800 < 1024) y dejar 224 frames de silencio"
+        );
+
+        // Llega el segundo tick de 800 frames (total 1600 >= 1024): ahora drena un bloque entero.
+        tap.push_monitor(&vec![0.5f32; 800 * NUM_CHANNELS]);
+        assert_eq!(tap.mix_monitor_into(&mut engine_buf), 1024 * NUM_CHANNELS);
+        assert!(engine_buf.iter().all(|&s| (s - 0.5).abs() < 1e-6));
+
+        // Quedan 576 frames (< 1024): drena con fade-out suave en el final y se des-prima.
+        engine_buf.fill(0.0);
+        assert_eq!(tap.mix_monitor_into(&mut engine_buf), 576 * NUM_CHANNELS);
+        assert!(
+            engine_buf[(576 - 1) * NUM_CHANNELS] < 0.05,
+            "el último sample tras underrun debe tener fade-out anti-clic"
+        );
+
+        // Tras des-primarse, vuelve a exigir un bloque completo antes de arrancar.
+        tap.push_monitor(&vec![0.5f32; 400 * NUM_CHANNELS]);
+        engine_buf.fill(0.0);
         assert_eq!(tap.mix_monitor_into(&mut engine_buf), 0);
     }
 }

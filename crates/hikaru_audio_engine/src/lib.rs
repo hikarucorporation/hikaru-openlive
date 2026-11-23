@@ -2134,6 +2134,9 @@ pub struct AudioEngine<'a> {
     dms_scratch_r: Vec<f32>,
     fx_scratch_buf: Vec<f32>,
     track_midi_events: Vec<Vec<hikaru_midi::MidiEvent>>,
+    /// Notas MIDI del teclado virtual / preview del Piano Roll encoladas fuera
+    /// de `process()` para que no se borren al limpiar `track_midi_events`.
+    pending_virtual_midi: Vec<Vec<hikaru_midi::MidiEvent>>,
     track_pdc_delays: Vec<PdcDelayLine>,
     dms_pdc_delay: PdcDelayLine,
     current_pdc_latency: u32,
@@ -2339,6 +2342,7 @@ impl<'a> AudioEngine<'a> {
             dms_scratch_r: vec![0.0; MAX_TRACK_BUF],
             fx_scratch_buf: vec![0.0; MAX_TRACK_BUF],
             track_midi_events: (0..16).map(|_| Vec::with_capacity(128)).collect(),
+            pending_virtual_midi: (0..16).map(|_| Vec::with_capacity(32)).collect(),
             track_pdc_delays: (0..16).map(|_| PdcDelayLine::new()).collect(),
             dms_pdc_delay: PdcDelayLine::new(),
             current_pdc_latency: 0,
@@ -4213,7 +4217,7 @@ impl<'a> AudioEngine<'a> {
         }
 
         let vel_byte = (velocity * 127.0).clamp(1.0, 127.0) as u8;
-        self.track_midi_events[ti].push(hikaru_midi::MidiEvent {
+        self.pending_virtual_midi[ti].push(hikaru_midi::MidiEvent {
             status: 0x90 | (ti as u8 & 0x0F),
             data1: pitch,
             data2: vel_byte,
@@ -4240,7 +4244,7 @@ impl<'a> AudioEngine<'a> {
         let key = dms_pad_key(ti, pitch as usize);
         self.dms_voice_pool.release_pad(key);
         self.dms_voice_pool.release_pad(pitch as usize);
-        self.track_midi_events[ti].push(hikaru_midi::MidiEvent {
+        self.pending_virtual_midi[ti].push(hikaru_midi::MidiEvent {
             status: 0x80 | (ti as u8 & 0x0F),
             data1: pitch,
             data2: 0,
@@ -4258,7 +4262,7 @@ impl<'a> AudioEngine<'a> {
         let key = dms_pad_key(ti, pitch as usize);
         self.dms_voice_pool.kill_pad(key);
         self.dms_voice_pool.kill_pad(pitch as usize);
-        self.track_midi_events[ti].push(hikaru_midi::MidiEvent {
+        self.pending_virtual_midi[ti].push(hikaru_midi::MidiEvent {
             status: 0x80 | (ti as u8 & 0x0F),
             data1: pitch,
             data2: 0,
@@ -4463,10 +4467,14 @@ impl<'a> AudioEngine<'a> {
         let open_grid_voice_pool = &mut self.open_grid_voice_pool;
         let track_open_grid_enabled = &self.track_open_grid_enabled;
         let track_midi_events = &mut self.track_midi_events;
+        let pending_virtual_midi = &mut self.pending_virtual_midi;
         let midi_clips = &mut self.midi_clips;
 
-        for evs in track_midi_events.iter_mut() {
+        for (evs, pending) in track_midi_events.iter_mut().zip(pending_virtual_midi.iter_mut()) {
             evs.clear();
+            if !pending.is_empty() {
+                evs.append(pending);
+            }
         }
 
         if self.transport.playback_state == TransportPlaybackState::Playing {
@@ -5433,17 +5441,19 @@ impl<'a> AudioEngine<'a> {
                 self.track_clip_playhead[t].store(packed, Ordering::Relaxed);
             }
         } else {
-            // Incluso con el transporte detenido, mezclar el audio de monitoreo
-            // proveniente de ventanas de plugins externos abiertas (p. ej. al
-            // tocar el teclado en pantalla de Vital) respetando volumen/paneo/mute.
+            // Incluso con el transporte detenido, procesamos los plugins externos
+            // activos para que:
+            // 1. El teclado virtual y las previews del Piano Roll (`pending_virtual_midi`)
+            //    disparadas sobre la pista suenen a través de Vital u otro synth VST3/CLAP.
+            // 2. El retorno de monitoreo (`tap.mix_monitor_into`) de la ventana nativa
+            //    del plugin suene por los parlantes respetando volumen/paneo/mute/solo.
             let buf_len = samples.len();
+            let transport = self.transport;
+            let frame_start = self.transport.sample_count;
             let any_solo = self.track_solos.iter().any(|s| s.load(Ordering::Relaxed));
             for t in 0..16 {
-                let has_monitor = !self.track_effects[t].is_empty()
-                    && self.track_effects[t]
-                        .iter()
-                        .any(|n| n.is_active && n.tap.is_some());
-                if !has_monitor {
+                let has_active_external = self.track_effects[t].iter().any(|n| n.is_active);
+                if !has_active_external {
                     self.track_peak_bits[t].store(0.0f32.to_bits(), Ordering::Relaxed);
                     continue;
                 }
@@ -5452,47 +5462,45 @@ impl<'a> AudioEngine<'a> {
                 }
                 let track_buf = &mut self.track_output_bufs[t][..buf_len];
                 track_buf.fill(0.0);
-                let mut mixed_any = false;
-                for node in &self.track_effects[t] {
-                    if node.is_active {
-                        if let Some(tap) = &node.tap {
-                            if tap.mix_monitor_into(track_buf) > 0 {
-                                mixed_any = true;
-                            }
+                {
+                    let mut upstream_latency = 0u32;
+                    let mut audio_buffer = AudioBuffer::new(track_buf);
+                    for node in self.track_effects[t].iter_mut() {
+                        if node.is_active {
+                            let host_t = build_host_transport(&transport, frame_start, upstream_latency);
+                            node.set_transport(host_t);
+                            node.process(&mut audio_buffer, &self.track_midi_events[t]);
+                            upstream_latency = upstream_latency.saturating_add(node.latency_samples());
                         }
                     }
                 }
-                if mixed_any {
-                    let vol = f32::from_bits(self.track_volumes[t].load(Ordering::Relaxed));
-                    let muted = self.track_mutes[t].load(Ordering::Relaxed);
-                    let soloed = self.track_solos[t].load(Ordering::Relaxed);
-                    let effective_gain = if muted || (any_solo && !soloed) {
-                        0.0
-                    } else {
-                        vol
-                    };
-                    let pan_norm = f32::from_bits(self.track_pans[t].load(Ordering::Relaxed)) / 100.0;
-                    let gl = effective_gain * if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
-                    let gr = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
-                    let mut track_peak = 0.0f32;
-                    for f in 0..(buf_len / 2) {
-                        let l = track_buf[f * 2] * gl;
-                        let r = track_buf[f * 2 + 1] * gr;
-                        let al = if l.is_finite() { l.abs() } else { 0.0 };
-                        let ar = if r.is_finite() { r.abs() } else { 0.0 };
-                        if al > track_peak {
-                            track_peak = al;
-                        }
-                        if ar > track_peak {
-                            track_peak = ar;
-                        }
-                        samples[f * 2] += l;
-                        samples[f * 2 + 1] += r;
-                    }
-                    self.track_peak_bits[t].store(track_peak.to_bits(), Ordering::Relaxed);
+                let vol = f32::from_bits(self.track_volumes[t].load(Ordering::Relaxed));
+                let muted = self.track_mutes[t].load(Ordering::Relaxed);
+                let soloed = self.track_solos[t].load(Ordering::Relaxed);
+                let effective_gain = if muted || (any_solo && !soloed) {
+                    0.0
                 } else {
-                    self.track_peak_bits[t].store(0.0f32.to_bits(), Ordering::Relaxed);
+                    vol
+                };
+                let pan_norm = f32::from_bits(self.track_pans[t].load(Ordering::Relaxed)) / 100.0;
+                let gl = effective_gain * if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
+                let gr = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
+                let mut track_peak = 0.0f32;
+                for f in 0..(buf_len / 2) {
+                    let l = track_buf[f * 2] * gl;
+                    let r = track_buf[f * 2 + 1] * gr;
+                    let al = if l.is_finite() { l.abs() } else { 0.0 };
+                    let ar = if r.is_finite() { r.abs() } else { 0.0 };
+                    if al > track_peak {
+                        track_peak = al;
+                    }
+                    if ar > track_peak {
+                        track_peak = ar;
+                    }
+                    samples[f * 2] += l;
+                    samples[f * 2 + 1] += r;
                 }
+                self.track_peak_bits[t].store(track_peak.to_bits(), Ordering::Relaxed);
             }
             for p in &self.track_clip_playhead {
                 p.store(0, Ordering::Relaxed);
@@ -6992,5 +7000,66 @@ mod tests {
             "El audio del teclado de la ventana debe sonar aunque el transporte esté detenido (peak={peak})"
         );
         assert!(engine.track_peak(0) > 0.2);
+    }
+
+    #[test]
+    fn virtual_midi_reaches_external_plugin_when_transport_is_stopped() {
+        struct MidiCountingSynth {
+            notes_received: Arc<Mutex<Vec<(u8, u8, u8)>>>,
+            sounding: bool,
+        }
+        impl hikaru_plugin_host::PluginInstance for MidiCountingSynth {
+            fn process(&mut self, buffer: &mut AudioBuffer) {
+                if self.sounding {
+                    for s in buffer.samples.iter_mut() {
+                        *s = 0.5;
+                    }
+                }
+            }
+            fn queue_midi_event(&mut self, status: u8, data1: u8, data2: u8) -> bool {
+                self.notes_received.lock().unwrap().push((status, data1, data2));
+                if (status & 0xF0) == 0x90 && data2 > 0 {
+                    self.sounding = true;
+                }
+                true
+            }
+            fn show_gui_embedded(
+                &mut self,
+                _h: hikaru_plugin_host::RawWindowHandle,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn show_gui_floating(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn hide_gui(&mut self) {}
+            fn get_name(&self) -> &str {
+                "MidiCountingSynth"
+            }
+        }
+
+        let mut engine = test_engine();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let node = hikaru_dsp::DspPluginNode::new(
+            "Vital".into(),
+            hikaru_dsp::PluginCategory::ClapFx,
+            Box::new(MidiCountingSynth {
+                notes_received: Arc::clone(&received),
+                sounding: false,
+            }),
+        )
+        .with_slot_idx(0);
+        engine.track_effects[0].push(node);
+
+        // Transporte detenido: tocar nota virtual (teclado virtual / preview Piano Roll).
+        engine.trigger_virtual_note(0, 60, 0.9);
+
+        let mut out = vec![0.0f32; 256 * 2];
+        engine.process(&mut AudioBuffer::new(&mut out));
+        let notes = received.lock().unwrap();
+        assert_eq!(notes.len(), 1, "La nota MIDI virtual debe llegar al plugin externo");
+        assert_eq!(notes[0].1, 60);
+        let peak = out.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(peak > 0.2, "El synth externo debe sonar con MIDI virtual (peak={peak})");
     }
 }

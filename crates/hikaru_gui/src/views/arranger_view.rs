@@ -216,6 +216,8 @@ struct StripActions {
     clip_drag_start: Option<(usize, usize, matrix::MatrixClip, egui::Vec2)>,
     /// Apertura del menú contextual estilo Bitwig sobre un pad del Clip Launcher: (track, scene, pos).
     open_context_menu: Option<(usize, usize, egui::Pos2)>,
+    /// Acción diferida de añadir pista (Instrument / Audio / Group) desde el menú contextual de cabecera.
+    add_menu_action: Option<crate::ui::add_menu::AddMenuAction>,
 }
 
 /// Renderiza la vista **Mix** de Bitwig Studio 5.1.7 (`bitwig-mix-panel.png`):
@@ -239,6 +241,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         clip_drop_target: None,
         clip_drag_start: None,
         open_context_menu: None,
+        add_menu_action: None,
     };
     let mut trigger_scene: Option<usize> = None;
     let mut add_scene_clicked = false;
@@ -725,6 +728,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         state.popup_browser.open_new_instrument();
     }
 
+    if let Some(add_act) = actions.add_menu_action {
+        crate::ui::add_menu::execute_action(state, add_act);
+    }
+
     if let Some((t_idx, s_idx, path)) = actions.drop_slot {
         matrix::load_clip_into_slot(
             &mut state.matrix_state,
@@ -1196,9 +1203,21 @@ fn render_channel_strip(
                     Some(ctxm::MenuAction::Delete) => {
                         actions.delete_strip = Some(kind);
                     }
+                    Some(ctxm::MenuAction::AddInstrumentTrack) => {
+                        actions.add_menu_action =
+                            Some(crate::ui::add_menu::AddMenuAction::AddInstrumentTrack);
+                    }
+                    Some(ctxm::MenuAction::AddAudioTrack) => {
+                        actions.add_menu_action =
+                            Some(crate::ui::add_menu::AddMenuAction::AddAudioTrack);
+                    }
                     Some(ctxm::MenuAction::AddFxTrack) => {
                         let fx_idx = state.add_fx_track();
                         actions.selected_fx_idx = Some(fx_idx);
+                    }
+                    Some(ctxm::MenuAction::AddGroupTrack) => {
+                        actions.add_menu_action =
+                            Some(crate::ui::add_menu::AddMenuAction::AddGroupTrack);
                     }
                     Some(ctxm::MenuAction::SetMonitor(m)) => {
                         let v = match m {

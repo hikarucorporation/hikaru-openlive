@@ -93,6 +93,11 @@ pub struct ParamFeedback {
     /// esto para no pelearse con el gesto del usuario: si el último valor
     /// conocido vino del host, no lo pisa con un eco desfasado.
     pub origin: FeedbackOrigin,
+    /// Snapshot binario opcional (`save_state`) emitido en vivo cuando el
+    /// usuario elige un preset o cambia estado interno (wavetables, matriz de
+    /// modulación) en el editor, para mantener sincronizado el motor de audio
+    /// sin tener que cerrar la ventana.
+    pub state: Option<Vec<u8>>,
 }
 
 /// De dónde viene un [`ParamFeedback`].
@@ -229,6 +234,29 @@ impl LoopExit {
 /// monitoreo tras caer por debajo del umbral, para no cortar colas de release.
 const MONITOR_TAIL_TICKS: u8 = 12;
 
+/// Ventana durante la cual asumimos que el motor de audio sigue reproduciendo
+/// señal real aunque el callback de CPAL (~21-23 ms) todavía no haya publicado
+/// el siguiente bloque en este tick de 60 Hz (~16.7 ms). Sin esta retención,
+/// cada 3er-4to tick `tap.take()` devuelve `false`, la ventana procesaba un
+/// bloque de silencio y volcaba colas viejas de reverb/delay/filtro de vuelta
+/// al `monitor_ring` mezclándolas fuera de fase sobre el audio real.
+const ENGINE_AUDIO_HOLD: Duration = Duration::from_millis(180);
+
+/// Colchón objetivo en frames para el anillo de monitoreo cuando el usuario
+/// está tocando el teclado en pantalla del plugin (~32 ms a 48 kHz = 1.5 bloques
+/// CPAL de 1024 frames), evitando underruns por jitter de `sleep`/X11.
+const MONITOR_TARGET_BUFFER_FRAMES: usize = 1536;
+
+/// Debounce para sincronizar `save_state()` en vivo hacia el motor de audio.
+const STATE_SYNC_DEBOUNCE: Duration = Duration::from_millis(450);
+
+fn hash_state_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn has_audible_signal(samples: &[f32]) -> bool {
     samples.iter().any(|s| s.is_finite() && s.abs() > 1e-6)
 }
@@ -240,9 +268,20 @@ pub fn pump_plugin(
     primed: &mut bool,
 ) {
     let mut tail = 0u8;
-    pump_plugin_paced(instance, feed, scratch, primed, None, &mut tail);
+    let mut last_engine_audio = None;
+    pump_plugin_paced(
+        instance,
+        feed,
+        scratch,
+        primed,
+        None,
+        &mut tail,
+        Instant::now(),
+        &mut last_engine_audio,
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pump_plugin_paced(
     instance: &mut dyn PluginInstance,
     feed: Option<&PluginTap>,
@@ -250,6 +289,8 @@ fn pump_plugin_paced(
     primed: &mut bool,
     paced_frames: Option<usize>,
     monitor_tail_ticks: &mut u8,
+    now: Instant,
+    last_engine_audio: &mut Option<Instant>,
 ) {
     let mut input_silent = true;
     let frames = match feed {
@@ -260,7 +301,21 @@ fn pump_plugin_paced(
             }
             if tap.take(scratch) {
                 *primed = true;
-                input_silent = !has_audible_signal(scratch);
+                if has_audible_signal(scratch) {
+                    *last_engine_audio = Some(now);
+                    input_silent = false;
+                } else {
+                    input_silent = last_engine_audio
+                        .is_none_or(|t| now.duration_since(t) >= ENGINE_AUDIO_HOLD);
+                }
+            } else if last_engine_audio
+                .is_some_and(|t| now.duration_since(t) < ENGINE_AUDIO_HOLD)
+            {
+                // El motor está reproduciendo audio activamente y simplemente
+                // todavía no terminó el próximo bloque CPAL (~21-23 ms): no
+                // inyectar silencio ni empujar colas de la ventana al monitor.
+                *monitor_tail_ticks = 0;
+                return;
             }
             if input_silent {
                 // El motor está en silencio (p. ej. transporte parado o
@@ -340,6 +395,8 @@ pub struct WrapperEventLoop {
     last_pump: Option<Instant>,
     frac_frames: f64,
     monitor_tail_ticks: u8,
+    /// Último instante en que el motor publicó audio audible por el tap.
+    last_engine_audio: Option<Instant>,
     /// Cuadro pendiente de aplicar, puesto por [`Self::set_host_frame`].
     ///
     /// Vive acá y no se aplica al vuelo porque reposicionar la ventana exige
@@ -373,6 +430,7 @@ impl WrapperEventLoop {
             last_pump: None,
             frac_frames: 0.0,
             monitor_tail_ticks: 0,
+            last_engine_audio: None,
             pending_host_frame: None,
         }
     }
@@ -397,6 +455,11 @@ impl WrapperEventLoop {
         // tick: un `Vec::new()` por tick serían 60 allocaciones por ventana y
         // por segundo para algo que casi siempre está vacío.
         let mut host_echo: Vec<(u32, f32)> = Vec::new();
+        // Debounce y deduplicación para sincronizar `save_state()` en vivo hacia
+        // el motor de audio cuando el usuario elige un preset o edita estado
+        // interno (wavetables, matriz de modulación) desde la ventana del plugin.
+        let mut state_sync_due: Option<Instant> = None;
+        let mut last_synced_state_hash: Option<u64> = None;
 
         let exit = loop {
             let tick_start = Instant::now();
@@ -470,11 +533,41 @@ impl WrapperEventLoop {
             //       durante un arrastre, 83 ms de retraso se ven.
             if tick.is_multiple_of(PARAM_POLL_TICKS) {
                 let editor = instance.poll_param_changes();
+                let state_dirty = instance.take_state_dirty();
+                // Los cambios normales de 1..7 knobs ya viajan lock-free vía
+                // `SetExternalPluginParam`: evitar llamar `save_state()`/`load_state()`
+                // en cada gesto porque `load_state()` bloquea el mutex del motor de
+                // audio y resetea voces activas. Sólo sincronizamos snapshot binario
+                // ante una ráfaga de preset (>=8 parámetros) o un `mark_dirty` sin
+                // cambios de parámetro (wavetables, matriz de modulación, etc.).
+                if editor.len() >= 8 || (state_dirty && editor.is_empty()) {
+                    state_sync_due = Some(Instant::now() + STATE_SYNC_DEBOUNCE);
+                }
                 if !editor.is_empty() {
                     let _ = self.feedback.send(ParamFeedback {
                         changes: editor,
                         origin: FeedbackOrigin::Editor,
+                        state: None,
                     });
+                }
+            }
+
+            if let Some(due) = state_sync_due {
+                if Instant::now() >= due {
+                    state_sync_due = None;
+                    if let Ok(bytes) = instance.save_state() {
+                        if !bytes.is_empty() {
+                            let h = hash_state_bytes(&bytes);
+                            if last_synced_state_hash != Some(h) {
+                                last_synced_state_hash = Some(h);
+                                let _ = self.feedback.send(ParamFeedback {
+                                    changes: Vec::new(),
+                                    origin: FeedbackOrigin::Editor,
+                                    state: Some(bytes),
+                                });
+                            }
+                        }
+                    }
                 }
             }
 
@@ -593,26 +686,87 @@ impl WrapperEventLoop {
     /// Le pasa un bloque de audio al plugin de la ventana.
     fn pump_audio(&mut self, instance: &mut dyn PluginInstance) {
         let now = Instant::now();
-        let paced_frames = self.feed.as_ref().map(|tap| {
+        let total_frames = self.feed.as_ref().map(|tap| {
             let sr = tap.sample_rate().max(8_000.0) as f64;
             let dt = match self.last_pump {
-                Some(prev) => now.duration_since(prev).as_secs_f64().clamp(0.001, 0.05),
+                Some(prev) => now.duration_since(prev).as_secs_f64().clamp(0.001, 0.06),
                 None => self.budget.period().as_secs_f64(),
             };
             let exact = dt * sr + self.frac_frames;
-            let whole = (exact.floor() as usize).clamp(64, tap.max_frames());
+            let max_total = tap.max_frames().saturating_mul(2).max(64);
+            let whole = (exact.floor() as usize).clamp(64, max_total);
             self.frac_frames = (exact - whole as f64).clamp(0.0, 1.0);
             whole
         });
         self.last_pump = Some(now);
-        pump_plugin_paced(
-            instance,
-            self.feed.as_deref(),
-            &mut self.scratch,
-            &mut self.primed,
-            paced_frames,
-            &mut self.monitor_tail_ticks,
-        );
+
+        match (self.feed.as_deref(), total_frames) {
+            (Some(tap), Some(mut remaining)) => {
+                let max_chunk = tap.max_frames().max(64);
+                let mut chunks = 0usize;
+                while remaining > 0 && chunks < 2 {
+                    let chunk = remaining.min(max_chunk);
+                    remaining -= chunk;
+                    chunks += 1;
+                    pump_plugin_paced(
+                        instance,
+                        Some(tap),
+                        &mut self.scratch,
+                        &mut self.primed,
+                        Some(chunk),
+                        &mut self.monitor_tail_ticks,
+                        now,
+                        &mut self.last_engine_audio,
+                    );
+                    // Si el motor está reproduciendo audio real, no hace falta
+                    // un segundo sub-bloque de monitoreo en el mismo tick.
+                    if self
+                        .last_engine_audio
+                        .is_some_and(|t| now.duration_since(t) < ENGINE_AUDIO_HOLD)
+                    {
+                        break;
+                    }
+                }
+                // Si el usuario está tocando el teclado del plugin (monitoreo
+                // activo) y el anillo cayó por debajo del colchón objetivo,
+                // completamos un bloque extra de pre-buffer para que el
+                // callback CPAL de 1024 frames nunca sufra underrun.
+                if self.monitor_tail_ticks > 0
+                    && self
+                        .last_engine_audio
+                        .is_none_or(|t| now.duration_since(t) >= ENGINE_AUDIO_HOLD)
+                {
+                    let buffered = tap.monitor_buffered_frames();
+                    if buffered < MONITOR_TARGET_BUFFER_FRAMES {
+                        let deficit = (MONITOR_TARGET_BUFFER_FRAMES - buffered).min(max_chunk);
+                        if deficit >= 64 {
+                            pump_plugin_paced(
+                                instance,
+                                Some(tap),
+                                &mut self.scratch,
+                                &mut self.primed,
+                                Some(deficit),
+                                &mut self.monitor_tail_ticks,
+                                now,
+                                &mut self.last_engine_audio,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {
+                pump_plugin_paced(
+                    instance,
+                    self.feed.as_deref(),
+                    &mut self.scratch,
+                    &mut self.primed,
+                    total_frames,
+                    &mut self.monitor_tail_ticks,
+                    now,
+                    &mut self.last_engine_audio,
+                );
+            }
+        }
     }
 
     /// Manda a la UI el estado de los parámetros que el editor tiene ahora.
@@ -635,6 +789,7 @@ impl WrapperEventLoop {
             let _ = self.feedback.send(ParamFeedback {
                 changes: host_echo.to_vec(),
                 origin: FeedbackOrigin::Host,
+                state: None,
             });
         }
     }
@@ -684,5 +839,75 @@ mod tests {
         assert!(LoopExit::UserClosed.is_clean());
         assert!(!LoopExit::Destroyed.is_clean());
         assert!(!LoopExit::ConnectionLost("x".into()).is_clean());
+    }
+
+    #[test]
+    fn missed_tap_tick_during_active_playback_does_not_leak_tail_into_monitor() {
+        struct TailPlugin {
+            had_audio: bool,
+        }
+        impl PluginInstance for TailPlugin {
+            fn process(&mut self, buffer: &mut AudioBuffer) {
+                if has_audible_signal(buffer.samples) {
+                    self.had_audio = true;
+                } else if self.had_audio {
+                    // Simula cola de reverb/delay/filtro cuando entra silencio.
+                    for s in buffer.samples.iter_mut() {
+                        *s = 0.25;
+                    }
+                }
+            }
+            fn show_gui_embedded(&mut self, _h: crate::RawWindowHandle) -> Result<(), String> {
+                Ok(())
+            }
+            fn show_gui_floating(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn hide_gui(&mut self) {}
+            fn get_name(&self) -> &str {
+                "TailPlugin"
+            }
+        }
+
+        let tap = PluginTap::new(48_000.0, 256);
+        tap.attach_consumer();
+        let mut plugin = TailPlugin { had_audio: false };
+        let mut scratch = Vec::new();
+        let mut primed = false;
+        let mut tail = 0u8;
+        let mut last_engine_audio = None;
+        let t0 = Instant::now();
+
+        // Tick 1: el motor publica audio real.
+        tap.publish(&vec![0.6f32; 256 * 2]);
+        pump_plugin_paced(
+            &mut plugin,
+            Some(&tap),
+            &mut scratch,
+            &mut primed,
+            Some(256),
+            &mut tail,
+            t0,
+            &mut last_engine_audio,
+        );
+        assert_eq!(tap.monitor_buffered_frames(), 0);
+
+        // Tick 2 (16 ms después): CPAL aún no publicó el próximo bloque (`tap.take() == false`).
+        // NO debe inyectar silencio ni volcar la cola del plugin al `monitor_ring`.
+        pump_plugin_paced(
+            &mut plugin,
+            Some(&tap),
+            &mut scratch,
+            &mut primed,
+            Some(256),
+            &mut tail,
+            t0 + Duration::from_millis(16),
+            &mut last_engine_audio,
+        );
+        assert_eq!(
+            tap.monitor_buffered_frames(),
+            0,
+            "un tick intermedio entre bloques CPAL nunca debe contaminar monitor_ring"
+        );
     }
 }
