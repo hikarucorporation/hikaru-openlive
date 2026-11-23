@@ -1012,16 +1012,13 @@ impl AudioClipInstance {
     }
 
     pub fn has_valid_clip_loop(&self) -> bool {
-        self.clip_loop_enabled
-            && self.clip_loop_end > self.clip_loop_start
-            && self.clip_loop_start < self.natural_frames()
+        self.clip_loop_enabled && self.clip_loop_end > self.clip_loop_start
     }
 
-    /// Longitud del loop EXPRESSADA en frames, sin tocar.
+    /// Longitud del loop EXPRESADA en frames, sin tocar (puede exceder `natural_frames()`
+    /// para rellenar con silencio el resto del ciclo).
     fn raw_loop_len(&self) -> u64 {
-        let natural = self.natural_frames();
-        let end = self.clip_loop_end.min(natural.max(1)).max(self.clip_loop_start + 1);
-        end.saturating_sub(self.clip_loop_start).max(1)
+        self.clip_loop_end.saturating_sub(self.clip_loop_start).max(1)
     }
 
     /// Longitud del loop CUANTIZADA a un número entero de beats del transporte.
@@ -1085,10 +1082,10 @@ impl AudioClipInstance {
         let active_pf = self.has_active_pitch_or_formant();
         if (rate - 1.0).abs() < 1e-4 && !active_warp && !active_pf {
             let total_frames = self.samples.len() / ch;
-            if total_frames == 0 {
+            let f = out_frame as usize;
+            if f >= total_frames {
                 return (0.0, 0.0);
             }
-            let f = (out_frame as usize).min(total_frames - 1);
             let idx = f * ch;
             let l = self.samples[idx];
             let r = if ch > 1 { self.samples[idx + 1] } else { l };
@@ -1098,7 +1095,10 @@ impl AudioClipInstance {
         if !self.stretched_samples.is_empty() && (active_warp || active_pf || (self.stretched_rate - rate).abs() < 0.05) {
             let total_stretched = self.stretched_samples.len() / ch;
             if total_stretched > 0 {
-                let f = (out_frame as usize).min(total_stretched - 1);
+                let f = out_frame as usize;
+                if f >= total_stretched {
+                    return (0.0, 0.0);
+                }
                 let idx = f * ch;
                 let l = self.stretched_samples[idx];
                 let r = if ch > 1 { self.stretched_samples[idx + 1] } else { l };
@@ -1107,10 +1107,10 @@ impl AudioClipInstance {
         }
 
         let total_frames = self.samples.len() / ch;
-        if total_frames == 0 {
+        let f = (out_frame as f64 * rate).round() as usize;
+        if f >= total_frames {
             return (0.0, 0.0);
         }
-        let f = ((out_frame as f64 * rate).round() as usize).min(total_frames - 1);
         let idx = f * ch;
         let l = self.samples[idx];
         let r = if ch > 1 { self.samples[idx + 1] } else { l };
@@ -1135,8 +1135,7 @@ impl AudioClipInstance {
 
     pub fn playback_length_frames(&self) -> u64 {
         if self.has_valid_clip_loop() {
-            let end = self.clip_loop_end.min(self.natural_frames());
-            end.saturating_sub(self.clip_loop_start)
+            self.clip_loop_end.saturating_sub(self.clip_loop_start)
         } else {
             self.natural_frames()
         }
@@ -1158,9 +1157,7 @@ impl AudioClipInstance {
         let rate = self.tempo_rate(transport);
 
         if self.has_valid_clip_loop() {
-            let natural = self.natural_frames();
-            let loop_start_src = self.clip_loop_start.min(natural);
-            let loop_start_out = ((loop_start_src as f64) / rate).round() as u64;
+            let loop_start_out = ((self.clip_loop_start as f64) / rate).round() as u64;
             let loop_len = self.quantized_loop_len(transport);
             let loop_end_out = loop_start_out + loop_len;
             let out_frame = if elapsed < loop_end_out {
@@ -1172,7 +1169,7 @@ impl AudioClipInstance {
                 loop_start_out + ((elapsed - loop_start_out) % loop_len)
             };
             let src_frame = ((out_frame as f64) * rate).round() as usize;
-            return Some(src_frame.min(natural.saturating_sub(1) as usize));
+            return Some(src_frame);
         }
 
         let emission_len_out = ((self.emission_len_frames() as f64) / rate).round() as u64;
@@ -1199,12 +1196,11 @@ impl AudioClipInstance {
         let rate = self.tempo_rate(transport);
 
         if self.has_valid_clip_loop() {
-            let loop_start_src = self.clip_loop_start.min(natural);
-            let loop_start_out = ((loop_start_src as f64) / rate).round() as u64;
+            let loop_start_out = ((self.clip_loop_start as f64) / rate).round() as u64;
             let loop_len = self.quantized_loop_len(transport);
             let out_frame = loop_start_out + (elapsed % loop_len);
             let src_frame = ((out_frame as f64) * rate).round() as usize;
-            return Some(src_frame.min(natural.saturating_sub(1) as usize));
+            return Some(src_frame);
         }
 
         let emission_len_out = ((self.emission_len_frames() as f64) / rate).round() as u64;
@@ -1231,7 +1227,7 @@ impl AudioClipInstance {
                 return VoiceState::Finished;
             }
             let clip_frame = if self.has_valid_clip_loop() {
-                let loop_start = self.clip_loop_start.min(natural);
+                let loop_start = self.clip_loop_start;
                 let loop_end = loop_start + self.quantized_loop_len(transport);
                 let loop_len = loop_end - loop_start;
                 (loop_start + (elapsed % loop_len)) as u64
@@ -1284,7 +1280,7 @@ impl AudioClipInstance {
             return None;
         }
         if self.has_valid_clip_loop() {
-            let loop_start = self.clip_loop_start.min(natural);
+            let loop_start = self.clip_loop_start;
             let loop_end = loop_start + self.quantized_loop_len(transport);
             let loop_len = loop_end - loop_start;
             Some((loop_start + (elapsed % loop_len)) as u64)
@@ -3018,23 +3014,18 @@ impl<'a> AudioEngine<'a> {
         {
             let natural = clip.natural_frames();
             let start = (start_secs.max(0.0) * sr) as u64;
-            let mut end = (end_secs.max(0.0) * sr) as u64;
-            if natural > 0 {
-                end = end.min(natural);
-            }
-            if enabled && start < natural {
+            let end = (end_secs.max(0.0) * sr) as u64;
+            if enabled {
                 // Región vacía (`end <= start`) NO significa "sin loop": un clip
                 // con el Loop activado y sin región elegida loopea el clip
                 // entero. Es la semántica que ya usan `add_clip` (default de
                 // los pads de Matrix) y `Clip::new` en `hikaru_sequencer`.
                 //
-                // Tratar `end <= start` como "desactivar" rompía el loop justo al
-                // abrir un proyecto: `apply_matrix` manda `SetClipLoop` para
-                // cada clip con (0, 0, enabled=true) — que es lo que producen
-                // los pads recién cargados — y eso apagaba el loop que
-                // `add_clip` acababa de dejar puesto.
+                // Si `end > start`, respetamos `end` tal cual aunque exceda
+                // `natural`, para permitir corchetes de loop más largos que el
+                // audio clip (rellenando con silencio el resto del ciclo).
                 let loop_end = if end > start {
-                    end.min(natural)
+                    end
                 } else {
                     natural
                 };
@@ -3162,7 +3153,7 @@ impl<'a> AudioEngine<'a> {
             // Refrescar loop por defecto al tamaño del nuevo timeline.
             let natural = clip.natural_frames();
             if clip.clip_loop_enabled && natural > 0 {
-                if clip.clip_loop_end == 0 || clip.clip_loop_end > natural || was_full_loop {
+                if clip.clip_loop_end == 0 || was_full_loop {
                     clip.clip_loop_start = 0;
                     clip.clip_loop_end = natural;
                 }
@@ -3977,7 +3968,11 @@ impl<'a> AudioEngine<'a> {
         {
             if clip.is_playing && clip.voice_state_linear(self.absolute_frame, &self.transport) == VoiceState::Active {
                 let frame = clip.voice_frame_linear(self.absolute_frame, &self.transport)? as u64;
-                let total = clip.natural_frames().max(1);
+                let total = if clip.has_valid_clip_loop() {
+                    clip.clip_loop_end.max(clip.natural_frames()).max(1)
+                } else {
+                    clip.natural_frames().max(1)
+                };
                 return Some((frame, total));
             }
         }
@@ -5148,7 +5143,7 @@ impl<'a> AudioEngine<'a> {
                             && !clip.stretched_samples.is_empty()
                         {
                             let emission_out = ((emission as f64) / rate).round() as u64;
-                            let loop_start_out = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
+                            let loop_start_out = ((clip.clip_loop_start as f64) / rate).round() as u64;
                             let loop_len = if has_loop { clip.quantized_loop_len(&transport) } else { 0 };
                             let norm_denom = emission_out.max(1) as f64;
                             let mut clip_finished = false;
@@ -5209,7 +5204,7 @@ impl<'a> AudioEngine<'a> {
                     let emission_out = ((emission as f64) / rate).round() as u64;
                     let norm_denom = emission_out.max(1) as f64;
                     let (loop_start, loop_len) = if has_loop {
-                        let ls = ((clip.clip_loop_start.min(natural) as f64) / rate).round() as u64;
+                        let ls = ((clip.clip_loop_start as f64) / rate).round() as u64;
                         // Longitud CUANTIZADA a beats: sin esto el wrap cae
                         // fuera de la grilla en cada vuelta y el clip se
                         // desfasage del pulso (ver `quantized_loop_len`).
@@ -5404,7 +5399,7 @@ impl<'a> AudioEngine<'a> {
                     let frame_opt = if !clip.events.is_empty() {
                         clip.clip_frame_for_elapsed(elapsed, &self.transport)
                     } else if clip.has_valid_clip_loop() {
-                        let ls = clip.clip_loop_start.min(natural);
+                        let ls = clip.clip_loop_start;
                         let len = clip.quantized_loop_len(&self.transport);
                         let le = ls + len;
                         Some(if elapsed < le {
@@ -5689,7 +5684,7 @@ mod tests {
         let mut engine = test_engine();
         engine.set_mode(EngineMode::OpenLive);
         engine.add_clip(1, 0, 0, vec![0.5f32; 1000 * 2], 0.0, 0.0, 0.0, 2, false);
-        engine.set_clip_loop(0, 0, 0.0, 0.25, true);
+        engine.set_clip_loop(0, 0, 0.0, 1000.0 / engine.sample_rate, true);
         assert!(engine.clips[0].has_valid_clip_loop());
         let t = engine.transport;
         let wrapped = engine.clips[0].voice_frame(5000, &t).unwrap();
@@ -5710,6 +5705,25 @@ mod tests {
         engine.set_clip_loop(0, 0, 0.0, 0.0, false);
         assert!(!engine.clips[0].has_valid_clip_loop());
         assert_eq!(engine.clips[0].playback_length_frames(), 44100);
+    }
+
+    #[test]
+    fn clip_loop_can_extend_past_audio_length_with_silence() {
+        let mut engine = test_engine();
+        engine.set_mode(EngineMode::OpenLive);
+        // Audio de 1.0 s (44100 frames) a 44100 Hz
+        engine.add_clip(1, 0, 0, vec![0.5f32; 44100 * 2], 0.0, 0.0, 0.0, 2, true);
+        // Loop extendido a 2.0 s (88200 frames), más allá del final del audio
+        engine.set_clip_loop(0, 0, 0.0, 2.0, true);
+        let clip = &engine.clips[0];
+        assert!(clip.has_valid_clip_loop());
+        assert_eq!(clip.clip_loop_start, 0);
+        assert_eq!(clip.clip_loop_end, 88200);
+        assert_eq!(clip.playback_length_frames(), 88200);
+        // Dentro del audio: suena; pasado natural_frames: silencio (0.0, 0.0)
+        assert_eq!(clip.sample_stereo_stretched(100, 1.0), (0.5, 0.5));
+        assert_eq!(clip.sample_stereo_stretched(44100, 1.0), (0.0, 0.0));
+        assert_eq!(clip.sample_stereo_stretched(60000, 1.0), (0.0, 0.0));
     }
 
     #[test]

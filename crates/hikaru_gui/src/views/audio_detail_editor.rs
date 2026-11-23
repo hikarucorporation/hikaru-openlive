@@ -741,12 +741,12 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 .unwrap_or(true);
             let clip_dur_beats = (ev_len / spb).max(0.25);
             let mut cur_ls_b = if loop_e > loop_s {
-                (loop_s / spb).clamp(0.0, clip_dur_beats)
+                (loop_s / spb).max(0.0)
             } else {
                 0.0
             };
             let mut cur_le_b = if loop_e > loop_s {
-                (loop_e / spb).clamp((cur_ls_b + 0.0625).min(clip_dur_beats), clip_dur_beats)
+                (loop_e / spb).max(cur_ls_b + 0.0625)
             } else {
                 clip_dur_beats
             };
@@ -814,12 +814,12 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 let dv = ui.add(
                     egui::DragValue::new(&mut cur_ls_b)
                         .speed(0.05)
-                        .range(0.0..=(clip_dur_beats - 0.0625).max(0.0))
+                        .range(0.0..=100_000.0)
                         .suffix(" b")
                         .fixed_decimals(2),
                 );
                 if dv.changed() {
-                    cur_le_b = cur_le_b.max((cur_ls_b + 0.0625).min(clip_dur_beats));
+                    cur_le_b = cur_le_b.max(cur_ls_b + 0.0625);
                     edited_loop = true;
                 }
             });
@@ -828,7 +828,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                 let dv = ui.add(
                     egui::DragValue::new(&mut cur_le_b)
                         .speed(0.05)
-                        .range((cur_ls_b + 0.0625).min(clip_dur_beats)..=clip_dur_beats)
+                        .range((cur_ls_b + 0.0625)..=100_000.0)
                         .suffix(" b")
                         .fixed_decimals(2),
                 );
@@ -849,11 +849,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
                     }
                 }
                 if tool_btn(ui, "×2", false, bw, 18.0, 9.5)
-                    .on_hover_text("Duplicar longitud de loop dentro del clip")
+                    .on_hover_text("Duplicar longitud de loop")
                     .clicked()
                 {
                     let len = ((cur_le_b - cur_ls_b) * 2.0).max(0.25);
-                    cur_le_b = (cur_ls_b + len).min(clip_dur_beats);
+                    cur_le_b = cur_ls_b + len;
                     edited_loop = true;
                 }
                 if tool_btn(ui, "Full", false, bw, 18.0, 9.5)
@@ -1504,7 +1504,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     let clip_start = start_beats.max(0.0);
     let clip_end = (start_beats + clip_beats).max(clip_start);
     let (mut ls, mut le) = if loop_e > loop_s {
-        ((loop_s / spb).clamp(clip_start, clip_end), (loop_e / spb).clamp(clip_start, clip_end))
+        ((loop_s / spb).max(0.0), (loop_e / spb).max(0.0))
     } else {
         (clip_start, clip_end)
     };
@@ -1583,31 +1583,30 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
     }
 
     if let (Some(d), Some(cur)) = (active_drag, interact_pos) {
-        if resp.dragged_by(egui::PointerButton::Primary) && clip_end > clip_start {
+        if resp.dragged_by(egui::PointerButton::Primary) {
             let snap_beats = v.snap_beats;
             let snap = |b: f64| if shift_held { b } else { (b / snap_beats).round() * snap_beats };
-            let min_len = 0.25_f64.min((clip_end - clip_start) * 0.5).max(0.01);
+            let min_len = 0.25_f64.min((clip_end - clip_start).max(0.02) * 0.5).max(0.01);
             let delta_b = (cur.x - d.orig_x) as f64 / v.ppb as f64;
             match d.handle {
                 LoopHandle::Start => {
-                    let max_ls = (d.orig_le - min_len).max(clip_start);
-                    ls = snap(d.orig_ls + delta_b).clamp(clip_start, max_ls);
+                    let max_ls = (d.orig_le - min_len).max(0.0);
+                    ls = snap(d.orig_ls + delta_b).clamp(0.0, max_ls);
                     le = d.orig_le;
                     loop_en = true;
                     loop_changed = true;
                 }
                 LoopHandle::End => {
-                    let min_le = (d.orig_ls + min_len).min(clip_end);
+                    let min_le = d.orig_ls + min_len;
                     ls = d.orig_ls;
-                    le = snap(d.orig_le + delta_b).clamp(min_le, clip_end);
+                    le = snap(d.orig_le + delta_b).max(min_le);
                     loop_en = true;
                     loop_changed = true;
                 }
                 LoopHandle::Body => {
                     let len = (d.orig_le - d.orig_ls).max(min_len);
-                    let max_ls = (clip_end - len).max(clip_start);
-                    ls = snap(d.orig_ls + delta_b).clamp(clip_start, max_ls);
-                    le = (ls + len).min(clip_end);
+                    ls = snap(d.orig_ls + delta_b).max(0.0);
+                    le = ls + len;
                     loop_changed = true;
                 }
                 LoopHandle::None => {}
@@ -2115,7 +2114,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState, target: AudioEditorTarget) 
 
     // Scrollbar + resolución de grilla interactiva
     mp.rect_filled(scroll_r, 0.0, Color32::from_rgb(0x22, 0x22, 0x22));
-    let total_b = (start_beats + clip_beats + 16.0) - (-8.0);
+    let total_b = ((start_beats + clip_beats).max(le) + 16.0) - (-8.0);
     let vis_b = (main.width() / v.ppb) as f64;
     let tw = (scroll_r.width() - 60.0).max(20.0);
     let th = ((vis_b / total_b) as f32 * tw).clamp(24.0, tw);

@@ -1191,7 +1191,8 @@ pub(crate) fn sync_midi_clip(
 }
 
 /// Configura los límites de loop (en segundos) de un clip de audio de la
-/// matriz, validando `0 <= start < end <= duration_secs` y sincronizando
+/// matriz, validando `0 <= start < end` (permitiendo extender el loop más allá
+/// de la duración natural del audio, rellenando con silencio) y sincronizando
 /// inmediatamente con el motor de audio.
 pub fn set_audio_clip_loop_secs(
     state: &mut SessionMatrixState,
@@ -1216,8 +1217,8 @@ pub fn set_audio_clip_loop_secs(
     };
     let max_secs = clip.duration_secs.max(0.01);
     let min_len = 0.01_f64.min(max_secs * 0.5).max(1.0 / sr);
-    let clamped_start = start_secs.clamp(0.0, (max_secs - min_len).max(0.0));
-    let clamped_end = end_secs.clamp((clamped_start + min_len).min(max_secs), max_secs);
+    let clamped_start = start_secs.max(0.0);
+    let clamped_end = end_secs.max(clamped_start + min_len);
     let start_frames = (clamped_start * sr).round() as u64;
     let end_frames = ((clamped_end * sr).round() as u64).max(start_frames + 1);
 

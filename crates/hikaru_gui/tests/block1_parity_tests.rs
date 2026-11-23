@@ -275,7 +275,7 @@ fn cl17_clip_loop_start_end_editor_validates_and_syncs_audio_and_midi() {
         _ => panic!("Se esperaba GuiCommand::SetClipLoop"),
     }
 
-    // Invertido / fuera de rango se clampa con start < end <= duration
+    // Invertido se ajusta para mantener start < end
     assert!(matrix::set_audio_clip_loop_secs(
         &mut state.matrix_state,
         &state.audio_proxy,
@@ -289,6 +289,24 @@ fn cl17_clip_loop_start_end_editor_validates_and_syncs_audio_and_midi() {
         let clip = state.matrix_state.slot(0, 0).unwrap().clip.as_ref().unwrap();
         assert!(clip.loop_end > clip.loop_start);
         assert!(clip.loop_end <= 88200);
+    }
+    while rx.try_recv().is_ok() {}
+
+    // Extender el loop más allá de la duración del audio clip (ej. 4.0s en clip de 2.0s)
+    assert!(matrix::set_audio_clip_loop_secs(
+        &mut state.matrix_state,
+        &state.audio_proxy,
+        0,
+        0,
+        0.0,
+        4.0,
+        true,
+    ));
+    {
+        let clip = state.matrix_state.slot(0, 0).unwrap().clip.as_ref().unwrap();
+        assert_eq!(clip.loop_start, 0);
+        assert_eq!(clip.loop_end, 176400);
+        assert!(clip.loop_enabled);
     }
     while rx.try_recv().is_ok() {}
 
