@@ -18,16 +18,91 @@ use clack_host::events::event_types::{
 use clack_host::events::io::{EventBuffer, OutputEvents};
 use clack_host::events::{EventFlags, EventHeader, Match};
 use clack_host::prelude::*;
-use clack_host::utils::{BeatTime, SecondsTime};
+use clack_host::utils::{BeatTime, Cookie, SecondsTime};
 use hikaru_core::AudioBuffer;
 use raw_window_handle::RawWindowHandle;
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "linux")]
 use crate::platform::linux::X11Connection;
+
+/// Hilo único y persistente que actúa como `[main-thread]` de la especificación CLAP.
+///
+/// La especificación CLAP exige que todas las llamadas `[main-thread]` (`create`,
+/// `init`, `activate`, `gui.*`, `timer.on_timer`, `params.*`, `state.*`, `destroy`)
+/// ocurran siempre en el mismo hilo. Wrappers como `clap-juce-extensions` (usado por
+/// Vital, Surge XT, etc.) graban el `pthread_self()` de la primera instancia como
+/// `messageThreadId` de `juce::MessageManager`: si otra instancia (p. ej. la ventana
+/// del editor) llama a `gui.create` o `on_timer` desde otro hilo, `MessageManagerLock`
+/// entra en deadlock infinito esperando un dispatch loop que nunca corre.
+struct ClapMainThread {
+    thread_id: std::thread::ThreadId,
+    tx: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+}
+
+fn clap_main_thread() -> &'static ClapMainThread {
+    static MAIN: OnceLock<ClapMainThread> = OnceLock::new();
+    MAIN.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        let (id_tx, id_rx) = std::sync::mpsc::sync_channel::<std::thread::ThreadId>(1);
+        std::thread::Builder::new()
+            .name("hikaru-clap-main".into())
+            .spawn(move || {
+                let _ = id_tx.send(std::thread::current().id());
+                while let Ok(job) = rx.recv() {
+                    job();
+                }
+            })
+            .expect("no se pudo crear el hilo principal de CLAP");
+        let thread_id = id_rx
+            .recv()
+            .expect("el hilo principal de CLAP terminó antes de inicializar");
+        ClapMainThread { thread_id, tx }
+    })
+}
+
+fn on_clap_main_thread<R: Send + 'static, F: FnOnce() -> R + Send + 'static>(f: F) -> R {
+    let main = clap_main_thread();
+    if std::thread::current().id() == main.thread_id {
+        return f();
+    }
+    let (res_tx, res_rx) = std::sync::mpsc::sync_channel(1);
+    let _ = main.tx.send(Box::new(move || {
+        let _ = res_tx.send(f());
+    }));
+    res_rx
+        .recv()
+        .expect("el hilo principal de CLAP cerró inesperadamente")
+}
+
+struct SendMutPtr<T>(*mut T);
+unsafe impl<T> Send for SendMutPtr<T> {}
+
+fn on_clap_main_thread_mut<T: 'static, R: Send + 'static, F: FnOnce(&mut T) -> R + Send + 'static>(
+    target: &mut T,
+    f: F,
+) -> R {
+    let main = clap_main_thread();
+    if std::thread::current().id() == main.thread_id {
+        return f(target);
+    }
+    let ptr = SendMutPtr(target as *mut T);
+    let (res_tx, res_rx) = std::sync::mpsc::sync_channel(1);
+    let _ = main.tx.send(Box::new(move || {
+        let ptr = ptr;
+        // SAFETY: el hilo llamador bloquea en `res_rx.recv()` hasta que este
+        // closure termina, garantizando acceso exclusivo `&mut T` durante la llamada.
+        let result = f(unsafe { &mut *ptr.0 });
+        let _ = res_tx.send(result);
+    }));
+    res_rx
+        .recv()
+        .expect("el hilo principal de CLAP cerró inesperadamente")
+}
 
 /// Diferencia mínima entre dos valores para considerarlos el mismo.
 ///
@@ -338,6 +413,13 @@ impl HostHandlers for HikaruClapHost {
 #[derive(Debug, Clone)]
 struct ClapParamMeta {
     id: u32,
+    /// Puntero opaco entregado por el plugin en `params.get_info()`.
+    ///
+    /// La especificación CLAP exige devolver este `cookie` en cada
+    /// `CLAP_EVENT_PARAM_VALUE` y `CLAP_EVENT_PARAM_MOD`: wrappers como
+    /// `clap-juce-extensions` (p. ej. Vital) lo desreferencian directamente
+    /// como `juce::AudioProcessorParameter*` y hacen SIGSEGV si llega `NULL`.
+    cookie: Cookie,
     name: String,
     min: f64,
     max: f64,
@@ -403,8 +485,8 @@ pub(crate) fn clap_step_count(min: f64, max: f64, is_stepped: bool) -> i32 {
 /// Evento encolado hacia el hilo de audio de CLAP (parámetro, modulación o MIDI).
 #[derive(Clone, Copy)]
 enum PendingClapEvent {
-    ParamValue { id: u32, plain: f64 },
-    ParamMod { id: u32, delta_plain: f64 },
+    ParamValue { id: u32, cookie: Cookie, plain: f64 },
+    ParamMod { id: u32, cookie: Cookie, delta_plain: f64 },
     Midi { status: u8, data1: u8, data2: u8 },
 }
 
@@ -417,7 +499,9 @@ enum PendingClapEvent {
 /// perezosa en el primer bloque, cuando ya conocemos el sample rate real.
 pub struct ClapInstance {
     name: String,
-    plugin: clack_host::plugin::PluginInstance<HikaruClapHost>,
+    /// Envuelto en `ManuallyDrop` para garantizar que `clap_plugin::destroy()`
+    /// se ejecute siempre dentro de `hikaru-clap-main` en `Drop::drop`.
+    plugin: ManuallyDrop<clack_host::plugin::PluginInstance<HikaruClapHost>>,
     /// El processor de audio. `None` hasta el primer `process()`, porque
     /// `activate` necesita el sample rate y en `load()` todavía no lo
     /// necesitamos.
@@ -490,6 +574,11 @@ unsafe impl Send for ClapInstance {}
 
 impl ClapInstance {
     pub fn load(path: &Path) -> Result<Self, String> {
+        let path_buf = path.to_path_buf();
+        on_clap_main_thread(move || Self::load_on_main_thread(&path_buf))
+    }
+
+    fn load_on_main_thread(path: &Path) -> Result<Self, String> {
         let _load_guard = crate::load_lock().lock().unwrap_or_else(|e| e.into_inner());
 
         // Xlib tiene que saber que el proceso es multihilo **antes** de que
@@ -595,6 +684,7 @@ impl ClapInstance {
                     let name = String::from_utf8_lossy(info.name).into_owned();
                     let meta = ClapParamMeta {
                         id: info.id.get(),
+                        cookie: info.cookie,
                         name,
                         min: info.min_value,
                         max: info.max_value,
@@ -622,7 +712,7 @@ impl ClapInstance {
 
         Ok(Self {
             name: plugin_name,
-            plugin,
+            plugin: ManuallyDrop::new(plugin),
             processor: None,
             scratch: PlanarScratch::new(crate::scratch::MAX_BLOCK_FRAMES),
             sample_rate: 48_000.0,
@@ -697,42 +787,46 @@ impl ClapInstance {
         };
 
         let sample_rate = self.sample_rate;
-        match self.plugin.activate(|_, _| ClapAudioProcessor { sample_rate }, config) {
-            Ok(processor) => {
-                self.processor = Some(processor.into());
-                // La especificación CLAP indica que la latencia real queda
-                // definida tras `activate()`. La leemos aquí mismo para que el
-                // bloque #0 ya entre compensado por PDC.
-                self.refresh_latency();
-
-                // `activate()` entrega el processor en estado `Stopped`. El
-                // primer `start_processing()` es lo que lo pone en
-                // `ProcessingStarted`, y sin él el `match` de `process()`
-                // cae en la rama `Stopped` y devuelve "process con el
-                // processor detenido" en el primer bloque. Antes esto sólo
-                // pasaba en las llamadas siguientes, porque el camino
-                // "ya activado" de arriba sí arrancaba el procesamiento.
-                let start_result = self
-                    .processor
-                    .as_mut()
-                    .expect("processor recién asignado")
-                    .start_processing();
-
-                if let Err(e) = start_result {
-                    // `ProcessingStarted` sólo puede aparecer si el plugin se
-                    // auto-arrancó en `activate()`, que es legal.
-                    if !matches!(e, PluginInstanceError::ProcessingStarted) {
-                        self.last_error = Some(format!("[CLAP] start_processing: {e:?}"));
-                        return false;
-                    }
+        let activated = on_clap_main_thread_mut(self, move |this| {
+            match this.plugin.activate(|_, _| ClapAudioProcessor { sample_rate }, config) {
+                Ok(processor) => {
+                    this.processor = Some(processor.into());
+                    // La especificación CLAP indica que la latencia real queda
+                    // definida tras `activate()`. La leemos aquí mismo para que el
+                    // bloque #0 ya entre compensado por PDC.
+                    this.refresh_latency();
+                    true
                 }
-                true
+                Err(e) => {
+                    this.last_error = Some(format!("[CLAP] activate: {e:?}"));
+                    false
+                }
             }
-            Err(e) => {
-                self.last_error = Some(format!("[CLAP] activate: {e:?}"));
-                false
+        });
+        if !activated {
+            return false;
+        }
+
+        // `activate()` entrega el processor en estado `Stopped`. El
+        // primer `start_processing()` es lo que lo pone en
+        // `ProcessingStarted`, y sin él el `match` de `process()`
+        // cae en la rama `Stopped` y devuelve "process con el
+        // processor detenido" en el primer bloque.
+        let start_result = self
+            .processor
+            .as_mut()
+            .expect("processor recién asignado")
+            .start_processing();
+
+        if let Err(e) = start_result {
+            // `ProcessingStarted` sólo puede aparecer si el plugin se
+            // auto-arrancó en `activate()`, que es legal.
+            if !matches!(e, PluginInstanceError::ProcessingStarted) {
+                self.last_error = Some(format!("[CLAP] start_processing: {e:?}"));
+                return false;
             }
         }
+        true
     }
 
     /// Aplica lo que el plugin pidió en su extensión de GUI.
@@ -907,28 +1001,28 @@ impl PluginInstance for ClapInstance {
             event_buffer.clear();
             for pending in param_queue.drain() {
                 match pending {
-                    PendingClapEvent::ParamValue { id, plain } => {
+                    PendingClapEvent::ParamValue { id, cookie, plain } => {
                         let Some(clap_id) = ClapId::from_raw(id) else {
                             continue;
                         };
-                        let event = ParamValueEvent::new(
-                            0,
-                            clap_id,
-                            Pckn::match_all(),
-                            plain,
-                        );
+                        // SAFETY: `cookie` fue entregado por `params.get_info()` de esta
+                        // misma instancia del plugin para `clap_id`.
+                        let event = unsafe {
+                            ParamValueEvent::new(0, clap_id, Pckn::match_all(), plain)
+                                .with_cookie(cookie)
+                        };
                         event_buffer.push(&event);
                     }
-                    PendingClapEvent::ParamMod { id, delta_plain } => {
+                    PendingClapEvent::ParamMod { id, cookie, delta_plain } => {
                         let Some(clap_id) = ClapId::from_raw(id) else {
                             continue;
                         };
-                        let event = ParamModEvent::new(
-                            0,
-                            clap_id,
-                            Pckn::match_all(),
-                            delta_plain,
-                        );
+                        // SAFETY: `cookie` fue entregado por `params.get_info()` de esta
+                        // misma instancia del plugin para `clap_id`.
+                        let event = unsafe {
+                            ParamModEvent::new(0, clap_id, Pckn::match_all(), delta_plain)
+                                .with_cookie(cookie)
+                        };
                         event_buffer.push(&event);
                     }
                     PendingClapEvent::Midi { status, data1, data2 } => {
@@ -1025,22 +1119,22 @@ impl PluginInstance for ClapInstance {
     }
 
     fn notify_gui_embedded(&mut self) -> Option<(u32, u32)> {
-        // After gui.create + gui.set_parent + gui.show, query the actual native size.
-        let gui = self.gui.as_ref()?;
-        let mut plugin_handle = self.plugin.plugin_handle();
-        gui.get_size(&mut plugin_handle)
-            .map(|size| (size.width, size.height))
+        on_clap_main_thread_mut(self, |this| {
+            // After gui.create + gui.set_parent + gui.show, query the actual native size.
+            let gui = this.gui.as_ref()?;
+            let mut plugin_handle = this.plugin.plugin_handle();
+            gui.get_size(&mut plugin_handle)
+                .map(|size| (size.width, size.height))
+        })
     }
 
     fn show_gui_embedded(&mut self, handle: RawWindowHandle) -> Result<(), String> {
-        let Some(gui) = &self.gui else {
+        if self.gui.is_none() {
             return Err(format!(
                 "'{}' no expone editor gráfico: suena igual, pero no hay ventana que abrir",
                 self.name
             ));
-        };
-
-        let mut plugin_handle = self.plugin.plugin_handle();
+        }
 
         #[cfg(target_os = "linux")]
         let (window_id, x11_conn) = match crate::platform::linux::get_or_create_x11_window(handle, 1024, 700) {
@@ -1057,94 +1151,109 @@ impl PluginInstance for ClapInstance {
             _ => return Err(format!("[CLAP] Handle no soportado: {:?}", handle)),
         };
 
-        // 1. gui.create siempre antes de cualquier otra llamada a la GUI
-        let config = GuiConfiguration {
-            api_type: GuiApiType::X11,
-            is_floating: false,
-        };
+        on_clap_main_thread_mut(self, move |this| {
+            let Some(gui) = &this.gui else {
+                return Err(format!(
+                    "'{}' no expone editor gráfico: suena igual, pero no hay ventana que abrir",
+                    this.name
+                ));
+            };
+            let mut plugin_handle = this.plugin.plugin_handle();
 
-        if let Err(e) = gui.create(&mut plugin_handle, config) {
-            return Err(format!(
-                "El plugin '{}' rechazó crear su editor: {:?}",
-                self.name, e
-            ));
-        }
+            // 1. gui.create siempre antes de cualquier otra llamada a la GUI
+            let config = GuiConfiguration {
+                api_type: GuiApiType::X11,
+                is_floating: false,
+            };
 
-        // 2. Consultar y aplicar el tamaño nativo del plugin
-        if let Some(native_size) = gui.get_size(&mut plugin_handle) {
-            println!(
-                "[CLAP] Ajustando GUI de '{}' a tamaño nativo: {}x{}",
-                self.name, native_size.width, native_size.height
-            );
-            let _ = gui.set_size(&mut plugin_handle, native_size);
-        }
+            if let Err(e) = gui.create(&mut plugin_handle, config) {
+                return Err(format!(
+                    "El plugin '{}' rechazó crear su editor: {:?}",
+                    this.name, e
+                ));
+            }
 
-        // 3. Vincular ventana padre
-        let parent_window = Window::from_x11_handle(window_id as std::ffi::c_ulong);
+            // 2. Consultar y aplicar el tamaño nativo del plugin
+            if let Some(native_size) = gui.get_size(&mut plugin_handle) {
+                println!(
+                    "[CLAP] Ajustando GUI de '{}' a tamaño nativo: {}x{}",
+                    this.name, native_size.width, native_size.height
+                );
+                let _ = gui.set_size(&mut plugin_handle, native_size);
+            }
 
-        if let Err(e) = unsafe { gui.set_parent(&mut plugin_handle, parent_window) } {
-            let _ = gui.destroy(&mut plugin_handle);
-            return Err(format!(
-                "El plugin '{}' no aceptó la ventana del host: {:?}",
-                self.name, e
-            ));
-        }
+            // 3. Vincular ventana padre
+            let parent_window = Window::from_x11_handle(window_id as std::ffi::c_ulong);
 
-        // 4. Mostrar la GUI
-        if let Err(e) = gui.show(&mut plugin_handle) {
-            let _ = gui.destroy(&mut plugin_handle);
-            return Err(format!(
-                "El plugin '{}' no pudo mostrar su editor: {:?}",
-                self.name, e
-            ));
-        }
+            if let Err(e) = unsafe { gui.set_parent(&mut plugin_handle, parent_window) } {
+                let _ = gui.destroy(&mut plugin_handle);
+                return Err(format!(
+                    "El plugin '{}' no aceptó la ventana del host: {:?}",
+                    this.name, e
+                ));
+            }
 
-        self.window_attached = true;
+            // 4. Mostrar la GUI
+            if let Err(e) = gui.show(&mut plugin_handle) {
+                let _ = gui.destroy(&mut plugin_handle);
+                return Err(format!(
+                    "El plugin '{}' no pudo mostrar su editor: {:?}",
+                    this.name, e
+                ));
+            }
+
+            this.window_attached = true;
+            println!("[CLAP] GUI de '{}' abierta OK", this.name);
+            Ok(())
+        })?;
 
         #[cfg(target_os = "linux")]
         {
             self._x11_conn = x11_conn;
         }
 
-        println!("[CLAP] GUI de '{}' abierta OK", self.name);
         Ok(())
     }
 
     fn show_gui_floating(&mut self) -> Result<(), String> {
-        let Some(gui) = &self.gui else {
-            return Err(format!("[CLAP] '{}' sin GUI", self.name));
-        };
+        on_clap_main_thread_mut(self, |this| {
+            let Some(gui) = &this.gui else {
+                return Err(format!("[CLAP] '{}' sin GUI", this.name));
+            };
 
-        let mut plugin_handle = self.plugin.plugin_handle();
+            let mut plugin_handle = this.plugin.plugin_handle();
 
-        let config = GuiConfiguration {
-            api_type: GuiApiType::X11,
-            is_floating: true,
-        };
+            let config = GuiConfiguration {
+                api_type: GuiApiType::X11,
+                is_floating: true,
+            };
 
-        gui.create(&mut plugin_handle, config)
-            .map_err(|e| format!("[CLAP] gui.create(floating) failed: {:?}", e))?;
+            gui.create(&mut plugin_handle, config)
+                .map_err(|e| format!("[CLAP] gui.create(floating) failed: {:?}", e))?;
 
-        gui.show(&mut plugin_handle)
-            .map_err(|e| format!("[CLAP] gui.show(floating) failed: {:?}", e))?;
+            gui.show(&mut plugin_handle)
+                .map_err(|e| format!("[CLAP] gui.show(floating) failed: {:?}", e))?;
 
-        self.window_attached = true;
-        Ok(())
+            this.window_attached = true;
+            Ok(())
+        })
     }
 
     fn hide_gui(&mut self) {
-        if self.window_attached {
-            if let Some(gui) = &self.gui {
-                let mut plugin_handle = self.plugin.plugin_handle();
-                let _ = gui.hide(&mut plugin_handle);
-                let _ = gui.destroy(&mut plugin_handle);
+        on_clap_main_thread_mut(self, |this| {
+            if this.window_attached {
+                if let Some(gui) = &this.gui {
+                    let mut plugin_handle = this.plugin.plugin_handle();
+                    let _ = gui.hide(&mut plugin_handle);
+                    let _ = gui.destroy(&mut plugin_handle);
+                }
+                this.window_attached = false;
+                #[cfg(target_os = "linux")]
+                {
+                    this._x11_conn = None;
+                }
             }
-            self.window_attached = false;
-            #[cfg(target_os = "linux")]
-            {
-                self._x11_conn = None;
-            }
-        }
+        });
     }
 
     fn get_name(&self) -> &str {
@@ -1156,12 +1265,14 @@ impl PluginInstance for ClapInstance {
     }
 
     fn resize_gui(&mut self, width: u32, height: u32) {
-        if let Some(gui) = &self.gui {
-            let mut plugin_handle = self.plugin.plugin_handle();
-            if gui.can_resize(&plugin_handle) {
-                let _ = gui.set_size(&mut plugin_handle, GuiSize { width, height });
+        on_clap_main_thread_mut(self, move |this| {
+            if let Some(gui) = &this.gui {
+                let mut plugin_handle = this.plugin.plugin_handle();
+                if gui.can_resize(&plugin_handle) {
+                    let _ = gui.set_size(&mut plugin_handle, GuiSize { width, height });
+                }
             }
-        }
+        });
     }
 
     fn poll_editor_resize(&mut self) -> Option<(u32, u32)> {
@@ -1192,29 +1303,33 @@ impl PluginInstance for ClapInstance {
     }
 
     fn get_param_normalized(&mut self, id: u32) -> Option<f32> {
-        let params = self.params.as_ref()?;
-        let meta = self.param_index.get(&id).and_then(|&i| self.param_list.get(i))?;
-        let mut plugin_handle = self.plugin.plugin_handle();
-        let clap_id = clack_host::prelude::ClapId::from_raw(id)?;
-        let plain = params.get_value(&mut plugin_handle, clap_id)?;
-        Some(meta.plain_to_norm(plain))
+        on_clap_main_thread_mut(self, move |this| {
+            let params = this.params.as_ref()?;
+            let meta = this.param_index.get(&id).and_then(|&i| this.param_list.get(i))?;
+            let mut plugin_handle = this.plugin.plugin_handle();
+            let clap_id = clack_host::prelude::ClapId::from_raw(id)?;
+            let plain = params.get_value(&mut plugin_handle, clap_id)?;
+            Some(meta.plain_to_norm(plain))
+        })
     }
 
     fn format_param_value(&mut self, id: u32, normalized: f32) -> Option<String> {
-        let params = self.params.as_ref()?;
-        let meta = self.param_index.get(&id).and_then(|&i| self.param_list.get(i))?;
-        let clap_id = ClapId::from_raw(id)?;
-        let plain = meta.norm_to_plain(normalized);
-        let mut buf = [0u8; 128];
-        let mut plugin_handle = self.plugin.plugin_handle();
-        params
-            .value_to_text(&mut plugin_handle, clap_id, plain, &mut buf)
-            .ok()
-            .map(|bytes| {
-                let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-                String::from_utf8_lossy(&bytes[..end]).trim().to_string()
-            })
-            .filter(|s| !s.is_empty())
+        on_clap_main_thread_mut(self, move |this| {
+            let params = this.params.as_ref()?;
+            let meta = this.param_index.get(&id).and_then(|&i| this.param_list.get(i))?;
+            let clap_id = ClapId::from_raw(id)?;
+            let plain = meta.norm_to_plain(normalized);
+            let mut buf = [0u8; 128];
+            let mut plugin_handle = this.plugin.plugin_handle();
+            params
+                .value_to_text(&mut plugin_handle, clap_id, plain, &mut buf)
+                .ok()
+                .map(|bytes| {
+                    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+                })
+                .filter(|s| !s.is_empty())
+        })
     }
 
     /// Publica un cambio de parámetro (normalizado 0..=1 -> plano `[min, max]`)
@@ -1223,35 +1338,45 @@ impl PluginInstance for ClapInstance {
         if self.params.is_none() {
             return false;
         }
+        let Some(meta) = self.param_index.get(&id).and_then(|&i| self.param_list.get(i)) else {
+            return false;
+        };
         let value = value.clamp(0.0, 1.0);
-        let plain = self
-            .param_index
-            .get(&id)
-            .and_then(|&i| self.param_list.get(i))
-            .map(|m| m.norm_to_plain(value))
-            .unwrap_or(value as f64);
+        let plain = meta.norm_to_plain(value);
+        let cookie = meta.cookie;
 
         self.host_sent.insert(id, value);
 
         // Camino directo para un plugin que todavía no está sonando.
-        if let Some(mut inactive_handle) = self.plugin.inactive_plugin_handle() {
-            let Some(clap_id) = ClapId::from_raw(id) else {
-                return false;
-            };
-            let event = ParamValueEvent::new(0, clap_id, Pckn::match_all(), plain);
-            let mut buffer = EventBuffer::with_capacity(1);
-            buffer.push(&event);
-            let mut output_buffer = EventBuffer::with_capacity(1);
-            let mut output_events = OutputEvents::from_buffer(&mut output_buffer);
-            let Some(params) = self.params.as_mut() else {
-                return false;
-            };
-            params.flush(
-                &mut inactive_handle,
-                &buffer.as_input(),
-                &mut output_events,
-            );
-            return true;
+        if self.processor.is_none() {
+            return on_clap_main_thread_mut(self, move |this| {
+                let Some(mut inactive_handle) = this.plugin.inactive_plugin_handle() else {
+                    return this
+                        .param_queue
+                        .push(PendingClapEvent::ParamValue { id, cookie, plain });
+                };
+                let Some(clap_id) = ClapId::from_raw(id) else {
+                    return false;
+                };
+                // SAFETY: `cookie` fue entregado por `params.get_info()` de esta
+                // misma instancia del plugin para `clap_id`.
+                let event = unsafe {
+                    ParamValueEvent::new(0, clap_id, Pckn::match_all(), plain).with_cookie(cookie)
+                };
+                let mut buffer = EventBuffer::with_capacity(1);
+                buffer.push(&event);
+                let mut output_buffer = EventBuffer::with_capacity(1);
+                let mut output_events = OutputEvents::from_buffer(&mut output_buffer);
+                let Some(params) = this.params.as_mut() else {
+                    return false;
+                };
+                params.flush(
+                    &mut inactive_handle,
+                    &buffer.as_input(),
+                    &mut output_events,
+                );
+                true
+            });
         }
 
         // Plugin sonando: que lo aplique el hilo de audio. Si el plugin avisó
@@ -1260,10 +1385,10 @@ impl PluginInstance for ClapInstance {
             .plugin
             .access_shared_handler(|s| s.latency_dirty.swap(false, Ordering::AcqRel));
         if latency_changed {
-            self.refresh_latency();
+            on_clap_main_thread_mut(self, |this| this.refresh_latency());
         }
         self.param_queue
-            .push(PendingClapEvent::ParamValue { id, plain })
+            .push(PendingClapEvent::ParamValue { id, cookie, plain })
     }
 
     fn set_param_modulation(&mut self, id: u32, delta_normalized: f32) -> bool {
@@ -1273,9 +1398,10 @@ impl PluginInstance for ClapInstance {
         if !meta.is_modulatable {
             return false;
         }
+        let cookie = meta.cookie;
         let delta_plain = meta.delta_norm_to_plain(delta_normalized);
         self.param_queue
-            .push(PendingClapEvent::ParamMod { id, delta_plain })
+            .push(PendingClapEvent::ParamMod { id, cookie, delta_plain })
     }
 
     fn queue_midi_event(&mut self, status: u8, data1: u8, data2: u8) -> bool {
@@ -1284,88 +1410,95 @@ impl PluginInstance for ClapInstance {
     }
 
     fn save_state(&mut self) -> Result<Vec<u8>, String> {
-        let Some(state_ext) = self.state_ext else {
-            return Err(format!("[CLAP] '{}' no expone CLAP_EXT_STATE", self.name));
-        };
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        let mut handle = self.plugin.plugin_handle();
-        state_ext
-            .save(&mut handle, &mut cursor)
-            .map_err(|e| format!("[CLAP] state.save '{}': {e:?}", self.name))?;
-        Ok(cursor.into_inner())
+        on_clap_main_thread_mut(self, |this| {
+            let Some(state_ext) = this.state_ext else {
+                return Err(format!("[CLAP] '{}' no expone CLAP_EXT_STATE", this.name));
+            };
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            let mut handle = this.plugin.plugin_handle();
+            state_ext
+                .save(&mut handle, &mut cursor)
+                .map_err(|e| format!("[CLAP] state.save '{}': {e:?}", this.name))?;
+            Ok(cursor.into_inner())
+        })
     }
 
     fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
-        let Some(state_ext) = self.state_ext else {
-            return Err(format!("[CLAP] '{}' no expone CLAP_EXT_STATE", self.name));
-        };
-        let mut cursor = std::io::Cursor::new(data);
-        let mut handle = self.plugin.plugin_handle();
-        state_ext
-            .load(&mut handle, &mut cursor)
-            .map_err(|e| format!("[CLAP] state.load '{}': {e:?}", self.name))?;
+        let data_vec = data.to_vec();
+        on_clap_main_thread_mut(self, move |this| {
+            let Some(state_ext) = this.state_ext else {
+                return Err(format!("[CLAP] '{}' no expone CLAP_EXT_STATE", this.name));
+            };
+            let mut cursor = std::io::Cursor::new(data_vec.as_slice());
+            let mut handle = this.plugin.plugin_handle();
+            state_ext
+                .load(&mut handle, &mut cursor)
+                .map_err(|e| format!("[CLAP] state.load '{}': {e:?}", this.name))?;
 
-        // Refrescar línea base de parámetros y latencia tras restaurar el preset.
-        self.host_sent.clear();
-        if let Some(params) = self.params {
-            let mut plugin_handle = self.plugin.plugin_handle();
-            for meta in &self.param_list {
-                if let Some(clap_id) = ClapId::from_raw(meta.id) {
-                    if let Some(plain) = params.get_value(&mut plugin_handle, clap_id) {
-                        self.seen.insert(meta.id, meta.plain_to_norm(plain));
+            // Refrescar línea base de parámetros y latencia tras restaurar el preset.
+            this.host_sent.clear();
+            if let Some(params) = this.params {
+                let mut plugin_handle = this.plugin.plugin_handle();
+                for meta in &this.param_list {
+                    if let Some(clap_id) = ClapId::from_raw(meta.id) {
+                        if let Some(plain) = params.get_value(&mut plugin_handle, clap_id) {
+                            this.seen.insert(meta.id, meta.plain_to_norm(plain));
+                        }
                     }
                 }
             }
-        }
-        self.refresh_latency();
-        Ok(())
+            this.refresh_latency();
+            Ok(())
+        })
     }
 
     /// Lo que el editor nativo movió por su cuenta.
     fn poll_param_changes(&mut self) -> Vec<(u32, f32)> {
-        let Some(params) = self.params else {
-            return Vec::new();
-        };
+        on_clap_main_thread_mut(self, |this| {
+            let Some(params) = this.params else {
+                return Vec::new();
+            };
 
-        let mut changes = Vec::new();
-        let ids: Vec<(u32, f64, f64)> = self
-            .param_list
-            .iter()
-            .filter(|m| m.can_automate)
-            .map(|m| (m.id, m.min, m.max))
-            .collect();
+            let mut changes = Vec::new();
+            let ids: Vec<(u32, f64, f64)> = this
+                .param_list
+                .iter()
+                .filter(|m| m.can_automate)
+                .map(|m| (m.id, m.min, m.max))
+                .collect();
 
-        for (id, min, max) in ids {
-            let Some(clap_id) = ClapId::from_raw(id) else {
-                continue;
-            };
-            let plain = {
-                let mut plugin_handle = self.plugin.plugin_handle();
-                params.get_value(&mut plugin_handle, clap_id)
-            };
-            let Some(plain) = plain else {
-                continue;
-            };
-            let current = clap_plain_to_norm(plain, min, max);
+            for (id, min, max) in ids {
+                let Some(clap_id) = ClapId::from_raw(id) else {
+                    continue;
+                };
+                let plain = {
+                    let mut plugin_handle = this.plugin.plugin_handle();
+                    params.get_value(&mut plugin_handle, clap_id)
+                };
+                let Some(plain) = plain else {
+                    continue;
+                };
+                let current = clap_plain_to_norm(plain, min, max);
 
-            let previous = self.seen.insert(id, current);
-            let Some(previous) = previous else {
-                continue;
-            };
-            if (previous - current).abs() <= PARAM_EPSILON {
-                continue;
+                let previous = this.seen.insert(id, current);
+                let Some(previous) = previous else {
+                    continue;
+                };
+                if (previous - current).abs() <= PARAM_EPSILON {
+                    continue;
+                }
+                if this
+                    .host_sent
+                    .get(&id)
+                    .is_some_and(|sent| (sent - current).abs() <= PARAM_EPSILON)
+                {
+                    continue;
+                }
+                changes.push((id, current));
             }
-            if self
-                .host_sent
-                .get(&id)
-                .is_some_and(|sent| (sent - current).abs() <= PARAM_EPSILON)
-            {
-                continue;
-            }
-            changes.push((id, current));
-        }
 
-        changes
+            changes
+        })
     }
 
     /// Bompea el editor del plugin desde el hilo principal.
@@ -1389,48 +1522,71 @@ impl PluginInstance for ClapInstance {
     /// Si el plugin no declaró ninguna de las tres, el tick no hace nada: son
     /// unos `if` sobre banderas, no un coste fijo.
     fn gui_tick(&mut self) {
-        // 1. Temporizadores. Se leen del handler de hilo principal porque es
-        //    el único lugar donde se garantiza que estamos en el hilo que
-        //    CLAP permite usar para llamar al plugin.
-        let due = self.plugin.access_handler(|handler| handler.take_due_timers());
-        if !due.is_empty() {
-            let handle = self.plugin.plugin_handle();
-            if let Some(timer) = handle.get_extension::<PluginTimer>() {
-                for id in due {
-                    timer.on_timer(&handle, id);
+        on_clap_main_thread_mut(self, |this| {
+            // 1. Temporizadores. Se leen del handler de hilo principal porque es
+            //    el único lugar donde se garantiza que estamos en el hilo que
+            //    CLAP permite usar para llamar al plugin.
+            let due = this.plugin.access_handler(|handler| handler.take_due_timers());
+            if !due.is_empty() {
+                let handle = this.plugin.plugin_handle();
+                if let Some(timer) = handle.get_extension::<PluginTimer>() {
+                    for id in due {
+                        timer.on_timer(&handle, id);
+                    }
+                } else {
+                    eprintln!(
+                        "[CLAP] '{}' registró temporizadores pero no expone la extensión timer",
+                        this.name
+                    );
                 }
-            } else {
-                eprintln!(
-                    "[CLAP] '{}' registró temporizadores pero no expone la extensión timer",
-                    self.name
-                );
             }
-        }
 
-        // 2. Callback de hilo principal.
-        let wants_callback = self
-            .plugin
-            .access_shared_handler(|shared| shared.take_callback_request());
-        if wants_callback {
-            self.plugin.call_on_main_thread_callback();
-        }
+            // 2. Callback de hilo principal.
+            let wants_callback = this
+                .plugin
+                .access_shared_handler(|shared| shared.take_callback_request());
+            if wants_callback {
+                this.plugin.call_on_main_thread_callback();
+            }
 
-        // 3. Peticiones de GUI.
-        self.service_gui_requests();
+            // 3. Peticiones de GUI.
+            this.service_gui_requests();
 
-        // 4. Cambios de latencia reportados vía `CLAP_EXT_LATENCY` (hilo principal).
-        let latency_changed = self
-            .plugin
-            .access_shared_handler(|shared| shared.latency_dirty.swap(false, Ordering::AcqRel));
-        if latency_changed {
-            self.refresh_latency();
-        }
+            // 4. Cambios de latencia reportados vía `CLAP_EXT_LATENCY` (hilo principal).
+            let latency_changed = this
+                .plugin
+                .access_shared_handler(|shared| shared.latency_dirty.swap(false, Ordering::AcqRel));
+            if latency_changed {
+                this.refresh_latency();
+            }
+        });
     }
 }
 
 impl Drop for ClapInstance {
     fn drop(&mut self) {
-        self.hide_gui();
+        on_clap_main_thread_mut(self, |this| {
+            if this.window_attached {
+                if let Some(gui) = &this.gui {
+                    let mut plugin_handle = this.plugin.plugin_handle();
+                    let _ = gui.hide(&mut plugin_handle);
+                    let _ = gui.destroy(&mut plugin_handle);
+                }
+                this.window_attached = false;
+                #[cfg(target_os = "linux")]
+                {
+                    this._x11_conn = None;
+                }
+            }
+            // Soltar el processor antes del plugin y destruir `plugin` en el
+            // hilo principal de CLAP (`clap_plugin::destroy` es `[main-thread]`).
+            this.processor.take();
+            // SAFETY: `Drop::drop` corre exactamente una vez y `self.plugin` no
+            // se vuelve a usar después.
+            unsafe {
+                ManuallyDrop::drop(&mut this.plugin);
+            }
+        });
     }
 }
 

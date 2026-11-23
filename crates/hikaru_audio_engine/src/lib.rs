@@ -5433,8 +5433,66 @@ impl<'a> AudioEngine<'a> {
                 self.track_clip_playhead[t].store(packed, Ordering::Relaxed);
             }
         } else {
-            for p in &self.track_peak_bits {
-                p.store(0.0f32.to_bits(), Ordering::Relaxed);
+            // Incluso con el transporte detenido, mezclar el audio de monitoreo
+            // proveniente de ventanas de plugins externos abiertas (p. ej. al
+            // tocar el teclado en pantalla de Vital) respetando volumen/paneo/mute.
+            let buf_len = samples.len();
+            let any_solo = self.track_solos.iter().any(|s| s.load(Ordering::Relaxed));
+            for t in 0..16 {
+                let has_monitor = !self.track_effects[t].is_empty()
+                    && self.track_effects[t]
+                        .iter()
+                        .any(|n| n.is_active && n.tap.is_some());
+                if !has_monitor {
+                    self.track_peak_bits[t].store(0.0f32.to_bits(), Ordering::Relaxed);
+                    continue;
+                }
+                if self.track_output_bufs[t].len() != buf_len {
+                    self.track_output_bufs[t].resize(buf_len, 0.0);
+                }
+                let track_buf = &mut self.track_output_bufs[t][..buf_len];
+                track_buf.fill(0.0);
+                let mut mixed_any = false;
+                for node in &self.track_effects[t] {
+                    if node.is_active {
+                        if let Some(tap) = &node.tap {
+                            if tap.mix_monitor_into(track_buf) > 0 {
+                                mixed_any = true;
+                            }
+                        }
+                    }
+                }
+                if mixed_any {
+                    let vol = f32::from_bits(self.track_volumes[t].load(Ordering::Relaxed));
+                    let muted = self.track_mutes[t].load(Ordering::Relaxed);
+                    let soloed = self.track_solos[t].load(Ordering::Relaxed);
+                    let effective_gain = if muted || (any_solo && !soloed) {
+                        0.0
+                    } else {
+                        vol
+                    };
+                    let pan_norm = f32::from_bits(self.track_pans[t].load(Ordering::Relaxed)) / 100.0;
+                    let gl = effective_gain * if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
+                    let gr = effective_gain * if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
+                    let mut track_peak = 0.0f32;
+                    for f in 0..(buf_len / 2) {
+                        let l = track_buf[f * 2] * gl;
+                        let r = track_buf[f * 2 + 1] * gr;
+                        let al = if l.is_finite() { l.abs() } else { 0.0 };
+                        let ar = if r.is_finite() { r.abs() } else { 0.0 };
+                        if al > track_peak {
+                            track_peak = al;
+                        }
+                        if ar > track_peak {
+                            track_peak = ar;
+                        }
+                        samples[f * 2] += l;
+                        samples[f * 2 + 1] += r;
+                    }
+                    self.track_peak_bits[t].store(track_peak.to_bits(), Ordering::Relaxed);
+                } else {
+                    self.track_peak_bits[t].store(0.0f32.to_bits(), Ordering::Relaxed);
+                }
             }
             for p in &self.track_clip_playhead {
                 p.store(0, Ordering::Relaxed);
@@ -6889,5 +6947,50 @@ mod tests {
         engine.set_external_plugin_active(0, 1, false);
         run_frames(&mut engine, 256);
         assert_eq!(engine.pdc_latency_samples(), 0);
+    }
+
+    #[test]
+    fn external_plugin_window_monitor_sounds_when_transport_is_stopped() {
+        struct SilentStub;
+        impl hikaru_plugin_host::PluginInstance for SilentStub {
+            fn process(&mut self, _buffer: &mut AudioBuffer) {}
+            fn show_gui_embedded(
+                &mut self,
+                _h: hikaru_plugin_host::RawWindowHandle,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn show_gui_floating(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn hide_gui(&mut self) {}
+            fn get_name(&self) -> &str {
+                "SilentStub"
+            }
+        }
+
+        let mut engine = test_engine();
+        let tap = Arc::new(hikaru_plugin_host::PluginTap::new(48_000.0, 1024));
+        let mut node = hikaru_dsp::DspPluginNode::new(
+            "Vital".into(),
+            hikaru_dsp::PluginCategory::ClapFx,
+            Box::new(SilentStub),
+        )
+        .with_slot_idx(0);
+        node.set_tap(Some(Arc::clone(&tap)));
+        engine.track_effects[0].push(node);
+
+        // Transporte detenido: la ventana de Vital publica audio de una nota tocada en su teclado.
+        let note_audio = vec![0.4f32; 256 * 2];
+        tap.push_monitor(&note_audio);
+
+        let mut out = vec![0.0f32; 256 * 2];
+        engine.process(&mut AudioBuffer::new(&mut out));
+        let peak = out.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(
+            peak > 0.2,
+            "El audio del teclado de la ventana debe sonar aunque el transporte esté detenido (peak={peak})"
+        );
+        assert!(engine.track_peak(0) > 0.2);
     }
 }

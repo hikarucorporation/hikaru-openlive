@@ -89,8 +89,13 @@ impl DspPluginNode {
         // Se publica DESPUÉS del efecto: el display tiene que mostrar lo que
         // sale del plugin, no lo que entró. `publish` es RT (sin locks ni
         // allocaciones) y sale temprano si no hay consumidor conectado.
+        //
+        // Luego mezclamos el monitoreo de retorno (audio generado por el
+        // teclado en pantalla o preview interno de la ventana del editor).
+        // Hacerlo DESPUÉS de `publish` evita cualquier lazo de feedback.
         if let Some(tap) = &self.tap {
             tap.publish(buffer.samples);
+            tap.mix_monitor_into(buffer.samples);
         }
     }
 

@@ -50,6 +50,15 @@ use crate::scratch::NUM_CHANNELS;
 /// GC o una llamada lenta del plugin.
 const DEFAULT_CAPACITY: usize = 8;
 
+/// Capacidad del anillo de retorno de monitoreo (ventana -> motor de audio),
+/// en samples interleaved. 8192 frames estéreo (~170 ms a 48 kHz), potencia de 2.
+const MONITOR_CAPACITY_SAMPLES: usize = 8192 * NUM_CHANNELS;
+const MONITOR_MASK: usize = MONITOR_CAPACITY_SAMPLES - 1;
+/// Tope de latencia de monitoreo (~64 ms a 48 kHz): si el motor estuvo detenido
+/// y se acumuló más que esto, se avanza el puntero de lectura para mantener el
+/// teclado de la ventana con respuesta inmediata.
+const MONITOR_MAX_LAG_SAMPLES: usize = 3072 * NUM_CHANNELS;
+
 /// Identifica el slot `(pista del motor, índice de la cadena)` al que pertenece
 /// un tap.
 ///
@@ -121,6 +130,12 @@ pub struct PluginTap {
     consumers: AtomicUsize,
     /// Bloques que el productor tuvo que tirar por ir el consumidor atrasado.
     dropped: AtomicU64,
+    /// Anillo SPSC de retorno de monitoreo: lleva audio generado por la
+    /// instancia de la ventana (p. ej. teclado en pantalla de Vital) de vuelta
+    /// al motor de audio para que suene por los parlantes.
+    monitor_ring: UnsafeCell<Box<[f32]>>,
+    monitor_write: AtomicUsize,
+    monitor_read: AtomicUsize,
 }
 
 impl PluginTap {
@@ -153,6 +168,9 @@ impl PluginTap {
             sample_rate_bits: AtomicU32::new(sample_rate.to_bits()),
             consumers: AtomicUsize::new(0),
             dropped: AtomicU64::new(0),
+            monitor_ring: UnsafeCell::new(vec![0.0f32; MONITOR_CAPACITY_SAMPLES].into_boxed_slice()),
+            monitor_write: AtomicUsize::new(0),
+            monitor_read: AtomicUsize::new(0),
         }
     }
 
@@ -268,6 +286,65 @@ impl PluginTap {
         self.read.store(newest + 1, Ordering::Release);
         true
     }
+
+    /// Publica audio generado por la ventana del editor (p. ej. al tocar el
+    /// teclado en pantalla de un sintetizador como Vital) para que el motor de
+    /// audio lo mezcle en la pista. Hilo de la ventana (productor único).
+    pub fn push_monitor(&self, samples: &[f32]) {
+        // Siempre frames estéreo completos para mantener alineados L/R.
+        let count = samples.len() & !1;
+        if count == 0 {
+            return;
+        }
+        let mut w = self.monitor_write.load(Ordering::Relaxed);
+        let r = self.monitor_read.load(Ordering::Acquire);
+        let used = w.wrapping_sub(r);
+        let free = MONITOR_CAPACITY_SAMPLES.saturating_sub(used + NUM_CHANNELS);
+        let to_write = count.min(free) & !1;
+        if to_write == 0 {
+            return;
+        }
+        // SAFETY: productor único SPSC; el consumidor sólo lee índices `< monitor_write`.
+        unsafe {
+            let ring = &mut *self.monitor_ring.get();
+            for &s in &samples[..to_write] {
+                ring[w & MONITOR_MASK] = if s.is_finite() { s } else { 0.0 };
+                w = w.wrapping_add(1);
+            }
+        }
+        self.monitor_write.store(w, Ordering::Release);
+    }
+
+    /// Mezcla (suma) audio de monitoreo proveniente de la ventana del editor
+    /// dentro de `dst`. Hilo de audio (consumidor único, RT: sin locks ni allocs).
+    pub fn mix_monitor_into(&self, dst: &mut [f32]) -> usize {
+        let w = self.monitor_write.load(Ordering::Acquire);
+        let mut r = self.monitor_read.load(Ordering::Relaxed);
+        let mut avail = w.wrapping_sub(r);
+        if avail < NUM_CHANNELS {
+            return 0;
+        }
+        // Mantener baja latencia si se acumuló audio viejo.
+        if avail > MONITOR_MAX_LAG_SAMPLES {
+            let skip = (avail - MONITOR_MAX_LAG_SAMPLES) & !1;
+            r = r.wrapping_add(skip);
+            avail = w.wrapping_sub(r);
+        }
+        let to_read = (dst.len().min(avail)) & !1;
+        if to_read == 0 {
+            return 0;
+        }
+        // SAFETY: consumidor único SPSC; estos índices ya fueron publicados con `Release`.
+        unsafe {
+            let ring = &*self.monitor_ring.get();
+            for sample_out in &mut dst[..to_read] {
+                *sample_out += ring[r & MONITOR_MASK];
+                r = r.wrapping_add(1);
+            }
+        }
+        self.monitor_read.store(r, Ordering::Release);
+        to_read
+    }
 }
 
 // SAFETY: `ring` es `!Sync` por el `UnsafeCell`, pero el acceso está gobernado
@@ -362,5 +439,21 @@ mod tests {
         let mut out = Vec::new();
         assert!(tap.take(&mut out));
         assert_eq!(out.len(), 4 * NUM_CHANNELS);
+    }
+
+    #[test]
+    fn monitor_return_mixes_window_audio_into_engine_buffer() {
+        let tap = PluginTap::new(48_000.0, 64);
+        tap.push_monitor(&[0.25, -0.25, 0.5, -0.5]);
+
+        let mut engine_buf = vec![0.1, 0.1, 0.1, 0.1];
+        let mixed = tap.mix_monitor_into(&mut engine_buf);
+        assert_eq!(mixed, 4);
+        assert!((engine_buf[0] - 0.35).abs() < 1e-6);
+        assert!((engine_buf[1] - (-0.15)).abs() < 1e-6);
+        assert!((engine_buf[2] - 0.6).abs() < 1e-6);
+        assert!((engine_buf[3] - (-0.4)).abs() < 1e-6);
+        // Una segunda lectura con el anillo vacío no altera el buffer.
+        assert_eq!(tap.mix_monitor_into(&mut engine_buf), 0);
     }
 }

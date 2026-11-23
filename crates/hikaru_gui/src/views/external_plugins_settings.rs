@@ -419,7 +419,26 @@ impl PluginSettingsState {
         self.opening.remove(name);
         if let Some(handle) = self.open_plugins.remove(name) {
             println!("[PluginSettings] Closing plugin '{}' (waiting for state capture)", name);
-            let _ = handle.join();
+            // Esperar brevemente sin congelar nunca el hilo principal de egui:
+            // si el plugin tarda o está bloqueado, `poll_updates()` recibirá su
+            // `PluginClosedNotification` (y `saved_state`) en cuanto termine.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(120);
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(4));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                eprintln!(
+                    "[PluginSettings] '{}' aún cerrándose; se deja terminar en segundo plano",
+                    name
+                );
+                let _ = std::thread::Builder::new()
+                    .name("hikaru-plugin-reap".into())
+                    .spawn(move || {
+                        let _ = handle.join();
+                    });
+            }
         }
     }
 

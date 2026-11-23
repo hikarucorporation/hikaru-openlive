@@ -37,7 +37,7 @@
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::tap::PluginTap;
 use crate::{AudioBuffer, PluginInstance};
@@ -225,12 +225,33 @@ impl LoopExit {
 /// plugin que no está en ninguna cadena— se reprocesa el último bloque
 /// conocido en vez de no hacer nada, para que el bombéo (y por lo tanto el
 /// anillo de control) siga ocurriendo.
+/// Ticks extra durante los cuales se sigue enviando audio al retorno de
+/// monitoreo tras caer por debajo del umbral, para no cortar colas de release.
+const MONITOR_TAIL_TICKS: u8 = 12;
+
+fn has_audible_signal(samples: &[f32]) -> bool {
+    samples.iter().any(|s| s.is_finite() && s.abs() > 1e-6)
+}
+
 pub fn pump_plugin(
     instance: &mut dyn PluginInstance,
     feed: Option<&PluginTap>,
     scratch: &mut Vec<f32>,
     primed: &mut bool,
 ) {
+    let mut tail = 0u8;
+    pump_plugin_paced(instance, feed, scratch, primed, None, &mut tail);
+}
+
+fn pump_plugin_paced(
+    instance: &mut dyn PluginInstance,
+    feed: Option<&PluginTap>,
+    scratch: &mut Vec<f32>,
+    primed: &mut bool,
+    paced_frames: Option<usize>,
+    monitor_tail_ticks: &mut u8,
+) {
+    let mut input_silent = true;
     let frames = match feed {
         Some(tap) => {
             let capacity = tap.max_frames() * crate::scratch::NUM_CHANNELS;
@@ -239,10 +260,23 @@ pub fn pump_plugin(
             }
             if tap.take(scratch) {
                 *primed = true;
+                input_silent = !has_audible_signal(scratch);
             }
-            if !*primed {
-                // Todavía no llegó audio: se procesa silencio para arrancar el
-                // plugin y drenar el anillo de control.
+            if input_silent {
+                // El motor está en silencio (p. ej. transporte parado o
+                // sintetizador sin audio de entrada): procesamos silencio del
+                // tamaño exacto del período del tick para mantener la tasa de
+                // muestreo real cuando el usuario toca el teclado del plugin.
+                let target_frames = paced_frames
+                    .unwrap_or_else(|| {
+                        if *primed {
+                            scratch.len() / crate::scratch::NUM_CHANNELS
+                        } else {
+                            tap.max_frames()
+                        }
+                    })
+                    .clamp(1, tap.max_frames());
+                scratch.resize(target_frames * crate::scratch::NUM_CHANNELS, 0.0);
                 scratch.fill(0.0);
             }
             scratch.len() / crate::scratch::NUM_CHANNELS
@@ -256,6 +290,8 @@ pub fn pump_plugin(
                 let capacity = crate::scratch::MAX_BLOCK_FRAMES * crate::scratch::NUM_CHANNELS;
                 *scratch = vec![0.0f32; capacity];
                 *primed = true;
+            } else {
+                scratch.fill(0.0);
             }
             scratch.len() / crate::scratch::NUM_CHANNELS
         }
@@ -265,6 +301,23 @@ pub fn pump_plugin(
         return;
     }
     instance.process(&mut AudioBuffer::new(scratch));
+
+    // Si entró silencio pero el plugin de la ventana produjo señal audible
+    // (p. ej. el usuario hizo click en el teclado de Vital), la devolvemos al
+    // anillo de monitoreo del tap para que el motor la mezcle en la pista.
+    if input_silent {
+        if let Some(tap) = feed {
+            if has_audible_signal(scratch) {
+                *monitor_tail_ticks = MONITOR_TAIL_TICKS;
+                tap.push_monitor(scratch);
+            } else if *monitor_tail_ticks > 0 {
+                *monitor_tail_ticks -= 1;
+                tap.push_monitor(scratch);
+            }
+        }
+    } else {
+        *monitor_tail_ticks = 0;
+    }
 }
 
 /// Configuración del bucle.
@@ -282,6 +335,11 @@ pub struct WrapperEventLoop {
     scratch: Vec<f32>,
     /// Si el `scratch` alguna vez recibió un bloque.
     primed: bool,
+    /// Reloj del último bombeo y acumulador fraccionario de frames para que el
+    /// monitoreo del teclado en pantalla corra a exactamente `sample_rate` Hz.
+    last_pump: Option<Instant>,
+    frac_frames: f64,
+    monitor_tail_ticks: u8,
     /// Cuadro pendiente de aplicar, puesto por [`Self::set_host_frame`].
     ///
     /// Vive acá y no se aplica al vuelo porque reposicionar la ventana exige
@@ -312,6 +370,9 @@ impl WrapperEventLoop {
             budget,
             scratch,
             primed: false,
+            last_pump: None,
+            frac_frames: 0.0,
+            monitor_tail_ticks: 0,
             pending_host_frame: None,
         }
     }
@@ -338,6 +399,7 @@ impl WrapperEventLoop {
         let mut host_echo: Vec<(u32, f32)> = Vec::new();
 
         let exit = loop {
+            let tick_start = Instant::now();
             tick = tick.wrapping_add(1);
             host_echo.clear();
 
@@ -476,7 +538,10 @@ impl WrapperEventLoop {
                 self.emit_feedback(&host_echo);
             }
 
-            std::thread::sleep(self.budget.period());
+            let sleep_for = self.budget.period().saturating_sub(tick_start.elapsed());
+            if !sleep_for.is_zero() {
+                std::thread::sleep(sleep_for);
+            }
         };
 
         // El consumidor de la cinta se suelta antes que el editor: si no, el
@@ -527,7 +592,27 @@ impl WrapperEventLoop {
 
     /// Le pasa un bloque de audio al plugin de la ventana.
     fn pump_audio(&mut self, instance: &mut dyn PluginInstance) {
-        pump_plugin(instance, self.feed.as_deref(), &mut self.scratch, &mut self.primed);
+        let now = Instant::now();
+        let paced_frames = self.feed.as_ref().map(|tap| {
+            let sr = tap.sample_rate().max(8_000.0) as f64;
+            let dt = match self.last_pump {
+                Some(prev) => now.duration_since(prev).as_secs_f64().clamp(0.001, 0.05),
+                None => self.budget.period().as_secs_f64(),
+            };
+            let exact = dt * sr + self.frac_frames;
+            let whole = (exact.floor() as usize).clamp(64, tap.max_frames());
+            self.frac_frames = (exact - whole as f64).clamp(0.0, 1.0);
+            whole
+        });
+        self.last_pump = Some(now);
+        pump_plugin_paced(
+            instance,
+            self.feed.as_deref(),
+            &mut self.scratch,
+            &mut self.primed,
+            paced_frames,
+            &mut self.monitor_tail_ticks,
+        );
     }
 
     /// Manda a la UI el estado de los parámetros que el editor tiene ahora.
