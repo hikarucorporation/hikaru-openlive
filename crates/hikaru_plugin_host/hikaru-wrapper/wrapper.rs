@@ -168,6 +168,37 @@ impl HikaruWrapper {
         feedback: Sender<ParamFeedback>,
         tap_key: TapKey,
     ) -> Result<Self, WrapperError> {
+        Self::open_with_state(
+            path,
+            format,
+            title,
+            config,
+            runtime,
+            commands,
+            feedback,
+            tap_key,
+            None,
+            &[],
+        )
+    }
+
+    /// Igual que [`Self::open`], pero restaura opcionalmente el estado binario
+    /// (`initial_state`, p. ej. preset y ajustes internos) y/o parámetros
+    /// iniciales (`initial_params`) **antes** de abrir el editor nativo, para
+    /// que cerrar y reabrir la ventana nunca reinicie el preset del plugin.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_with_state(
+        path: &Path,
+        format: PluginFormat,
+        title: &str,
+        config: WrapperConfig,
+        runtime: WrapperRuntime,
+        commands: Receiver<WrapperCommand>,
+        feedback: Sender<ParamFeedback>,
+        tap_key: TapKey,
+        initial_state: Option<&[u8]>,
+        initial_params: &[(u32, f32)],
+    ) -> Result<Self, WrapperError> {
         // 1. Ventana, sin mapear. Nada visible todavía: si el `dlopen` falla,
         //    el usuario no llega a ver una ventana vacía.
         let mut window = HikaruWrapperWindow::create(title, &config, runtime.input)
@@ -190,6 +221,41 @@ impl HikaruWrapper {
         let feed = crate::tap::lookup(tap_key);
         if let Some(tap) = &feed {
             instance.set_sample_rate(tap.sample_rate());
+        }
+
+        // 3-bis. Arrancar el procesador (un mini bloque de silencio) ANTES de
+        //        restaurar el estado binario y abrir la GUI. En VST3 esto ejecuta
+        //        `setActive(0) -> setupProcessing -> setActive(1) -> setProcessing(1)`
+        //        de antemano, evitando que el primer tick del bucle desactive y
+        //        reinicie el estado recién restaurado.
+        {
+            let mut prime = vec![0.0f32; 128 * crate::scratch::NUM_CHANNELS];
+            instance.process(&mut crate::AudioBuffer::new(&mut prime));
+        }
+
+        // 3-ter. Restaurar estado binario (preset completo + controles internos)
+        //        y overrides del rack ANTES de crear/mostrar la vista del editor.
+        if let Some(bytes) = initial_state {
+            if !bytes.is_empty() {
+                match instance.load_state(bytes) {
+                    Ok(()) => println!(
+                        "[hikaru-wrapper] '{}' estado restaurado ({} bytes)",
+                        instance.get_name(),
+                        bytes.len()
+                    ),
+                    Err(e) => eprintln!(
+                        "[hikaru-wrapper] '{}' load_state falló: {e}",
+                        instance.get_name()
+                    ),
+                }
+            }
+        }
+        if !initial_params.is_empty() {
+            for &(id, value) in initial_params {
+                let _ = instance.set_param_normalized(id, value);
+            }
+            let mut drain = vec![0.0f32; 128 * crate::scratch::NUM_CHANNELS];
+            instance.process(&mut crate::AudioBuffer::new(&mut drain));
         }
 
         // 4. Tamaño preferido antes de embebir. VST3 lo sabe siempre; CLAP lo
@@ -246,8 +312,44 @@ impl HikaruWrapper {
     ///
     /// No vuelve antes. El hilo que la llama es el que se ocupa del apagado:
     /// soltar la `HikaruWrapper` y soltar el `JoinHandle` del hilo.
-    pub fn run(mut self) -> LoopExit {
+    pub fn run(self) -> LoopExit {
+        self.run_and_capture().0
+    }
+
+    /// Corre el bucle hasta que la ventana se cierra y captura el estado
+    /// binario completo (`save_state`) + snapshot final de parámetros del
+    /// plugin **antes** de destruir la vista, para persistir presets y ajustes
+    /// al reabrir la ventana o sincronizar con el motor de audio.
+    pub fn run_and_capture(mut self) -> (LoopExit, Option<Vec<u8>>, Vec<(u32, f32)>) {
         let exit = self.loop_.run(self.instance.as_mut());
+
+        // Drenar cualquier último gesto del editor y correr un bloque corto para
+        // asegurar que `IComponent` tenga todos los valores antes de `save_state()`.
+        let _ = self.instance.poll_param_changes();
+        {
+            let mut flush = vec![0.0f32; 128 * crate::scratch::NUM_CHANNELS];
+            self.instance.process(&mut crate::AudioBuffer::new(&mut flush));
+        }
+
+        let saved_state = self
+            .instance
+            .save_state()
+            .ok()
+            .filter(|bytes| !bytes.is_empty());
+        let final_params: Vec<(u32, f32)> = self
+            .instance
+            .snapshot_params()
+            .into_iter()
+            .map(|(info, val)| (info.id, val))
+            .collect();
+        if let Some(ref bytes) = saved_state {
+            println!(
+                "[hikaru-wrapper] '{}' estado capturado al cerrar ({} bytes, {} params)",
+                self.instance.get_name(),
+                bytes.len(),
+                final_params.len()
+            );
+        }
 
         // La cinta se desconecta adentro de `run`, pero un `open` que terminó
         // en `Err` puede haber dejado un consumidor conectado. `run` no llega
@@ -257,7 +359,7 @@ impl HikaruWrapper {
             tap.detach_consumer();
         }
 
-        exit
+        (exit, saved_state, final_params)
     }
 
     /// Mueve y redimensiona el editor dentro de la ventana del DAW.

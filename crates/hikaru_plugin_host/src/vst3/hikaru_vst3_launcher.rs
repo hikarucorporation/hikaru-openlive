@@ -612,7 +612,18 @@ impl PluginInstance for Vst3Instance {
         self.runner
             .plugin_mut()
             .load_state(data)
-            .map_err(|e| format!("[VST3] load_state: {e}"))
+            .map_err(|e| format!("[VST3] load_state: {e}"))?;
+        // Tras restaurar el estado binario, actualizamos la línea base de `seen`
+        // y limpiamos `host_sent` para que `poll_param_changes` no interprete los
+        // valores restaurados como falsos cambios ni ignore futuros gestos.
+        self.host_sent.clear();
+        let ids: Vec<u32> = self.params.iter().map(|p| p.id).collect();
+        for id in ids {
+            if let Some(v) = self.read_param_normalized(id) {
+                self.seen.insert(id, v);
+            }
+        }
+        Ok(())
     }
 
     fn get_param_normalized(&mut self, id: u32) -> Option<f32> {
@@ -632,6 +643,13 @@ impl PluginInstance for Vst3Instance {
     fn set_param_normalized(&mut self, id: u32, value: f32) -> bool {
         let value = value.clamp(0.0, 1.0);
         self.host_sent.insert(id, value);
+        if !self.started {
+            // Antes del primer bloque (p. ej. al abrir la ventana del editor con
+            // parámetros iniciales), aplicamos directo sobre el controlador para
+            // que la GUI nazca ya con los valores correctos sin esperar a `process`.
+            self.seen.insert(id, value);
+            let _ = self.runner.plugin_mut().set_parameter(id, value as f64);
+        }
         self.control.set_parameter(id, value as f64)
     }
 
@@ -748,6 +766,15 @@ impl PluginInstance for Vst3Instance {
                 continue;
             }
             changes.push((id, current));
+        }
+
+        // En VST3, editar un knob en la GUI nativa actualiza `IEditController`,
+        // pero `IComponent` (el procesador que serializa `getState()`) sólo se
+        // entera cuando el host le envía esos cambios en `process()`. Reenviar
+        // cada cambio del editor al anillo local asegura que el procesador de la
+        // ventana (display + `save_state()`) tenga siempre los valores reales.
+        for &(id, value) in &changes {
+            let _ = self.control.set_parameter(id, value as f64);
         }
 
         changes

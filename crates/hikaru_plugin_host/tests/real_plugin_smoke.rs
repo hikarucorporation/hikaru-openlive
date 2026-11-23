@@ -345,3 +345,70 @@ fn real_plugins_report_latency_and_accept_host_transport() {
         assert!(out_l.iter().all(|s| s.is_finite()));
     }
 }
+
+/// Verifica que `save_state()` -> `load_state()` preserva los parámetros modificados
+/// al cerrar y reabrir una instancia VST3 y CLAP real (como al cerrar/reabrir la ventana).
+#[test]
+fn real_plugins_preserve_state_across_reopen() {
+    let report = hikaru_plugin_host::registry::scan_standard_paths();
+    if report.plugins.is_empty() {
+        eprintln!("[smoke] sin plugins instalados; skip");
+        return;
+    }
+
+    for desc in &report.plugins {
+        let name_lower = desc.name.to_ascii_lowercase();
+        if !name_lower.contains("frequency shifter") && !name_lower.contains("dragonflyhall") {
+            continue;
+        }
+        let load_inst = || -> Box<dyn PluginInstance> {
+            match desc.format {
+                hikaru_plugin_host::PluginFormat::VST3 => {
+                    Box::new(Vst3Instance::load(&desc.path).expect("VST3 load"))
+                }
+                hikaru_plugin_host::PluginFormat::CLAP => {
+                    Box::new(ClapInstance::load(&desc.path).expect("CLAP load"))
+                }
+            }
+        };
+
+        // 1. Primera instancia: modificar un parámetro, procesar 1 bloque y guardar estado.
+        let mut inst1 = load_inst();
+        inst1.set_sample_rate(48_000.0);
+        let params = inst1.snapshot_params();
+        let Some((target_info, orig_val)) = params
+            .into_iter()
+            .find(|(p, _)| p.can_automate && p.step_count == 0)
+        else {
+            continue;
+        };
+        let target_val = if orig_val < 0.5 { 0.82 } else { 0.18 };
+        assert!(inst1.set_param_normalized(target_info.id, target_val));
+        let mut raw = vec![0.0f32; HIKARU_BLOCK_FRAMES * NUM_CHANNELS];
+        inst1.process(&mut AudioBuffer::new(&mut raw));
+
+        let saved = inst1
+            .save_state()
+            .unwrap_or_else(|e| panic!("[smoke] {} save_state falló: {e}", desc.name));
+        assert!(!saved.is_empty(), "[smoke] {} devolvió estado vacío", desc.name);
+
+        // 2. Segunda instancia (simula reabrir la ventana): restaurar estado y verificar el parámetro.
+        let mut inst2 = load_inst();
+        inst2.set_sample_rate(48_000.0);
+        inst2
+            .load_state(&saved)
+            .unwrap_or_else(|e| panic!("[smoke] {} load_state falló: {e}", desc.name));
+        let restored = inst2
+            .get_param_normalized(target_info.id)
+            .expect("get_param_normalized tras load_state");
+        eprintln!(
+            "[smoke] {} ({:?}) state roundtrip ({} bytes): param '{}' orig={:.3} -> target={:.3} -> restored={:.3}",
+            desc.name, desc.format, saved.len(), target_info.name, orig_val, target_val, restored
+        );
+        assert!(
+            (restored - target_val).abs() < 0.05,
+            "[smoke] {} no preservó '{}' tras load_state: esperado {:.3}, recibido {:.3}",
+            desc.name, target_info.name, target_val, restored
+        );
+    }
+}

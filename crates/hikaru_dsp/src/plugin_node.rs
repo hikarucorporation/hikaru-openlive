@@ -134,4 +134,9 @@ impl DspPluginNode {
     pub fn snapshot_params(&mut self) -> Vec<(hikaru_plugin_host::PluginParamInfo, f32)> {
         self.instance.snapshot_params()
     }
+
+    /// Restaura el estado binario completo (preset + ajustes internos) en la instancia DSP.
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        self.instance.load_state(data)
+    }
 }

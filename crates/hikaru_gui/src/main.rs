@@ -655,6 +655,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.sync_external_plugin_params(track_idx, slot_idx, &params);
                     }
                 }
+                GuiCommand::LoadExternalPluginState { track_idx, slot_idx, state } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.load_external_plugin_state(track_idx, slot_idx, &state);
+                    }
+                }
 
                 _ => {}
             }

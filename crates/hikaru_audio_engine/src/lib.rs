@@ -2732,6 +2732,30 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    /// Restaura el estado binario completo (preset + ajustes internos) de un
+    /// plugin externo en el motor de audio y recalcula buffers PDC si cambió su latencia.
+    pub fn load_external_plugin_state(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        state: &[u8],
+    ) {
+        if track_idx >= 16 || state.is_empty() {
+            return;
+        }
+        let pos = self.track_effects[track_idx]
+            .iter()
+            .position(|n| n.slot_idx == slot_idx)
+            .unwrap_or(slot_idx);
+        if let Some(node) = self.track_effects[track_idx].get_mut(pos) {
+            if let Err(e) = node.load_state(state) {
+                eprintln!("[AudioEngine] load_state '{}' falló: {e}", node.name);
+            } else {
+                self.prepare_pdc_buffers();
+            }
+        }
+    }
+
     /// Devuelve la lista de parámetros de un plugin cargado (para la UI).
     pub fn external_plugin_params(
         &mut self,

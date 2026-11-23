@@ -114,6 +114,12 @@ pub struct DspSlot {
     pub preset_name: String,
     /// Si este slot ya envió `LoadExternalPlugin` al motor de audio.
     pub engine_loaded: bool,
+    /// Estado binario guardado del plugin externo (VST3 `getState` / CLAP `state.save`),
+    /// persistido al cerrar/reabrir la ventana nativa para mantener presets y ajustes.
+    pub saved_state: Option<Vec<u8>>,
+    /// Parámetros modificados desde el rack mientras la ventana nativa estaba cerrada;
+    /// se aplican encima de `saved_state` al reabrir para no perder cambios del rack.
+    pub rack_overrides_since_state: Vec<(u32, f32)>,
 }
 
 impl Default for DspSlot {
@@ -169,6 +175,8 @@ impl DspSlot {
             params_expanded: true,
             preset_name: "init".to_string(),
             engine_loaded: false,
+            saved_state: None,
+            rack_overrides_since_state: Vec::new(),
         }
     }
 

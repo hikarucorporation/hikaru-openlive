@@ -63,6 +63,9 @@ struct PluginClosedNotification {
     /// ventana no puede tocar el estado de GPUI: `poll_updates` lo recoge en
     /// el hilo principal y lo guarda en `gui_errors`, donde el rack lo pinta.
     error: Option<String>,
+    /// Estado binario capturado justo antes de cerrar el editor (`save_state`),
+    /// para persistir el preset completo y restaurarlo al reabrir la ventana.
+    saved_state: Option<Vec<u8>>,
 }
 
 pub struct PluginSettingsState {
@@ -104,6 +107,8 @@ pub struct PluginSettingsState {
     /// `take_param_feedback` lo entrega a `AppState`, que es quien posee las
     /// pistas. El rodeo existe porque este estado no ve los tracks.
     pending_param_feedback: Vec<ParamFeedbackEvent>,
+    /// Estados binarios capturados al cerrar ventanas de plugin `(window_key, bytes)`.
+    pending_saved_states: Vec<(String, Vec<u8>)>,
 }
 
 impl Default for PluginSettingsState {
@@ -133,6 +138,7 @@ impl Default for PluginSettingsState {
             param_tx,
             param_rx,
             pending_param_feedback: Vec::new(),
+            pending_saved_states: Vec::new(),
         }
     }
 }
@@ -213,6 +219,9 @@ impl PluginSettingsState {
             self.open_plugins.remove(&notif.name);
             self.cmd_tx.remove(&notif.name);
             self.opening.remove(&notif.name);
+            if let Some(state) = notif.saved_state {
+                self.pending_saved_states.push((notif.name.clone(), state));
+            }
             match notif.error {
                 Some(message) => {
                     eprintln!("[PluginSettings] GUI de '{}' falló: {}", notif.name, message);
@@ -233,6 +242,11 @@ impl PluginSettingsState {
     /// `sync_frame` y lo entrega a `AppState::apply_param_feedback`.
     pub fn take_param_feedback(&mut self) -> Vec<ParamFeedbackEvent> {
         std::mem::take(&mut self.pending_param_feedback)
+    }
+
+    /// Estados binarios capturados al cerrar ventanas de plugin `(window_key, bytes)`.
+    pub fn take_saved_states(&mut self) -> Vec<(String, Vec<u8>)> {
+        std::mem::take(&mut self.pending_saved_states)
     }
 
 
@@ -307,6 +321,7 @@ impl PluginSettingsState {
         plugin: &DiscoveredPlugin,
         parent: HostParentKind,
         tap_key: hikaru_plugin_host::tap::TapKey,
+        initial_state: Option<Vec<u8>>,
         initial_params: Vec<(u32, f32)>,
     ) {
         if self.open_plugins.contains_key(&window_key) || self.opening.contains(&window_key) {
@@ -326,10 +341,6 @@ impl PluginSettingsState {
         let (cmd_tx, cmd_rx) = channel();
         let wrapper_config = WrapperConfig::bitwig_floating(parent);
 
-        for (id, value) in initial_params {
-            let _ = cmd_tx.send(PluginWindowCommand::SetParam { id, value });
-        }
-
         self.opening.insert(window_key.clone());
         self.cmd_tx.insert(window_key.clone(), cmd_tx);
 
@@ -346,6 +357,8 @@ impl PluginSettingsState {
                 param_tx,
                 close_tx,
                 tap_key,
+                initial_state,
+                initial_params,
             );
         });
 
@@ -366,6 +379,7 @@ impl PluginSettingsState {
             plugin,
             parent,
             tap_key,
+            None,
             Vec::new(),
         );
     }
@@ -398,14 +412,14 @@ impl PluginSettingsState {
 
     pub fn close_plugin(&mut self, name: &str) {
         // Pedir cierre elegante primero: el hilo destruye el editor con el
-        // padre aún vivo en vez de que le maten la conexión por debajo.
+        // padre aún vivo y captura `save_state()` antes de salir.
         if let Some(tx) = self.cmd_tx.remove(name) {
             let _ = tx.send(PluginWindowCommand::Close);
         }
         self.opening.remove(name);
         if let Some(handle) = self.open_plugins.remove(name) {
-            println!("[PluginSettings] Closing plugin '{}' (thread will exit)", name);
-            let _ = handle;
+            println!("[PluginSettings] Closing plugin '{}' (waiting for state capture)", name);
+            let _ = handle.join();
         }
     }
 
@@ -445,19 +459,21 @@ fn run_plugin_window(
     param_tx: Sender<ParamFeedbackEvent>,
     close_tx: Sender<PluginClosedNotification>,
     tap_key: hikaru_plugin_host::tap::TapKey,
+    initial_state: Option<Vec<u8>>,
+    initial_params: Vec<(u32, f32)>,
 ) {
-    let notify = |error: Option<String>| {
+    let notify = |error: Option<String>, saved_state: Option<Vec<u8>>| {
         let _ = close_tx.send(PluginClosedNotification {
             name: window_key.clone(),
             error,
+            saved_state,
         });
     };
 
-    // Todo el ciclo de vida —ventana, `dlopen`, embebido, apagado— vive en
-    // `HikaruWrapper::open`. Acá sólo se le pasa la cinta de audio del motor,
-    // se traduce el resultado al canal de la UI y se corre.
+    // Todo el ciclo de vida —ventana, `dlopen`, restauración de estado/preset,
+    // embebido, apagado— vive en `HikaruWrapper::open_with_state`.
     let (feedback_tx, feedback_rx) = channel::<ParamFeedback>();
-    let open_result = HikaruWrapper::open(
+    let open_result = HikaruWrapper::open_with_state(
         &plugin_path,
         format,
         &window_title,
@@ -466,6 +482,8 @@ fn run_plugin_window(
         cmd_rx,
         feedback_tx,
         tap_key,
+        initial_state.as_deref(),
+        &initial_params,
     );
 
     let wrapper = match open_result {
@@ -473,7 +491,7 @@ fn run_plugin_window(
         Err(e) => {
             let message = e.to_string();
             eprintln!("[PluginWindow] '{}': {}", window_title, message);
-            notify(Some(message));
+            notify(Some(message), None);
             return;
         }
     };
@@ -489,6 +507,8 @@ fn run_plugin_window(
     // El feedback se reenvía con `window_key` y el id del descriptor para que el
     // hilo principal sepa exactamente a qué instancia del rack pertenece.
     let fb_window_key = window_key.clone();
+    let fb_descriptor_id = descriptor_id.clone();
+    let final_param_tx = param_tx.clone();
     let feedback_forwarder = std::thread::Builder::new()
         .name("hikaru-plugin-feedback".into())
         .spawn(move || {
@@ -498,14 +518,26 @@ fn run_plugin_window(
                 }
                 let _ = param_tx.send(ParamFeedbackEvent {
                     window_key: fb_window_key.clone(),
-                    descriptor_id: descriptor_id.clone(),
+                    descriptor_id: fb_descriptor_id.clone(),
                     changes: feedback.changes,
                     origin: feedback.origin,
                 });
             }
         });
 
-    let exit = wrapper.run();
+    let (exit, saved_state, final_params) = wrapper.run_and_capture();
+
+    // Garantizamos que el rack y el motor reciban el snapshot final de todos
+    // los parámetros antes de notificar el cierre (incluso en plugins que no
+    // emiten `performEdit` durante el arrastre).
+    if !final_params.is_empty() {
+        let _ = final_param_tx.send(ParamFeedbackEvent {
+            window_key: window_key.clone(),
+            descriptor_id,
+            changes: final_params,
+            origin: FeedbackOrigin::Editor,
+        });
+    }
 
     // El hilo del feedback termina solo: `feedback_tx` se suelta con el
     // bucle, así que `recv` devuelve error y el hilo muere. No se hace join
@@ -516,12 +548,18 @@ fn run_plugin_window(
     // fallo y no debe pintar una línea roja en el rack, pero perder la
     // conexión con el servidor sí es algo que el usuario tiene que saber.
     match exit {
-        LoopExit::Requested | LoopExit::UserClosed => notify(None),
+        LoopExit::Requested | LoopExit::UserClosed => notify(None, saved_state),
         LoopExit::Destroyed => {
-            notify(Some("La ventana del editor fue destruida por el sistema de ventanas.".into()))
+            notify(
+                Some("La ventana del editor fue destruida por el sistema de ventanas.".into()),
+                saved_state,
+            )
         }
         LoopExit::ConnectionLost(e) => {
-            notify(Some(format!("Se perdió la conexión con el servidor X11: {e}")))
+            notify(
+                Some(format!("Se perdió la conexión con el servidor X11: {e}")),
+                saved_state,
+            )
         }
     }
 }

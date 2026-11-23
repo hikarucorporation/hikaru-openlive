@@ -396,6 +396,13 @@ pub enum GuiCommand {
         slot_idx: usize,
         params: Vec<(u32, f32)>,
     },
+    /// Restaura el estado binario completo (preset + parámetros internos) de un
+    /// plugin externo en el motor de audio (VST3 `setState` / CLAP `state.load`).
+    LoadExternalPluginState {
+        track_idx: usize,
+        slot_idx: usize,
+        state: Vec<u8>,
+    },
     /// Carga un efecto nativo (ej. Hikaru Ultracomb) en un slot del rack.
     LoadNativeEffect {
         track_idx: usize,

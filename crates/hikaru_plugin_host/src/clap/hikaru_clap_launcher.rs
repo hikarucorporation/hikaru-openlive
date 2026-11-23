@@ -10,6 +10,7 @@ use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{ParamInfoFlags, PluginParams};
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
+use clack_extensions::state::{HostState, HostStateImpl, PluginState};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 use clack_host::events::event_types::{
     NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent, TransportFlags,
@@ -286,6 +287,10 @@ impl HostLatencyImpl for HikaruMainThread<'_> {
     }
 }
 
+impl HostStateImpl for HikaruMainThread<'_> {
+    fn mark_dirty(&self) {}
+}
+
 /// Estado que el host guarda del lado del hilo de audio.
 ///
 /// CLAP obliga a declarar un tipo concreto como `AudioProcessor`: es el valor
@@ -319,7 +324,8 @@ impl HostHandlers for HikaruClapHost {
             .register::<HostGui>()
             .register::<HostTimer>()
             .register::<HostPosixFd>()
-            .register::<HostLatency>();
+            .register::<HostLatency>()
+            .register::<HostState>();
     }
 }
 
@@ -423,6 +429,8 @@ pub struct ClapInstance {
     gui: Option<PluginGui>,
     /// Extensión de latencia CLAP (`CLAP_EXT_LATENCY`) para PDC.
     latency_ext: Option<PluginLatency>,
+    /// Extensión de estado CLAP (`CLAP_EXT_STATE`) para guardar/restaurar presets.
+    state_ext: Option<PluginState>,
     /// Latencia reportada en samples (cacheada lock-free para el hilo de audio).
     cached_latency: AtomicU32,
     /// Último snapshot del transporte musical del host (tempo, beats, compás, loop).
@@ -552,6 +560,7 @@ impl ClapInstance {
 
         let gui = shared_handle.get_extension::<PluginGui>();
         let latency_ext = shared_handle.get_extension::<PluginLatency>();
+        let state_ext = shared_handle.get_extension::<PluginState>();
         let params = shared_handle.get_extension::<PluginParams>();
 
         if gui.is_some() {
@@ -620,6 +629,7 @@ impl ClapInstance {
             last_error: None,
             gui,
             latency_ext,
+            state_ext,
             cached_latency: AtomicU32::new(initial_latency),
             transport: HostTransportInfo::default(),
             steady_time: 0,
@@ -1271,6 +1281,44 @@ impl PluginInstance for ClapInstance {
     fn queue_midi_event(&mut self, status: u8, data1: u8, data2: u8) -> bool {
         self.param_queue
             .push(PendingClapEvent::Midi { status, data1, data2 })
+    }
+
+    fn save_state(&mut self) -> Result<Vec<u8>, String> {
+        let Some(state_ext) = self.state_ext else {
+            return Err(format!("[CLAP] '{}' no expone CLAP_EXT_STATE", self.name));
+        };
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut handle = self.plugin.plugin_handle();
+        state_ext
+            .save(&mut handle, &mut cursor)
+            .map_err(|e| format!("[CLAP] state.save '{}': {e:?}", self.name))?;
+        Ok(cursor.into_inner())
+    }
+
+    fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        let Some(state_ext) = self.state_ext else {
+            return Err(format!("[CLAP] '{}' no expone CLAP_EXT_STATE", self.name));
+        };
+        let mut cursor = std::io::Cursor::new(data);
+        let mut handle = self.plugin.plugin_handle();
+        state_ext
+            .load(&mut handle, &mut cursor)
+            .map_err(|e| format!("[CLAP] state.load '{}': {e:?}", self.name))?;
+
+        // Refrescar línea base de parámetros y latencia tras restaurar el preset.
+        self.host_sent.clear();
+        if let Some(params) = self.params {
+            let mut plugin_handle = self.plugin.plugin_handle();
+            for meta in &self.param_list {
+                if let Some(clap_id) = ClapId::from_raw(meta.id) {
+                    if let Some(plain) = params.get_value(&mut plugin_handle, clap_id) {
+                        self.seen.insert(meta.id, meta.plain_to_norm(plain));
+                    }
+                }
+            }
+        }
+        self.refresh_latency();
+        Ok(())
     }
 
     /// Lo que el editor nativo movió por su cuenta.

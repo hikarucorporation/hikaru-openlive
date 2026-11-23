@@ -596,17 +596,23 @@ pub fn render_card(
                 .map(|et| (et, slot_idx))
                 .unwrap_or(hikaru_plugin_host::tap::NO_SLOT);
             let title = format!("{} / {}", track_name, slot_snap.name);
-            let initial_params: Vec<(u32, f32)> = slot_snap
-                .cached_params
-                .iter()
-                .map(|p| (p.info.id, p.value))
-                .collect();
+            let initial_state = slot_snap.saved_state.clone();
+            let initial_params: Vec<(u32, f32)> = if initial_state.is_some() {
+                slot_snap.rack_overrides_since_state.clone()
+            } else {
+                slot_snap
+                    .cached_params
+                    .iter()
+                    .map(|p| (p.info.id, p.value))
+                    .collect()
+            };
             app.plugin_settings_state.open_plugin_for_slot(
                 wkey.clone(),
                 title,
                 &ext_desc,
                 parent,
                 tap_key,
+                initial_state,
                 initial_params,
             );
         }
@@ -622,6 +628,13 @@ pub fn render_card(
                 slot_idx,
                 descriptor: ext_desc.clone(),
             });
+            if let Some(state) = slot_snap.saved_state.clone() {
+                app.audio_proxy.send(GuiCommand::LoadExternalPluginState {
+                    track_idx: et,
+                    slot_idx,
+                    state,
+                });
+            }
             if let Some(s) = app.slot_mut(track_idx, slot_idx) {
                 s.engine_loaded = true;
                 for p in &mut s.cached_params {

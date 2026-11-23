@@ -1284,7 +1284,7 @@ impl AppState {
     /// (incluidos los recién cargados desde `.oplf`/`.opsf`/`.hdp`) esté
     /// instanciado en el motor de audio y tenga sus parámetros sondeados.
     pub fn ensure_external_plugins_loaded(&mut self) {
-        let mut to_load: Vec<(usize, usize, bool, hikaru_plugin_host::PluginDescriptor)> = Vec::new();
+        let mut to_load: Vec<(usize, usize, bool, hikaru_plugin_host::PluginDescriptor, Option<Vec<u8>>)> = Vec::new();
         let mut to_probe: Vec<hikaru_plugin_host::PluginDescriptor> = Vec::new();
 
         for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
@@ -1295,7 +1295,7 @@ impl AppState {
                 if let Some(ext) = slot.external.clone() {
                     if !slot.engine_loaded {
                         slot.engine_loaded = true;
-                        to_load.push((eng_track, sl_idx, slot.active, ext.clone()));
+                        to_load.push((eng_track, sl_idx, slot.active, ext.clone(), slot.saved_state.clone()));
                         crate::views::hikaru_native_plugins::hikaru_openmodulation::ensure_empty_bay_for_slot(
                             tr_idx, sl_idx,
                         );
@@ -1309,12 +1309,19 @@ impl AppState {
             }
         }
 
-        for (eng_track, sl_idx, active, desc) in to_load {
+        for (eng_track, sl_idx, active, desc, saved_state) in to_load {
             self.audio_proxy.send(GuiCommand::LoadExternalPlugin {
                 track_idx: eng_track,
                 slot_idx: sl_idx,
                 descriptor: desc,
             });
+            if let Some(state) = saved_state {
+                self.audio_proxy.send(GuiCommand::LoadExternalPluginState {
+                    track_idx: eng_track,
+                    slot_idx: sl_idx,
+                    state,
+                });
+            }
             if !active {
                 self.audio_proxy.send(GuiCommand::SetExternalPluginActive {
                     track_idx: eng_track,
@@ -1395,6 +1402,39 @@ impl AppState {
         changed
     }
 
+    pub fn apply_saved_plugin_states(&mut self, states: Vec<(String, Vec<u8>)>) {
+        if states.is_empty() {
+            return;
+        }
+        let mut engine_cmds: Vec<GuiCommand> = Vec::new();
+        for (wkey, bytes) in states {
+            if bytes.is_empty() {
+                continue;
+            }
+            for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
+                let eng_track = tr_idx.checked_sub(1);
+                for (sl_idx, slot) in track.effects.iter_mut().enumerate() {
+                    if slot.external.is_some()
+                        && external_plugins_settings::slot_window_key(tr_idx, sl_idx) == wkey
+                    {
+                        slot.saved_state = Some(bytes.clone());
+                        slot.rack_overrides_since_state.clear();
+                        if let Some(et) = eng_track {
+                            engine_cmds.push(GuiCommand::LoadExternalPluginState {
+                                track_idx: et,
+                                slot_idx: sl_idx,
+                                state: bytes.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for cmd in engine_cmds {
+            self.audio_proxy.send(cmd);
+        }
+    }
+
     pub fn flush_pending_external_params(&mut self) {
         use crate::views::hikaru_native_plugins::hikaru_openmodulation;
         use hikaru_plugin_host::PluginFormat;
@@ -1402,6 +1442,12 @@ impl AppState {
         let mut engine_cmds: Vec<GuiCommand> = Vec::new();
         let mut win_param_cmds: Vec<(String, Option<String>, u32, f32)> = Vec::new();
         let mut win_mod_cmds: Vec<(String, Option<String>, u32, f32)> = Vec::new();
+
+        let open_keys: std::collections::HashSet<String> = self
+            .plugin_settings_state
+            .open_plugin_names()
+            .into_iter()
+            .collect();
 
         for (tr_idx, track) in self.tracks_mut().iter_mut().enumerate() {
             let Some(eng_track) = tr_idx.checked_sub(1) else {
@@ -1414,6 +1460,7 @@ impl AppState {
                 let format = ext.format;
                 let plug_name = Some(ext.name.clone());
                 let wkey = external_plugins_settings::slot_window_key(tr_idx, sl_idx);
+                let window_is_open = open_keys.contains(&wkey);
 
                 for p in &mut slot.cached_params {
                     if p.pending_to_engine {
@@ -1424,6 +1471,17 @@ impl AppState {
                             value: p.value,
                         });
                         win_param_cmds.push((wkey.clone(), plug_name.clone(), p.info.id, p.value));
+                        if !window_is_open && slot.saved_state.is_some() {
+                            if let Some(entry) = slot
+                                .rack_overrides_since_state
+                                .iter_mut()
+                                .find(|(id, _)| *id == p.info.id)
+                            {
+                                entry.1 = p.value;
+                            } else {
+                                slot.rack_overrides_since_state.push((p.info.id, p.value));
+                            }
+                        }
                         p.last_sent_effective = Some(p.value);
                         p.pending_to_engine = false;
                     }
@@ -1932,6 +1990,8 @@ impl HikaruApp {
         self.state.plugin_settings_state.poll_updates();
         self.state.drain_param_probes();
         self.state.ensure_external_plugins_loaded();
+        let saved_states = self.state.plugin_settings_state.take_saved_states();
+        self.state.apply_saved_plugin_states(saved_states);
         let param_feedback = self.state.plugin_settings_state.take_param_feedback();
         let _feedback_changed = self.state.apply_param_feedback(param_feedback);
         self.state.flush_pending_external_params();
