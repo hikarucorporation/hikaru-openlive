@@ -521,7 +521,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         tr.effects.push(slot);
                                         state.selected_slot_index = new_slot_idx;
                                         state.show_dsp_rack = true;
-                                        if plugin.name == "Hikaru Ultracomb" {
+                                        if plugin.name == "Hikaru Ultracomb"
+                                            || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(plugin.name)
+                                        {
                                             if let Some(et_idx) = t_idx.checked_sub(1) {
                                                 state.audio_proxy.send(crate::audio_proxy::GuiCommand::LoadNativeEffect {
                                                     track_idx: et_idx,

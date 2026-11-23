@@ -34,7 +34,7 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 8] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 16] = [
     PluginEntry {
         category: "Audio FX",
         name: "OpenEQ3",
@@ -49,6 +49,46 @@ pub const PLUGIN_CATALOG: [PluginEntry; 8] = [
         category: "Audio FX",
         name: "Hikaru Ultracomb",
         label: "Hikaru Ultracomb Filter",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Tool",
+        label: "Tool",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "DC Offset",
+        label: "DC Offset",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Dual Pan",
+        label: "Dual Pan",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Test Tone",
+        label: "Test Tone",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Time Shift",
+        label: "Time Shift",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Tremolo",
+        label: "Tremolo",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Ring-Mod",
+        label: "Ring-Mod",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Bit-8",
+        label: "Bit-8",
     },
     PluginEntry {
         category: "Polysynth",
@@ -151,6 +191,7 @@ pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize)
             removed.name.as_str(),
             "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
         )
+        || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&removed.name)
     {
         if let Some(eng_track) = track_idx.checked_sub(1) {
             app.audio_proxy.send(crate::audio_proxy::GuiCommand::RemoveExternalPlugin {
@@ -595,6 +636,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
                                 "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH,
                                 "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
+                                name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
+                                    crate::views::hikaru_native_plugins::hikaru_tier_s_fx::card_width(name).unwrap_or(CARD_WIDTH)
+                                }
                                 _ => CARD_WIDTH,
                             }
                         };
@@ -1118,6 +1162,15 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         app,
                                         track_idx,
                                         slot_idx,
+                                    );
+                                }
+                                name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
+                                    crate::views::hikaru_native_plugins::hikaru_tier_s_fx::render_module(
+                                        &mut body_ui,
+                                        app,
+                                        track_idx,
+                                        slot_idx,
+                                        name,
                                     );
                                 }
                                 "OpenModulation" | "Hikaru OpenModulation" | "LFO MOD" => {

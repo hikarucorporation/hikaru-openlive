@@ -37,11 +37,11 @@
   "summary": {
     "areas": 18,
     "features": 687,
-    "done": 318,
+    "done": 326,
     "in_progress": 17,
-    "planned": 352,
+    "planned": 344,
     "bugs": 1,
-    "parity_percent": 46
+    "parity_percent": 47
   },
   "areas": [
     {
@@ -784,7 +784,8 @@
         {
           "id": "dv-006",
           "name": "Bit-8",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/bit8.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-007",
@@ -835,7 +836,8 @@
         {
           "id": "dv-016",
           "name": "DC Offset",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/dc_offset.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-017",
@@ -881,7 +883,8 @@
         {
           "id": "dv-025",
           "name": "Dual Pan",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/dual_pan.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-026",
@@ -1258,7 +1261,8 @@
         {
           "id": "dv-098",
           "name": "Ring-Mod",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/ring_mod.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-099",
@@ -1304,17 +1308,20 @@
         {
           "id": "dv-107",
           "name": "Test Tone",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/test_tone.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-108",
           "name": "Time Shift",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/time_shift.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-109",
           "name": "Tool",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/tool.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-110",
@@ -1339,7 +1346,8 @@
         {
           "id": "dv-114",
           "name": "Tremolo",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/tremolo.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs"
         },
         {
           "id": "dv-115",

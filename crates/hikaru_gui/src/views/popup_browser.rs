@@ -306,6 +306,54 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 FX_ORANGE,
                 "Resonant comb filter and stereo delay resonator.",
             ),
+            "Tool" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Utility stereo processor: gain, pan, width, phase invert and L/R swap.",
+            ),
+            "DC Offset" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Adds constant DC offset or removes DC with a 5 Hz high-pass filter.",
+            ),
+            "Dual Pan" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Independent stereo panning for Left and Right input channels.",
+            ),
+            "Test Tone" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Diagnostic sine, white noise and pink noise generator.",
+            ),
+            "Time Shift" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Precise millisecond and sub-sample delay utility.",
+            ),
+            "Tremolo" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Stereo LFO amplitude modulator with stereo phase offset.",
+            ),
+            "Ring-Mod" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Carrier ring modulator with multiple waveforms and dry/wet mix.",
+            ),
+            "Bit-8" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Bitcrusher and sample-rate clock reducer.",
+            ),
             _ => (
                 BrowserRailTab::AudioFx,
                 None,
@@ -644,7 +692,9 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                     });
                 }
                 state.request_external_params(&desc);
-            } else if slot_name == "Hikaru Ultracomb" {
+            } else if slot_name == "Hikaru Ultracomb"
+                || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
+            {
                 if let Some(et_idx) = mixer_idx.checked_sub(1) {
                     state.audio_proxy.send(GuiCommand::LoadNativeEffect {
                         track_idx: et_idx,
@@ -683,7 +733,9 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                         });
                     }
                     state.request_external_params(&desc);
-                } else if slot_name == "Hikaru Ultracomb" {
+                } else if slot_name == "Hikaru Ultracomb"
+                || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
+            {
                     if let Some(et_idx) = track_idx.checked_sub(1) {
                         state.audio_proxy.send(GuiCommand::LoadNativeEffect {
                             track_idx: et_idx,

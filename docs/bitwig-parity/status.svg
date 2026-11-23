@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" height="480" viewBox="0 0 680 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.3.13: 318 of 687 features done">
-<title>Hikaru OpenLive vs Bitwig Studio 5.3.13: 318 of 687 features done</title>
-<desc>Feature parity of Hikaru OpenLive against Bitwig Studio 5.3.13. 318 of 687 tracked features are done; 1 open bug.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="480" viewBox="0 0 680 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.3.13: 326 of 687 features done">
+<title>Hikaru OpenLive vs Bitwig Studio 5.3.13: 326 of 687 features done</title>
+<desc>Feature parity of Hikaru OpenLive against Bitwig Studio 5.3.13. 326 of 687 tracked features are done; 1 open bug.</desc>
 <rect width="680" height="480" fill="#0d1117"/>
-<text x="678.0" y="20.0" font-size="12" font-weight="600" text-anchor="end" fill="#F1EFE8">46% · 318 of 687 done</text>
+<text x="678.0" y="20.0" font-size="12" font-weight="600" text-anchor="end" fill="#F1EFE8">47% · 326 of 687 done</text>
 <rect x="2.0" y="11" width="10" height="10" rx="2" fill="#1D9E75"/>
 <text x="17.0" y="20.0" font-size="12" fill="#B4B2A9">Done</text>
 <rect x="64.0" y="11" width="10" height="10" rx="2" fill="#EF9F27"/>
@@ -74,17 +74,17 @@
 <text x="412.7" y="225.6" font-size="22" font-weight="600" fill="#F1EFE8">56%</text>
 <text x="412.7" y="239.6" font-size="10" fill="#B4B2A9">14 of 25 done</text>
 </g>
-<g><title>Built-in Devices &amp; FX: 9 done, 3 in progress, 138 planned</title>
+<g><title>Built-in Devices &amp; FX: 17 done, 3 in progress, 130 planned</title>
 <clipPath id="b5"><rect x="219.9" y="35.5" width="181.8" height="343.6" rx="6"/></clipPath>
 <g clip-path="url(#b5)">
 <rect x="219.9" y="35.5" width="181.8" height="343.6" fill="#2C2C2A"/>
-<rect x="219.9" y="35.5" width="10.9" height="343.6" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="219.9" y="373.1" width="10.9" height="6" fill="#1D9E75"/>
-<rect x="230.8" y="373.1" width="3.6" height="6" fill="#EF9F27"/>
+<rect x="219.9" y="35.5" width="20.6" height="343.6" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="219.9" y="373.1" width="20.6" height="6" fill="#1D9E75"/>
+<rect x="240.5" y="373.1" width="3.6" height="6" fill="#EF9F27"/>
 </g>
 <text x="227.9" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Built-in Devices &amp; FX</text>
-<text x="227.9" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">6%</text>
-<text x="227.9" y="104.8" font-size="11" fill="#B4B2A9">9 of 150 done</text>
+<text x="227.9" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">11%</text>
+<text x="227.9" y="104.8" font-size="11" fill="#B4B2A9">17 of 150 done</text>
 </g>
 <g><title>Modulators: 43 done, 0 in progress, 0 planned</title>
 <clipPath id="b6"><rect x="219.9" y="382.1" width="181.8" height="96.4" rx="6"/></clipPath>

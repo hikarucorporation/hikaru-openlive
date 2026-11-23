@@ -2540,6 +2540,30 @@ impl<'a> AudioEngine<'a> {
             "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
                 Box::new(hikaru_dsp::effects::UltracombFilter::new(self.sample_rate))
             }
+            "Tool" | "Hikaru Tool" => {
+                Box::new(hikaru_dsp::effects::ToolEffect::new(self.sample_rate))
+            }
+            "DC Offset" | "Hikaru DC Offset" => {
+                Box::new(hikaru_dsp::effects::DcOffsetEffect::new(self.sample_rate))
+            }
+            "Dual Pan" | "Hikaru Dual Pan" => {
+                Box::new(hikaru_dsp::effects::DualPanEffect::new(self.sample_rate))
+            }
+            "Test Tone" | "Hikaru Test Tone" => {
+                Box::new(hikaru_dsp::effects::TestToneEffect::new(self.sample_rate))
+            }
+            "Time Shift" | "Hikaru Time Shift" => {
+                Box::new(hikaru_dsp::effects::TimeShiftEffect::new(self.sample_rate))
+            }
+            "Tremolo" | "Hikaru Tremolo" => {
+                Box::new(hikaru_dsp::effects::TremoloEffect::new(self.sample_rate))
+            }
+            "Ring-Mod" | "Ring Mod" | "Hikaru Ring-Mod" => {
+                Box::new(hikaru_dsp::effects::RingModEffect::new(self.sample_rate))
+            }
+            "Bit-8" | "Bit 8" | "Hikaru Bit-8" => {
+                Box::new(hikaru_dsp::effects::Bit8Effect::new(self.sample_rate))
+            }
             _ => return Err(format!("Efecto nativo desconocido: {name}")),
         };
 

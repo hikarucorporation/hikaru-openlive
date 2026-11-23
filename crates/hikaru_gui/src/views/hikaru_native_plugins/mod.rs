@@ -66,6 +66,7 @@ pub mod hikaru_openpoly;
 pub mod hikaru_openspectral_phaser;
 pub mod hikaru_openwavetable;
 pub mod hikaru_sampler;
+pub mod hikaru_tier_s_fx;
 pub mod hikaru_ultracomb;
 
 // Reexports de superficie. Los que el resto de la app usa por nombre;

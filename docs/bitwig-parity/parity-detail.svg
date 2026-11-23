@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="6270.0" viewBox="0 0 1400 6270.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 318 of 687 done">
-<title>Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 318 of 687 done</title>
-<desc>Feature-by-feature parity of Hikaru OpenLive against Bitwig Studio 5.3.13: 318 done, 17 in progress, 352 planned, 1 open bug(s).</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="6270.0" viewBox="0 0 1400 6270.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 326 of 687 done">
+<title>Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 326 of 687 done</title>
+<desc>Feature-by-feature parity of Hikaru OpenLive against Bitwig Studio 5.3.13: 326 done, 17 in progress, 344 planned, 1 open bug(s).</desc>
 <rect width="1400" height="6270.0" fill="#0d1117"/>
 <text x="32" y="48" font-size="25" font-weight="700" fill="#F1EFE8">Hikaru OpenLive vs Bitwig Studio 5.3.13</text>
 <text x="32" y="72" font-size="12.5" fill="#B4B2A9">Paridad funcional sobre un catálogo de 687 features · revisión 161983 · auditoría 2026-11-22 · workspace 2.24.0</text>
@@ -10,20 +10,20 @@
 <text x="1217.1" y="47" font-size="12" fill="#B4B2A9">En progreso</text>
 <rect x="1134.0" y="38" width="9" height="9" rx="2" fill="#1D9E75"/>
 <text x="1150.0" y="47" font-size="12" fill="#B4B2A9">Hecho</text>
-<text x="32" y="138" font-size="52" font-weight="700" fill="#F1EFE8">46 %</text>
-<text x="32" y="160" font-size="12" fill="#B4B2A9">318 de 687 features implementadas</text>
-<text x="242.0" y="118" font-size="28" font-weight="700" fill="#1D9E75">318</text>
+<text x="32" y="138" font-size="52" font-weight="700" fill="#F1EFE8">47 %</text>
+<text x="32" y="160" font-size="12" fill="#B4B2A9">326 de 687 features implementadas</text>
+<text x="242.0" y="118" font-size="28" font-weight="700" fill="#1D9E75">326</text>
 <text x="242.0" y="138" font-size="11.5" fill="#B4B2A9">Hecho</text>
 <text x="392.0" y="118" font-size="28" font-weight="700" fill="#EF9F27">17</text>
 <text x="392.0" y="138" font-size="11.5" fill="#B4B2A9">En progreso</text>
-<text x="542.0" y="118" font-size="28" font-weight="700" fill="#5F5E5A">352</text>
+<text x="542.0" y="118" font-size="28" font-weight="700" fill="#5F5E5A">344</text>
 <text x="542.0" y="138" font-size="11.5" fill="#B4B2A9">Pendiente</text>
 <text x="692.0" y="118" font-size="28" font-weight="700" fill="#E24B4A">1</text>
 <text x="692.0" y="138" font-size="11.5" fill="#B4B2A9">bug abierto</text>
 <rect x="32" y="180.0" width="1336" height="12.0" rx="6" fill="#2C2C2A"/>
-<rect x="32.0" y="180.0" width="618.4" height="12.0" fill="#1D9E75"/>
-<rect x="650.4" y="180.0" width="33.1" height="12.0" fill="#EF9F27"/>
-<text x="32" y="210.0" font-size="12" fill="#B4B2A9">141 de 193 features del catálogo de Bitwig (150 devices + 43 modulators) siguen pendientes.</text>
+<rect x="32.0" y="180.0" width="634.0" height="12.0" fill="#1D9E75"/>
+<rect x="666.0" y="180.0" width="33.1" height="12.0" fill="#EF9F27"/>
+<text x="32" y="210.0" font-size="12" fill="#B4B2A9">133 de 193 features del catálogo de Bitwig (150 devices + 43 modulators) siguen pendientes.</text>
 <text x="1368" y="210.0" font-size="12" text-anchor="end" fill="#B4B2A9">Verde = implementado · Naranja = en progreso · Gris = pendiente</text>
 <text x="32" y="250.0" font-size="11" letter-spacing="1.4" fill="#B4B2A9">RESUMEN POR ÁREA</text>
 <text x="32.0" y="275.0" font-size="12" fill="#F1EFE8">Clip Launcher</text>
@@ -48,8 +48,8 @@
 <text x="686.0" y="371.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">14/25 · 56 %</text>
 <text x="32.0" y="395.0" font-size="12" fill="#F1EFE8">Built-in Devices &amp; FX</text>
 <rect x="372.1" y="389.0" width="196.2" height="5" rx="2.5" fill="#2C2C2A"/>
-<rect x="372.1" y="389.0" width="11.8" height="5" rx="2.5" fill="#1D9E75"/>
-<text x="686.0" y="395.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">9/150 · 6 %</text>
+<rect x="372.1" y="389.0" width="22.2" height="5" rx="2.5" fill="#1D9E75"/>
+<text x="686.0" y="395.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">17/150 · 11 %</text>
 <text x="32.0" y="419.0" font-size="12" fill="#F1EFE8">Modulators</text>
 <rect x="372.1" y="413.0" width="196.2" height="5" rx="2.5" fill="#2C2C2A"/>
 <rect x="372.1" y="413.0" width="196.2" height="5" rx="2.5" fill="#1D9E75"/>
@@ -258,164 +258,164 @@
 <line x1="32" y1="1832.0" x2="1368" y2="1832.0" stroke="#5F5E5A" stroke-opacity="0.35" stroke-width="1"/>
 <text x="32" y="1824.0" font-size="11" letter-spacing="1.4" fill="#B4B2A9">CATÁLOGO DE BITWIG · 193 FEATURES</text>
 <text x="32" y="1862.0" font-size="15" font-weight="600" fill="#F1EFE8">Built-in Devices &amp; FX</text>
-<text x="1368" y="1862.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">9 de 150 · 6 %</text>
-<text x="1278.7" y="1862.0" font-size="11" text-anchor="end" fill="#B4B2A9">3 en progreso</text>
+<text x="1368" y="1862.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">17 de 150 · 11 %</text>
+<text x="1266.5" y="1862.0" font-size="11" text-anchor="end" fill="#B4B2A9">3 en progreso</text>
 <rect x="32" y="1871.0" width="1336" height="4" rx="2" fill="#2C2C2A"/>
-<rect x="32.0" y="1871.0" width="80.2" height="4" fill="#1D9E75"/>
-<rect x="112.2" y="1871.0" width="26.7" height="4" fill="#EF9F27"/>
+<rect x="32.0" y="1871.0" width="151.4" height="4" fill="#1D9E75"/>
+<rect x="183.4" y="1871.0" width="26.7" height="4" fill="#EF9F27"/>
 <text x="32" y="1898.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#EF9F27" fill-opacity="0.9">EN PROGRESO · 3</text>
-<text x="32" y="1940.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#1D9E75" fill-opacity="0.9">HECHO · 9</text>
-<text x="32" y="2008.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#5F5E5A" fill-opacity="0.9">PENDIENTE · 138</text>
+<text x="32" y="1940.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#1D9E75" fill-opacity="0.9">HECHO · 17</text>
+<text x="32" y="2034.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#5F5E5A" fill-opacity="0.9">PENDIENTE · 130</text>
 <g><title>Filter+ (dv-043) — crates/hikaru_dsp/src/effects/filter.rs</title><rect x="32.0" y="1902.0" width="9" height="9" rx="2" fill="#EF9F27"/><text x="48.0" y="1911.0" font-size="12.5" fill="#F1EFE8">Filter+</text></g>
 <g><title>Flanger+ (dv-045) — crates/hikaru_dsp/src/effects/flanger.rs</title><rect x="257.0" y="1902.0" width="9" height="9" rx="2" fill="#EF9F27"/><text x="273.0" y="1911.0" font-size="12.5" fill="#F1EFE8">Flanger+</text></g>
 <g><title>Phaser+ (dv-087) — crates/hikaru_dsp/src/effects/phaser.rs</title><rect x="482.0" y="1902.0" width="9" height="9" rx="2" fill="#EF9F27"/><text x="498.0" y="1911.0" font-size="12.5" fill="#F1EFE8">Phaser+</text></g>
-<g><title>Chain (dv-008) — crates/hikaru_gui/src/views/dsp_rack.rs</title><rect x="32.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Chain</text></g>
-<g><title>Drum Machine (dv-024) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/mod.rs</title><rect x="257.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Drum Machine</text></g>
-<g><title>EQ+ (dv-033) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openeq3/mod.rs</title><rect x="482.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="1953.0" font-size="12.5" fill="#F1EFE8">EQ+</text></g>
-<g><title>Filter (dv-042) — crates/hikaru_dsp/src/effects/filter.rs</title><rect x="707.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Filter</text></g>
-<g><title>Flanger (dv-044) — crates/hikaru_dsp/src/effects/flanger.rs</title><rect x="932.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Flanger</text></g>
-<g><title>Phaser (dv-086) — crates/hikaru_dsp/src/effects/phaser.rs</title><rect x="1157.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Phaser</text></g>
-<g><title>Poly Grid (dv-089) — crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs</title><rect x="32.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Poly Grid</text></g>
-<g><title>Polymer (dv-090) — crates/hikaru_dsp/src/synth/open_poly.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openpoly/open_poly.rs</title><rect x="257.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Polymer</text></g>
-<g><title>Sampler (dv-100) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_sampler/sampler_editor.rs</title><rect x="482.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Sampler</text></g>
-<g><title>Amp (dv-001)</title><rect x="32.0" y="2012.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2021.0" font-size="12.5" fill="#B4B2A9">Amp</text></g>
-<g><title>Arpeggiator (dv-002)</title><rect x="257.0" y="2012.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2021.0" font-size="12.5" fill="#B4B2A9">Arpeggiator</text></g>
-<g><title>Audio MOD (dv-003)</title><rect x="482.0" y="2012.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2021.0" font-size="12.5" fill="#B4B2A9">Audio MOD</text></g>
-<g><title>Audio Receiver (dv-004)</title><rect x="707.0" y="2012.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2021.0" font-size="12.5" fill="#B4B2A9">Audio Receiver</text></g>
-<g><title>Bend (dv-005)</title><rect x="932.0" y="2012.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2021.0" font-size="12.5" fill="#B4B2A9">Bend</text></g>
-<g><title>Bit-8 (dv-006)</title><rect x="1157.0" y="2012.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2021.0" font-size="12.5" fill="#B4B2A9">Bit-8</text></g>
-<g><title>Blur (dv-007)</title><rect x="32.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Blur</text></g>
-<g><title>Channel Filter (dv-009)</title><rect x="257.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Channel Filter</text></g>
-<g><title>Channel Map (dv-010)</title><rect x="482.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Channel Map</text></g>
-<g><title>Chorus (dv-011)</title><rect x="707.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Chorus</text></g>
-<g><title>Chorus+ (dv-012)</title><rect x="932.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Chorus+</text></g>
-<g><title>Comb (dv-013)</title><rect x="1157.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Comb</text></g>
-<g><title>Compressor (dv-014)</title><rect x="32.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Compressor</text></g>
-<g><title>Convolution (dv-015)</title><rect x="257.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Convolution</text></g>
-<g><title>DC Offset (dv-016)</title><rect x="482.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2073.0" font-size="12.5" fill="#B4B2A9">DC Offset</text></g>
-<g><title>De-Esser (dv-017)</title><rect x="707.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2073.0" font-size="12.5" fill="#B4B2A9">De-Esser</text></g>
-<g><title>Delay+ (dv-018)</title><rect x="932.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Delay+</text></g>
-<g><title>Delay-1 (dv-019)</title><rect x="1157.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Delay-1</text></g>
-<g><title>Delay-2 (dv-020)</title><rect x="32.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Delay-2</text></g>
-<g><title>Delay-4 (dv-021)</title><rect x="257.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Delay-4</text></g>
-<g><title>Distortion (dv-022)</title><rect x="482.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Distortion</text></g>
-<g><title>Dribble (dv-023)</title><rect x="707.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Dribble</text></g>
-<g><title>Dual Pan (dv-025)</title><rect x="932.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Dual Pan</text></g>
-<g><title>Dynamics (dv-026)</title><rect x="1157.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Dynamics</text></g>
-<g><title>v1 Clap (dv-027)</title><rect x="32.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Clap</text></g>
-<g><title>v1 Cowbell (dv-028)</title><rect x="257.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Cowbell</text></g>
-<g><title>v1 Hat (dv-029)</title><rect x="482.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Hat</text></g>
-<g><title>v1 Kick (dv-030)</title><rect x="707.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Kick</text></g>
-<g><title>v1 Snare (dv-031)</title><rect x="932.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Snare</text></g>
-<g><title>v1 Tom (dv-032)</title><rect x="1157.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Tom</text></g>
-<g><title>EQ-2 (dv-034)</title><rect x="32.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2151.0" font-size="12.5" fill="#B4B2A9">EQ-2</text></g>
-<g><title>EQ-5 (dv-035)</title><rect x="257.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2151.0" font-size="12.5" fill="#B4B2A9">EQ-5</text></g>
-<g><title>EQ-DJ (dv-036)</title><rect x="482.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2151.0" font-size="12.5" fill="#B4B2A9">EQ-DJ</text></g>
-<g><title>Echo (dv-037)</title><rect x="707.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2151.0" font-size="12.5" fill="#B4B2A9">Echo</text></g>
-<g><title>FM-4 (dv-038)</title><rect x="932.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2151.0" font-size="12.5" fill="#B4B2A9">FM-4</text></g>
-<g><title>FX Grid (dv-039)</title><rect x="1157.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2151.0" font-size="12.5" fill="#B4B2A9">FX Grid</text></g>
-<g><title>FX Layer (dv-040)</title><rect x="32.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2177.0" font-size="12.5" fill="#B4B2A9">FX Layer</text></g>
-<g><title>FX Selector (dv-041)</title><rect x="257.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2177.0" font-size="12.5" fill="#B4B2A9">FX Selector</text></g>
-<g><title>Freq Shifter (dv-046)</title><rect x="482.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2177.0" font-size="12.5" fill="#B4B2A9">Freq Shifter</text></g>
-<g><title>Freq Split (dv-047)</title><rect x="707.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2177.0" font-size="12.5" fill="#B4B2A9">Freq Split</text></g>
-<g><title>Gate (dv-048)</title><rect x="932.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2177.0" font-size="12.5" fill="#B4B2A9">Gate</text></g>
-<g><title>HW CV Instrument (dv-049)</title><rect x="1157.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2177.0" font-size="12.5" fill="#B4B2A9">HW CV Instrument</text></g>
-<g><title>HW CV Out (dv-050)</title><rect x="32.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW CV Out</text></g>
-<g><title>HW Clock Out (dv-051)</title><rect x="257.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW Clock Out</text></g>
-<g><title>HW FX (dv-052)</title><rect x="482.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW FX</text></g>
-<g><title>HW Instrument (dv-053)</title><rect x="707.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW Instrument</text></g>
-<g><title>Harmonic Split (dv-054)</title><rect x="932.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2203.0" font-size="12.5" fill="#B4B2A9">Harmonic Split</text></g>
-<g><title>Harmonize (dv-055)</title><rect x="1157.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2203.0" font-size="12.5" fill="#B4B2A9">Harmonize</text></g>
-<g><title>Humanize (dv-056)</title><rect x="32.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Humanize</text></g>
-<g><title>Instrument Layer (dv-057)</title><rect x="257.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Instrument Layer</text></g>
-<g><title>Instrument Selector (dv-058)</title><rect x="482.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Instrument Selector</text></g>
-<g><title>Key Filter (dv-059)</title><rect x="707.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Key Filter</text></g>
-<g><title>LFO MOD (dv-060)</title><rect x="932.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2229.0" font-size="12.5" fill="#B4B2A9">LFO MOD</text></g>
-<g><title>Ladder (dv-061)</title><rect x="1157.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Ladder</text></g>
-<g><title>Latch (dv-062)</title><rect x="32.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Latch</text></g>
-<g><title>Loud Split (dv-063)</title><rect x="257.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Loud Split</text></g>
-<g><title>MIDI CC (dv-064)</title><rect x="482.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2255.0" font-size="12.5" fill="#B4B2A9">MIDI CC</text></g>
-<g><title>MIDI Program Change (dv-065)</title><rect x="707.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2255.0" font-size="12.5" fill="#B4B2A9">MIDI Program Change</text></g>
-<g><title>MIDI Song Select (dv-066)</title><rect x="932.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2255.0" font-size="12.5" fill="#B4B2A9">MIDI Song Select</text></g>
-<g><title>Micro-pitch (dv-067)</title><rect x="1157.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Micro-pitch</text></g>
-<g><title>Mid-Side Split (dv-068)</title><rect x="32.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Mid-Side Split</text></g>
-<g><title>Multi-note (dv-069)</title><rect x="257.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Multi-note</text></g>
-<g><title>Multiband FX-2 (dv-070)</title><rect x="482.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Multiband FX-2</text></g>
-<g><title>Multiband FX-3 (dv-071)</title><rect x="707.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Multiband FX-3</text></g>
-<g><title>Note Delay (dv-072)</title><rect x="932.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Note Delay</text></g>
-<g><title>Note FX Layer (dv-073)</title><rect x="1157.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Note FX Layer</text></g>
-<g><title>Note FX Selector (dv-074)</title><rect x="32.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note FX Selector</text></g>
-<g><title>Note Filter (dv-075)</title><rect x="257.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Filter</text></g>
-<g><title>Note Grid (dv-076)</title><rect x="482.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Grid</text></g>
-<g><title>Note Length (dv-077)</title><rect x="707.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Length</text></g>
-<g><title>Note MOD (dv-078)</title><rect x="932.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note MOD</text></g>
-<g><title>Note Receiver (dv-079)</title><rect x="1157.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Receiver</text></g>
-<g><title>Note Repeats (dv-080)</title><rect x="32.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note Repeats</text></g>
-<g><title>Note Transpose (dv-081)</title><rect x="257.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note Transpose</text></g>
-<g><title>Organ (dv-082)</title><rect x="482.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Organ</text></g>
-<g><title>Oscilloscope (dv-083)</title><rect x="707.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Oscilloscope</text></g>
-<g><title>Peak Limiter (dv-084)</title><rect x="932.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Peak Limiter</text></g>
-<g><title>Phase-4 (dv-085)</title><rect x="1157.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Phase-4</text></g>
-<g><title>Pitch Shifter (dv-088)</title><rect x="32.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Pitch Shifter</text></g>
-<g><title>Polysynth (dv-091)</title><rect x="257.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Polysynth</text></g>
-<g><title>Quantize (dv-092)</title><rect x="482.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Quantize</text></g>
-<g><title>Randomize (dv-093)</title><rect x="707.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Randomize</text></g>
-<g><title>Replacer (dv-094)</title><rect x="932.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Replacer</text></g>
-<g><title>Resonator Bank (dv-095)</title><rect x="1157.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Resonator Bank</text></g>
-<g><title>Reverb (dv-096)</title><rect x="32.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Reverb</text></g>
-<g><title>Ricochet (dv-097)</title><rect x="257.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Ricochet</text></g>
-<g><title>Ring-Mod (dv-098)</title><rect x="482.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Ring-Mod</text></g>
-<g><title>Rotary (dv-099)</title><rect x="707.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Rotary</text></g>
-<g><title>Saturator (dv-101)</title><rect x="932.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Saturator</text></g>
-<g><title>Spectrum (dv-102)</title><rect x="1157.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Spectrum</text></g>
-<g><title>Step MOD (dv-103)</title><rect x="32.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Step MOD</text></g>
-<g><title>Stereo Split (dv-104)</title><rect x="257.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Stereo Split</text></g>
-<g><title>Strum (dv-105)</title><rect x="482.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Strum</text></g>
-<g><title>Sweep (dv-106)</title><rect x="707.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Sweep</text></g>
-<g><title>Test Tone (dv-107)</title><rect x="932.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Test Tone</text></g>
-<g><title>Time Shift (dv-108)</title><rect x="1157.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Time Shift</text></g>
-<g><title>Tool (dv-109)</title><rect x="32.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Tool</text></g>
-<g><title>Transient Control (dv-110)</title><rect x="257.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Transient Control</text></g>
-<g><title>Transient Split (dv-111)</title><rect x="482.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Transient Split</text></g>
-<g><title>Transpose Map (dv-112)</title><rect x="707.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Transpose Map</text></g>
-<g><title>Treemonster (dv-113)</title><rect x="932.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Treemonster</text></g>
-<g><title>Tremolo (dv-114)</title><rect x="1157.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Tremolo</text></g>
-<g><title>Velocity Curve (dv-115)</title><rect x="32.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Velocity Curve</text></g>
-<g><title>Vocoder (dv-116)</title><rect x="257.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Vocoder</text></g>
-<g><title>XY FX (dv-117)</title><rect x="482.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2463.0" font-size="12.5" fill="#B4B2A9">XY FX</text></g>
-<g><title>XY Instrument (dv-118)</title><rect x="707.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2463.0" font-size="12.5" fill="#B4B2A9">XY Instrument</text></g>
-<g><title>Compressor+ (dv-119)</title><rect x="932.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Compressor+</text></g>
-<g><title>Focus (dv-120)</title><rect x="1157.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Focus</text></g>
-<g><title>Freq Shifter+ (dv-121)</title><rect x="32.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Freq Shifter+</text></g>
-<g><title>Over (dv-122)</title><rect x="257.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Over</text></g>
-<g><title>Sculpt (dv-123)</title><rect x="482.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Sculpt</text></g>
-<g><title>Stepwise (dv-124)</title><rect x="707.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Stepwise</text></g>
-<g><title>Tilt (dv-125)</title><rect x="932.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Tilt</text></g>
-<g><title>v0 Cymbal (dv-126)</title><rect x="1157.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2489.0" font-size="12.5" fill="#B4B2A9">v0 Cymbal</text></g>
-<g><title>v0 Hat (dv-127)</title><rect x="32.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Hat</text></g>
-<g><title>v0 Kick (dv-128)</title><rect x="257.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Kick</text></g>
-<g><title>v0 Snare (dv-129)</title><rect x="482.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Snare</text></g>
-<g><title>v0 Tom (dv-130)</title><rect x="707.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Tom</text></g>
-<g><title>v0 Zap Kick (dv-131)</title><rect x="932.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Zap Kick</text></g>
-<g><title>v8 Clap (dv-132)</title><rect x="1157.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v8 Clap</text></g>
-<g><title>v8 Claves (dv-133)</title><rect x="32.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Claves</text></g>
-<g><title>v8 Cowbell (dv-134)</title><rect x="257.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Cowbell</text></g>
-<g><title>v8 Cymbal (dv-135)</title><rect x="482.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Cymbal</text></g>
-<g><title>v8 Hat (dv-136)</title><rect x="707.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Hat</text></g>
-<g><title>v8 Kick (dv-137)</title><rect x="932.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Kick</text></g>
-<g><title>v8 Maracas (dv-138)</title><rect x="1157.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Maracas</text></g>
-<g><title>v8 Rimshot (dv-139)</title><rect x="32.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v8 Rimshot</text></g>
-<g><title>v8 Snare (dv-140)</title><rect x="257.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v8 Snare</text></g>
-<g><title>v8 Tom (dv-141)</title><rect x="482.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v8 Tom</text></g>
-<g><title>v9 Clap (dv-142)</title><rect x="707.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Clap</text></g>
-<g><title>v9 Crash (dv-143)</title><rect x="932.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Crash</text></g>
-<g><title>v9 Hat Closed (dv-144)</title><rect x="1157.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Hat Closed</text></g>
-<g><title>v9 Hat Open (dv-145)</title><rect x="32.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Hat Open</text></g>
-<g><title>v9 Kick (dv-146)</title><rect x="257.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Kick</text></g>
-<g><title>v9 Ride (dv-147)</title><rect x="482.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Ride</text></g>
-<g><title>v9 Rimshot (dv-148)</title><rect x="707.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Rimshot</text></g>
-<g><title>v9 Snare (dv-149)</title><rect x="932.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Snare</text></g>
-<g><title>v9 Tom (dv-150)</title><rect x="1157.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Tom</text></g>
+<g><title>Bit-8 (dv-006) — crates/hikaru_dsp/src/effects/bit8.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="32.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Bit-8</text></g>
+<g><title>Chain (dv-008) — crates/hikaru_gui/src/views/dsp_rack.rs</title><rect x="257.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Chain</text></g>
+<g><title>DC Offset (dv-016) — crates/hikaru_dsp/src/effects/dc_offset.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="482.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="1953.0" font-size="12.5" fill="#F1EFE8">DC Offset</text></g>
+<g><title>Drum Machine (dv-024) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opendms/mod.rs</title><rect x="707.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Drum Machine</text></g>
+<g><title>Dual Pan (dv-025) — crates/hikaru_dsp/src/effects/dual_pan.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="932.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Dual Pan</text></g>
+<g><title>EQ+ (dv-033) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openeq3/mod.rs</title><rect x="1157.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="1953.0" font-size="12.5" fill="#F1EFE8">EQ+</text></g>
+<g><title>Filter (dv-042) — crates/hikaru_dsp/src/effects/filter.rs</title><rect x="32.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Filter</text></g>
+<g><title>Flanger (dv-044) — crates/hikaru_dsp/src/effects/flanger.rs</title><rect x="257.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Flanger</text></g>
+<g><title>Phaser (dv-086) — crates/hikaru_dsp/src/effects/phaser.rs</title><rect x="482.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Phaser</text></g>
+<g><title>Poly Grid (dv-089) — crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs</title><rect x="707.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Poly Grid</text></g>
+<g><title>Polymer (dv-090) — crates/hikaru_dsp/src/synth/open_poly.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openpoly/open_poly.rs</title><rect x="932.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Polymer</text></g>
+<g><title>Ring-Mod (dv-098) — crates/hikaru_dsp/src/effects/ring_mod.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="1157.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Ring-Mod</text></g>
+<g><title>Sampler (dv-100) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_sampler/sampler_editor.rs</title><rect x="32.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Sampler</text></g>
+<g><title>Test Tone (dv-107) — crates/hikaru_dsp/src/effects/test_tone.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="257.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Test Tone</text></g>
+<g><title>Time Shift (dv-108) — crates/hikaru_dsp/src/effects/time_shift.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="482.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Time Shift</text></g>
+<g><title>Tool (dv-109) — crates/hikaru_dsp/src/effects/tool.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="707.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Tool</text></g>
+<g><title>Tremolo (dv-114) — crates/hikaru_dsp/src/effects/tremolo.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="932.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Tremolo</text></g>
+<g><title>Amp (dv-001)</title><rect x="32.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Amp</text></g>
+<g><title>Arpeggiator (dv-002)</title><rect x="257.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Arpeggiator</text></g>
+<g><title>Audio MOD (dv-003)</title><rect x="482.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Audio MOD</text></g>
+<g><title>Audio Receiver (dv-004)</title><rect x="707.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Audio Receiver</text></g>
+<g><title>Bend (dv-005)</title><rect x="932.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Bend</text></g>
+<g><title>Blur (dv-007)</title><rect x="1157.0" y="2038.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2047.0" font-size="12.5" fill="#B4B2A9">Blur</text></g>
+<g><title>Channel Filter (dv-009)</title><rect x="32.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Channel Filter</text></g>
+<g><title>Channel Map (dv-010)</title><rect x="257.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Channel Map</text></g>
+<g><title>Chorus (dv-011)</title><rect x="482.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Chorus</text></g>
+<g><title>Chorus+ (dv-012)</title><rect x="707.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Chorus+</text></g>
+<g><title>Comb (dv-013)</title><rect x="932.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Comb</text></g>
+<g><title>Compressor (dv-014)</title><rect x="1157.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Compressor</text></g>
+<g><title>Convolution (dv-015)</title><rect x="32.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Convolution</text></g>
+<g><title>De-Esser (dv-017)</title><rect x="257.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2099.0" font-size="12.5" fill="#B4B2A9">De-Esser</text></g>
+<g><title>Delay+ (dv-018)</title><rect x="482.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Delay+</text></g>
+<g><title>Delay-1 (dv-019)</title><rect x="707.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Delay-1</text></g>
+<g><title>Delay-2 (dv-020)</title><rect x="932.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Delay-2</text></g>
+<g><title>Delay-4 (dv-021)</title><rect x="1157.0" y="2090.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2099.0" font-size="12.5" fill="#B4B2A9">Delay-4</text></g>
+<g><title>Distortion (dv-022)</title><rect x="32.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2125.0" font-size="12.5" fill="#B4B2A9">Distortion</text></g>
+<g><title>Dribble (dv-023)</title><rect x="257.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2125.0" font-size="12.5" fill="#B4B2A9">Dribble</text></g>
+<g><title>Dynamics (dv-026)</title><rect x="482.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2125.0" font-size="12.5" fill="#B4B2A9">Dynamics</text></g>
+<g><title>v1 Clap (dv-027)</title><rect x="707.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Clap</text></g>
+<g><title>v1 Cowbell (dv-028)</title><rect x="932.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Cowbell</text></g>
+<g><title>v1 Hat (dv-029)</title><rect x="1157.0" y="2116.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2125.0" font-size="12.5" fill="#B4B2A9">v1 Hat</text></g>
+<g><title>v1 Kick (dv-030)</title><rect x="32.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2151.0" font-size="12.5" fill="#B4B2A9">v1 Kick</text></g>
+<g><title>v1 Snare (dv-031)</title><rect x="257.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2151.0" font-size="12.5" fill="#B4B2A9">v1 Snare</text></g>
+<g><title>v1 Tom (dv-032)</title><rect x="482.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2151.0" font-size="12.5" fill="#B4B2A9">v1 Tom</text></g>
+<g><title>EQ-2 (dv-034)</title><rect x="707.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2151.0" font-size="12.5" fill="#B4B2A9">EQ-2</text></g>
+<g><title>EQ-5 (dv-035)</title><rect x="932.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2151.0" font-size="12.5" fill="#B4B2A9">EQ-5</text></g>
+<g><title>EQ-DJ (dv-036)</title><rect x="1157.0" y="2142.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2151.0" font-size="12.5" fill="#B4B2A9">EQ-DJ</text></g>
+<g><title>Echo (dv-037)</title><rect x="32.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2177.0" font-size="12.5" fill="#B4B2A9">Echo</text></g>
+<g><title>FM-4 (dv-038)</title><rect x="257.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2177.0" font-size="12.5" fill="#B4B2A9">FM-4</text></g>
+<g><title>FX Grid (dv-039)</title><rect x="482.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2177.0" font-size="12.5" fill="#B4B2A9">FX Grid</text></g>
+<g><title>FX Layer (dv-040)</title><rect x="707.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2177.0" font-size="12.5" fill="#B4B2A9">FX Layer</text></g>
+<g><title>FX Selector (dv-041)</title><rect x="932.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2177.0" font-size="12.5" fill="#B4B2A9">FX Selector</text></g>
+<g><title>Freq Shifter (dv-046)</title><rect x="1157.0" y="2168.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2177.0" font-size="12.5" fill="#B4B2A9">Freq Shifter</text></g>
+<g><title>Freq Split (dv-047)</title><rect x="32.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2203.0" font-size="12.5" fill="#B4B2A9">Freq Split</text></g>
+<g><title>Gate (dv-048)</title><rect x="257.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2203.0" font-size="12.5" fill="#B4B2A9">Gate</text></g>
+<g><title>HW CV Instrument (dv-049)</title><rect x="482.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW CV Instrument</text></g>
+<g><title>HW CV Out (dv-050)</title><rect x="707.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW CV Out</text></g>
+<g><title>HW Clock Out (dv-051)</title><rect x="932.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW Clock Out</text></g>
+<g><title>HW FX (dv-052)</title><rect x="1157.0" y="2194.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2203.0" font-size="12.5" fill="#B4B2A9">HW FX</text></g>
+<g><title>HW Instrument (dv-053)</title><rect x="32.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2229.0" font-size="12.5" fill="#B4B2A9">HW Instrument</text></g>
+<g><title>Harmonic Split (dv-054)</title><rect x="257.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Harmonic Split</text></g>
+<g><title>Harmonize (dv-055)</title><rect x="482.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Harmonize</text></g>
+<g><title>Humanize (dv-056)</title><rect x="707.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Humanize</text></g>
+<g><title>Instrument Layer (dv-057)</title><rect x="932.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Instrument Layer</text></g>
+<g><title>Instrument Selector (dv-058)</title><rect x="1157.0" y="2220.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2229.0" font-size="12.5" fill="#B4B2A9">Instrument Selector</text></g>
+<g><title>Key Filter (dv-059)</title><rect x="32.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Key Filter</text></g>
+<g><title>LFO MOD (dv-060)</title><rect x="257.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2255.0" font-size="12.5" fill="#B4B2A9">LFO MOD</text></g>
+<g><title>Ladder (dv-061)</title><rect x="482.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Ladder</text></g>
+<g><title>Latch (dv-062)</title><rect x="707.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Latch</text></g>
+<g><title>Loud Split (dv-063)</title><rect x="932.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2255.0" font-size="12.5" fill="#B4B2A9">Loud Split</text></g>
+<g><title>MIDI CC (dv-064)</title><rect x="1157.0" y="2246.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2255.0" font-size="12.5" fill="#B4B2A9">MIDI CC</text></g>
+<g><title>MIDI Program Change (dv-065)</title><rect x="32.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2281.0" font-size="12.5" fill="#B4B2A9">MIDI Program Change</text></g>
+<g><title>MIDI Song Select (dv-066)</title><rect x="257.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2281.0" font-size="12.5" fill="#B4B2A9">MIDI Song Select</text></g>
+<g><title>Micro-pitch (dv-067)</title><rect x="482.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Micro-pitch</text></g>
+<g><title>Mid-Side Split (dv-068)</title><rect x="707.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Mid-Side Split</text></g>
+<g><title>Multi-note (dv-069)</title><rect x="932.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Multi-note</text></g>
+<g><title>Multiband FX-2 (dv-070)</title><rect x="1157.0" y="2272.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2281.0" font-size="12.5" fill="#B4B2A9">Multiband FX-2</text></g>
+<g><title>Multiband FX-3 (dv-071)</title><rect x="32.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Multiband FX-3</text></g>
+<g><title>Note Delay (dv-072)</title><rect x="257.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Delay</text></g>
+<g><title>Note FX Layer (dv-073)</title><rect x="482.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note FX Layer</text></g>
+<g><title>Note FX Selector (dv-074)</title><rect x="707.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note FX Selector</text></g>
+<g><title>Note Filter (dv-075)</title><rect x="932.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Filter</text></g>
+<g><title>Note Grid (dv-076)</title><rect x="1157.0" y="2298.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2307.0" font-size="12.5" fill="#B4B2A9">Note Grid</text></g>
+<g><title>Note Length (dv-077)</title><rect x="32.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note Length</text></g>
+<g><title>Note MOD (dv-078)</title><rect x="257.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note MOD</text></g>
+<g><title>Note Receiver (dv-079)</title><rect x="482.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note Receiver</text></g>
+<g><title>Note Repeats (dv-080)</title><rect x="707.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note Repeats</text></g>
+<g><title>Note Transpose (dv-081)</title><rect x="932.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Note Transpose</text></g>
+<g><title>Organ (dv-082)</title><rect x="1157.0" y="2324.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2333.0" font-size="12.5" fill="#B4B2A9">Organ</text></g>
+<g><title>Oscilloscope (dv-083)</title><rect x="32.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Oscilloscope</text></g>
+<g><title>Peak Limiter (dv-084)</title><rect x="257.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Peak Limiter</text></g>
+<g><title>Phase-4 (dv-085)</title><rect x="482.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Phase-4</text></g>
+<g><title>Pitch Shifter (dv-088)</title><rect x="707.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Pitch Shifter</text></g>
+<g><title>Polysynth (dv-091)</title><rect x="932.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Polysynth</text></g>
+<g><title>Quantize (dv-092)</title><rect x="1157.0" y="2350.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2359.0" font-size="12.5" fill="#B4B2A9">Quantize</text></g>
+<g><title>Randomize (dv-093)</title><rect x="32.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Randomize</text></g>
+<g><title>Replacer (dv-094)</title><rect x="257.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Replacer</text></g>
+<g><title>Resonator Bank (dv-095)</title><rect x="482.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Resonator Bank</text></g>
+<g><title>Reverb (dv-096)</title><rect x="707.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Reverb</text></g>
+<g><title>Ricochet (dv-097)</title><rect x="932.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Ricochet</text></g>
+<g><title>Rotary (dv-099)</title><rect x="1157.0" y="2376.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2385.0" font-size="12.5" fill="#B4B2A9">Rotary</text></g>
+<g><title>Saturator (dv-101)</title><rect x="32.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Saturator</text></g>
+<g><title>Spectrum (dv-102)</title><rect x="257.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Spectrum</text></g>
+<g><title>Step MOD (dv-103)</title><rect x="482.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Step MOD</text></g>
+<g><title>Stereo Split (dv-104)</title><rect x="707.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Stereo Split</text></g>
+<g><title>Strum (dv-105)</title><rect x="932.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Strum</text></g>
+<g><title>Sweep (dv-106)</title><rect x="1157.0" y="2402.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2411.0" font-size="12.5" fill="#B4B2A9">Sweep</text></g>
+<g><title>Transient Control (dv-110)</title><rect x="32.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Transient Control</text></g>
+<g><title>Transient Split (dv-111)</title><rect x="257.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Transient Split</text></g>
+<g><title>Transpose Map (dv-112)</title><rect x="482.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Transpose Map</text></g>
+<g><title>Treemonster (dv-113)</title><rect x="707.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Treemonster</text></g>
+<g><title>Velocity Curve (dv-115)</title><rect x="932.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Velocity Curve</text></g>
+<g><title>Vocoder (dv-116)</title><rect x="1157.0" y="2428.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2437.0" font-size="12.5" fill="#B4B2A9">Vocoder</text></g>
+<g><title>XY FX (dv-117)</title><rect x="32.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2463.0" font-size="12.5" fill="#B4B2A9">XY FX</text></g>
+<g><title>XY Instrument (dv-118)</title><rect x="257.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2463.0" font-size="12.5" fill="#B4B2A9">XY Instrument</text></g>
+<g><title>Compressor+ (dv-119)</title><rect x="482.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Compressor+</text></g>
+<g><title>Focus (dv-120)</title><rect x="707.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Focus</text></g>
+<g><title>Freq Shifter+ (dv-121)</title><rect x="932.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Freq Shifter+</text></g>
+<g><title>Over (dv-122)</title><rect x="1157.0" y="2454.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2463.0" font-size="12.5" fill="#B4B2A9">Over</text></g>
+<g><title>Sculpt (dv-123)</title><rect x="32.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Sculpt</text></g>
+<g><title>Stepwise (dv-124)</title><rect x="257.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Stepwise</text></g>
+<g><title>Tilt (dv-125)</title><rect x="482.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2489.0" font-size="12.5" fill="#B4B2A9">Tilt</text></g>
+<g><title>v0 Cymbal (dv-126)</title><rect x="707.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2489.0" font-size="12.5" fill="#B4B2A9">v0 Cymbal</text></g>
+<g><title>v0 Hat (dv-127)</title><rect x="932.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2489.0" font-size="12.5" fill="#B4B2A9">v0 Hat</text></g>
+<g><title>v0 Kick (dv-128)</title><rect x="1157.0" y="2480.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2489.0" font-size="12.5" fill="#B4B2A9">v0 Kick</text></g>
+<g><title>v0 Snare (dv-129)</title><rect x="32.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Snare</text></g>
+<g><title>v0 Tom (dv-130)</title><rect x="257.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Tom</text></g>
+<g><title>v0 Zap Kick (dv-131)</title><rect x="482.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v0 Zap Kick</text></g>
+<g><title>v8 Clap (dv-132)</title><rect x="707.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v8 Clap</text></g>
+<g><title>v8 Claves (dv-133)</title><rect x="932.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v8 Claves</text></g>
+<g><title>v8 Cowbell (dv-134)</title><rect x="1157.0" y="2506.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2515.0" font-size="12.5" fill="#B4B2A9">v8 Cowbell</text></g>
+<g><title>v8 Cymbal (dv-135)</title><rect x="32.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Cymbal</text></g>
+<g><title>v8 Hat (dv-136)</title><rect x="257.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Hat</text></g>
+<g><title>v8 Kick (dv-137)</title><rect x="482.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Kick</text></g>
+<g><title>v8 Maracas (dv-138)</title><rect x="707.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Maracas</text></g>
+<g><title>v8 Rimshot (dv-139)</title><rect x="932.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Rimshot</text></g>
+<g><title>v8 Snare (dv-140)</title><rect x="1157.0" y="2532.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2541.0" font-size="12.5" fill="#B4B2A9">v8 Snare</text></g>
+<g><title>v8 Tom (dv-141)</title><rect x="32.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v8 Tom</text></g>
+<g><title>v9 Clap (dv-142)</title><rect x="257.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Clap</text></g>
+<g><title>v9 Crash (dv-143)</title><rect x="482.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Crash</text></g>
+<g><title>v9 Hat Closed (dv-144)</title><rect x="707.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Hat Closed</text></g>
+<g><title>v9 Hat Open (dv-145)</title><rect x="932.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="948.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Hat Open</text></g>
+<g><title>v9 Kick (dv-146)</title><rect x="1157.0" y="2558.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="1173.0" y="2567.0" font-size="12.5" fill="#B4B2A9">v9 Kick</text></g>
+<g><title>v9 Ride (dv-147)</title><rect x="32.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Ride</text></g>
+<g><title>v9 Rimshot (dv-148)</title><rect x="257.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Rimshot</text></g>
+<g><title>v9 Snare (dv-149)</title><rect x="482.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Snare</text></g>
+<g><title>v9 Tom (dv-150)</title><rect x="707.0" y="2584.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="723.0" y="2593.0" font-size="12.5" fill="#B4B2A9">v9 Tom</text></g>
 <text x="32" y="2644.0" font-size="15" font-weight="600" fill="#F1EFE8">Modulators</text>
 <text x="1368" y="2644.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">43 de 43 · 100 %</text>
 <rect x="32" y="2653.0" width="1336" height="4" rx="2" fill="#2C2C2A"/>
@@ -923,5 +923,5 @@
 <g><title>New project from template workflow (bt-04)</title><rect x="842.0" y="6176.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="858.0" y="6185.0" font-size="12.5" fill="#F1EFE8">New project from template workflow</text></g>
 <line x1="32" y1="6226.0" x2="1368" y2="6226.0" stroke="#5F5E5A" stroke-opacity="0.35" stroke-width="1"/>
 <text x="32" y="6248.0" font-size="11" fill="#B4B2A9">Fuente: docs/bitwig-parity/features_bitwig.json · generado por generate_status.py · auditoría 2026-11-22 · referencia Bitwig Studio 5.3.13 (rev 161983)</text>
-<text x="1368" y="6248.0" font-size="11" text-anchor="end" fill="#B4B2A9">318 hechas · 17 en progreso · 352 pendientes</text>
+<text x="1368" y="6248.0" font-size="11" text-anchor="end" fill="#B4B2A9">326 hechas · 17 en progreso · 344 pendientes</text>
 </svg>
