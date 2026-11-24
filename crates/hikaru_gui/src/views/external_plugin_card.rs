@@ -19,7 +19,9 @@ use crate::theme;
 use crate::ui::{fonts, icons};
 use crate::views::automation_editor;
 use crate::views::dsp_rack;
-use crate::views::external_plugins_settings::{capture_host_parent, slot_window_key};
+use crate::views::external_plugins_settings::{
+    capture_host_parent, slot_window_key, wet_fx_window_key,
+};
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MOD_ARROW_CYAN};
 use crate::views::mixer::{DspSlot, ExternalParamsStatus};
 use crate::views::remote_controls::{self, RemoteTarget, REMOTES_BODY_WIDTH};
@@ -39,6 +41,97 @@ const ROW_BG_ODD: Color32 = Color32::from_rgb(0x23, 0x25, 0x2B);
 const ROW_HOVER_BG: Color32 = Color32::from_rgb(0x30, 0x33, 0x3B);
 const DIVIDER_DARK: Color32 = Color32::from_rgb(0x1A, 0x1C, 0x20);
 
+/// Identifica si la tarjeta de plugin externo reside en la cadena principal del rack
+/// o anidada dentro de `Wet FX` (p. ej. `Hikaru Open8-Bit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ExternalSlotTarget {
+    TopLevel {
+        track_idx: usize,
+        slot_idx: usize,
+    },
+    Bit8WetFx {
+        track_idx: usize,
+        parent_slot_idx: usize,
+        wet_idx: usize,
+    },
+}
+
+impl ExternalSlotTarget {
+    fn track_idx(self) -> usize {
+        match self {
+            Self::TopLevel { track_idx, .. } | Self::Bit8WetFx { track_idx, .. } => track_idx,
+        }
+    }
+
+    fn removal_index(self) -> usize {
+        match self {
+            Self::TopLevel { slot_idx, .. } => slot_idx,
+            Self::Bit8WetFx { wet_idx, .. } => wet_idx,
+        }
+    }
+
+    fn top_level_slot(self) -> Option<(usize, usize)> {
+        match self {
+            Self::TopLevel {
+                track_idx,
+                slot_idx,
+            } => Some((track_idx, slot_idx)),
+            Self::Bit8WetFx { .. } => None,
+        }
+    }
+
+    fn window_key(self) -> String {
+        match self {
+            Self::TopLevel {
+                track_idx,
+                slot_idx,
+            } => slot_window_key(track_idx, slot_idx),
+            Self::Bit8WetFx {
+                track_idx,
+                parent_slot_idx,
+                wet_idx,
+            } => wet_fx_window_key(track_idx, parent_slot_idx, wet_idx),
+        }
+    }
+
+    fn slot_cloned(self, app: &AppState) -> Option<DspSlot> {
+        match self {
+            Self::TopLevel {
+                track_idx,
+                slot_idx,
+            } => app
+                .current_tracks()
+                .get(track_idx)
+                .and_then(|t| t.effects.get(slot_idx))
+                .cloned(),
+            Self::Bit8WetFx {
+                track_idx,
+                parent_slot_idx,
+                wet_idx,
+            } => app
+                .current_tracks()
+                .get(track_idx)
+                .and_then(|t| t.effects.get(parent_slot_idx))
+                .and_then(|p| p.wet_fx_chain.get(wet_idx))
+                .cloned(),
+        }
+    }
+
+    fn slot_mut(self, app: &mut AppState) -> Option<&mut DspSlot> {
+        match self {
+            Self::TopLevel {
+                track_idx,
+                slot_idx,
+            } => app.slot_mut(track_idx, slot_idx),
+            Self::Bit8WetFx {
+                track_idx,
+                parent_slot_idx,
+                wet_idx,
+            } => app.wet_fx_slot_mut(track_idx, parent_slot_idx, wet_idx),
+        }
+    }
+}
+
 /// Ancho dinámico de la tarjeta de un plugin externo VST3/CLAP según qué paneles
 /// auxiliares estén abiertos (Remotes 2×4, Device Modulator Bay y lista de parámetros).
 pub fn card_width(slot: &DspSlot, track_idx: usize, slot_idx: usize) -> f32 {
@@ -56,6 +149,16 @@ pub fn card_width(slot: &DspSlot, track_idx: usize, slot_idx: usize) -> f32 {
         EXT_PARAMS_COLLAPSED_W
     };
     w
+}
+
+/// Ancho dinámico de la tarjeta de un plugin externo VST3/CLAP anidado dentro de `Wet FX`.
+pub fn wet_fx_card_width(slot: &DspSlot) -> f32 {
+    EXT_SIDEBAR_W
+        + if slot.params_expanded {
+            EXT_PARAMS_EXPANDED_W
+        } else {
+            EXT_PARAMS_COLLAPSED_W
+        }
 }
 
 /// Dibuja el ícono cuadrado de ventana del plugin (estilo Bitwig Screenshot 4:
@@ -263,25 +366,69 @@ pub fn render_card(
     is_selected: bool,
     slot_to_remove: &mut Option<usize>,
 ) {
-    let Some(slot_snap) = app
-        .current_tracks()
-        .get(track_idx)
-        .and_then(|t| t.effects.get(slot_idx))
-        .cloned()
-    else {
+    render_card_impl(
+        ui,
+        app,
+        card_rect,
+        ExternalSlotTarget::TopLevel {
+            track_idx,
+            slot_idx,
+        },
+        is_selected,
+        slot_to_remove,
+    );
+}
+
+/// Renderiza la misma tarjeta dedicada de plugin externo VST3/CLAP dentro de la cadena
+/// anidada `Wet FX` de `Hikaru Open8-Bit` (idéntica a Bitwig Studio).
+#[allow(clippy::too_many_arguments)]
+pub fn render_wet_fx_card(
+    ui: &mut Ui,
+    app: &mut AppState,
+    card_rect: Rect,
+    track_idx: usize,
+    parent_slot_idx: usize,
+    wet_idx: usize,
+    wet_to_remove: &mut Option<usize>,
+) {
+    render_card_impl(
+        ui,
+        app,
+        card_rect,
+        ExternalSlotTarget::Bit8WetFx {
+            track_idx,
+            parent_slot_idx,
+            wet_idx,
+        },
+        false,
+        wet_to_remove,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_card_impl(
+    ui: &mut Ui,
+    app: &mut AppState,
+    card_rect: Rect,
+    target: ExternalSlotTarget,
+    is_selected: bool,
+    slot_to_remove: &mut Option<usize>,
+) {
+    let Some(slot_snap) = target.slot_cloned(app) else {
         return;
     };
     let Some(ext_desc) = slot_snap.external.clone() else {
         return;
     };
 
+    let track_idx = target.track_idx();
     let track_name = app
         .current_tracks()
         .get(track_idx)
         .map(|t| t.name.clone())
         .unwrap_or_else(|| "Track".to_string());
     let eng_track = track_idx.checked_sub(1);
-    let wkey = slot_window_key(track_idx, slot_idx);
+    let wkey = target.window_key();
     let win_open = app.plugin_settings_state.is_window_open(&wkey);
     let win_opening = app.plugin_settings_state.is_window_opening(&wkey);
     let gui_err = app.plugin_settings_state.gui_error_for(&wkey);
@@ -316,7 +463,7 @@ pub fn render_card(
     let pwr_r = Rect::from_center_size(pos2(sb_rect.center().x, sb_rect.min.y + 13.0), vec2(15.0, 15.0));
     let pwr_resp = ui.interact(
         pwr_r,
-        ui.id().with(("ext_sb_pwr", track_idx, slot_idx)),
+        ui.id().with(("ext_sb_pwr", target)),
         Sense::click(),
     );
     icons::paint_power_switch(
@@ -343,16 +490,33 @@ pub fn render_card(
     }
     if pwr_resp.on_hover_text("Device Active / Bypass").clicked() {
         let next_active = !slot_snap.active;
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+        if let Some(s) = target.slot_mut(app) {
             s.active = next_active;
         }
         if let Some(et) = eng_track {
-            app.audio_proxy.send(GuiCommand::SetExternalPluginActive {
-                track_idx: et,
-                slot_idx,
-                active: next_active,
-            });
+            match target {
+                ExternalSlotTarget::TopLevel { slot_idx, .. } => {
+                    app.audio_proxy.send(GuiCommand::SetExternalPluginActive {
+                        track_idx: et,
+                        slot_idx,
+                        active: next_active,
+                    });
+                }
+                ExternalSlotTarget::Bit8WetFx {
+                    parent_slot_idx,
+                    wet_idx,
+                    ..
+                } => {
+                    app.audio_proxy.send(GuiCommand::SetBit8WetFxActive {
+                        track_idx: et,
+                        slot_idx: parent_slot_idx,
+                        wet_idx,
+                        active: next_active,
+                    });
+                }
+            }
         }
+        app.project_dirty = true;
     }
 
     // 1b. Preset / Plugin Menu folder icon
@@ -360,7 +524,7 @@ pub fn render_card(
     let fld_resp = ui
         .interact(
             fld_r,
-            ui.id().with(("ext_sb_fld", track_idx, slot_idx)),
+            ui.id().with(("ext_sb_fld", target)),
             Sense::click(),
         )
         .on_hover_text("Plug-in Options & Presets");
@@ -378,7 +542,7 @@ pub fn render_card(
     if fld_resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    let menu_popup_id = ui.id().with(("ext_sb_menu", track_idx, slot_idx));
+    let menu_popup_id = ui.id().with(("ext_sb_menu", target));
     if fld_resp.clicked() {
         ui.memory_mut(|m| m.toggle_popup(menu_popup_id));
     }
@@ -453,7 +617,7 @@ pub fn render_card(
     );
     let title_resp = ui.interact(
         title_r,
-        ui.id().with(("ext_sb_title", track_idx, slot_idx)),
+        ui.id().with(("ext_sb_title", target)),
         Sense::click(),
     );
     paint_rotated_title(
@@ -470,7 +634,16 @@ pub fn render_card(
         },
     );
     if title_resp.clicked() {
-        app.selected_slot_index = slot_idx;
+        match target {
+            ExternalSlotTarget::TopLevel { slot_idx, .. } => {
+                app.selected_slot_index = slot_idx;
+            }
+            ExternalSlotTarget::Bit8WetFx {
+                parent_slot_idx, ..
+            } => {
+                app.selected_slot_index = parent_slot_idx;
+            }
+        }
         app.matrix_state.selected_scene = None;
     }
 
@@ -484,7 +657,7 @@ pub fn render_card(
     );
     let win_resp = ui.interact(
         win_btn_r,
-        ui.id().with(("ext_sb_win", track_idx, slot_idx)),
+        ui.id().with(("ext_sb_win", target)),
         Sense::click(),
     );
     paint_plugin_window_icon(
@@ -525,20 +698,21 @@ pub fn render_card(
     );
     let rem_resp = ui.interact(
         rem_btn_r,
-        ui.id().with(("ext_sb_rem", track_idx, slot_idx)),
+        ui.id().with(("ext_sb_rem", target)),
         Sense::click(),
     );
+    let remotes_open = target.top_level_slot().is_some() && slot_snap.remotes.remotes_open;
     remote_controls::paint_remote_toggle_icon(
         ui.painter(),
         rem_btn_r.center(),
-        slot_snap.remotes.remotes_open,
+        remotes_open,
         rem_resp.hovered(),
     );
     if rem_resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         app.footer_context_help = Some((
             "SHOW REMOTE CONTROLS".to_string(),
-            if slot_snap.remotes.remotes_open {
+            if remotes_open {
                 "On".to_string()
             } else {
                 "Off".to_string()
@@ -547,8 +721,10 @@ pub fn render_card(
         app.footer_context_cues = vec![("CLICK".to_string(), "Toggle".to_string())];
     }
     if rem_resp.on_hover_text("Show / Hide Device Remote Controls").clicked() {
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
-            s.remotes.remotes_open = !s.remotes.remotes_open;
+        if let Some((tr, sl)) = target.top_level_slot() {
+            if let Some(s) = app.slot_mut(tr, sl) {
+                s.remotes.remotes_open = !s.remotes.remotes_open;
+            }
         }
     }
 
@@ -558,20 +734,21 @@ pub fn render_card(
     );
     let mod_resp = ui.interact(
         mod_btn_r,
-        ui.id().with(("ext_sb_mod", track_idx, slot_idx)),
+        ui.id().with(("ext_sb_mod", target)),
         Sense::click(),
     );
+    let modulators_open = target.top_level_slot().is_some() && slot_snap.modulators_open;
     remote_controls::paint_mod_toggle_icon(
         ui.painter(),
         mod_btn_r.center(),
-        slot_snap.modulators_open,
+        modulators_open,
         mod_resp.hovered(),
     );
     if mod_resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         app.footer_context_help = Some((
             "SHOW MODULATORS".to_string(),
-            if slot_snap.modulators_open {
+            if modulators_open {
                 "On".to_string()
             } else {
                 "Off".to_string()
@@ -580,9 +757,11 @@ pub fn render_card(
         app.footer_context_cues = vec![("CLICK".to_string(), "Toggle".to_string())];
     }
     if mod_resp.on_hover_text("Show / Hide Device Modulators").clicked() {
-        hikaru_openmodulation::ensure_empty_bay_for_slot(track_idx, slot_idx);
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
-            s.modulators_open = !s.modulators_open;
+        if let Some((tr, sl)) = target.top_level_slot() {
+            hikaru_openmodulation::ensure_empty_bay_for_slot(tr, sl);
+            if let Some(s) = app.slot_mut(tr, sl) {
+                s.modulators_open = !s.modulators_open;
+            }
         }
     }
 
@@ -592,10 +771,20 @@ pub fn render_card(
             app.plugin_settings_state.close_window(&wkey);
         } else {
             let parent = capture_host_parent();
-            let tap_key = eng_track
-                .map(|et| (et, slot_idx))
-                .unwrap_or(hikaru_plugin_host::tap::NO_SLOT);
-            let title = format!("{} / {}", track_name, slot_snap.name);
+            let tap_key = match target {
+                ExternalSlotTarget::TopLevel { slot_idx, .. } => eng_track
+                    .map(|et| (et, slot_idx))
+                    .unwrap_or(hikaru_plugin_host::tap::NO_SLOT),
+                ExternalSlotTarget::Bit8WetFx { .. } => hikaru_plugin_host::tap::NO_SLOT,
+            };
+            let title = match target {
+                ExternalSlotTarget::TopLevel { .. } => {
+                    format!("{} / {}", track_name, slot_snap.name)
+                }
+                ExternalSlotTarget::Bit8WetFx { .. } => {
+                    format!("{} / Wet FX / {}", track_name, slot_snap.name)
+                }
+            };
             let initial_state = slot_snap.saved_state.clone();
             let initial_params: Vec<(u32, f32)> = if initial_state.is_some() {
                 slot_snap.rack_overrides_since_state.clone()
@@ -623,19 +812,35 @@ pub fn render_card(
     }
     if trigger_reload_engine {
         if let Some(et) = eng_track {
-            app.audio_proxy.send(GuiCommand::LoadExternalPlugin {
-                track_idx: et,
-                slot_idx,
-                descriptor: ext_desc.clone(),
-            });
-            if let Some(state) = slot_snap.saved_state.clone() {
-                app.audio_proxy.send(GuiCommand::LoadExternalPluginState {
-                    track_idx: et,
-                    slot_idx,
-                    state,
-                });
+            match target {
+                ExternalSlotTarget::TopLevel { slot_idx, .. } => {
+                    app.audio_proxy.send(GuiCommand::LoadExternalPlugin {
+                        track_idx: et,
+                        slot_idx,
+                        descriptor: ext_desc.clone(),
+                    });
+                    if let Some(state) = slot_snap.saved_state.clone() {
+                        app.audio_proxy.send(GuiCommand::LoadExternalPluginState {
+                            track_idx: et,
+                            slot_idx,
+                            state,
+                        });
+                    }
+                }
+                ExternalSlotTarget::Bit8WetFx {
+                    parent_slot_idx,
+                    wet_idx,
+                    ..
+                } => {
+                    app.audio_proxy.send(GuiCommand::LoadBit8WetExternalPlugin {
+                        track_idx: et,
+                        slot_idx: parent_slot_idx,
+                        wet_idx,
+                        descriptor: ext_desc.clone(),
+                    });
+                }
             }
-            if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+            if let Some(s) = target.slot_mut(app) {
                 s.engine_loaded = true;
                 for p in &mut s.cached_params {
                     p.pending_to_engine = true;
@@ -655,41 +860,45 @@ pub fn render_card(
     // =========================================================================
     // 2. OPTIONAL DEVICE REMOTE CONTROLS 2×4 PANEL (Screenshot 3)
     // =========================================================================
-    if slot_snap.remotes.remotes_open {
-        let rem_rect = Rect::from_min_size(
-            pos2(cursor_x, card_rect.min.y + 1.0),
-            vec2(REMOTES_BODY_WIDTH - 1.0, card_rect.height() - 2.0),
-        );
-        remote_controls::render_device_remotes_body(ui, rem_rect, app, track_idx, slot_idx);
-        ui.painter().line_segment(
-            [pos2(rem_rect.max.x, card_rect.min.y), pos2(rem_rect.max.x, card_rect.max.y)],
-            Stroke::new(1.0_f32, DIVIDER_DARK),
-        );
-        cursor_x += REMOTES_BODY_WIDTH;
+    if let Some((tr, sl)) = target.top_level_slot() {
+        if slot_snap.remotes.remotes_open {
+            let rem_rect = Rect::from_min_size(
+                pos2(cursor_x, card_rect.min.y + 1.0),
+                vec2(REMOTES_BODY_WIDTH - 1.0, card_rect.height() - 2.0),
+            );
+            remote_controls::render_device_remotes_body(ui, rem_rect, app, tr, sl);
+            ui.painter().line_segment(
+                [pos2(rem_rect.max.x, card_rect.min.y), pos2(rem_rect.max.x, card_rect.max.y)],
+                Stroke::new(1.0_f32, DIVIDER_DARK),
+            );
+            cursor_x += REMOTES_BODY_WIDTH;
+        }
     }
 
     // =========================================================================
     // 3. OPTIONAL DEVICE MODULATOR BAY (Screenshot 2: 3 stacked `+` slots)
     // =========================================================================
-    if slot_snap.modulators_open {
-        hikaru_openmodulation::ensure_empty_bay_for_slot(track_idx, slot_idx);
-        let mut request_add_modulator = false;
-        let bay_w = hikaru_openmodulation::render_device_modulator_bay(
-            ui,
-            pos2(cursor_x + 2.0, card_rect.min.y + 3.0),
-            (card_rect.height() - 6.0).max(120.0),
-            track_idx,
-            slot_idx,
-            &mut request_add_modulator,
-        );
-        if request_add_modulator {
-            app.popup_browser.open_insert_modulator(track_idx, slot_idx);
+    if let Some((tr, sl)) = target.top_level_slot() {
+        if slot_snap.modulators_open {
+            hikaru_openmodulation::ensure_empty_bay_for_slot(tr, sl);
+            let mut request_add_modulator = false;
+            let bay_w = hikaru_openmodulation::render_device_modulator_bay(
+                ui,
+                pos2(cursor_x + 2.0, card_rect.min.y + 3.0),
+                (card_rect.height() - 6.0).max(120.0),
+                tr,
+                sl,
+                &mut request_add_modulator,
+            );
+            if request_add_modulator {
+                app.popup_browser.open_insert_modulator(tr, sl);
+            }
+            cursor_x += bay_w + 2.0;
+            ui.painter().line_segment(
+                [pos2(cursor_x, card_rect.min.y), pos2(cursor_x, card_rect.max.y)],
+                Stroke::new(1.0_f32, DIVIDER_DARK),
+            );
         }
-        cursor_x += bay_w + 2.0;
-        ui.painter().line_segment(
-            [pos2(cursor_x, card_rect.min.y), pos2(cursor_x, card_rect.max.y)],
-            Stroke::new(1.0_f32, DIVIDER_DARK),
-        );
     }
 
     // =========================================================================
@@ -710,7 +919,7 @@ pub fn render_card(
         let exp_resp = ui
             .interact(
                 exp_r,
-                ui.id().with(("ext_params_expand", track_idx, slot_idx)),
+                ui.id().with(("ext_params_expand", target)),
                 Sense::click(),
             )
             .on_hover_text("Expand Public Parameters");
@@ -729,7 +938,7 @@ pub fn render_card(
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
         if exp_resp.clicked() {
-            if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+            if let Some(s) = target.slot_mut(app) {
                 s.params_expanded = true;
             }
         }
@@ -741,7 +950,7 @@ pub fn render_card(
         let close_resp = ui
             .interact(
                 close_r,
-                ui.id().with(("ext_close_collapsed", track_idx, slot_idx)),
+                ui.id().with(("ext_close_collapsed", target)),
                 Sense::click(),
             )
             .on_hover_text("Remove Plug-in (Del)");
@@ -757,7 +966,7 @@ pub fn render_card(
             1.5,
         );
         if close_resp.clicked() {
-            *slot_to_remove = Some(slot_idx);
+            *slot_to_remove = Some(target.removal_index());
         }
         return;
     }
@@ -776,7 +985,7 @@ pub fn render_card(
     let dot_resp = ui
         .interact(
             dot_btn_r,
-            ui.id().with(("ext_params_dot", track_idx, slot_idx)),
+            ui.id().with(("ext_params_dot", target)),
             Sense::click(),
         )
         .on_hover_text("Public Parameters (Click to rescan from plug-in)");
@@ -799,7 +1008,7 @@ pub fn render_card(
     let close_resp = ui
         .interact(
             close_r,
-            ui.id().with(("ext_close", track_idx, slot_idx)),
+            ui.id().with(("ext_close", target)),
             Sense::click(),
         )
         .on_hover_text("Remove Plug-in (Del)");
@@ -815,14 +1024,14 @@ pub fn render_card(
         1.5,
     );
     if close_resp.clicked() {
-        *slot_to_remove = Some(slot_idx);
+        *slot_to_remove = Some(target.removal_index());
     }
 
     let collapse_r = Rect::from_center_size(pos2(close_r.min.x - 9.0, tb_rect.center().y), vec2(14.0, 14.0));
     let collapse_resp = ui
         .interact(
             collapse_r,
-            ui.id().with(("ext_params_collapse", track_idx, slot_idx)),
+            ui.id().with(("ext_params_collapse", target)),
             Sense::click(),
         )
         .on_hover_text("Collapse Parameters Panel");
@@ -841,7 +1050,7 @@ pub fn render_card(
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     if collapse_resp.clicked() {
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+        if let Some(s) = target.slot_mut(app) {
             s.params_expanded = false;
         }
     }
@@ -869,7 +1078,7 @@ pub fn render_card(
     let clr_r = Rect::from_center_size(pos2(search_r.max.x - 7.5, search_r.center().y), vec2(11.0, 11.0));
     let clr_resp = ui.interact(
         clr_r,
-        ui.id().with(("ext_search_clr", track_idx, slot_idx)),
+        ui.id().with(("ext_search_clr", target)),
         Sense::click(),
     );
     icons::paint_icon(
@@ -896,6 +1105,7 @@ pub fn render_card(
     let te_resp = te_ui.add_sized(
         te_rect.size(),
         egui::TextEdit::singleline(&mut query)
+            .id(ui.id().with(("ext_search_te", target)))
             .frame(false)
             .hint_text("Search")
             .font(fonts::regular(9.5))
@@ -903,11 +1113,11 @@ pub fn render_card(
     );
     if clr_resp.clicked() {
         query.clear();
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+        if let Some(s) = target.slot_mut(app) {
             s.param_search.clear();
         }
     } else if te_resp.changed() {
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+        if let Some(s) = target.slot_mut(app) {
             s.param_search = query.clone();
         }
     }
@@ -922,7 +1132,7 @@ pub fn render_card(
         let err_resp = ui
             .interact(
                 err_r,
-                ui.id().with(("ext_gui_err", track_idx, slot_idx)),
+                ui.id().with(("ext_gui_err", target)),
                 Sense::click(),
             )
             .on_hover_text(format!("{err}\nClick to dismiss"));
@@ -1023,8 +1233,11 @@ pub fn render_card(
         return;
     }
 
-    let mod_mapping_src = hikaru_openmodulation::active_mapping_source_for_external(track_idx, slot_idx);
-    let remote_mapping_active = remote_controls::is_mapping_active(app);
+    let top_slot = target.top_level_slot();
+    let mod_mapping_src = top_slot.and_then(|(tr, sl)| {
+        hikaru_openmodulation::active_mapping_source_for_external(tr, sl)
+    });
+    let remote_mapping_active = top_slot.is_some() && remote_controls::is_mapping_active(app);
 
     let mut pending_value_updates: Vec<(usize, f32)> = Vec::new();
     let mut pending_remote_pick: Option<RemoteTarget> = None;
@@ -1034,7 +1247,7 @@ pub fn render_card(
 
     let row_h = 30.0_f32;
     egui::ScrollArea::vertical()
-        .id_salt(("ext_params_scroll", track_idx, slot_idx))
+        .id_salt(("ext_params_scroll", target))
         .auto_shrink([false; 2])
         .show_rows(&mut list_ui, row_h, filtered_indices.len(), |ui, row_range| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -1045,11 +1258,15 @@ pub fn render_card(
                 let param_id = p_state.info.id;
                 let base_val = p_state.value.clamp(0.0, 1.0);
                 let val_text = p_state.display();
-                let active_mod =
-                    hikaru_openmodulation::get_external_param_modulation(track_idx, slot_idx, param_id);
-                let map_amt = mod_mapping_src
-                    .map(|src| hikaru_openmodulation::get_external_route_amount(src, slot_idx, param_id))
-                    .unwrap_or(0.0);
+                let active_mod = top_slot.and_then(|(tr, sl)| {
+                    hikaru_openmodulation::get_external_param_modulation(tr, sl, param_id)
+                });
+                let map_amt = match (mod_mapping_src, top_slot) {
+                    (Some(src), Some((_, sl))) => {
+                        hikaru_openmodulation::get_external_route_amount(src, sl, param_id)
+                    }
+                    _ => 0.0,
+                };
 
                 let (row_rect, row_resp) = ui.allocate_exact_size(
                     vec2(row_w, row_h),
@@ -1120,18 +1337,20 @@ pub fn render_card(
 
                 // Cyan overlay when Remote Controls Mapping Mode is active
                 if remote_mapping_active {
-                    remote_controls::paint_mappable_overlay(ui, row_rect.shrink(1.0));
-                    if row_resp.hovered() {
-                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    if let Some((tr, sl)) = top_slot {
+                        remote_controls::paint_mappable_overlay(ui, row_rect.shrink(1.0));
+                        if row_resp.hovered() {
+                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                        }
+                        if row_resp.clicked() {
+                            pending_remote_pick = Some(RemoteTarget::DeviceParam {
+                                track_idx: tr,
+                                slot_idx: sl,
+                                param_idx,
+                            });
+                        }
                     }
-                    if row_resp.clicked() {
-                        pending_remote_pick = Some(RemoteTarget::DeviceParam {
-                            track_idx,
-                            slot_idx,
-                            param_idx,
-                        });
-                    }
-                } else if let Some(src) = mod_mapping_src {
+                } else if let (Some(src), Some((_, sl))) = (mod_mapping_src, top_slot) {
                     // Modulator mapping mode: drag vertically to assign bipolar depth
                     if row_resp.hovered() || row_resp.dragged() {
                         ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
@@ -1146,12 +1365,12 @@ pub fn render_card(
                         if dy.abs() > 0.0 {
                             let next_amt = (map_amt + dy * speed).clamp(-1.0, 1.0);
                             hikaru_openmodulation::set_external_route_amount(
-                                src, slot_idx, param_id, next_amt,
+                                src, sl, param_id, next_amt,
                             );
                         }
                     } else if row_resp.double_clicked() {
                         hikaru_openmodulation::set_external_route_amount(
-                            src, slot_idx, param_id, 0.0,
+                            src, sl, param_id, 0.0,
                         );
                     }
                     if row_resp.hovered() || row_resp.dragged() {
@@ -1169,15 +1388,18 @@ pub fn render_card(
                     // Normal parameter editing
                     if row_resp.hovered() || row_resp.dragged() {
                         ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+                        let mut cues = vec![
+                            ("DRAG".to_string(), "Adjust".to_string()),
+                            ("SHIFT".to_string(), "Fine".to_string()),
+                            ("DBL-CLICK".to_string(), "Reset".to_string()),
+                        ];
+                        if top_slot.is_some() {
+                            cues.push(("RIGHT-CLICK".to_string(), "Automate".to_string()));
+                        }
                         hovered_help = Some((
                             p_state.info.name.to_uppercase(),
                             val_text.clone(),
-                            vec![
-                                ("DRAG".to_string(), "Adjust".to_string()),
-                                ("SHIFT".to_string(), "Fine".to_string()),
-                                ("DBL-CLICK".to_string(), "Reset".to_string()),
-                                ("RIGHT-CLICK".to_string(), "Automate".to_string()),
-                            ],
+                            cues,
                         ));
                     }
                     if row_resp.dragged() {
@@ -1210,7 +1432,7 @@ pub fn render_card(
                                 .push((param_idx, p_state.info.snap(p_state.info.default_value)));
                             menu_ui.close_menu();
                         }
-                        if menu_ui.button("Automate Parameter").clicked() {
+                        if top_slot.is_some() && menu_ui.button("Automate Parameter").clicked() {
                             pending_automate_param = Some(param_id);
                             menu_ui.close_menu();
                         }
@@ -1226,7 +1448,7 @@ pub fn render_card(
         });
 
     if !pending_value_updates.is_empty() {
-        if let Some(s) = app.slot_mut(track_idx, slot_idx) {
+        if let Some(s) = target.slot_mut(app) {
             for (param_idx, new_val) in pending_value_updates {
                 if let Some(p) = s.cached_params.get_mut(param_idx) {
                     p.value = new_val;
@@ -1237,14 +1459,14 @@ pub fn render_card(
         }
         app.project_dirty = true;
     }
-    if let Some(target) = pending_remote_pick {
-        remote_controls::complete_mapping(app, target);
+    if let Some(target_remote) = pending_remote_pick {
+        remote_controls::complete_mapping(app, target_remote);
     }
-    if let Some(param_id) = pending_automate_param {
-        automation_editor::open_external_param_automation(app, track_idx, slot_idx, param_id);
+    if let (Some(param_id), Some((tr, sl))) = (pending_automate_param, top_slot) {
+        automation_editor::open_external_param_automation(app, tr, sl, param_id);
     }
-    if let Some(param_id) = pending_clear_mod_param {
-        hikaru_openmodulation::clear_external_param_routes(track_idx, slot_idx, param_id);
+    if let (Some(param_id), Some((tr, sl))) = (pending_clear_mod_param, top_slot) {
+        hikaru_openmodulation::clear_external_param_routes(tr, sl, param_id);
     }
     if let Some((title, val, cues)) = hovered_help {
         app.footer_context_help = Some((title, val));
@@ -1286,5 +1508,17 @@ mod tests {
         let w_both = card_width(&slot, 99, 77);
         assert!(w_both > w_remotes + 50.0);
         hikaru_openmodulation::clear_bay_for_slot(99, 77);
+    }
+
+    #[test]
+    fn wet_fx_card_width_matches_dedicated_external_card() {
+        let mut slot = DspSlot::new(2, "UZU".to_string());
+        assert!(
+            (wet_fx_card_width(&slot) - (EXT_SIDEBAR_W + EXT_PARAMS_EXPANDED_W)).abs() < 1e-3
+        );
+        slot.params_expanded = false;
+        assert!(
+            (wet_fx_card_width(&slot) - (EXT_SIDEBAR_W + EXT_PARAMS_COLLAPSED_W)).abs() < 1e-3
+        );
     }
 }

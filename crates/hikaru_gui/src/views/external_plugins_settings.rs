@@ -26,6 +26,11 @@ pub fn slot_window_key(track_idx: usize, slot_idx: usize) -> String {
     format!("slot:{track_idx}:{slot_idx}")
 }
 
+/// Clave única de ventana para un plugin externo anidado dentro de `Wet FX` (ej. Open8-Bit).
+pub fn wet_fx_window_key(track_idx: usize, parent_slot_idx: usize, wet_idx: usize) -> String {
+    format!("wet_fx:{track_idx}:{parent_slot_idx}:{wet_idx}")
+}
+
 /// Lo que el editor nativo movió por su cuenta, hacia la UI.
 ///
 /// Lo produce el hilo de la ventana al bombear el editor y lo consume

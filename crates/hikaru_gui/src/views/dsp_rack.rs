@@ -187,6 +187,12 @@ pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize)
     hikaru_bit8::clear_slot_state(track_idx, slot_idx);
     let wkey = crate::views::external_plugins_settings::slot_window_key(track_idx, slot_idx);
     app.plugin_settings_state.close_window(&wkey);
+    for wet_idx in 0..removed.wet_fx_chain.len() {
+        let wet_wkey = crate::views::external_plugins_settings::wet_fx_window_key(
+            track_idx, slot_idx, wet_idx,
+        );
+        app.plugin_settings_state.close_window(&wet_wkey);
+    }
 
     if removed.external.is_some()
         || matches!(
@@ -532,7 +538,7 @@ fn render_dms_fx_plus_slot(
 
 fn wet_fx_nested_card_width(wet_slot: &crate::views::mixer::DspSlot) -> f32 {
     if wet_slot.external.is_some() {
-        214.0
+        crate::views::external_plugin_card::wet_fx_card_width(wet_slot)
     } else if let Some(w) =
         crate::views::hikaru_native_plugins::hikaru_tier_s_fx::card_width(&wet_slot.name)
     {
@@ -627,6 +633,34 @@ fn render_bit8_wet_fx_chain(
         let w = wet_fx_nested_card_width(wet_slot);
         let nested_rect = Rect::from_min_size(pos2(cursor_x, nested_card_top), vec2(w, nested_card_h));
         cursor_x += w + gap;
+
+        if wet_slot.external.is_some() {
+            let p = ui.painter();
+            p.rect_filled(nested_rect, 3.5, Color32::from_rgb(0x2E, 0x30, 0x35));
+            p.rect_stroke(
+                nested_rect,
+                3.5,
+                Stroke::new(
+                    1.0_f32,
+                    if wet_slot.active {
+                        Color32::from_rgb(0x46, 0x49, 0x52)
+                    } else {
+                        Color32::from_rgb(0x34, 0x36, 0x3C)
+                    },
+                ),
+                egui::StrokeKind::Inside,
+            );
+            crate::views::external_plugin_card::render_wet_fx_card(
+                ui,
+                app,
+                nested_rect,
+                track_idx,
+                parent_slot_idx,
+                wet_idx,
+                &mut wet_to_remove,
+            );
+            continue;
+        }
 
         let p = ui.painter();
         p.rect_filled(nested_rect, 3.0, Color32::from_rgb(0x2B, 0x2D, 0x33));
@@ -771,118 +805,7 @@ fn render_bit8_wet_fx_chain(
         );
         body_ui.set_clip_rect(body_rect.intersect(card_ui.clip_rect()));
 
-        if let Some(ref ext) = wet_slot.external {
-            let fmt_badge = match ext.format {
-                hikaru_plugin_host::PluginFormat::VST3 => "VST3",
-                hikaru_plugin_host::PluginFormat::CLAP => "CLAP",
-            };
-            body_ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(fmt_badge)
-                        .font(fonts::semibold(8.5))
-                        .color(theme::BW_LCD_CYAN),
-                );
-                ui.label(
-                    RichText::new(&ext.vendor)
-                        .font(fonts::regular(8.5))
-                        .color(theme::TEXT_MUTED),
-                );
-            });
-            if wet_slot.cached_params.is_empty() {
-                body_ui.add_space(16.0);
-                body_ui.vertical_centered(|ui| {
-                    ui.label(
-                        RichText::new("Loading parameters…")
-                            .font(fonts::regular(9.5))
-                            .color(theme::TEXT_MUTED),
-                    );
-                });
-            } else {
-                let mut param_updates: Vec<(usize, u32, f32)> = Vec::new();
-                egui::ScrollArea::vertical()
-                    .id_salt(("bit8_wet_ext_params", track_idx, parent_slot_idx, wet_idx))
-                    .auto_shrink([false; 2])
-                    .show(&mut body_ui, |ui| {
-                        let avail_w = ui.available_width().max(120.0);
-                        let cols = 3usize;
-                        let col_w = (avail_w / cols as f32).floor();
-                        let row_h = 56.0;
-                        for (row_idx, chunk) in wet_slot.cached_params.chunks(cols).enumerate() {
-                            let (row_r, _) =
-                                ui.allocate_exact_size(vec2(avail_w, row_h), Sense::hover());
-                            for (c_idx, p_state) in chunk.iter().enumerate() {
-                                let p_idx = row_idx * cols + c_idx;
-                                let cell_r = Rect::from_min_size(
-                                    pos2(row_r.min.x + c_idx as f32 * col_w, row_r.min.y),
-                                    vec2(col_w, row_h),
-                                );
-                                let mut cell_ui = ui.new_child(
-                                    egui::UiBuilder::new()
-                                        .max_rect(cell_r)
-                                        .layout(egui::Layout::top_down(egui::Align::Center)),
-                                );
-                                cell_ui.spacing_mut().item_spacing.y = 1.5;
-                                let mut pct = p_state.value * 100.0;
-                                let (k_resp, k_changed) = crate::ui::bitwig_kit::rotary_knob(
-                                    &mut cell_ui,
-                                    26.0,
-                                    &mut pct,
-                                    0.0..=100.0,
-                                    p_state.info.default_value * 100.0,
-                                    theme::BW_LCD_CYAN,
-                                    false,
-                                );
-                                k_resp.on_hover_text(format!(
-                                    "{}: {:.1}%",
-                                    p_state.info.name, pct
-                                ));
-                                if k_changed {
-                                    param_updates.push((
-                                        p_idx,
-                                        p_state.info.id,
-                                        (pct / 100.0).clamp(0.0, 1.0),
-                                    ));
-                                }
-                                let short_name: String =
-                                    p_state.info.name.chars().take(9).collect();
-                                cell_ui.label(
-                                    RichText::new(short_name)
-                                        .font(fonts::regular(8.5))
-                                        .color(theme::TEXT_SECONDARY),
-                                );
-                            }
-                        }
-                    });
-                if !param_updates.is_empty() {
-                    if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
-                        if let Some(parent) = t.effects.get_mut(parent_slot_idx) {
-                            if let Some(ws) = parent.wet_fx_chain.get_mut(wet_idx) {
-                                for &(p_idx, _, val) in &param_updates {
-                                    if let Some(ps) = ws.cached_params.get_mut(p_idx) {
-                                        ps.value = val;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some(et_idx) = track_idx.checked_sub(1) {
-                        for (_, param_id, value) in param_updates {
-                            app.audio_proxy.send(
-                                crate::audio_proxy::GuiCommand::SetBit8WetFxParam {
-                                    track_idx: et_idx,
-                                    slot_idx: parent_slot_idx,
-                                    wet_idx,
-                                    param_id,
-                                    value,
-                                },
-                            );
-                        }
-                    }
-                    app.project_dirty = true;
-                }
-            }
-        } else if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&wet_slot.name)
-        {
+        if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&wet_slot.name) {
             crate::views::hikaru_native_plugins::hikaru_tier_s_fx::render_wet_fx_module(
                 &mut body_ui,
                 app,
@@ -922,6 +845,12 @@ fn render_bit8_wet_fx_chain(
     }
 
     if let Some(rem_idx) = wet_to_remove {
+        let wet_wkey = crate::views::external_plugins_settings::wet_fx_window_key(
+            track_idx,
+            parent_slot_idx,
+            rem_idx,
+        );
+        app.plugin_settings_state.close_window(&wet_wkey);
         if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
             if let Some(parent) = t.effects.get_mut(parent_slot_idx) {
                 if rem_idx < parent.wet_fx_chain.len() {

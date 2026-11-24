@@ -1085,6 +1085,34 @@ impl AppState {
         self.tracks_mut().get_mut(track_idx)?.effects.get_mut(slot_idx)
     }
 
+    pub fn wet_fx_slot(
+        &self,
+        track_idx: usize,
+        parent_slot_idx: usize,
+        wet_idx: usize,
+    ) -> Option<&mixer::DspSlot> {
+        self.tracks()
+            .get(track_idx)?
+            .effects
+            .get(parent_slot_idx)?
+            .wet_fx_chain
+            .get(wet_idx)
+    }
+
+    pub fn wet_fx_slot_mut(
+        &mut self,
+        track_idx: usize,
+        parent_slot_idx: usize,
+        wet_idx: usize,
+    ) -> Option<&mut mixer::DspSlot> {
+        self.tracks_mut()
+            .get_mut(track_idx)?
+            .effects
+            .get_mut(parent_slot_idx)?
+            .wet_fx_chain
+            .get_mut(wet_idx)
+    }
+
     pub fn target_effects_mut(
         &mut self,
         target: arranger_view::StripTarget,
@@ -1333,6 +1361,15 @@ impl AppState {
                         to_probe.push(ext);
                     }
                 }
+                for wet_slot in &mut slot.wet_fx_chain {
+                    if let Some(ext) = wet_slot.external.clone() {
+                        if wet_slot.cached_params.is_empty()
+                            && matches!(wet_slot.params_status, mixer::ExternalParamsStatus::Idle)
+                        {
+                            to_probe.push(ext);
+                        }
+                    }
+                }
             }
         }
 
@@ -1391,6 +1428,31 @@ impl AppState {
                                         p.pending_to_engine = true;
                                     }
                                     changed = true;
+                                }
+                            }
+                        }
+                    }
+                    for (wet_idx, wet_slot) in slot.wet_fx_chain.iter_mut().enumerate() {
+                        if wet_slot.external.is_some()
+                            && external_plugins_settings::wet_fx_window_key(tr_idx, sl_idx, wet_idx)
+                                == ev.window_key
+                        {
+                            matched_by_key = true;
+                            for &(param_id, val) in &ev.changes {
+                                if let Some(p) = wet_slot
+                                    .cached_params
+                                    .iter_mut()
+                                    .find(|p| p.info.id == param_id)
+                                {
+                                    let clamped = val.clamp(0.0, 1.0);
+                                    if (p.value - clamped).abs() > 1e-6 {
+                                        p.value = clamped;
+                                        p.display_text = None;
+                                        if is_editor {
+                                            p.pending_to_engine = true;
+                                        }
+                                        changed = true;
+                                    }
                                 }
                             }
                         }
@@ -1454,6 +1516,15 @@ impl AppState {
                             });
                         }
                     }
+                    for (wet_idx, wet_slot) in slot.wet_fx_chain.iter_mut().enumerate() {
+                        if wet_slot.external.is_some()
+                            && external_plugins_settings::wet_fx_window_key(tr_idx, sl_idx, wet_idx)
+                                == wkey
+                        {
+                            wet_slot.saved_state = Some(bytes.clone());
+                            wet_slot.rack_overrides_since_state.clear();
+                        }
+                    }
                 }
             }
         }
@@ -1481,6 +1552,40 @@ impl AppState {
                 continue;
             };
             for (sl_idx, slot) in track.effects.iter_mut().enumerate() {
+                for (wet_idx, wet_slot) in slot.wet_fx_chain.iter_mut().enumerate() {
+                    if wet_slot.external.is_none() {
+                        continue;
+                    }
+                    let wet_wkey =
+                        external_plugins_settings::wet_fx_window_key(tr_idx, sl_idx, wet_idx);
+                    let wet_window_is_open = open_keys.contains(&wet_wkey);
+                    for p in &mut wet_slot.cached_params {
+                        if p.pending_to_engine {
+                            engine_cmds.push(GuiCommand::SetBit8WetFxParam {
+                                track_idx: eng_track,
+                                slot_idx: sl_idx,
+                                wet_idx,
+                                param_id: p.info.id,
+                                value: p.value,
+                            });
+                            win_param_cmds.push((wet_wkey.clone(), None, p.info.id, p.value));
+                            if !wet_window_is_open && wet_slot.saved_state.is_some() {
+                                if let Some(entry) = wet_slot
+                                    .rack_overrides_since_state
+                                    .iter_mut()
+                                    .find(|(id, _)| *id == p.info.id)
+                                {
+                                    entry.1 = p.value;
+                                } else {
+                                    wet_slot.rack_overrides_since_state.push((p.info.id, p.value));
+                                }
+                            }
+                            p.last_sent_effective = Some(p.value);
+                            p.pending_to_engine = false;
+                        }
+                    }
+                }
+
                 let Some(ext) = slot.external.as_ref() else {
                     continue;
                 };
