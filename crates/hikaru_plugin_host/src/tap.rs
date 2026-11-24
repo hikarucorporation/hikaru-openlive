@@ -62,19 +62,25 @@ const MONITOR_MAX_LAG_SAMPLES: usize = 4096 * NUM_CHANNELS;
 /// monitoreo llega al final de una cola o sufre un underrun real.
 const MONITOR_UNDERRUN_FADE_FRAMES: usize = 64;
 
-/// Identifica el slot `(pista del motor, índice de la cadena)` al que pertenece
-/// un tap.
+/// Identifica el slot al que pertenece un tap de audio hacia el editor nativo.
 ///
 /// Ojo con la pista: la UI trabaja con el índice del **mixer** y el motor con el
 /// de la **cadena de efectos**, que es uno menos. La conversión es
 /// `AppState::engine_track_index`, y si se olvida el editor se queda escuchando
 /// la pista de al lado.
-pub type TapKey = (usize, usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TapKey {
+    /// Slot de nivel superior `(pista del motor, índice de la cadena)`.
+    Slot(usize, usize),
+    /// Slot anidado dentro de la cadena `Wet FX` de un dispositivo padre
+    /// (p. ej. `Hikaru Open8-Bit`): `(pista del motor, parent_slot_idx, wet_idx)`.
+    WetFx(usize, usize, usize),
+}
 
 /// Clave que nunca existe en el registro: para abrir el editor de un plugin que
 /// no está en ninguna cadena (el panel de plugins externos deja abrir cualquier
 /// `.vst3` del sistema). La ventana funciona igual, sólo que sin audio.
-pub const NO_SLOT: TapKey = (usize::MAX, usize::MAX);
+pub const NO_SLOT: TapKey = TapKey::Slot(usize::MAX, usize::MAX);
 
 /// Registro global de taps por slot.
 ///
@@ -104,6 +110,14 @@ pub fn lookup(key: TapKey) -> Option<Arc<PluginTap>> {
 pub fn unregister(key: TapKey) {
     let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
     reg.retain(|(k, _)| *k != key);
+}
+
+/// Saca todos los taps `WetFx` asociados a un slot padre `(track_idx, parent_slot_idx)`.
+pub fn unregister_wet_fx_parent(track_idx: usize, parent_slot_idx: usize) {
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    reg.retain(|(k, _)| {
+        !matches!(k, TapKey::WetFx(t, p, _) if *t == track_idx && *p == parent_slot_idx)
+    });
 }
 
 /// Anillo SPSC de bloques estéreo interleaved.
@@ -538,5 +552,32 @@ mod tests {
         tap.push_monitor(&vec![0.5f32; 400 * NUM_CHANNELS]);
         engine_buf.fill(0.0);
         assert_eq!(tap.mix_monitor_into(&mut engine_buf), 0);
+    }
+
+    #[test]
+    fn wet_fx_tap_keys_register_lookup_and_unregister_by_parent() {
+        let tap_top = Arc::new(PluginTap::new(48_000.0, 64));
+        let tap_wet0 = Arc::new(PluginTap::new(48_000.0, 64));
+        let tap_wet1 = Arc::new(PluginTap::new(48_000.0, 64));
+
+        let k_top = TapKey::Slot(99, 1);
+        let k_wet0 = TapKey::WetFx(99, 1, 0);
+        let k_wet1 = TapKey::WetFx(99, 1, 1);
+
+        register(k_top, Arc::clone(&tap_top));
+        register(k_wet0, Arc::clone(&tap_wet0));
+        register(k_wet1, Arc::clone(&tap_wet1));
+
+        assert!(lookup(k_top).is_some());
+        assert!(lookup(k_wet0).is_some());
+        assert!(lookup(k_wet1).is_some());
+
+        unregister_wet_fx_parent(99, 1);
+        assert!(lookup(k_top).is_some(), "top-level slot tap must remain");
+        assert!(lookup(k_wet0).is_none());
+        assert!(lookup(k_wet1).is_none());
+
+        unregister(k_top);
+        assert!(lookup(k_top).is_none());
     }
 }

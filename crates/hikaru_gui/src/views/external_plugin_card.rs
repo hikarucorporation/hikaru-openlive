@@ -773,9 +773,15 @@ fn render_card_impl(
             let parent = capture_host_parent();
             let tap_key = match target {
                 ExternalSlotTarget::TopLevel { slot_idx, .. } => eng_track
-                    .map(|et| (et, slot_idx))
+                    .map(|et| hikaru_plugin_host::tap::TapKey::Slot(et, slot_idx))
                     .unwrap_or(hikaru_plugin_host::tap::NO_SLOT),
-                ExternalSlotTarget::Bit8WetFx { .. } => hikaru_plugin_host::tap::NO_SLOT,
+                ExternalSlotTarget::Bit8WetFx {
+                    parent_slot_idx,
+                    wet_idx,
+                    ..
+                } => eng_track
+                    .map(|et| hikaru_plugin_host::tap::TapKey::WetFx(et, parent_slot_idx, wet_idx))
+                    .unwrap_or(hikaru_plugin_host::tap::NO_SLOT),
             };
             let title = match target {
                 ExternalSlotTarget::TopLevel { .. } => {

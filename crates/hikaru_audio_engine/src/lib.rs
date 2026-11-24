@@ -2450,7 +2450,10 @@ impl<'a> AudioEngine<'a> {
         // La cinta anterior sale del registro antes de tocar la cadena: si el
         // slot se reemplaza, el editor que quedó escuchando la vieja tiene que
         // quedarse sin blocks, no con audio del plugin anterior.
-        hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
+        hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
+            track_idx, slot_idx,
+        ));
+        hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
 
         let chain = &mut self.track_effects[track_idx];
 
@@ -2501,7 +2504,10 @@ impl<'a> AudioEngine<'a> {
             self.sample_rate,
             hikaru_plugin_host::scratch::MAX_BLOCK_FRAMES,
         ));
-        hikaru_plugin_host::tap::register((track_idx, slot_idx), std::sync::Arc::clone(&tap));
+        hikaru_plugin_host::tap::register(
+            hikaru_plugin_host::tap::TapKey::Slot(track_idx, slot_idx),
+            std::sync::Arc::clone(&tap),
+        );
         node.set_tap(Some(tap));
 
         let insert_pos = chain
@@ -2579,7 +2585,10 @@ impl<'a> AudioEngine<'a> {
         if track_idx >= 16 {
             return Err(format!("Índice de pista fuera de rango: {track_idx}"));
         }
-        hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
+        hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
+            track_idx, slot_idx,
+        ));
+        hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
         hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, slot_idx));
 
         let sample_rate = self.sample_rate;
@@ -2653,6 +2662,9 @@ impl<'a> AudioEngine<'a> {
         if let Some(telem) = bit8_telemetry {
             node.set_bit8_telemetry(Some(telem));
         }
+        hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::WetFx(
+            track_idx, slot_idx, wet_idx,
+        ));
         let bit8 = self
             .find_bit8_mut(track_idx, slot_idx)
             .ok_or_else(|| format!("Open8-Bit no encontrado en pista {track_idx} slot {slot_idx}"))?;
@@ -2675,6 +2687,9 @@ impl<'a> AudioEngine<'a> {
         if track_idx >= 16 {
             return Err(format!("Índice de pista fuera de rango: {track_idx}"));
         }
+        hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::WetFx(
+            track_idx, slot_idx, wet_idx,
+        ));
         let mut instance: Box<dyn PluginInstance> = match descriptor.format {
             PluginFormat::VST3 => {
                 match hikaru_plugin_host::Vst3Instance::load(&descriptor.path) {
@@ -2694,8 +2709,21 @@ impl<'a> AudioEngine<'a> {
             PluginFormat::VST3 => hikaru_dsp::PluginCategory::Vst3Fx,
             PluginFormat::CLAP => hikaru_dsp::PluginCategory::ClapFx,
         };
-        let node = hikaru_dsp::DspPluginNode::new(descriptor.name.clone(), category, instance)
-            .with_slot_idx(wet_idx);
+        let mut node =
+            hikaru_dsp::DspPluginNode::new(descriptor.name.clone(), category, instance)
+                .with_slot_idx(wet_idx);
+        // Cinta de audio hacia el editor nativo del plugin anidado en Wet FX:
+        // sin esto los renders visuales reactivos al audio (osciloscopios, medidores,
+        // analizadores de espectro) quedan vacíos aunque el audio suene bien.
+        let tap = std::sync::Arc::new(hikaru_plugin_host::PluginTap::new(
+            self.sample_rate,
+            hikaru_plugin_host::scratch::MAX_BLOCK_FRAMES,
+        ));
+        hikaru_plugin_host::tap::register(
+            hikaru_plugin_host::tap::TapKey::WetFx(track_idx, slot_idx, wet_idx),
+            std::sync::Arc::clone(&tap),
+        );
+        node.set_tap(Some(tap));
         let bit8 = self
             .find_bit8_mut(track_idx, slot_idx)
             .ok_or_else(|| format!("Open8-Bit no encontrado en pista {track_idx} slot {slot_idx}"))?;
@@ -2709,8 +2737,17 @@ impl<'a> AudioEngine<'a> {
     }
 
     pub fn remove_bit8_wet_fx(&mut self, track_idx: usize, slot_idx: usize, wet_idx: usize) {
+        hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
         if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
             bit8.remove_wet_fx(wet_idx);
+            for n in bit8.wet_chain() {
+                if let Some(tap) = &n.tap {
+                    hikaru_plugin_host::tap::register(
+                        hikaru_plugin_host::tap::TapKey::WetFx(track_idx, slot_idx, n.slot_idx),
+                        std::sync::Arc::clone(tap),
+                    );
+                }
+            }
             self.prepare_pdc_buffers();
         }
     }
@@ -2752,6 +2789,30 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    fn register_node_taps(track_idx: usize, node: &mut hikaru_dsp::DspPluginNode) {
+        let slot_idx = node.slot_idx;
+        if let Some(tap) = &node.tap {
+            hikaru_plugin_host::tap::register(
+                hikaru_plugin_host::tap::TapKey::Slot(track_idx, slot_idx),
+                std::sync::Arc::clone(tap),
+            );
+        }
+        if let Some(bit8) = node
+            .instance
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<hikaru_dsp::effects::Bit8Effect>())
+        {
+            for wet in bit8.wet_chain() {
+                if let Some(tap) = &wet.tap {
+                    hikaru_plugin_host::tap::register(
+                        hikaru_plugin_host::tap::TapKey::WetFx(track_idx, slot_idx, wet.slot_idx),
+                        std::sync::Arc::clone(tap),
+                    );
+                }
+            }
+        }
+    }
+
     /// Quita un plugin externo de un slot y desplaza los `slot_idx` posteriores
     /// para mantener la correspondencia exacta con `Track::effects` en la GUI.
     pub fn remove_external_plugin(&mut self, track_idx: usize, slot_idx: usize) {
@@ -2761,10 +2822,16 @@ impl<'a> AudioEngine<'a> {
         let chain = &mut self.track_effects[track_idx];
         // Limpiar todos los taps y telemetrías viejas de esta pista antes de re-indexar.
         for n in chain.iter() {
-            hikaru_plugin_host::tap::unregister((track_idx, n.slot_idx));
+            hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
+                track_idx, n.slot_idx,
+            ));
+            hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, n.slot_idx);
             hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, n.slot_idx));
         }
-        hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
+        hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
+            track_idx, slot_idx,
+        ));
+        hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
         hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, slot_idx));
 
         if let Some(pos) = chain.iter().position(|n| n.slot_idx == slot_idx) {
@@ -2778,9 +2845,7 @@ impl<'a> AudioEngine<'a> {
             if n.slot_idx > slot_idx {
                 n.slot_idx -= 1;
             }
-            if let Some(tap) = &n.tap {
-                hikaru_plugin_host::tap::register((track_idx, n.slot_idx), std::sync::Arc::clone(tap));
-            }
+            Self::register_node_taps(track_idx, n);
             if let Some(telem) = &n.bit8_telemetry {
                 hikaru_dsp::effects::bit8::telemetry::register(
                     (track_idx, n.slot_idx),
@@ -2823,7 +2888,10 @@ impl<'a> AudioEngine<'a> {
         };
 
         for n in &self.track_effects[from_track] {
-            hikaru_plugin_host::tap::unregister((from_track, n.slot_idx));
+            hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
+                from_track, n.slot_idx,
+            ));
+            hikaru_plugin_host::tap::unregister_wet_fx_parent(from_track, n.slot_idx);
             hikaru_dsp::effects::bit8::telemetry::unregister((from_track, n.slot_idx));
         }
         let mut node = self.track_effects[from_track].remove(pos);
@@ -2833,9 +2901,7 @@ impl<'a> AudioEngine<'a> {
             if n.slot_idx > from_slot {
                 n.slot_idx -= 1;
             }
-            if let Some(tap) = &n.tap {
-                hikaru_plugin_host::tap::register((from_track, n.slot_idx), std::sync::Arc::clone(tap));
-            }
+            Self::register_node_taps(from_track, n);
             if let Some(telem) = &n.bit8_telemetry {
                 hikaru_dsp::effects::bit8::telemetry::register(
                     (from_track, n.slot_idx),
@@ -2846,7 +2912,10 @@ impl<'a> AudioEngine<'a> {
 
         // Desplazar slots en pista destino >= to_slot e insertar el nodo movido
         for n in &self.track_effects[to_track] {
-            hikaru_plugin_host::tap::unregister((to_track, n.slot_idx));
+            hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
+                to_track, n.slot_idx,
+            ));
+            hikaru_plugin_host::tap::unregister_wet_fx_parent(to_track, n.slot_idx);
             hikaru_dsp::effects::bit8::telemetry::unregister((to_track, n.slot_idx));
         }
         for n in self.track_effects[to_track].iter_mut() {
@@ -2861,10 +2930,8 @@ impl<'a> AudioEngine<'a> {
             .unwrap_or(self.track_effects[to_track].len());
         self.track_effects[to_track].insert(insert_pos, node);
 
-        for n in self.track_effects[to_track].iter() {
-            if let Some(tap) = &n.tap {
-                hikaru_plugin_host::tap::register((to_track, n.slot_idx), std::sync::Arc::clone(tap));
-            }
+        for n in self.track_effects[to_track].iter_mut() {
+            Self::register_node_taps(to_track, n);
             if let Some(telem) = &n.bit8_telemetry {
                 hikaru_dsp::effects::bit8::telemetry::register(
                     (to_track, n.slot_idx),
