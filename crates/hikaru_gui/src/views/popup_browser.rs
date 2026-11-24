@@ -348,11 +348,11 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 FX_ORANGE,
                 "Carrier ring modulator with multiple waveforms and dry/wet mix.",
             ),
-            "Bit-8" => (
+            "Hikaru Open8-Bit" | "Bit-8" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
-                "Bitwig-style digital degrader: Clock/Jitter/Chance, Gate, Shape, Quantize, Anti-alias & Wet FX.",
+                "ADAA1 digital degrader: Clock/Jitter/Chance, Gate, Shape (Rectify + Clip/Fold/Wrap), Quantize (Off/On-zero, Diffusion, Dither, x²), Anti-alias & Wet FX.",
             ),
             _ => (
                 BrowserRailTab::AudioFx,

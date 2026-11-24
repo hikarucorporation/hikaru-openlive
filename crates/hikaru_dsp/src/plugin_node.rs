@@ -34,6 +34,8 @@ pub struct DspPluginNode {
     /// `None` cuando no hay editor abierto que lo pida: el motor se ahorra
     /// hasta la copia.
     pub tap: Option<Arc<PluginTap>>,
+    /// Telemetría lock-free dedicada para `Hikaru Open8-Bit` (LEDs y display de 3 trazas).
+    pub bit8_telemetry: Option<Arc<crate::effects::Bit8Telemetry>>,
 }
 
 impl DspPluginNode {
@@ -45,6 +47,7 @@ impl DspPluginNode {
             is_active: true,
             slot_idx: 0,
             tap: None,
+            bit8_telemetry: None,
         }
     }
 
@@ -56,6 +59,11 @@ impl DspPluginNode {
     /// Conecta (o desconecta) la cinta hacia el editor nativo.
     pub fn set_tap(&mut self, tap: Option<Arc<PluginTap>>) {
         self.tap = tap;
+    }
+
+    /// Adjunta telemetría dedicada para `Hikaru Open8-Bit`.
+    pub fn set_bit8_telemetry(&mut self, telemetry: Option<Arc<crate::effects::Bit8Telemetry>>) {
+        self.bit8_telemetry = telemetry;
     }
 
     /// Latencia reportada por este nodo en samples (`0` cuando está en bypass).

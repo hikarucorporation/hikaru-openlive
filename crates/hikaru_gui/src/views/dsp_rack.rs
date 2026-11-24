@@ -88,8 +88,8 @@ pub const PLUGIN_CATALOG: [PluginEntry; 16] = [
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Bit-8",
-        label: "Bit-8",
+        name: "Hikaru Open8-Bit",
+        label: "Hikaru Open8-Bit",
     },
     PluginEntry {
         category: "Polysynth",
@@ -1017,7 +1017,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 ui,
                                 sb_rect,
                                 ("bit8_sb", track_idx, slot_idx),
-                                "BIT-8",
+                                "OPEN8-BIT",
                                 slot.active,
                                 is_selected,
                             );

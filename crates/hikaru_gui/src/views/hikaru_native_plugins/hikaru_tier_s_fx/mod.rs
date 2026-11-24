@@ -2,7 +2,7 @@
 
 //! Tarjetas nativas compactas para los 8 efectos **Tier S** de Hikaru OpenLive:
 //! `Tool`, `DC Offset`, `Dual Pan`, `Test Tone`, `Time Shift`, `Tremolo`,
-//! `Ring-Mod` y `Bit-8`.
+//! `Ring-Mod` y `Hikaru Open8-Bit`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};

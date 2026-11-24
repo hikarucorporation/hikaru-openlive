@@ -18,6 +18,7 @@ fn tier_s_native_effects_load_in_engine() {
         "Time Shift",
         "Tremolo",
         "Ring-Mod",
+        "Hikaru Open8-Bit",
         "Bit-8",
     ];
     for (slot_idx, name) in names.iter().enumerate() {
