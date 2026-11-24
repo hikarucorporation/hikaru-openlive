@@ -764,13 +764,19 @@ fn run_gui(options: GuiOptions) -> ExitCode {
     // existir antes de que `project::load` lo pise).
     let project_path = options.project.clone();
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1280.0, 720.0])
+        .with_min_inner_size([960.0, 540.0])
+        .with_decorations(false)
+        .with_maximized(true)
+        .with_title("Hikaru OpenLive")
+        .with_app_id("hikaru_openlive");
+    if let Some(icon) = hikaru_gui::views::branding::window_icon_data() {
+        viewport = viewport.with_icon(icon);
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
-            .with_min_inner_size([960.0, 540.0])
-            .with_decorations(false)
-            .with_maximized(true)
-            .with_title("Hikaru OpenLive"),
+        viewport,
         ..Default::default()
     };
 

@@ -2,17 +2,19 @@
 // GNU AGPLv3
 // crates/hikaru_gui/src/views/branding.rs
 
-use egui::{ColorImage, Context, TextureHandle, TextureOptions};
+use egui::{ColorImage, Context, IconData, TextureHandle, TextureOptions};
 use image::{Rgba, RgbaImage};
 use std::sync::OnceLock;
 
 const ENERGY_CORE_LOGO: &[u8] =
     include_bytes!("../../../../assets/logos/hikaru_energy_core_2.png");
+const WINDOW_ICON_PNG: &[u8] =
+    include_bytes!("../../../../assets/logos/hikaru_energy_core.png");
 
 const ALPHA_CUTOFF: u8 = 8;
 
-fn decode_energy_core() -> Option<RgbaImage> {
-    let decoded = image::load_from_memory(ENERGY_CORE_LOGO)
+fn decode_cropped_square(bytes: &[u8]) -> Option<RgbaImage> {
+    let decoded = image::load_from_memory(bytes)
         .expect("el PNG del logo va embebido y fue verificado al compilar");
     let rgba = decoded.to_rgba8();
     let (width, height) = (rgba.width(), rgba.height());
@@ -53,11 +55,21 @@ fn decode_energy_core() -> Option<RgbaImage> {
     Some(square)
 }
 
+pub fn window_icon_data() -> Option<IconData> {
+    let rgba = decode_cropped_square(WINDOW_ICON_PNG)?;
+    let (width, height) = (rgba.width(), rgba.height());
+    Some(IconData {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
+}
+
 pub fn energy_core_color_image() -> Option<ColorImage> {
     static IMAGE: OnceLock<Option<ColorImage>> = OnceLock::new();
     IMAGE
         .get_or_init(|| {
-            let rgba = decode_energy_core()?;
+            let rgba = decode_cropped_square(ENERGY_CORE_LOGO)?;
             let (width, height) = (rgba.width() as usize, rgba.height() as usize);
             Some(ColorImage::from_rgba_unmultiplied(
                 [width, height],

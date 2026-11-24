@@ -320,7 +320,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         state.project_dirty = false;
     }
 
-    // Emblema central de 10 puntos estilo Bitwig (abre el Studio Dashboard)
+    // Emblema central de Hikaru (abre el Studio Dashboard)
     let emblem_rect = Rect::from_center_size(top_rect.center(), vec2(36.0, 20.0));
     let emblem_resp = ui.interact(emblem_rect, ui.id().with("bitwig_10dot_emblem"), Sense::click());
     if ui.is_rect_visible(emblem_rect) {
@@ -338,7 +338,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         } else {
             Color32::from_rgb(220, 222, 228)
         };
-        icons::paint_bitwig_emblem(ui.painter(), emblem_rect, emb_col);
+        if let Some(tex) = crate::views::branding::energy_core_texture(ui.ctx()) {
+            let logo_rect = Rect::from_center_size(emblem_rect.center(), vec2(16.0, 16.0));
+            ui.painter().image(
+                tex.id(),
+                logo_rect,
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                emb_col,
+            );
+        } else {
+            icons::paint_bitwig_emblem(ui.painter(), emblem_rect, emb_col);
+        }
     }
     if emblem_resp.clicked() {
         state.control_panel_state.is_open = !state.control_panel_state.is_open;

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hikaru OpenLive
+Comment=Modular Digital Audio Workstation
+Exec=hikaru_openlive %F
+Icon=hikaru_openlive
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+StartupWMClass=hikaru_openlive

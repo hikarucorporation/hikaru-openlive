@@ -33,11 +33,14 @@ MAN1DIR    := $(DESTDIR)$(MANDIR)/man1
 # `$HOME/.local/share/man` está en el MANPATH (en la mayoría de las
 # distribuciones ya lo está).
 USER_MAN1DIR ?= $(HOME)/.local/share/man/man1
+USER_APPDIR  ?= $(HOME)/.local/share/applications
+USER_ICONDIR ?= $(HOME)/.local/share/icons/hicolor
 
 .PHONY: help all build release test run \
         status status-watch \
         man man-render man-check man-sync man-pack \
-        man-install man-install-user man-uninstall clean
+        man-install man-install-user man-uninstall \
+        desktop-install-user desktop-uninstall clean
 
 # --- La ayuda --------------------------------------------------------------
 
@@ -139,6 +142,23 @@ man-install-user:
 man-uninstall:
 	@rm -f $(MAN1DIR)/$(MAN_NAME).1 $(USER_MAN1DIR)/$(MAN_NAME).1
 	@echo "man: desinstalada"
+
+# --- Integración de escritorio (icono en Wayland/KDE/GNOME) ----------------
+
+desktop-install-user:
+	@mkdir -p $(USER_APPDIR) $(USER_ICONDIR)/scalable/apps $(USER_ICONDIR)/512x512/apps
+	@cp assets/hikaru_openlive.desktop $(USER_APPDIR)/hikaru_openlive.desktop
+	@cp assets/logos/hikaru_energy_core.svg $(USER_ICONDIR)/scalable/apps/hikaru_openlive.svg
+	@cp assets/logos/hikaru_energy_core.png $(USER_ICONDIR)/512x512/apps/hikaru_openlive.png
+	@if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database $(USER_APPDIR) || true; fi
+	@if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -f -t $(USER_ICONDIR) || true; fi
+	@echo "desktop: instalado en $(USER_APPDIR)/hikaru_openlive.desktop"
+
+desktop-uninstall:
+	@rm -f $(USER_APPDIR)/hikaru_openlive.desktop \
+	       $(USER_ICONDIR)/scalable/apps/hikaru_openlive.svg \
+	       $(USER_ICONDIR)/512x512/apps/hikaru_openlive.png
+	@echo "desktop: desinstalado"
 
 clean:
 	$(CARGO) clean
