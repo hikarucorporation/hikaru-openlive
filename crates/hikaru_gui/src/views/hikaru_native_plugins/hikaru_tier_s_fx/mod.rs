@@ -330,6 +330,7 @@ pub fn card_width(name: &str) -> Option<f32> {
 
 type StateMap = Mutex<HashMap<(usize, usize, String), Vec<f32>>>;
 type LoadedSet = Mutex<HashSet<(usize, usize, String)>>;
+type WetStateMap = Mutex<HashMap<(usize, usize, usize, String), Vec<f32>>>;
 
 fn state_map() -> &'static StateMap {
     static CELL: OnceLock<StateMap> = OnceLock::new();
@@ -339,6 +340,33 @@ fn state_map() -> &'static StateMap {
 fn loaded_set() -> &'static LoadedSet {
     static CELL: OnceLock<LoadedSet> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn wet_state_map() -> &'static WetStateMap {
+    static CELL: OnceLock<WetStateMap> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn clear_wet_fx_state(track_idx: usize, parent_slot_idx: usize) {
+    let mut map = wet_state_map().lock().unwrap();
+    map.retain(|k, _| !(k.0 == track_idx && k.1 == parent_slot_idx));
+}
+
+pub fn remove_wet_fx_slot_state(track_idx: usize, parent_slot_idx: usize, wet_idx: usize) {
+    let mut map = wet_state_map().lock().unwrap();
+    let old_entries: Vec<((usize, usize, usize, String), Vec<f32>)> = map
+        .iter()
+        .filter(|(k, _)| k.0 == track_idx && k.1 == parent_slot_idx)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    map.retain(|k, _| !(k.0 == track_idx && k.1 == parent_slot_idx));
+    for ((t, p, w, name), vals) in old_entries {
+        if w < wet_idx {
+            map.insert((t, p, w, name), vals);
+        } else if w > wet_idx {
+            map.insert((t, p, w - 1, name), vals);
+        }
+    }
 }
 
 fn format_param_value(desc: &ParamDesc, norm: f32) -> String {
@@ -415,6 +443,67 @@ pub fn render_module(
         }
     }
 
+    let changed = render_params_ui(ui, &spec, &mut values);
+
+    if changed {
+        state_map().lock().unwrap().insert(key, values.clone());
+        if let Some(et_idx) = engine_track_idx {
+            for (i, &v) in values.iter().enumerate() {
+                app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
+                    track_idx: et_idx,
+                    slot_idx,
+                    param_id: i as u32,
+                    value: v.clamp(0.0, 1.0),
+                });
+            }
+        }
+    }
+}
+
+pub fn render_wet_fx_module(
+    ui: &mut egui::Ui,
+    app: &mut AppState,
+    track_idx: usize,
+    parent_slot_idx: usize,
+    wet_idx: usize,
+    slot_name: &str,
+) {
+    let Some(spec) = spec_for(slot_name) else {
+        return;
+    };
+
+    let key = (
+        track_idx,
+        parent_slot_idx,
+        wet_idx,
+        spec.canonical_name.to_string(),
+    );
+    let mut values = {
+        let mut map = wet_state_map().lock().unwrap();
+        map.entry(key.clone())
+            .or_insert_with(|| spec.params.iter().map(|p| p.default_norm).collect())
+            .clone()
+    };
+
+    let changed = render_params_ui(ui, &spec, &mut values);
+
+    if changed {
+        wet_state_map().lock().unwrap().insert(key, values.clone());
+        if let Some(et_idx) = track_idx.checked_sub(1) {
+            for (i, &v) in values.iter().enumerate() {
+                app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetBit8WetFxParam {
+                    track_idx: et_idx,
+                    slot_idx: parent_slot_idx,
+                    wet_idx,
+                    param_id: i as u32,
+                    value: v.clamp(0.0, 1.0),
+                });
+            }
+        }
+    }
+}
+
+fn render_params_ui(ui: &mut egui::Ui, spec: &DeviceSpec, values: &mut [f32]) -> bool {
     let mut changed = false;
 
     ui.vertical_centered(|ui| {
@@ -543,17 +632,5 @@ pub fn render_module(
         }
     });
 
-    if changed {
-        state_map().lock().unwrap().insert(key, values.clone());
-        if let Some(et_idx) = engine_track_idx {
-            for (i, &v) in values.iter().enumerate() {
-                app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
-                    track_idx: et_idx,
-                    slot_idx,
-                    param_id: i as u32,
-                    value: v.clamp(0.0, 1.0),
-                });
-            }
-        }
-    }
+    changed
 }

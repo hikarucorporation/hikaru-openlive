@@ -1275,6 +1275,33 @@ impl AppState {
                             }
                         }
                     }
+                    // También poblar parámetros de plugins externos anidados dentro de Wet FX.
+                    for wet_slot in &mut slot.wet_fx_chain {
+                        if let Some(ref ext) = wet_slot.external {
+                            if ext.id == res.descriptor_id {
+                                wet_slot.has_gui = Some(res.has_gui);
+                                if let Some(ref err) = res.error {
+                                    wet_slot.params_status =
+                                        mixer::ExternalParamsStatus::Error(err.clone());
+                                } else {
+                                    wet_slot.cached_params = res
+                                        .params
+                                        .iter()
+                                        .cloned()
+                                        .map(|(info, val, text)| mixer::ExternalParamState {
+                                            info,
+                                            value: val,
+                                            display_text: Some(text),
+                                            pending_to_engine: false,
+                                            last_sent_effective: None,
+                                            last_sent_mod: 0.0,
+                                        })
+                                        .collect();
+                                    wet_slot.params_status = mixer::ExternalParamsStatus::Ready;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

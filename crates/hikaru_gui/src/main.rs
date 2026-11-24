@@ -640,6 +640,70 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         let _ = engine.load_native_effect(track_idx, slot_idx, &name);
                     }
                 }
+                GuiCommand::LoadBit8WetNativeEffect {
+                    track_idx,
+                    slot_idx,
+                    wet_idx,
+                    name,
+                } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        if let Err(e) = engine.load_bit8_wet_native_effect(track_idx, slot_idx, wet_idx, &name) {
+                            eprintln!("[Hikaru] No se pudo cargar Wet FX nativo '{}': {}", name, e);
+                        }
+                    }
+                }
+                GuiCommand::LoadBit8WetExternalPlugin {
+                    track_idx,
+                    slot_idx,
+                    wet_idx,
+                    descriptor,
+                } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        if let Err(e) = engine.load_bit8_wet_external_plugin(track_idx, slot_idx, wet_idx, &descriptor) {
+                            eprintln!("[Hikaru] No se pudo cargar Wet FX externo '{}': {}", descriptor.name, e);
+                        }
+                    }
+                }
+                GuiCommand::RemoveBit8WetFx {
+                    track_idx,
+                    slot_idx,
+                    wet_idx,
+                } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.remove_bit8_wet_fx(track_idx, slot_idx, wet_idx);
+                    }
+                }
+                GuiCommand::SetBit8WetFxActive {
+                    track_idx,
+                    slot_idx,
+                    wet_idx,
+                    active,
+                } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_bit8_wet_fx_active(track_idx, slot_idx, wet_idx, active);
+                    }
+                }
+                GuiCommand::SetBit8WetFxParam {
+                    track_idx,
+                    slot_idx,
+                    wet_idx,
+                    param_id,
+                    value,
+                } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_bit8_wet_fx_param(track_idx, slot_idx, wet_idx, param_id, value);
+                    }
+                }
+                GuiCommand::SyncBit8WetFxParams {
+                    track_idx,
+                    slot_idx,
+                    wet_idx,
+                    params,
+                } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.sync_bit8_wet_fx_params(track_idx, slot_idx, wet_idx, &params);
+                    }
+                }
                 GuiCommand::SyncExternalPluginParams { track_idx, slot_idx, params } => {
                     // Lock de verdad y no `try_lock`: el hilo de audio tiene
                     // tomado el motor durante `process()` y un `try_lock`

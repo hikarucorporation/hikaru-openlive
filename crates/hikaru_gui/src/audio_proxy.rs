@@ -409,4 +409,46 @@ pub enum GuiCommand {
         slot_idx: usize,
         name: String,
     },
+    /// Carga un efecto nativo dentro de la cadena anidada `Wet FX` de `Hikaru Open8-Bit`.
+    LoadBit8WetNativeEffect {
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        name: String,
+    },
+    /// Carga un plugin externo VST3/CLAP dentro de la cadena anidada `Wet FX` de `Hikaru Open8-Bit`.
+    LoadBit8WetExternalPlugin {
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        descriptor: hikaru_plugin_host::PluginDescriptor,
+    },
+    /// Elimina un efecto de la cadena anidada `Wet FX` de `Hikaru Open8-Bit`.
+    RemoveBit8WetFx {
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+    },
+    /// Activa o desactiva (bypass) un efecto dentro de `Wet FX` de `Hikaru Open8-Bit`.
+    SetBit8WetFxActive {
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        active: bool,
+    },
+    /// Actualiza un parámetro normalizado de un efecto dentro de `Wet FX` de `Hikaru Open8-Bit`.
+    SetBit8WetFxParam {
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        param_id: u32,
+        value: f32,
+    },
+    /// Sincroniza varios parámetros de un efecto dentro de `Wet FX` de `Hikaru Open8-Bit`.
+    SyncBit8WetFxParams {
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        params: Vec<(u32, f32)>,
+    },
 }

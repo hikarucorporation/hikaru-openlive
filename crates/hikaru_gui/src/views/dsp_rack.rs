@@ -530,6 +530,464 @@ fn render_dms_fx_plus_slot(
     );
 }
 
+fn wet_fx_nested_card_width(wet_slot: &crate::views::mixer::DspSlot) -> f32 {
+    if wet_slot.external.is_some() {
+        214.0
+    } else if let Some(w) =
+        crate::views::hikaru_native_plugins::hikaru_tier_s_fx::card_width(&wet_slot.name)
+    {
+        w
+    } else if matches!(
+        wet_slot.name.as_str(),
+        "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
+    ) {
+        crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH
+    } else {
+        220.0
+    }
+}
+
+/// Renderiza la cadena de dispositivos anidada `Wet FX` de `Hikaru Open8-Bit`
+/// exactamente como Bitwig Studio (`Bit-8 -> Wet FX`): un marco contenedor acoplado
+/// al borde derecho con dispositivos internos en serie y su propio botón `+` para
+/// insertar efectos de audio dentro de la señal wet.
+fn render_bit8_wet_fx_chain(
+    ui: &mut egui::Ui,
+    app: &mut AppState,
+    track_idx: usize,
+    parent_slot_idx: usize,
+    card_h: f32,
+) {
+    let wet_slots = app
+        .current_tracks()
+        .get(track_idx)
+        .and_then(|t| t.effects.get(parent_slot_idx))
+        .map(|s| s.wet_fx_chain.clone())
+        .unwrap_or_default();
+
+    let pad_x = 6.0_f32;
+    let gap = 5.0_f32;
+    let plus_w = 22.0_f32;
+    let top_bar_h = 13.0_f32;
+    let bot_pad = 5.0_f32;
+
+    let total_w = if wet_slots.is_empty() {
+        24.0
+    } else {
+        let cards_w: f32 = wet_slots.iter().map(wet_fx_nested_card_width).sum();
+        let gaps_w = gap * wet_slots.len() as f32;
+        pad_x * 2.0 + cards_w + gaps_w + plus_w
+    };
+
+    let (outer_rect, _) = ui.allocate_exact_size(vec2(total_w, card_h), Sense::hover());
+
+    // Marco contenedor anidado estilo Bitwig (borde gris-azulado + barra superior cyan)
+    let frame_rounding = egui::CornerRadius {
+        nw: 2,
+        sw: 2,
+        ne: 4,
+        se: 4,
+    };
+    let bracket_accent = Color32::from_rgb(0x40, 0x6A, 0x80);
+    let border_col = Color32::from_rgb(0x74, 0x7C, 0x88);
+    {
+        let p = ui.painter();
+        p.rect_filled(outer_rect, frame_rounding, Color32::from_rgb(0x14, 0x16, 0x1A));
+        p.rect_stroke(
+            outer_rect,
+            frame_rounding,
+            Stroke::new(1.25_f32, border_col),
+            egui::StrokeKind::Inside,
+        );
+        // Barra superior de acento Wet FX conectando visualmente con Open8-Bit
+        let bar_r = Rect::from_min_max(
+            pos2(outer_rect.min.x + 1.0, outer_rect.min.y + 1.0),
+            pos2(outer_rect.max.x - 1.0, outer_rect.min.y + 4.0),
+        );
+        p.rect_filled(bar_r, 1.0, bracket_accent);
+
+        if !wet_slots.is_empty() {
+            p.text(
+                pos2(outer_rect.min.x + 7.0, outer_rect.min.y + 8.5),
+                Align2::LEFT_CENTER,
+                "WET FX",
+                fonts::semibold(8.0),
+                theme::BW_LCD_CYAN,
+            );
+        }
+    }
+
+    let mut wet_to_remove: Option<usize> = None;
+    let mut cursor_x = outer_rect.min.x + if wet_slots.is_empty() { 1.0 } else { pad_x };
+    let nested_card_top = outer_rect.min.y + top_bar_h;
+    let nested_card_bot = outer_rect.max.y - bot_pad;
+    let nested_card_h = (nested_card_bot - nested_card_top).max(120.0);
+
+    for (wet_idx, wet_slot) in wet_slots.iter().enumerate() {
+        let w = wet_fx_nested_card_width(wet_slot);
+        let nested_rect = Rect::from_min_size(pos2(cursor_x, nested_card_top), vec2(w, nested_card_h));
+        cursor_x += w + gap;
+
+        let p = ui.painter();
+        p.rect_filled(nested_rect, 3.0, Color32::from_rgb(0x2B, 0x2D, 0x33));
+        p.rect_stroke(
+            nested_rect,
+            3.0,
+            Stroke::new(
+                1.0_f32,
+                if wet_slot.active {
+                    Color32::from_rgb(0x4A, 0x4E, 0x58)
+                } else {
+                    Color32::from_rgb(0x34, 0x36, 0x3C)
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+
+        let inner_rect = nested_rect.shrink2(vec2(5.0, 4.0));
+        let inner_w = inner_rect.width();
+        let mut card_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        card_ui.set_clip_rect(inner_rect.intersect(ui.clip_rect()));
+        card_ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
+
+        // Barra superior del dispositivo anidado: Power + Título + Quitar (×)
+        let (hdr_rect, _) = card_ui.allocate_exact_size(vec2(inner_w, 19.0), Sense::hover());
+        {
+            let active = wet_slot.active;
+            let pwr_r = Rect::from_min_size(
+                pos2(hdr_rect.min.x, hdr_rect.center().y - 8.0),
+                vec2(16.0, 16.0),
+            );
+            let pwr_resp = card_ui.interact(
+                pwr_r,
+                card_ui.id().with(("bit8_wet_pwr", track_idx, parent_slot_idx, wet_idx)),
+                Sense::click(),
+            );
+            icons::paint_power_switch(
+                card_ui.painter(),
+                pwr_r,
+                if active {
+                    theme::ACCENT_ORANGE
+                } else {
+                    Color32::from_rgb(0x44, 0x47, 0x50)
+                },
+                if active {
+                    Color32::from_rgb(0x14, 0x12, 0x10)
+                } else {
+                    Color32::from_rgb(0xB8, 0xBC, 0xC4)
+                },
+            );
+            if pwr_resp.on_hover_text("Wet FX Active / Bypass").clicked() {
+                let mut new_active = None;
+                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                    if let Some(parent) = t.effects.get_mut(parent_slot_idx) {
+                        if let Some(ws) = parent.wet_fx_chain.get_mut(wet_idx) {
+                            ws.active = !ws.active;
+                            new_active = Some(ws.active);
+                        }
+                    }
+                }
+                if let (Some(et_idx), Some(act)) = (track_idx.checked_sub(1), new_active) {
+                    app.audio_proxy
+                        .send(crate::audio_proxy::GuiCommand::SetBit8WetFxActive {
+                            track_idx: et_idx,
+                            slot_idx: parent_slot_idx,
+                            wet_idx,
+                            active: act,
+                        });
+                }
+                app.project_dirty = true;
+            }
+
+            let title_clip = Rect::from_min_max(
+                pos2(pwr_r.max.x + 4.0, hdr_rect.min.y),
+                pos2(hdr_rect.max.x - 18.0, hdr_rect.max.y),
+            );
+            card_ui.painter().with_clip_rect(title_clip).text(
+                pos2(title_clip.min.x, hdr_rect.center().y),
+                Align2::LEFT_CENTER,
+                &wet_slot.name,
+                fonts::semibold(10.5),
+                if active {
+                    theme::TEXT_PRIMARY
+                } else {
+                    theme::TEXT_MUTED
+                },
+            );
+
+            let close_r = Rect::from_min_size(
+                pos2(hdr_rect.max.x - 16.0, hdr_rect.center().y - 8.0),
+                vec2(16.0, 16.0),
+            );
+            let close_resp = card_ui.interact(
+                close_r,
+                card_ui
+                    .id()
+                    .with(("bit8_wet_close", track_idx, parent_slot_idx, wet_idx)),
+                Sense::click(),
+            );
+            if close_resp.hovered() {
+                card_ui
+                    .painter()
+                    .rect_filled(close_r, 2.5, Color32::from_rgb(0x48, 0x4A, 0x52));
+            }
+            icons::paint_icon(
+                card_ui.painter(),
+                close_r.shrink(3.0),
+                icons::X_CLOSE,
+                if close_resp.hovered() {
+                    Color32::WHITE
+                } else {
+                    theme::TEXT_MUTED
+                },
+                1.5,
+            );
+            if close_resp.on_hover_text("Remove from Wet FX").clicked() {
+                wet_to_remove = Some(wet_idx);
+            }
+        }
+
+        let sep_y = hdr_rect.max.y + 1.5;
+        card_ui.painter().line_segment(
+            [
+                pos2(inner_rect.min.x, sep_y),
+                pos2(inner_rect.max.x, sep_y),
+            ],
+            Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x25)),
+        );
+
+        let body_rect = Rect::from_min_max(
+            pos2(inner_rect.min.x, (sep_y + 2.0).min(inner_rect.max.y)),
+            inner_rect.max,
+        );
+        let mut body_ui = card_ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(body_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        body_ui.set_clip_rect(body_rect.intersect(card_ui.clip_rect()));
+
+        if let Some(ref ext) = wet_slot.external {
+            let fmt_badge = match ext.format {
+                hikaru_plugin_host::PluginFormat::VST3 => "VST3",
+                hikaru_plugin_host::PluginFormat::CLAP => "CLAP",
+            };
+            body_ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(fmt_badge)
+                        .font(fonts::semibold(8.5))
+                        .color(theme::BW_LCD_CYAN),
+                );
+                ui.label(
+                    RichText::new(&ext.vendor)
+                        .font(fonts::regular(8.5))
+                        .color(theme::TEXT_MUTED),
+                );
+            });
+            if wet_slot.cached_params.is_empty() {
+                body_ui.add_space(16.0);
+                body_ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new("Loading parameters…")
+                            .font(fonts::regular(9.5))
+                            .color(theme::TEXT_MUTED),
+                    );
+                });
+            } else {
+                let mut param_updates: Vec<(usize, u32, f32)> = Vec::new();
+                egui::ScrollArea::vertical()
+                    .id_salt(("bit8_wet_ext_params", track_idx, parent_slot_idx, wet_idx))
+                    .auto_shrink([false; 2])
+                    .show(&mut body_ui, |ui| {
+                        let avail_w = ui.available_width().max(120.0);
+                        let cols = 3usize;
+                        let col_w = (avail_w / cols as f32).floor();
+                        let row_h = 56.0;
+                        for (row_idx, chunk) in wet_slot.cached_params.chunks(cols).enumerate() {
+                            let (row_r, _) =
+                                ui.allocate_exact_size(vec2(avail_w, row_h), Sense::hover());
+                            for (c_idx, p_state) in chunk.iter().enumerate() {
+                                let p_idx = row_idx * cols + c_idx;
+                                let cell_r = Rect::from_min_size(
+                                    pos2(row_r.min.x + c_idx as f32 * col_w, row_r.min.y),
+                                    vec2(col_w, row_h),
+                                );
+                                let mut cell_ui = ui.new_child(
+                                    egui::UiBuilder::new()
+                                        .max_rect(cell_r)
+                                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                                );
+                                cell_ui.spacing_mut().item_spacing.y = 1.5;
+                                let mut pct = p_state.value * 100.0;
+                                let (k_resp, k_changed) = crate::ui::bitwig_kit::rotary_knob(
+                                    &mut cell_ui,
+                                    26.0,
+                                    &mut pct,
+                                    0.0..=100.0,
+                                    p_state.info.default_value * 100.0,
+                                    theme::BW_LCD_CYAN,
+                                    false,
+                                );
+                                k_resp.on_hover_text(format!(
+                                    "{}: {:.1}%",
+                                    p_state.info.name, pct
+                                ));
+                                if k_changed {
+                                    param_updates.push((
+                                        p_idx,
+                                        p_state.info.id,
+                                        (pct / 100.0).clamp(0.0, 1.0),
+                                    ));
+                                }
+                                let short_name: String =
+                                    p_state.info.name.chars().take(9).collect();
+                                cell_ui.label(
+                                    RichText::new(short_name)
+                                        .font(fonts::regular(8.5))
+                                        .color(theme::TEXT_SECONDARY),
+                                );
+                            }
+                        }
+                    });
+                if !param_updates.is_empty() {
+                    if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                        if let Some(parent) = t.effects.get_mut(parent_slot_idx) {
+                            if let Some(ws) = parent.wet_fx_chain.get_mut(wet_idx) {
+                                for &(p_idx, _, val) in &param_updates {
+                                    if let Some(ps) = ws.cached_params.get_mut(p_idx) {
+                                        ps.value = val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(et_idx) = track_idx.checked_sub(1) {
+                        for (_, param_id, value) in param_updates {
+                            app.audio_proxy.send(
+                                crate::audio_proxy::GuiCommand::SetBit8WetFxParam {
+                                    track_idx: et_idx,
+                                    slot_idx: parent_slot_idx,
+                                    wet_idx,
+                                    param_id,
+                                    value,
+                                },
+                            );
+                        }
+                    }
+                    app.project_dirty = true;
+                }
+            }
+        } else if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&wet_slot.name)
+        {
+            crate::views::hikaru_native_plugins::hikaru_tier_s_fx::render_wet_fx_module(
+                &mut body_ui,
+                app,
+                track_idx,
+                parent_slot_idx,
+                wet_idx,
+                &wet_slot.name,
+            );
+        } else if matches!(
+            wet_slot.name.as_str(),
+            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
+        ) {
+            crate::views::hikaru_native_plugins::hikaru_ultracomb::ultracomb::render_wet_fx_module(
+                &mut body_ui,
+                app,
+                track_idx,
+                parent_slot_idx,
+                wet_idx,
+            );
+        } else if wet_slot.name == "OpenEQ3" {
+            hikaru_openeq3::render_module(&mut body_ui);
+        } else {
+            body_ui.vertical_centered(|ui| {
+                ui.add_space(16.0);
+                ui.label(
+                    RichText::new(&wet_slot.name)
+                        .font(fonts::semibold(11.0))
+                        .color(theme::TEXT_SECONDARY),
+                );
+                ui.label(
+                    RichText::new("Wet FX Device")
+                        .font(fonts::regular(9.5))
+                        .color(theme::TEXT_MUTED),
+                );
+            });
+        }
+    }
+
+    if let Some(rem_idx) = wet_to_remove {
+        if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+            if let Some(parent) = t.effects.get_mut(parent_slot_idx) {
+                if rem_idx < parent.wet_fx_chain.len() {
+                    parent.wet_fx_chain.remove(rem_idx);
+                }
+            }
+        }
+        crate::views::hikaru_native_plugins::hikaru_tier_s_fx::remove_wet_fx_slot_state(
+            track_idx,
+            parent_slot_idx,
+            rem_idx,
+        );
+        crate::views::hikaru_native_plugins::hikaru_ultracomb::ultracomb::remove_wet_fx_slot_state(
+            track_idx,
+            parent_slot_idx,
+            rem_idx,
+        );
+        if let Some(et_idx) = track_idx.checked_sub(1) {
+            app.audio_proxy
+                .send(crate::audio_proxy::GuiCommand::RemoveBit8WetFx {
+                    track_idx: et_idx,
+                    slot_idx: parent_slot_idx,
+                    wet_idx: rem_idx,
+                });
+        }
+        app.project_dirty = true;
+    }
+
+    // Botón `+` interno dentro del marco Wet FX (exactamente como Bitwig Studio)
+    let plus_center = pos2(
+        outer_rect.max.x - (plus_w * 0.5) - 1.0,
+        outer_rect.center().y,
+    );
+    let plus_rect = Rect::from_center_size(plus_center, vec2(18.0, 28.0));
+    let plus_resp = ui
+        .interact(
+            plus_rect,
+            ui.id().with(("bit8_wet_fx_plus", track_idx, parent_slot_idx)),
+            Sense::click(),
+        )
+        .on_hover_text("Insert Audio FX into Wet FX chain");
+    if plus_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(
+            plus_rect.shrink2(vec2(1.0, 4.0)),
+            3.0,
+            Color32::from_rgb(0x2A, 0x33, 0x3E),
+        );
+    }
+    ui.painter().text(
+        plus_rect.center(),
+        Align2::CENTER_CENTER,
+        "+",
+        fonts::semibold(14.0),
+        if plus_resp.hovered() {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(0xB8, 0xC0, 0xCC)
+        },
+    );
+    if plus_resp.clicked() {
+        app.popup_browser
+            .open_insert_wet_fx(track_idx, parent_slot_idx);
+    }
+}
+
 pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     crate::views::remote_controls::sync_global_mapping_flag(app);
     let track_idx = app.safe_track_index();
@@ -1282,6 +1740,13 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                     });
                                 }
                             }
+                        }
+
+                        // Cadena anidada Wet FX de Hikaru Open8-Bit (estilo Bitwig Studio Bit-8)
+                        if hikaru_bit8::is_bit8_name(&slot.name)
+                            && hikaru_bit8::is_wet_fx_open(track_idx, slot_idx)
+                        {
+                            render_bit8_wet_fx_chain(ui, app, track_idx, slot_idx, card_h);
                         }
 
                         // Cadena FX anidada del pad seleccionado en Hikaru OpenDMS (ej. Hikaru Sampler)

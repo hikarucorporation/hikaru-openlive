@@ -13,6 +13,7 @@ const DEFAULTS: [f32; 2] = [50.0, 60.0];
 
 type StateMap = Mutex<HashMap<(usize, usize), [f32; 2]>>;
 type LoadedSet = Mutex<HashSet<(usize, usize)>>;
+type WetStateMap = Mutex<HashMap<(usize, usize, usize), [f32; 2]>>;
 
 fn state_map() -> &'static StateMap {
     static CELL: OnceLock<StateMap> = OnceLock::new();
@@ -22,6 +23,123 @@ fn state_map() -> &'static StateMap {
 fn loaded_set() -> &'static LoadedSet {
     static CELL: OnceLock<LoadedSet> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn wet_state_map() -> &'static WetStateMap {
+    static CELL: OnceLock<WetStateMap> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn clear_wet_fx_state(track_idx: usize, parent_slot_idx: usize) {
+    let mut map = wet_state_map().lock().unwrap();
+    map.retain(|k, _| !(k.0 == track_idx && k.1 == parent_slot_idx));
+}
+
+pub fn remove_wet_fx_slot_state(track_idx: usize, parent_slot_idx: usize, wet_idx: usize) {
+    let mut map = wet_state_map().lock().unwrap();
+    let old_entries: Vec<((usize, usize, usize), [f32; 2])> = map
+        .iter()
+        .filter(|(k, _)| k.0 == track_idx && k.1 == parent_slot_idx)
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    map.retain(|k, _| !(k.0 == track_idx && k.1 == parent_slot_idx));
+    for ((t, p, w), vals) in old_entries {
+        if w < wet_idx {
+            map.insert((t, p, w), vals);
+        } else if w > wet_idx {
+            map.insert((t, p, w - 1), vals);
+        }
+    }
+}
+
+pub fn render_wet_fx_module(
+    ui: &mut egui::Ui,
+    app: &mut AppState,
+    track_idx: usize,
+    parent_slot_idx: usize,
+    wet_idx: usize,
+) {
+    let key = (track_idx, parent_slot_idx, wet_idx);
+    let mut params = {
+        let mut map = wet_state_map().lock().unwrap();
+        *map.entry(key).or_insert(DEFAULTS)
+    };
+    let mut changed = false;
+
+    ui.vertical_centered(|ui| {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Hikaru Ultracomb")
+                .size(11.0)
+                .strong()
+                .color(theme::ACCENT_PRIMARY),
+        );
+        ui.add_space(6.0);
+
+        let avail_w = ui.available_width().max(120.0);
+        let col_w = (avail_w / 2.0).floor();
+        let row_h = 62.0;
+        let (row_rect, _) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::hover());
+
+        for (i, name) in PARAM_NAMES.iter().enumerate() {
+            let cell_rect = egui::Rect::from_min_size(
+                egui::pos2(row_rect.min.x + i as f32 * col_w, row_rect.min.y),
+                egui::vec2(col_w, row_h),
+            );
+            let mut cell_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(cell_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Center)),
+            );
+            cell_ui.spacing_mut().item_spacing.y = 2.0;
+
+            let mut val = params[i];
+            let color = if i == 0 {
+                theme::BW_LCD_CYAN
+            } else {
+                theme::ACCENT_ORANGE
+            };
+            let (k_resp, k_changed) = crate::ui::bitwig_kit::rotary_knob(
+                &mut cell_ui,
+                32.0,
+                &mut val,
+                0.0..=100.0,
+                DEFAULTS[i],
+                color,
+                false,
+            );
+            k_resp.on_hover_text(format!("{name}: {val:.1}%"));
+            if k_changed {
+                params[i] = val;
+                changed = true;
+            }
+            cell_ui.label(
+                egui::RichText::new(*name)
+                    .font(crate::ui::fonts::semibold(9.5))
+                    .color(theme::TEXT_SECONDARY),
+            );
+            cell_ui.label(
+                egui::RichText::new(format!("{val:.0}%"))
+                    .font(crate::ui::fonts::regular(8.5))
+                    .color(theme::TEXT_MUTED),
+            );
+        }
+    });
+
+    if changed {
+        wet_state_map().lock().unwrap().insert(key, params);
+        if let Some(et_idx) = track_idx.checked_sub(1) {
+            for (i, &v) in params.iter().enumerate() {
+                app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetBit8WetFxParam {
+                    track_idx: et_idx,
+                    slot_idx: parent_slot_idx,
+                    wet_idx,
+                    param_id: i as u32,
+                    value: (v / 100.0).clamp(0.0, 1.0),
+                });
+            }
+        }
+    }
 }
 
 pub fn get_params(track_idx: usize, slot_idx: usize) -> [f32; 2] {

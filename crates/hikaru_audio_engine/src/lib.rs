@@ -2518,6 +2518,58 @@ impl<'a> AudioEngine<'a> {
         Ok(())
     }
 
+    fn instantiate_native_effect(
+        sample_rate: f32,
+        name: &str,
+    ) -> Result<
+        (
+            Box<dyn PluginInstance>,
+            Option<std::sync::Arc<hikaru_dsp::effects::Bit8Telemetry>>,
+        ),
+        String,
+    > {
+        let mut bit8_telemetry = None;
+        let instance: Box<dyn PluginInstance> = match name {
+            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
+                Box::new(hikaru_dsp::effects::UltracombFilter::new(sample_rate))
+            }
+            "Tool" | "Hikaru Tool" => {
+                Box::new(hikaru_dsp::effects::ToolEffect::new(sample_rate))
+            }
+            "DC Offset" | "Hikaru DC Offset" => {
+                Box::new(hikaru_dsp::effects::DcOffsetEffect::new(sample_rate))
+            }
+            "Dual Pan" | "Hikaru Dual Pan" => {
+                Box::new(hikaru_dsp::effects::DualPanEffect::new(sample_rate))
+            }
+            "Test Tone" | "Hikaru Test Tone" => {
+                Box::new(hikaru_dsp::effects::TestToneEffect::new(sample_rate))
+            }
+            "Time Shift" | "Hikaru Time Shift" => {
+                Box::new(hikaru_dsp::effects::TimeShiftEffect::new(sample_rate))
+            }
+            "Tremolo" | "Hikaru Tremolo" => {
+                Box::new(hikaru_dsp::effects::TremoloEffect::new(sample_rate))
+            }
+            "Ring-Mod" | "Ring Mod" | "Hikaru Ring-Mod" => {
+                Box::new(hikaru_dsp::effects::RingModEffect::new(sample_rate))
+            }
+            "Hikaru Open8-Bit"
+            | "Hikaru Open8-bit"
+            | "Open8-Bit"
+            | "Open8-bit"
+            | "Bit-8"
+            | "Bit 8"
+            | "Hikaru Bit-8" => {
+                let fx = hikaru_dsp::effects::Bit8Effect::new(sample_rate);
+                bit8_telemetry = Some(fx.telemetry());
+                Box::new(fx)
+            }
+            _ => return Err(format!("Efecto nativo desconocido: {name}")),
+        };
+        Ok((instance, bit8_telemetry))
+    }
+
     pub fn load_native_effect(
         &mut self,
         track_idx: usize,
@@ -2530,6 +2582,7 @@ impl<'a> AudioEngine<'a> {
         hikaru_plugin_host::tap::unregister((track_idx, slot_idx));
         hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, slot_idx));
 
+        let sample_rate = self.sample_rate;
         let chain = &mut self.track_effects[track_idx];
         if let Some(pos) = chain.iter().position(|n| n.slot_idx == slot_idx) {
             chain.remove(pos);
@@ -2537,45 +2590,7 @@ impl<'a> AudioEngine<'a> {
             return Ok(());
         }
 
-        let mut bit8_telemetry = None;
-        let instance: Box<dyn PluginInstance> = match name {
-            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
-                Box::new(hikaru_dsp::effects::UltracombFilter::new(self.sample_rate))
-            }
-            "Tool" | "Hikaru Tool" => {
-                Box::new(hikaru_dsp::effects::ToolEffect::new(self.sample_rate))
-            }
-            "DC Offset" | "Hikaru DC Offset" => {
-                Box::new(hikaru_dsp::effects::DcOffsetEffect::new(self.sample_rate))
-            }
-            "Dual Pan" | "Hikaru Dual Pan" => {
-                Box::new(hikaru_dsp::effects::DualPanEffect::new(self.sample_rate))
-            }
-            "Test Tone" | "Hikaru Test Tone" => {
-                Box::new(hikaru_dsp::effects::TestToneEffect::new(self.sample_rate))
-            }
-            "Time Shift" | "Hikaru Time Shift" => {
-                Box::new(hikaru_dsp::effects::TimeShiftEffect::new(self.sample_rate))
-            }
-            "Tremolo" | "Hikaru Tremolo" => {
-                Box::new(hikaru_dsp::effects::TremoloEffect::new(self.sample_rate))
-            }
-            "Ring-Mod" | "Ring Mod" | "Hikaru Ring-Mod" => {
-                Box::new(hikaru_dsp::effects::RingModEffect::new(self.sample_rate))
-            }
-            "Hikaru Open8-Bit"
-            | "Hikaru Open8-bit"
-            | "Open8-Bit"
-            | "Open8-bit"
-            | "Bit-8"
-            | "Bit 8"
-            | "Hikaru Bit-8" => {
-                let fx = hikaru_dsp::effects::Bit8Effect::new(self.sample_rate);
-                bit8_telemetry = Some(fx.telemetry());
-                Box::new(fx)
-            }
-            _ => return Err(format!("Efecto nativo desconocido: {name}")),
-        };
+        let (instance, bit8_telemetry) = Self::instantiate_native_effect(sample_rate, name)?;
 
         let mut node = hikaru_dsp::DspPluginNode::new(
             name.to_string(),
@@ -2600,6 +2615,141 @@ impl<'a> AudioEngine<'a> {
             name, track_idx, slot_idx
         );
         Ok(())
+    }
+
+    fn find_bit8_mut(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+    ) -> Option<&mut hikaru_dsp::effects::Bit8Effect> {
+        if track_idx >= 16 {
+            return None;
+        }
+        let node = self.track_effects[track_idx]
+            .iter_mut()
+            .find(|n| n.slot_idx == slot_idx)?;
+        node.instance
+            .as_any_mut()?
+            .downcast_mut::<hikaru_dsp::effects::Bit8Effect>()
+    }
+
+    pub fn load_bit8_wet_native_effect(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        name: &str,
+    ) -> Result<(), String> {
+        if track_idx >= 16 {
+            return Err(format!("Índice de pista fuera de rango: {track_idx}"));
+        }
+        let (instance, bit8_telemetry) = Self::instantiate_native_effect(self.sample_rate, name)?;
+        let mut node = hikaru_dsp::DspPluginNode::new(
+            name.to_string(),
+            hikaru_dsp::PluginCategory::Vst3Fx,
+            instance,
+        )
+        .with_slot_idx(wet_idx);
+        if let Some(telem) = bit8_telemetry {
+            node.set_bit8_telemetry(Some(telem));
+        }
+        let bit8 = self
+            .find_bit8_mut(track_idx, slot_idx)
+            .ok_or_else(|| format!("Open8-Bit no encontrado en pista {track_idx} slot {slot_idx}"))?;
+        bit8.insert_wet_fx(node);
+        self.prepare_pdc_buffers();
+        println!(
+            "[AudioEngine] Wet FX nativo '{}' cargado en Open8-Bit pista {} slot {} wet_idx {}",
+            name, track_idx, slot_idx, wet_idx
+        );
+        Ok(())
+    }
+
+    pub fn load_bit8_wet_external_plugin(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        descriptor: &hikaru_plugin_host::PluginDescriptor,
+    ) -> Result<(), String> {
+        if track_idx >= 16 {
+            return Err(format!("Índice de pista fuera de rango: {track_idx}"));
+        }
+        let mut instance: Box<dyn PluginInstance> = match descriptor.format {
+            PluginFormat::VST3 => {
+                match hikaru_plugin_host::Vst3Instance::load(&descriptor.path) {
+                    Ok(inst) => Box::new(inst),
+                    Err(e) => return Err(format!("VST3: {e}")),
+                }
+            }
+            PluginFormat::CLAP => {
+                match hikaru_plugin_host::ClapInstance::load(&descriptor.path) {
+                    Ok(inst) => Box::new(inst),
+                    Err(e) => return Err(format!("CLAP: {e}")),
+                }
+            }
+        };
+        instance.set_sample_rate(self.sample_rate);
+        let category = match descriptor.format {
+            PluginFormat::VST3 => hikaru_dsp::PluginCategory::Vst3Fx,
+            PluginFormat::CLAP => hikaru_dsp::PluginCategory::ClapFx,
+        };
+        let node = hikaru_dsp::DspPluginNode::new(descriptor.name.clone(), category, instance)
+            .with_slot_idx(wet_idx);
+        let bit8 = self
+            .find_bit8_mut(track_idx, slot_idx)
+            .ok_or_else(|| format!("Open8-Bit no encontrado en pista {track_idx} slot {slot_idx}"))?;
+        bit8.insert_wet_fx(node);
+        self.prepare_pdc_buffers();
+        println!(
+            "[AudioEngine] Wet FX externo '{}' cargado en Open8-Bit pista {} slot {} wet_idx {}",
+            descriptor.name, track_idx, slot_idx, wet_idx
+        );
+        Ok(())
+    }
+
+    pub fn remove_bit8_wet_fx(&mut self, track_idx: usize, slot_idx: usize, wet_idx: usize) {
+        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
+            bit8.remove_wet_fx(wet_idx);
+            self.prepare_pdc_buffers();
+        }
+    }
+
+    pub fn set_bit8_wet_fx_active(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        active: bool,
+    ) {
+        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
+            bit8.set_wet_fx_active(wet_idx, active);
+        }
+    }
+
+    pub fn set_bit8_wet_fx_param(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        param_id: u32,
+        value: f32,
+    ) {
+        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
+            bit8.set_wet_fx_param(wet_idx, param_id, value);
+        }
+    }
+
+    pub fn sync_bit8_wet_fx_params(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        wet_idx: usize,
+        params: &[(u32, f32)],
+    ) {
+        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
+            bit8.sync_wet_fx_params(wet_idx, params);
+        }
     }
 
     /// Quita un plugin externo de un slot y desplaza los `slot_idx` posteriores

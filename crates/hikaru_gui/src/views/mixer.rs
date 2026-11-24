@@ -120,6 +120,8 @@ pub struct DspSlot {
     /// Parámetros modificados desde el rack mientras la ventana nativa estaba cerrada;
     /// se aplican encima de `saved_state` al reabrir para no perder cambios del rack.
     pub rack_overrides_since_state: Vec<(u32, f32)>,
+    /// Cadena de dispositivos anidados `Wet FX` (estilo Bitwig Studio, ej. en `Hikaru Open8-Bit`).
+    pub wet_fx_chain: Vec<DspSlot>,
 }
 
 impl Default for DspSlot {
@@ -177,6 +179,7 @@ impl DspSlot {
             engine_loaded: false,
             saved_state: None,
             rack_overrides_since_state: Vec::new(),
+            wet_fx_chain: Vec::new(),
         }
     }
 

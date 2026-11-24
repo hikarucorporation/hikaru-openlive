@@ -49,6 +49,7 @@ pub enum BrowserTargetMode {
     NewInstrumentTrack,
     InsertDevice { track_idx: usize },
     InsertModulator { track_idx: usize, slot_idx: usize },
+    InsertWetFx { track_idx: usize, parent_slot_idx: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -209,6 +210,20 @@ impl PopupBrowserState {
         self.open = true;
         self.mode = BrowserTargetMode::InsertDevice { track_idx };
         self.active_rail = BrowserRailTab::Everything;
+        self.quick_filter = None;
+        self.selected_filter_value = None;
+        self.search_query.clear();
+        self.selected_item_idx = 0;
+        self.focus_search = true;
+    }
+
+    pub fn open_insert_wet_fx(&mut self, track_idx: usize, parent_slot_idx: usize) {
+        self.open = true;
+        self.mode = BrowserTargetMode::InsertWetFx {
+            track_idx,
+            parent_slot_idx,
+        };
+        self.active_rail = BrowserRailTab::AudioFx;
         self.quick_filter = None;
         self.selected_filter_value = None;
         self.search_query.clear();
@@ -755,6 +770,55 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
             if let BrowserPayload::Modulator { kind } = item.payload {
                 hikaru_openmodulation::add_bay_modulator(track_idx, slot_idx, kind);
                 state.project_dirty = true;
+            }
+        }
+        BrowserTargetMode::InsertWetFx {
+            track_idx,
+            parent_slot_idx,
+        } => {
+            let mut slot = build_slot(item);
+            let slot_name = slot.name.clone();
+            let ext_desc = slot.external.clone();
+            if ext_desc.is_some() {
+                slot.engine_loaded = true;
+            }
+            let mut inserted_wet_idx: Option<usize> = None;
+            if let Some(track) = state.current_tracks_mut().get_mut(track_idx) {
+                if let Some(parent) = track.effects.get_mut(parent_slot_idx) {
+                    let wet_idx = parent.wet_fx_chain.len();
+                    parent.wet_fx_chain.push(slot);
+                    inserted_wet_idx = Some(wet_idx);
+                }
+            }
+            if let Some(wet_idx) = inserted_wet_idx {
+                state.selected_track_index = track_idx;
+                state.selected_slot_index = parent_slot_idx;
+                state.show_dsp_rack = true;
+                state.project_dirty = true;
+
+                if let Some(desc) = ext_desc {
+                    if let Some(et_idx) = track_idx.checked_sub(1) {
+                        state.audio_proxy.send(GuiCommand::LoadBit8WetExternalPlugin {
+                            track_idx: et_idx,
+                            slot_idx: parent_slot_idx,
+                            wet_idx,
+                            descriptor: desc.clone(),
+                        });
+                    }
+                    state.request_external_params(&desc);
+                } else if slot_name == "Hikaru Ultracomb"
+                    || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
+                {
+                    if let Some(et_idx) = track_idx.checked_sub(1) {
+                        state.audio_proxy.send(GuiCommand::LoadBit8WetNativeEffect {
+                            track_idx: et_idx,
+                            slot_idx: parent_slot_idx,
+                            wet_idx,
+                            name: slot_name,
+                        });
+                    }
+                }
             }
         }
     }

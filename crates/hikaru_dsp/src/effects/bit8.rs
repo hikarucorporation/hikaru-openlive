@@ -791,10 +791,15 @@ pub struct Bit8Effect {
     freq_rng: XorShift32,
     dither_rng: XorShift32,
 
-    // Filtros de la cadena Wet FX
+    // Filtros de la cadena Wet FX (legacy HP/LP/Gain)
     wet_hp_prev_in: [f32; 2],
     wet_hp_prev_out: [f32; 2],
     wet_lp_state: [f32; 2],
+
+    // Cadena de dispositivos anidados Wet FX (estilo Bitwig Studio Bit-8)
+    wet_chain: Vec<crate::plugin_node::DspPluginNode>,
+    // Buffer scratch prealocado para la señal dry durante `process()` (cero alocaciones RT)
+    dry_scratch: Vec<f32>,
 }
 
 impl Bit8Effect {
@@ -825,6 +830,58 @@ impl Bit8Effect {
             wet_hp_prev_in: [0.0; 2],
             wet_hp_prev_out: [0.0; 2],
             wet_lp_state: [0.0; 2],
+            wet_chain: Vec::new(),
+            dry_scratch: vec![0.0; 8192],
+        }
+    }
+
+    pub fn wet_chain(&self) -> &[crate::plugin_node::DspPluginNode] {
+        &self.wet_chain
+    }
+
+    pub fn wet_chain_mut(&mut self) -> &mut Vec<crate::plugin_node::DspPluginNode> {
+        &mut self.wet_chain
+    }
+
+    pub fn insert_wet_fx(&mut self, mut node: crate::plugin_node::DspPluginNode) {
+        node.instance.set_sample_rate(self.sample_rate);
+        if let Some(pos) = self.wet_chain.iter().position(|n| n.slot_idx == node.slot_idx) {
+            self.wet_chain.remove(pos);
+        }
+        let insert_pos = self
+            .wet_chain
+            .iter()
+            .position(|n| n.slot_idx > node.slot_idx)
+            .unwrap_or(self.wet_chain.len());
+        self.wet_chain.insert(insert_pos, node);
+    }
+
+    pub fn remove_wet_fx(&mut self, wet_idx: usize) {
+        if let Some(pos) = self.wet_chain.iter().position(|n| n.slot_idx == wet_idx) {
+            self.wet_chain.remove(pos);
+        }
+        for n in &mut self.wet_chain {
+            if n.slot_idx > wet_idx {
+                n.slot_idx -= 1;
+            }
+        }
+    }
+
+    pub fn set_wet_fx_active(&mut self, wet_idx: usize, active: bool) {
+        if let Some(node) = self.wet_chain.iter_mut().find(|n| n.slot_idx == wet_idx) {
+            node.is_active = active;
+        }
+    }
+
+    pub fn set_wet_fx_param(&mut self, wet_idx: usize, param_id: u32, value: f32) {
+        if let Some(node) = self.wet_chain.iter_mut().find(|n| n.slot_idx == wet_idx) {
+            node.set_param_normalized(param_id, value);
+        }
+    }
+
+    pub fn sync_wet_fx_params(&mut self, wet_idx: usize, params: &[(u32, f32)]) {
+        if let Some(node) = self.wet_chain.iter_mut().find(|n| n.slot_idx == wet_idx) {
+            node.sync_params(params);
         }
     }
 
@@ -1011,7 +1068,7 @@ impl Bit8Effect {
     }
 
     #[inline]
-    pub fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
+    pub fn process_degrade_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
         let p = self.params;
         let sr = self.sample_rate;
 
@@ -1175,30 +1232,98 @@ impl Bit8Effect {
             wet[ch] = if s.is_finite() { s.clamp(-4.0, 4.0) } else { 0.0 };
         }
 
+        (wet[0], wet[1])
+    }
+
+    #[inline]
+    fn apply_output_stage(&self, dry_l: f32, dry_r: f32, wet_l: f32, wet_r: f32) -> (f32, f32) {
+        let wl_in = if wet_l.is_finite() { wet_l } else { 0.0 };
+        let wr_in = if wet_r.is_finite() { wet_r } else { 0.0 };
+
         // 9. Stereo Width (Mid/Side post Wet FX).
-        let half_l = 0.5 * wet[0];
-        let half_r = 0.5 * wet[1];
-        let w = p.width;
+        let half_l = 0.5 * wl_in;
+        let half_r = 0.5 * wr_in;
+        let w = self.params.width;
         let wl = half_l * (1.0 + w) + half_r * (1.0 - w);
         let wr = half_r * (1.0 + w) + half_l * (1.0 - w);
 
         // 10. Equal-Gain Dry / Wet Mix.
-        let m = p.mix;
-        (in_l * (1.0 - m) + wl * m, in_r * (1.0 - m) + wr * m)
+        let m = self.params.mix;
+        (dry_l * (1.0 - m) + wl * m, dry_r * (1.0 - m) + wr * m)
+    }
+
+    #[inline]
+    pub fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
+        let in_l = if left.is_finite() { left } else { 0.0 };
+        let in_r = if right.is_finite() { right } else { 0.0 };
+        let (wet_l, wet_r) = self.process_degrade_stereo(in_l, in_r);
+        self.apply_output_stage(in_l, in_r, wet_l, wet_r)
     }
 }
 
 impl PluginInstance for Bit8Effect {
     fn process(&mut self, buffer: &mut AudioBuffer) {
+        if self.wet_chain.is_empty() {
+            for frame in buffer.samples.chunks_exact_mut(2) {
+                let (l, r) = self.process_stereo(frame[0], frame[1]);
+                frame[0] = l;
+                frame[1] = r;
+            }
+            return;
+        }
+
+        let n = buffer.samples.len();
+        if self.dry_scratch.len() < n {
+            self.dry_scratch.resize(n, 0.0);
+        }
+        self.dry_scratch[..n].copy_from_slice(&buffer.samples);
+
+        // 1..8: degradación digital sobre la rama wet.
         for frame in buffer.samples.chunks_exact_mut(2) {
-            let (l, r) = self.process_stereo(frame[0], frame[1]);
-            frame[0] = l;
-            frame[1] = r;
+            let (wl, wr) = self.process_degrade_stereo(frame[0], frame[1]);
+            frame[0] = wl;
+            frame[1] = wr;
+        }
+
+        // Cadena anidada Wet FX (procesa exclusivamente la señal wet).
+        for node in &mut self.wet_chain {
+            if node.is_active {
+                node.process(buffer, &[]);
+            }
+        }
+
+        // 9..10: Stereo Width y Equal-Gain Dry/Wet Mix.
+        for (i, frame) in buffer.samples.chunks_exact_mut(2).enumerate() {
+            let dry_l = self.dry_scratch[i * 2];
+            let dry_r = self.dry_scratch[i * 2 + 1];
+            let (out_l, out_r) = self.apply_output_stage(dry_l, dry_r, frame[0], frame[1]);
+            frame[0] = out_l;
+            frame[1] = out_r;
         }
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(8_000.0);
+        for node in &mut self.wet_chain {
+            node.instance.set_sample_rate(self.sample_rate);
+        }
+    }
+
+    fn latency_samples(&self) -> u32 {
+        self.wet_chain
+            .iter()
+            .map(|n| n.latency_samples())
+            .sum()
+    }
+
+    fn set_transport(&mut self, transport: hikaru_plugin_host::HostTransportInfo) {
+        for node in &mut self.wet_chain {
+            node.set_transport(transport);
+        }
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
     fn show_gui_embedded(&mut self, _: hikaru_plugin_host::RawWindowHandle) -> Result<(), String> {
@@ -1536,5 +1661,81 @@ mod tests {
             let v2 = fx.get_param_normalized(id).unwrap();
             assert!((v - v2).abs() < 1e-3, "param {id} drifted: {v} vs {v2}");
         }
+    }
+
+    #[test]
+    fn bit8_wet_fx_chain_processes_only_wet_signal() {
+        use crate::effects::ToolEffect;
+        use crate::plugin_node::{DspPluginNode, PluginCategory};
+
+        let mut fx = Bit8Effect::new(48_000.0);
+        fx.set_params(Bit8Params {
+            clock_hz: 100_000.0,
+            jitter: 0.0,
+            gate_db: -96.0,
+            quantize_db: -96.0,
+            mix: 1.0,
+            ..Bit8Params::default()
+        });
+
+        // ToolEffect con Invert L + Invert R activados (param_id 3 & 4 = 1.0) dentro de Wet FX.
+        let mut tool = ToolEffect::new(48_000.0);
+        tool.set_param_normalized(3, 1.0); // invert_left = true
+        tool.set_param_normalized(4, 1.0); // invert_right = true
+        let node = DspPluginNode::new(
+            "Tool".to_string(),
+            PluginCategory::Vst3Fx,
+            Box::new(tool),
+        )
+        .with_slot_idx(0);
+        fx.insert_wet_fx(node);
+
+        // Con Mix = 100% y Tool invirtiendo fase en Wet FX, la salida debe ser negativa (~ -0.5).
+        let mut samples_wet = vec![0.5_f32; 64];
+        {
+            let mut buf = AudioBuffer {
+                samples: &mut samples_wet,
+            };
+            fx.process(&mut buf);
+        }
+        assert!(
+            samples_wet[62] < -0.4,
+            "expected phase-inverted wet output, got {}",
+            samples_wet[62]
+        );
+
+        // Con Mix = 0% (100% Dry), la señal dry debe pasar intacta (+0.5) aunque Wet FX invierta fase.
+        let mut p = fx.params();
+        p.mix = 0.0;
+        fx.set_params(p);
+        let mut samples_dry = vec![0.5_f32; 64];
+        {
+            let mut buf = AudioBuffer {
+                samples: &mut samples_dry,
+            };
+            fx.process(&mut buf);
+        }
+        assert!(
+            (samples_dry[0] - 0.5).abs() < 1e-5,
+            "expected untouched dry signal, got {}",
+            samples_dry[0]
+        );
+
+        // Con bypass en el nodo Wet FX y Mix = 100%, la señal wet vuelve a ser positiva (~ +0.5).
+        p.mix = 1.0;
+        fx.set_params(p);
+        fx.set_wet_fx_active(0, false);
+        let mut samples_bypass = vec![0.5_f32; 64];
+        {
+            let mut buf = AudioBuffer {
+                samples: &mut samples_bypass,
+            };
+            fx.process(&mut buf);
+        }
+        assert!(
+            samples_bypass[62] > 0.4,
+            "expected positive wet signal after bypass, got {}",
+            samples_bypass[62]
+        );
     }
 }

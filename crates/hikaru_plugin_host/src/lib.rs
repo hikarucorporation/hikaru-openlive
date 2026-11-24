@@ -266,6 +266,12 @@ pub trait PluginInstance: Send {
     fn hide_gui(&mut self);
     fn get_name(&self) -> &str;
 
+    /// Downcast mutable opcional para instancias nativas que exponen cadenas
+    /// anidadas (por ejemplo, la cadena `Wet FX` de `Hikaru Open8-Bit`).
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
+
     /// Bompea el editor: el equivalente por formato a un `idle()` del host.
     ///
     /// Lo llama el tick de [`hikaru_wrapper::WrapperEventLoop`], a ritmo fijo

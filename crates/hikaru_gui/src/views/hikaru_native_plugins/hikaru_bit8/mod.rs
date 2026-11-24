@@ -104,23 +104,26 @@ fn loaded_set() -> &'static LoadedSet {
     CELL.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-pub fn card_width_for_slot(track_idx: usize, slot_idx: usize) -> f32 {
-    let open = state_map()
+pub fn is_wet_fx_open(track_idx: usize, slot_idx: usize) -> bool {
+    state_map()
         .lock()
         .unwrap()
         .get(&(track_idx, slot_idx))
         .map(|s| s.wet_fx_open)
-        .unwrap_or(false);
-    if open {
-        BIT8_BASE_CARD_WIDTH + BIT8_WET_FX_DRAWER_WIDTH
-    } else {
-        BIT8_BASE_CARD_WIDTH
-    }
+        .unwrap_or(false)
+}
+
+pub fn card_width_for_slot(_track_idx: usize, _slot_idx: usize) -> f32 {
+    BIT8_BASE_CARD_WIDTH
 }
 
 pub fn clear_slot_state(track_idx: usize, slot_idx: usize) {
     state_map().lock().unwrap().remove(&(track_idx, slot_idx));
     loaded_set().lock().unwrap().remove(&(track_idx, slot_idx));
+    crate::views::hikaru_native_plugins::hikaru_tier_s_fx::clear_wet_fx_state(track_idx, slot_idx);
+    crate::views::hikaru_native_plugins::hikaru_ultracomb::ultracomb::clear_wet_fx_state(
+        track_idx, slot_idx,
+    );
 }
 
 pub struct Bit8Preset {
@@ -808,20 +811,7 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
 
     let clock_w = 62.0;
     let right_w = 64.0;
-    let drawer_w = if wet_fx_open {
-        BIT8_WET_FX_DRAWER_WIDTH - 4.0
-    } else {
-        0.0
-    };
-    let drawer_gap = if wet_fx_open { gap } else { 0.0 };
-    let center_w = (full_rect.width()
-        - pad * 2.0
-        - clock_w
-        - right_w
-        - gap * 2.0
-        - drawer_w
-        - drawer_gap)
-        .max(210.0);
+    let center_w = (full_rect.width() - pad * 2.0 - clock_w - right_w - gap * 2.0).max(210.0);
 
     // =========================================================================
     // 1. COLUMNA IZQUIERDA: CLOCK (Amarillo)
@@ -1277,13 +1267,19 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     // 3. COLUMNA DERECHA: WET FX / ANTI-ALIAS / WIDTH / MIX (Naranja)
     // =========================================================================
     let right_x = disp_rect.max.x + gap;
+    let wet_fx_count = app
+        .current_tracks()
+        .get(track_idx)
+        .and_then(|t| t.effects.get(slot_idx))
+        .map(|s| s.wet_fx_chain.len())
+        .unwrap_or(0);
 
-    // Pestaña superior Wet FX
+    // Pestaña superior Wet FX (abre/cierra la cadena anidada estilo Bitwig)
     let wet_tab_h = 30.0;
     let wet_tab_rect = Rect::from_min_size(pos2(right_x, top_y), vec2(right_w, wet_tab_h));
     let wet_resp = ui
         .interact(wet_tab_rect, ui.id().with(("open8_wet_tab", track_idx, slot_idx)), Sense::click())
-        .on_hover_text("Toggle Wet FX Post-Filter (HP/LP) & Gain");
+        .on_hover_text("Show/Hide Wet FX Nested Device Chain");
     if wet_resp.clicked() {
         wet_fx_open = !wet_fx_open;
         wet_toggle_changed = true;
@@ -1294,10 +1290,12 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     paint_recessed_panel(ui.painter(), wet_tab_rect);
     let top_bar_col = if wet_fx_open {
         theme::BW_LCD_CYAN
-    } else if wet_resp.hovered() {
+    } else if wet_fx_count > 0 {
         COL_WET_CYAN
+    } else if wet_resp.hovered() {
+        Color32::from_rgb(0x52, 0x7A, 0x90)
     } else {
-        Color32::from_rgb(0x2D, 0x5A, 0x72)
+        Color32::from_rgb(0x2D, 0x35, 0x3E)
     };
     ui.painter().line_segment(
         [
@@ -1306,10 +1304,15 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         ],
         Stroke::new(2.0_f32, top_bar_col),
     );
+    let wet_label = if !wet_fx_open && wet_fx_count > 0 {
+        format!("Wet FX ({wet_fx_count})")
+    } else {
+        "Wet FX".to_string()
+    };
     ui.painter().text(
         pos2(wet_tab_rect.center().x, wet_tab_rect.center().y + 2.0),
         Align2::CENTER_CENTER,
-        if wet_fx_open { "Wet FX ›" } else { "Wet FX" },
+        &wet_label,
         fonts::semibold(10.0),
         if wet_fx_open || wet_resp.hovered() {
             Color32::WHITE
@@ -1385,82 +1388,6 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     ) {
         params.mix = mix_norm;
         changed = true;
-    }
-
-    // =========================================================================
-    // 4. PANEL EXPANDIBLE WET FX (opcional al hacer clic en `Wet FX`)
-    // =========================================================================
-    if wet_fx_open {
-        let drawer_rect = Rect::from_min_size(pos2(out_rect.max.x + gap, top_y), vec2(drawer_w, total_h));
-        paint_recessed_panel(ui.painter(), drawer_rect);
-        ui.painter().text(
-            pos2(drawer_rect.center().x, drawer_rect.min.y + 10.0),
-            Align2::CENTER_CENTER,
-            "WET FX",
-            fonts::semibold(9.5),
-            theme::BW_LCD_CYAN,
-        );
-        let d_slot_h = (total_h - 22.0) / 3.0;
-        let dk = 30.0;
-
-        let mut hp_norm = Bit8Params::wet_hp_hz_to_norm(params.wet_hp_hz);
-        let hp_lbl = if params.wet_hp_hz <= 20.5 {
-            "HP Off".to_string()
-        } else {
-            format!("HP {:.0}", params.wet_hp_hz)
-        };
-        if draw_knob_cell(
-            ui,
-            drawer_rect.center().x,
-            drawer_rect.min.y + 20.0,
-            dk,
-            &mut hp_norm,
-            Bit8Params::wet_hp_hz_to_norm(def.wet_hp_hz),
-            theme::BW_LCD_CYAN,
-            Some(&hp_lbl),
-            &format!("Wet High-Pass: {:.0} Hz", params.wet_hp_hz),
-        ) {
-            params.wet_hp_hz = Bit8Params::wet_hp_norm_to_hz(hp_norm);
-            changed = true;
-        }
-
-        let mut lp_norm = Bit8Params::wet_lp_hz_to_norm(params.wet_lp_hz);
-        let lp_lbl = if params.wet_lp_hz >= 19_900.0 {
-            "LP Off".to_string()
-        } else {
-            format!("LP {:.1}k", params.wet_lp_hz / 1000.0)
-        };
-        if draw_knob_cell(
-            ui,
-            drawer_rect.center().x,
-            drawer_rect.min.y + 20.0 + d_slot_h,
-            dk,
-            &mut lp_norm,
-            Bit8Params::wet_lp_hz_to_norm(def.wet_lp_hz),
-            theme::BW_LCD_CYAN,
-            Some(&lp_lbl),
-            &format!("Wet Low-Pass: {:.0} Hz", params.wet_lp_hz),
-        ) {
-            params.wet_lp_hz = Bit8Params::wet_lp_norm_to_hz(lp_norm);
-            changed = true;
-        }
-
-        let mut gain_norm = ((params.wet_gain_db + 12.0) / 24.0).clamp(0.0, 1.0);
-        let gain_lbl = format!("{:+.1} dB", params.wet_gain_db);
-        if draw_knob_cell(
-            ui,
-            drawer_rect.center().x,
-            drawer_rect.min.y + 20.0 + d_slot_h * 2.0,
-            dk,
-            &mut gain_norm,
-            0.5,
-            COL_OUT_ORANGE,
-            Some(&gain_lbl),
-            &format!("Wet Gain: {gain_lbl}"),
-        ) {
-            params.wet_gain_db = -12.0 + gain_norm * 24.0;
-            changed = true;
-        }
     }
 
     if changed || wet_toggle_changed {
