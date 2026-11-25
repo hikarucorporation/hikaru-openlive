@@ -59,6 +59,7 @@
 //! la app, un nativo es sólo un `DspSlot` con un nombre.
 
 pub mod hikaru_bit8;
+pub mod hikaru_freq_shifter_plus;
 pub mod hikaru_opendms;
 pub mod hikaru_openeq3;
 pub mod hikaru_opengrid;

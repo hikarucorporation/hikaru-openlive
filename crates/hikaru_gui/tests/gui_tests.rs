@@ -1142,3 +1142,62 @@ fn test_add_fx_track_creates_right_side_mixer_channel() {
     assert_eq!(state.fx_tracks[0].name, "FX 1");
     assert_eq!(state.selected_fx_index, Some(0));
 }
+
+#[test]
+fn open_freq_shifter_plus_registers_in_catalog_and_renders_in_dsp_rack() {
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
+    use hikaru_gui::views::dsp_rack::{render as render_dsp_rack, PLUGIN_CATALOG};
+    use hikaru_gui::views::mixer::DspSlot;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::Arc;
+
+    assert!(
+        PLUGIN_CATALOG
+            .iter()
+            .any(|e| e.name == "Hikaru OpenFreqShifter+" && e.category == "Audio FX"),
+        "Hikaru OpenFreqShifter+ debe estar registrado en PLUGIN_CATALOG"
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let proxy = AudioProxy::new(tx);
+    let clock = Arc::new(AtomicU64::new(0));
+    let level = Arc::new(AtomicU32::new(0));
+    let mut state = AppState::new(proxy, clock, level, None);
+
+    state.selected_track_index = 1;
+    state.show_dsp_rack = true;
+    let mut slot = DspSlot::default();
+    slot.name = "Hikaru OpenFreqShifter+".to_string();
+    state.live_tracks[1].effects.push(slot);
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_dsp_rack(ui, &mut state);
+            });
+        },
+    );
+
+    let mut saw_load = false;
+    while let Ok(cmd) = rx.try_recv() {
+        if let GuiCommand::LoadNativeEffect { name, .. } = cmd {
+            if name == "Hikaru OpenFreqShifter+" {
+                saw_load = true;
+            }
+        }
+    }
+    assert!(
+        saw_load,
+        "Renderizar Hikaru OpenFreqShifter+ en el rack debe enviar LoadNativeEffect al motor"
+    );
+}

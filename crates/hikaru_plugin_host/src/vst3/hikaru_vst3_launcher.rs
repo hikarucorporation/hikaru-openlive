@@ -295,9 +295,9 @@ impl Vst3Instance {
                 WindowHandle::from_raw(h.surface.as_ptr() as *mut std::ffi::c_void)
             },
             #[cfg(target_os = "windows")]
-            RawWindowHandle::Win32(h) => unsafe {
-                WindowHandle::from_hwnd(h.hwnd as *mut std::ffi::c_void)
-            },
+            RawWindowHandle::Win32(h) => {
+                WindowHandle::from_hwnd(h.hwnd.get() as *mut std::ffi::c_void)
+            }
             #[cfg(target_os = "macos")]
             RawWindowHandle::AppKit(h) => unsafe {
                 WindowHandle::from_nsview(h.ns_view.as_ptr() as *mut std::ffi::c_void)
@@ -444,13 +444,19 @@ impl PluginInstance for Vst3Instance {
 
         #[cfg(not(target_os = "linux"))]
         let embedded_result = {
-            let window_id = match handle {
-                RawWindowHandle::Xlib(h) => h.window as u32,
+            let wh = match handle {
+                #[cfg(target_os = "windows")]
+                RawWindowHandle::Win32(h) => {
+                    WindowHandle::from_hwnd(h.hwnd.get() as *mut std::ffi::c_void)
+                }
+                #[cfg(target_os = "macos")]
+                RawWindowHandle::AppKit(h) => unsafe {
+                    WindowHandle::from_nsview(h.ns_view.as_ptr() as *mut std::ffi::c_void)
+                },
                 _ => {
                     return Err(format!("[VST3] Handle no soportado: {:?}", handle));
                 }
             };
-            let wh = WindowHandle::from_x11(window_id);
             self.runner.plugin_mut().open_editor(wh)
         };
 

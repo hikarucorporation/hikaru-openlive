@@ -1261,6 +1261,30 @@ impl Bit8Effect {
     }
 }
 
+impl crate::effects::WetFxChainHost for Bit8Effect {
+    fn wet_chain(&self) -> &[crate::plugin_node::DspPluginNode] {
+        Bit8Effect::wet_chain(self)
+    }
+    fn wet_chain_mut(&mut self) -> &mut Vec<crate::plugin_node::DspPluginNode> {
+        Bit8Effect::wet_chain_mut(self)
+    }
+    fn insert_wet_fx(&mut self, node: crate::plugin_node::DspPluginNode) {
+        Bit8Effect::insert_wet_fx(self, node);
+    }
+    fn remove_wet_fx(&mut self, wet_idx: usize) {
+        Bit8Effect::remove_wet_fx(self, wet_idx);
+    }
+    fn set_wet_fx_active(&mut self, wet_idx: usize, active: bool) {
+        Bit8Effect::set_wet_fx_active(self, wet_idx, active);
+    }
+    fn set_wet_fx_param(&mut self, wet_idx: usize, param_id: u32, value: f32) {
+        Bit8Effect::set_wet_fx_param(self, wet_idx, param_id, value);
+    }
+    fn sync_wet_fx_params(&mut self, wet_idx: usize, params: &[(u32, f32)]) {
+        Bit8Effect::sync_wet_fx_params(self, wet_idx, params);
+    }
+}
+
 impl PluginInstance for Bit8Effect {
     fn process(&mut self, buffer: &mut AudioBuffer) {
         if self.wet_chain.is_empty() {

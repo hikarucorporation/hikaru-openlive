@@ -9,6 +9,7 @@ use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, HostGui, Host
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{ParamInfoFlags, PluginParams};
+#[cfg(unix)]
 use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl};
 use clack_extensions::state::{HostState, HostStateImpl, PluginState};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
@@ -343,6 +344,7 @@ impl HostTimerImpl for HikaruMainThread<'_> {
     }
 }
 
+#[cfg(unix)]
 impl HostPosixFdImpl for HikaruMainThread<'_> {
     fn register_fd(&self, fd: std::os::unix::io::RawFd, flags: FdFlags) -> Result<(), HostError> {
         println!("[CLAP Host] POSIX FD registered: fd={}, flags={:?}", fd, flags);
@@ -404,9 +406,10 @@ impl HostHandlers for HikaruClapHost {
             .register::<HostLog>()
             .register::<HostGui>()
             .register::<HostTimer>()
-            .register::<HostPosixFd>()
             .register::<HostLatency>()
             .register::<HostState>();
+        #[cfg(unix)]
+        builder.register::<HostPosixFd>();
     }
 }
 

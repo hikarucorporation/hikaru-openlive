@@ -48,10 +48,10 @@ flate2 = "1.1"
 quick-xml = "0.41"
 raw-window-handle = "0.6.2"
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+rfd = "0.15"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-rfd = "0.15"
 
 [[bin]]
 name = "hikaru_openlive"
@@ -60,3 +60,20 @@ path = "src/main.rs"
 [dev-dependencies]
 hound = "3.5"
 naga = { workspace = true }
+
+[package.metadata.deb]
+    name = "hikaru-openlive"
+    maintainer = "Hikaru Corporation"
+    copyright = "Copyright 2026 (C) Hikaru OpenLive Developers"
+    license-file = ["../../LICENSE", "0"]
+    extended-description = "Modular Digital Audio Workstation"
+    depends = "$auto"
+    section = "sound"
+    priority = "optional"
+    assets = [
+        ["target/release/hikaru_openlive", "usr/bin/", "755"],
+        ["../../assets/hikaru_openlive.desktop", "usr/share/applications/hikaru_openlive.desktop", "644"],
+        ["../../assets/logos/hikaru_energy_core.svg", "usr/share/icons/hicolor/scalable/apps/hikaru_openlive.svg", "644"],
+        ["../../assets/logos/hikaru_energy_core.png", "usr/share/icons/hicolor/512x512/apps/hikaru_openlive.png", "644"],
+        ["../../crates/hikaru_cli/man/hikaru_openlive.1", "usr/share/man/man1/hikaru_openlive.1", "644"],
+    ]

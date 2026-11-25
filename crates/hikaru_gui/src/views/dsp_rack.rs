@@ -8,6 +8,7 @@ use crate::theme;
 use crate::ui::fonts;
 use crate::ui::icons;
 use crate::views::hikaru_native_plugins::hikaru_bit8;
+use crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus;
 use crate::views::hikaru_native_plugins::hikaru_opendms::rack_card::render_rack_card;
 use crate::views::hikaru_native_plugins::hikaru_openeq3;
 use crate::views::hikaru_native_plugins::hikaru_opengrid::{
@@ -35,7 +36,7 @@ pub struct PluginEntry {
     pub label: &'static str,
 }
 
-pub const PLUGIN_CATALOG: [PluginEntry; 16] = [
+pub const PLUGIN_CATALOG: [PluginEntry; 17] = [
     PluginEntry {
         category: "Audio FX",
         name: "OpenEQ3",
@@ -90,6 +91,11 @@ pub const PLUGIN_CATALOG: [PluginEntry; 16] = [
         category: "Audio FX",
         name: "Hikaru Open8-Bit",
         label: "Hikaru Open8-Bit",
+    },
+    PluginEntry {
+        category: "Audio FX",
+        name: "Hikaru OpenFreqShifter+",
+        label: "Hikaru OpenFreqShifter+",
     },
     PluginEntry {
         category: "Polysynth",
@@ -185,6 +191,7 @@ pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize)
 
     hikaru_openmodulation::clear_bay_for_slot(track_idx, slot_idx);
     hikaru_bit8::clear_slot_state(track_idx, slot_idx);
+    hikaru_freq_shifter_plus::clear_slot_state(track_idx, slot_idx);
     let wkey = crate::views::external_plugins_settings::slot_window_key(track_idx, slot_idx);
     app.plugin_settings_state.close_window(&wkey);
     for wet_idx in 0..removed.wet_fx_chain.len() {
@@ -200,6 +207,7 @@ pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize)
             "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
         )
         || hikaru_bit8::is_bit8_name(&removed.name)
+        || hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&removed.name)
         || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&removed.name)
     {
         if let Some(eng_track) = track_idx.checked_sub(1) {
@@ -1028,6 +1036,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 name if hikaru_bit8::is_bit8_name(name) => {
                                     hikaru_bit8::card_width_for_slot(track_idx, slot_idx)
                                 }
+                                name if hikaru_freq_shifter_plus::is_freq_shifter_plus_name(name) => {
+                                    hikaru_freq_shifter_plus::card_width_for_slot(track_idx, slot_idx)
+                                }
                                 "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
                                 name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
                                     crate::views::hikaru_native_plugins::hikaru_tier_s_fx::card_width(name).unwrap_or(CARD_WIDTH)
@@ -1477,6 +1488,85 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             if close_resp.on_hover_text("Remove Device (Del)").clicked() {
                                 slot_to_remove = Some(slot_idx);
                             }
+                        } else if hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot.name) {
+                            let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let sb_out = render_bitwig_device_sidebar(
+                                ui,
+                                sb_rect,
+                                ("fsp_sb", track_idx, slot_idx),
+                                "FREQ SHIFTER+",
+                                slot.active,
+                                is_selected,
+                            );
+                            if sb_out.toggled_power {
+                                let mut new_active = None;
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        s.active = !s.active;
+                                        new_active = Some(s.active);
+                                    }
+                                }
+                                if let (Some(et_idx), Some(active)) = (track_idx.checked_sub(1), new_active) {
+                                    app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginActive {
+                                        track_idx: et_idx,
+                                        slot_idx,
+                                        active,
+                                    });
+                                }
+                            }
+                            if sb_out.clicked_title {
+                                app.selected_slot_index = slot_idx;
+                                app.matrix_state.selected_scene = None;
+                            }
+                            let preset_popup_id = ui.id().with(("fsp_preset_popup", track_idx, slot_idx));
+                            if sb_out.clicked_folder {
+                                ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
+                            }
+                            egui::popup_below_widget(
+                                ui,
+                                preset_popup_id,
+                                &sb_out.folder_resp,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    hikaru_freq_shifter_plus::render_preset_menu(ui, app, track_idx, slot_idx);
+                                },
+                            );
+
+                            let body_rect = Rect::from_min_max(
+                                pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
+                                pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            let mut body_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                            hikaru_freq_shifter_plus::render_module(&mut body_ui, app, track_idx, slot_idx);
+
+                            let close_r = Rect::from_min_size(
+                                pos2(card_rect.max.x - 14.0, card_rect.min.y + 2.0),
+                                vec2(12.0, 12.0),
+                            );
+                            let close_resp = ui.interact(
+                                close_r,
+                                ui.id().with(("dsp_close", slot_idx)),
+                                Sense::click(),
+                            );
+                            icons::paint_icon(
+                                ui.painter(),
+                                close_r.shrink(2.0),
+                                icons::X_CLOSE,
+                                if close_resp.hovered() {
+                                    Color32::WHITE
+                                } else {
+                                    Color32::from_rgba_unmultiplied(0x8C, 0x90, 0x9A, 150)
+                                },
+                                1.4,
+                            );
+                            if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                slot_to_remove = Some(slot_idx);
+                            }
                         } else {
                             let inner_rect = card_rect.shrink2(vec2(6.0, 4.0));
                             let inner_w = inner_rect.width();
@@ -1671,9 +1761,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             }
                         }
 
-                        // Cadena anidada Wet FX de Hikaru Open8-Bit (estilo Bitwig Studio Bit-8)
-                        if hikaru_bit8::is_bit8_name(&slot.name)
-                            && hikaru_bit8::is_wet_fx_open(track_idx, slot_idx)
+                        // Cadena anidada Wet FX (Hikaru Open8-Bit y Hikaru OpenFreqShifter+)
+                        if (hikaru_bit8::is_bit8_name(&slot.name)
+                            && hikaru_bit8::is_wet_fx_open(track_idx, slot_idx))
+                            || (hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot.name)
+                                && hikaru_freq_shifter_plus::is_wet_fx_open(track_idx, slot_idx))
                         {
                             render_bit8_wet_fx_chain(ui, app, track_idx, slot_idx, card_h);
                         }

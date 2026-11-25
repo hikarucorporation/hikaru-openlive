@@ -2571,6 +2571,15 @@ impl<'a> AudioEngine<'a> {
                 bit8_telemetry = Some(fx.telemetry());
                 Box::new(fx)
             }
+            "Hikaru OpenFreqShifter+"
+            | "Hikaru OpenFreqShifter"
+            | "OpenFreqShifter+"
+            | "OpenFreqShifter"
+            | "Freq Shifter+"
+            | "Freq Shifter"
+            | "Hikaru Freq Shifter+" => {
+                Box::new(hikaru_dsp::effects::FreqShifterPlusEffect::new(sample_rate))
+            }
             _ => return Err(format!("Efecto nativo desconocido: {name}")),
         };
         Ok((instance, bit8_telemetry))
@@ -2626,20 +2635,29 @@ impl<'a> AudioEngine<'a> {
         Ok(())
     }
 
-    fn find_bit8_mut(
+    fn find_wet_fx_host_mut(
         &mut self,
         track_idx: usize,
         slot_idx: usize,
-    ) -> Option<&mut hikaru_dsp::effects::Bit8Effect> {
+    ) -> Option<&mut dyn hikaru_dsp::effects::WetFxChainHost> {
         if track_idx >= 16 {
             return None;
         }
         let node = self.track_effects[track_idx]
             .iter_mut()
             .find(|n| n.slot_idx == slot_idx)?;
-        node.instance
-            .as_any_mut()?
-            .downcast_mut::<hikaru_dsp::effects::Bit8Effect>()
+        let any = node.instance.as_any_mut()?;
+        if any.is::<hikaru_dsp::effects::Bit8Effect>() {
+            return any
+                .downcast_mut::<hikaru_dsp::effects::Bit8Effect>()
+                .map(|fx| fx as &mut dyn hikaru_dsp::effects::WetFxChainHost);
+        }
+        if any.is::<hikaru_dsp::effects::FreqShifterPlusEffect>() {
+            return any
+                .downcast_mut::<hikaru_dsp::effects::FreqShifterPlusEffect>()
+                .map(|fx| fx as &mut dyn hikaru_dsp::effects::WetFxChainHost);
+        }
+        None
     }
 
     pub fn load_bit8_wet_native_effect(
@@ -2665,13 +2683,13 @@ impl<'a> AudioEngine<'a> {
         hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::WetFx(
             track_idx, slot_idx, wet_idx,
         ));
-        let bit8 = self
-            .find_bit8_mut(track_idx, slot_idx)
-            .ok_or_else(|| format!("Open8-Bit no encontrado en pista {track_idx} slot {slot_idx}"))?;
-        bit8.insert_wet_fx(node);
+        let host = self
+            .find_wet_fx_host_mut(track_idx, slot_idx)
+            .ok_or_else(|| format!("Contenedor Wet FX no encontrado en pista {track_idx} slot {slot_idx}"))?;
+        host.insert_wet_fx(node);
         self.prepare_pdc_buffers();
         println!(
-            "[AudioEngine] Wet FX nativo '{}' cargado en Open8-Bit pista {} slot {} wet_idx {}",
+            "[AudioEngine] Wet FX nativo '{}' cargado en pista {} slot {} wet_idx {}",
             name, track_idx, slot_idx, wet_idx
         );
         Ok(())
@@ -2724,13 +2742,13 @@ impl<'a> AudioEngine<'a> {
             std::sync::Arc::clone(&tap),
         );
         node.set_tap(Some(tap));
-        let bit8 = self
-            .find_bit8_mut(track_idx, slot_idx)
-            .ok_or_else(|| format!("Open8-Bit no encontrado en pista {track_idx} slot {slot_idx}"))?;
-        bit8.insert_wet_fx(node);
+        let host = self
+            .find_wet_fx_host_mut(track_idx, slot_idx)
+            .ok_or_else(|| format!("Contenedor Wet FX no encontrado en pista {track_idx} slot {slot_idx}"))?;
+        host.insert_wet_fx(node);
         self.prepare_pdc_buffers();
         println!(
-            "[AudioEngine] Wet FX externo '{}' cargado en Open8-Bit pista {} slot {} wet_idx {}",
+            "[AudioEngine] Wet FX externo '{}' cargado en pista {} slot {} wet_idx {}",
             descriptor.name, track_idx, slot_idx, wet_idx
         );
         Ok(())
@@ -2738,9 +2756,9 @@ impl<'a> AudioEngine<'a> {
 
     pub fn remove_bit8_wet_fx(&mut self, track_idx: usize, slot_idx: usize, wet_idx: usize) {
         hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
-        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
-            bit8.remove_wet_fx(wet_idx);
-            for n in bit8.wet_chain() {
+        if let Some(host) = self.find_wet_fx_host_mut(track_idx, slot_idx) {
+            host.remove_wet_fx(wet_idx);
+            for n in host.wet_chain() {
                 if let Some(tap) = &n.tap {
                     hikaru_plugin_host::tap::register(
                         hikaru_plugin_host::tap::TapKey::WetFx(track_idx, slot_idx, n.slot_idx),
@@ -2759,8 +2777,8 @@ impl<'a> AudioEngine<'a> {
         wet_idx: usize,
         active: bool,
     ) {
-        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
-            bit8.set_wet_fx_active(wet_idx, active);
+        if let Some(host) = self.find_wet_fx_host_mut(track_idx, slot_idx) {
+            host.set_wet_fx_active(wet_idx, active);
         }
     }
 
@@ -2772,8 +2790,8 @@ impl<'a> AudioEngine<'a> {
         param_id: u32,
         value: f32,
     ) {
-        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
-            bit8.set_wet_fx_param(wet_idx, param_id, value);
+        if let Some(host) = self.find_wet_fx_host_mut(track_idx, slot_idx) {
+            host.set_wet_fx_param(wet_idx, param_id, value);
         }
     }
 
@@ -2784,8 +2802,8 @@ impl<'a> AudioEngine<'a> {
         wet_idx: usize,
         params: &[(u32, f32)],
     ) {
-        if let Some(bit8) = self.find_bit8_mut(track_idx, slot_idx) {
-            bit8.sync_wet_fx_params(wet_idx, params);
+        if let Some(host) = self.find_wet_fx_host_mut(track_idx, slot_idx) {
+            host.sync_wet_fx_params(wet_idx, params);
         }
     }
 
@@ -2797,17 +2815,25 @@ impl<'a> AudioEngine<'a> {
                 std::sync::Arc::clone(tap),
             );
         }
-        if let Some(bit8) = node
-            .instance
-            .as_any_mut()
-            .and_then(|any| any.downcast_mut::<hikaru_dsp::effects::Bit8Effect>())
-        {
-            for wet in bit8.wet_chain() {
-                if let Some(tap) = &wet.tap {
-                    hikaru_plugin_host::tap::register(
-                        hikaru_plugin_host::tap::TapKey::WetFx(track_idx, slot_idx, wet.slot_idx),
-                        std::sync::Arc::clone(tap),
-                    );
+        if let Some(any) = node.instance.as_any_mut() {
+            let wet_slice: Option<&[hikaru_dsp::DspPluginNode]> =
+                if let Some(bit8) = any.downcast_mut::<hikaru_dsp::effects::Bit8Effect>() {
+                    Some(bit8.wet_chain())
+                } else if let Some(fsp) =
+                    any.downcast_mut::<hikaru_dsp::effects::FreqShifterPlusEffect>()
+                {
+                    Some(fsp.wet_chain())
+                } else {
+                    None
+                };
+            if let Some(wets) = wet_slice {
+                for wet in wets {
+                    if let Some(tap) = &wet.tap {
+                        hikaru_plugin_host::tap::register(
+                            hikaru_plugin_host::tap::TapKey::WetFx(track_idx, slot_idx, wet.slot_idx),
+                            std::sync::Arc::clone(tap),
+                        );
+                    }
                 }
             }
         }

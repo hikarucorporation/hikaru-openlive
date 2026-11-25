@@ -37,11 +37,11 @@
   "summary": {
     "areas": 18,
     "features": 687,
-    "done": 326,
+    "done": 328,
     "in_progress": 17,
-    "planned": 344,
+    "planned": 342,
     "bugs": 1,
-    "parity_percent": 47
+    "parity_percent": 48
   },
   "areas": [
     {
@@ -996,7 +996,8 @@
         {
           "id": "dv-046",
           "name": "Freq Shifter",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/freq_shifter_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_freq_shifter_plus/mod.rs"
         },
         {
           "id": "dv-047",
@@ -1382,7 +1383,8 @@
         {
           "id": "dv-121",
           "name": "Freq Shifter+",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/freq_shifter_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_freq_shifter_plus/mod.rs"
         },
         {
           "id": "dv-122",

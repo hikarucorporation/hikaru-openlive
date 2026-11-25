@@ -79,6 +79,7 @@ mod config;
 mod frame;
 mod input;
 mod keep_alive;
+#[cfg(target_os = "linux")]
 mod wrapper;
 
 #[cfg(target_os = "linux")]
@@ -112,3 +113,102 @@ pub use window::{CreateError, HikaruWrapperWindow, WindowEvent};
 /// crate cuando alguien importa los dos con `use ...::*`.
 #[cfg(target_os = "linux")]
 pub use window::CreateError as WindowCreateError;
+
+#[cfg(not(target_os = "linux"))]
+mod non_linux_stub {
+    use std::path::Path;
+    use std::sync::mpsc::{Receiver, Sender};
+
+    use crate::tap::TapKey;
+    use crate::PluginFormat;
+
+    use super::config::WrapperConfig;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FeedbackOrigin {
+        Editor,
+        Host,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ParamFeedback {
+        pub changes: Vec<(u32, f32)>,
+        pub origin: FeedbackOrigin,
+        pub state: Option<Vec<u8>>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum WrapperCommand {
+        SetParam { id: u32, value: f32 },
+        SetParamMod { id: u32, delta: f32 },
+        Raise,
+        Close,
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum LoopExit {
+        Requested,
+        UserClosed,
+        Destroyed,
+        ConnectionLost(String),
+    }
+
+    #[derive(Debug, Default, Clone)]
+    pub struct WrapperRuntime;
+
+    #[derive(Debug)]
+    pub struct WrapperError(pub String);
+
+    impl std::fmt::Display for WrapperError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl std::error::Error for WrapperError {}
+
+    pub struct HikaruWrapper;
+
+    impl HikaruWrapper {
+        #[allow(clippy::too_many_arguments)]
+        pub fn open_with_state(
+            _plugin_path: &Path,
+            _format: PluginFormat,
+            _window_title: &str,
+            _config: WrapperConfig,
+            _runtime: WrapperRuntime,
+            _cmd_rx: Receiver<WrapperCommand>,
+            _feedback_tx: Sender<ParamFeedback>,
+            _tap_key: TapKey,
+            _initial_state: Option<&[u8]>,
+            _initial_params: &[(u32, f32)],
+        ) -> Result<Self, WrapperError> {
+            Err(WrapperError(
+                "El envoltorio nativo de editores de plugins aún no está implementado en esta plataforma."
+                    .to_string(),
+            ))
+        }
+
+        pub fn plugin_name(&self) -> &str {
+            ""
+        }
+
+        pub fn is_child_of_daw(&self) -> bool {
+            false
+        }
+
+        pub fn is_borderless(&self) -> bool {
+            false
+        }
+
+        pub fn run_and_capture(self) -> (LoopExit, Option<Vec<u8>>, Vec<(u32, f32)>) {
+            (LoopExit::Requested, None, Vec::new())
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub use non_linux_stub::{
+    FeedbackOrigin, HikaruWrapper, LoopExit, ParamFeedback, WrapperCommand, WrapperError,
+    WrapperRuntime,
+};

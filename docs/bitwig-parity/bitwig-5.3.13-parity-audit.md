@@ -146,7 +146,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Transport & Sync | 17 | 12 | 1 | 4 | 0 |
 | Group Tracks & Routing | 22 | 15 | 1 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
-| Built-in Devices & FX | 150 | 17 | 3 | 130 | 0 |
+| Built-in Devices & FX | 150 | 19 | 3 | 128 | 0 |
 | Modulators | 43 | 43 | 0 | 0 | 0 |
 | Grid Devices | 228 | 97 | 0 | 131 | 0 |
 | Mixer & I/O | 27 | 19 | 0 | 8 | 0 |
@@ -159,9 +159,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 3 | 0 | 3 | 0 |
 | .bwtemplate | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **687** | **326** | **17** | **344** | **1** |
+| **Total** | **687** | **328** | **17** | **342** | **1** |
 
-Paridad global: **326 / 687 = 47 %**.
+Paridad global: **328 / 687 = 48 %**.
 
 ### Bugs abiertos
 
