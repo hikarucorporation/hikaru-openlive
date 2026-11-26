@@ -6,6 +6,7 @@ pub mod filter;
 pub mod freq_shifter_plus;
 pub mod ultracomb;
 pub mod phaser;
+pub mod phaser_plus;
 pub mod flanger;
 pub mod lfo;
 pub mod open_harmonic; // ¡Nuevo integrante!
@@ -58,6 +59,13 @@ pub use freq_shifter_plus::{
 };
 pub use ultracomb::{CombFilter, UltracombFilter, UltracombParams};
 pub use phaser::Phaser;
+pub use phaser_plus::{
+    PhaserPlusEffect, PhaserPlusMode, PhaserPlusParams, PHASER_PLUS_MAX_SPEED_HZ,
+    PHASER_PLUS_MAX_STAGES, PHASER_PLUS_MIN_SPEED_HZ, PHASER_PLUS_PARAM_COUNT,
+    PHASER_SYNC_BEATS, PHASER_SYNC_LABELS, PHP_PARAM_COLOR, PHP_PARAM_DEPTH,
+    PHP_PARAM_FEEDBACK, PHP_PARAM_MIX, PHP_PARAM_MODE, PHP_PARAM_PHASE_INVERT,
+    PHP_PARAM_SPEED, PHP_PARAM_STEREO, PHP_PARAM_SYNC_DIV, PHP_PARAM_TEMPO_SYNC,
+};
 pub use flanger::Flanger;
 pub use lfo::{evaluate_waveform, LfoOscillator, LfoSyncMode, LfoWaveform, SyncRate};
 pub use open_harmonic::OpenHarmonicProcessor;

@@ -38,6 +38,14 @@ pub const BW_FADER_ORANGE: Color32 = Color32::from_rgb(255, 124, 16);     // #FF
 pub const BW_ACCENT_ORANGE: Color32 = Color32::from_rgb(255, 114, 0);     // #FF7200
 pub const BW_LCD_CYAN: Color32 = Color32::from_rgb(68, 184, 255);         // #44B8FF
 
+// Paleta "Pith" para editores de plugins portada de Lemon Studio
+// (`crates/os-ui/src/kit/lemon.rs`, GPL-3.0-or-later, compatible con AGPL-3.0-or-later)
+pub const LEMON_PLUG_BG: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x2D);
+pub const LEMON_PLUG_PANEL_LINE: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x22);
+pub const LEMON_PLUG_WELL: Color32 = Color32::from_rgb(0x19, 0x19, 0x1C);
+pub const LEMON_PLUG_WELL_LINE: Color32 = Color32::from_rgb(0x12, 0x12, 0x15);
+pub const LEMON_PLUG_DIM: Color32 = Color32::from_rgb(0xA3, 0xA3, 0xA8);
+
 /// Posición de un segmento dentro de una tira de cápsulas unidas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinSide {
@@ -465,6 +473,72 @@ pub fn stereo_meter_bar(ui: &mut Ui, size: Vec2, levels_and_holds: [f32; 4]) -> 
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     if ui.is_rect_visible(rect) {
         paint_stereo_meter(ui.painter(), rect, levels_and_holds);
+    }
+    response
+}
+
+/// Pozo oscuro empotrado estilo `kit::lemon::well` de Lemon Studio (`crates/os-ui/src/kit/lemon.rs`),
+/// ideal para tiras de modos segmentados (`GS | EHx | MX | MF`) y visores internos de dispositivos.
+pub fn paint_lemon_plug_well(painter: &Painter, rect: Rect, radius: u8) {
+    let cr = egui::CornerRadius::same(radius);
+    painter.rect_filled(rect, cr, LEMON_PLUG_WELL);
+    painter.rect_stroke(
+        rect,
+        cr,
+        egui::Stroke::new(1.0_f32, LEMON_PLUG_WELL_LINE),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// Botón interruptor rectangular hundido estilo Lemon Studio / Bitwig+ (`[ ∅ ]`, `[ ⚭ ]`).
+pub fn lemon_sunken_icon_toggle(
+    ui: &mut Ui,
+    rect: Rect,
+    id: egui::Id,
+    active: bool,
+    accent: Color32,
+    paint_fg: impl FnOnce(&Painter, Rect, Color32),
+) -> Response {
+    let response = ui.interact(rect, id, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let cr = egui::CornerRadius::same(3);
+        let fill = if active {
+            accent
+        } else if response.hovered() {
+            Color32::from_rgb(0x24, 0x25, 0x2A)
+        } else {
+            LEMON_PLUG_WELL
+        };
+        ui.painter().rect_filled(rect, cr, fill);
+        ui.painter().rect_stroke(
+            rect,
+            cr,
+            egui::Stroke::new(
+                1.0_f32,
+                if active {
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 48)
+                } else {
+                    LEMON_PLUG_WELL_LINE
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+
+        let fg = if active {
+            if prefers_dark_fg(accent) {
+                Color32::from_rgb(0x16, 0x10, 0x1C)
+            } else {
+                Color32::WHITE
+            }
+        } else if response.hovered() {
+            Color32::WHITE
+        } else {
+            LEMON_PLUG_DIM
+        };
+        paint_fg(ui.painter(), rect, fg);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     response
 }

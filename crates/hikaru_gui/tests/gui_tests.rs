@@ -1201,3 +1201,71 @@ fn open_freq_shifter_plus_registers_in_catalog_and_renders_in_dsp_rack() {
         "Renderizar Hikaru OpenFreqShifter+ en el rack debe enviar LoadNativeEffect al motor"
     );
 }
+
+#[test]
+fn open_phaser_plus_registers_in_catalog_and_renders_in_dsp_rack() {
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::{AudioProxy, GuiCommand};
+    use hikaru_gui::views::dsp_rack::{render as render_dsp_rack, PLUGIN_CATALOG};
+    use hikaru_gui::views::mixer::DspSlot;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::Arc;
+
+    assert!(
+        PLUGIN_CATALOG
+            .iter()
+            .any(|e| e.name == "Hikaru OpenPhaser+" && e.category == "Audio FX"),
+        "Hikaru OpenPhaser+ debe estar registrado en PLUGIN_CATALOG"
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let proxy = AudioProxy::new(tx);
+    let clock = Arc::new(AtomicU64::new(0));
+    let level = Arc::new(AtomicU32::new(0));
+    let mut state = AppState::new(proxy, clock, level, None);
+
+    state.selected_track_index = 1;
+    state.show_dsp_rack = true;
+    let mut slot = DspSlot::default();
+    slot.name = "Hikaru OpenPhaser+".to_string();
+    state.live_tracks[1].effects.push(slot);
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_dsp_rack(ui, &mut state);
+            });
+        },
+    );
+
+    let mut saw_load = false;
+    let mut param_updates = 0usize;
+    while let Ok(cmd) = rx.try_recv() {
+        match cmd {
+            GuiCommand::LoadNativeEffect { name, .. } if name == "Hikaru OpenPhaser+" => {
+                saw_load = true;
+            }
+            GuiCommand::SetExternalPluginParam { .. } => {
+                param_updates += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_load,
+        "Renderizar Hikaru OpenPhaser+ en el rack debe enviar LoadNativeEffect al motor"
+    );
+    assert!(
+        param_updates >= 8,
+        "Hikaru OpenPhaser+ debe sincronizar sus parámetros iniciales al motor (recibidos: {param_updates})"
+    );
+}

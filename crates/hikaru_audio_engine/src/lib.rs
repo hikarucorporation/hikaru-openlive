@@ -2580,6 +2580,12 @@ impl<'a> AudioEngine<'a> {
             | "Hikaru Freq Shifter+" => {
                 Box::new(hikaru_dsp::effects::FreqShifterPlusEffect::new(sample_rate))
             }
+            "Hikaru OpenPhaser+"
+            | "Hikaru OpenPhaser"
+            | "OpenPhaser+"
+            | "OpenPhaser"
+            | "Phaser+"
+            | "Hikaru Phaser+" => Box::new(hikaru_dsp::effects::PhaserPlusEffect::new(sample_rate)),
             _ => return Err(format!("Efecto nativo desconocido: {name}")),
         };
         Ok((instance, bit8_telemetry))

@@ -22,6 +22,8 @@ fn tier_s_native_effects_load_in_engine() {
         "Bit-8",
         "Hikaru OpenFreqShifter+",
         "Freq Shifter+",
+        "Hikaru OpenPhaser+",
+        "Phaser+",
     ];
     for (slot_idx, name) in names.iter().enumerate() {
         engine

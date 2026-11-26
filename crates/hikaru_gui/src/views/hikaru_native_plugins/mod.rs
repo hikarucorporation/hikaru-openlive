@@ -64,6 +64,7 @@ pub mod hikaru_opendms;
 pub mod hikaru_openeq3;
 pub mod hikaru_opengrid;
 pub mod hikaru_openmodulation;
+pub mod hikaru_openphaser_plus;
 pub mod hikaru_openpoly;
 pub mod hikaru_openspectral_phaser;
 pub mod hikaru_openwavetable;

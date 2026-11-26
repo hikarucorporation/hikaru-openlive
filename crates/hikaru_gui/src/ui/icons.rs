@@ -212,6 +212,13 @@ pub const CIRCLE_X: VectorIcon = VectorIcon {
     d: "M 3 12 C 3 16.971 7.029 21 12 21 C 16.971 21 21 16.971 21 12 C 21 7.029 16.971 3 12 3 C 7.029 3 3 7.029 3 12 M 9.5 9.5 L 14.5 14.5 M 14.5 9.5 L 9.5 14.5",
 };
 
+/// `blend-mode` (Tabler Icons 3.31.0 via Lemon-Studio `crates/os-ui/src/tabler.rs`):
+/// dos círculos entrelazados usados para controles de fase estéreo / mezcla espacial.
+pub const BLEND_MODE: VectorIcon = VectorIcon {
+    filled: false,
+    d: "M 8 9.5 C 8 13.09 10.91 16 14.5 16 C 18.09 16 21 13.09 21 9.5 C 21 5.91 18.09 3 14.5 3 C 10.91 3 8 5.91 8 9.5 M 3 14.5 C 3 18.09 5.91 21 9.5 21 C 13.09 21 16 18.09 16 14.5 C 16 10.91 13.09 8 9.5 8 C 5.91 8 3 10.91 3 14.5",
+};
+
 // =========================================================================
 // PARSER & TESELADOR BÉZIER (`M / L / Q / C / Z`) SOBRE GRILLA 24x24
 // =========================================================================
@@ -646,6 +653,32 @@ pub fn paint_power_switch(painter: &Painter, rect: Rect, fill: Color32, fg: Colo
     let c = rect.center();
     painter.circle_filled(c, r, fill);
     painter.line_segment([pos2(c.x, c.y - r * 0.55), pos2(c.x, c.y + r * 0.15)], Stroke::new(1.4_f32, fg));
+}
+
+/// Símbolo de inversión de polaridad / fase (`∅`) estilo **Phaser+** de Bitwig Studio:
+/// circunferencia nítida atravesada por una diagonal de abajo-izquierda a arriba-derecha.
+pub fn paint_phase_invert_symbol(painter: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    let r = (rect.width().min(rect.height()) * 0.34).clamp(3.6, 5.4);
+    let sw = 1.25_f32;
+    painter.circle_stroke(c, r, Stroke::new(sw, color));
+    let ext = r * 0.96;
+    painter.line_segment(
+        [pos2(c.x - ext, c.y + ext), pos2(c.x + ext, c.y - ext)],
+        Stroke::new(sw, color),
+    );
+}
+
+/// Símbolo de anchura / desfase estéreo (`⚭`) estilo **Phaser+** de Bitwig Studio
+/// (derivado de la geometría de anillos entrelazados `BLEND_MODE` de Lemon Studio):
+/// dos circunferencias gemelas solapadas horizontalmente.
+pub fn paint_stereo_rings_symbol(painter: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    let r = (rect.height().min(rect.width() * 0.65) * 0.33).clamp(3.3, 4.8);
+    let dx = r * 0.56;
+    let sw = 1.2_f32;
+    painter.circle_stroke(pos2(c.x - dx, c.y), r, Stroke::new(sw, color));
+    painter.circle_stroke(pos2(c.x + dx, c.y), r, Stroke::new(sw, color));
 }
 
 /// Tipo de ítem en el navegador lateral derecho estilo Bitwig.
