@@ -329,6 +329,7 @@ def render(document: dict) -> str:
     areas = document.get("areas", [])
     area_totals = []
     present_under_grid = []
+    present_bwrc = False
     for area in areas:
         count = len(area.get("features", []))
         if not count:
@@ -336,6 +337,9 @@ def render(document: dict) -> str:
         area_id = area.get("id", area.get("name", ""))
         if area_id in under_grid_set:
             present_under_grid.append(area_id)
+            continue
+        if area_id == "bwremotecontrols":
+            present_bwrc = True
             continue
         area_totals.append((area_id, float(max(count, LEGIBILITY_FLOOR))))
 
@@ -373,6 +377,12 @@ def render(document: dict) -> str:
                     tile_w,
                     row_h,
                 )
+
+    if present_bwrc and "builtin-devices-fx" in rects:
+        bx, by, bw, bh = rects["builtin-devices-fx"]
+        half_w = bw / 2.0
+        rects["builtin-devices-fx"] = (bx, by, half_w, bh)
+        rects["bwremotecontrols"] = (bx + half_w, by, half_w, bh)
 
     out: list[str] = []
     add = out.append

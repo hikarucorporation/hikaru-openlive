@@ -12,320 +12,323 @@
 <rect x="238.4" y="11" width="10" height="10" rx="2" fill="#E24B4A"/>
 <text x="253.4" y="20.0" font-size="12" fill="#B4B2A9">Open bugs</text>
 <g><title>Clip Launcher: 21 done, 0 in progress, 4 planned</title>
-<clipPath id="b0"><rect x="277.9" y="226.9" width="88.0" height="86.6" rx="6"/></clipPath>
+<clipPath id="b0"><rect x="284.6" y="230.1" width="91.3" height="85.5" rx="6"/></clipPath>
 <g clip-path="url(#b0)">
-<rect x="277.9" y="226.9" width="88.0" height="86.6" fill="#2C2C2A"/>
-<rect x="277.9" y="226.9" width="73.9" height="86.6" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="277.9" y="307.6" width="73.9" height="6" fill="#1D9E75"/>
+<rect x="284.6" y="230.1" width="91.3" height="85.5" fill="#2C2C2A"/>
+<rect x="284.6" y="230.1" width="76.7" height="85.5" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="284.6" y="309.6" width="76.7" height="6" fill="#1D9E75"/>
 </g>
-<text x="285.9" y="247.9" font-size="12" font-weight="600" fill="#F1EFE8">Clip</text>
-<text x="285.9" y="261.9" font-size="12" font-weight="600" fill="#F1EFE8">Launcher</text>
-<text x="285.9" y="283.9" font-size="18" font-weight="600" fill="#F1EFE8">84%</text>
-<text x="285.9" y="296.4" font-size="9.5" fill="#B4B2A9">21 of 25 done</text>
+<text x="292.6" y="251.1" font-size="12" font-weight="600" fill="#F1EFE8">Clip Launcher</text>
+<text x="292.6" y="278.1" font-size="22" font-weight="600" fill="#F1EFE8">84%</text>
+<text x="292.6" y="292.1" font-size="10" fill="#B4B2A9">21 of 25 done</text>
 </g>
 <g><title>Arranger: 16 done, 2 in progress, 8 planned</title>
-<clipPath id="b1"><rect x="598.2" y="35.5" width="80.3" height="98.8" rx="6"/></clipPath>
+<clipPath id="b1"><rect x="599.6" y="35.5" width="78.9" height="103.0" rx="6"/></clipPath>
 <g clip-path="url(#b1)">
-<rect x="598.2" y="35.5" width="80.3" height="98.8" fill="#2C2C2A"/>
-<rect x="598.2" y="35.5" width="49.4" height="98.8" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="598.2" y="128.3" width="49.4" height="6" fill="#1D9E75"/>
-<rect x="647.6" y="128.3" width="6.2" height="6" fill="#EF9F27"/>
+<rect x="599.6" y="35.5" width="78.9" height="103.0" fill="#2C2C2A"/>
+<rect x="599.6" y="35.5" width="48.6" height="103.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="599.6" y="132.5" width="48.6" height="6" fill="#1D9E75"/>
+<rect x="648.2" y="132.5" width="6.1" height="6" fill="#EF9F27"/>
 </g>
-<text x="606.2" y="56.5" font-size="12" font-weight="600" fill="#F1EFE8">Arranger</text>
-<text x="606.2" y="83.5" font-size="22" font-weight="600" fill="#F1EFE8">62%</text>
-<text x="606.2" y="97.5" font-size="10" fill="#B4B2A9">16 of 26 done</text>
+<text x="607.6" y="56.5" font-size="12" font-weight="600" fill="#F1EFE8">Arranger</text>
+<text x="607.6" y="83.5" font-size="22" font-weight="600" fill="#F1EFE8">62%</text>
+<text x="607.6" y="97.5" font-size="10" fill="#B4B2A9">16 of 26 done</text>
 </g>
 <g><title>Transport &amp; Sync: 12 done, 1 in progress, 4 planned</title>
-<clipPath id="b2"><rect x="613.3" y="323.7" width="65.2" height="102.2" rx="6"/></clipPath>
+<clipPath id="b2"><rect x="575.6" y="342.7" width="102.9" height="66.4" rx="6"/></clipPath>
 <g clip-path="url(#b2)">
-<rect x="613.3" y="323.7" width="65.2" height="102.2" fill="#2C2C2A"/>
-<rect x="613.3" y="323.7" width="46.0" height="102.2" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="613.3" y="419.9" width="46.0" height="6" fill="#1D9E75"/>
-<rect x="659.3" y="419.9" width="3.8" height="6" fill="#EF9F27"/>
+<rect x="575.6" y="342.7" width="102.9" height="66.4" fill="#2C2C2A"/>
+<rect x="575.6" y="342.7" width="72.6" height="66.4" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="575.6" y="403.1" width="72.6" height="6" fill="#1D9E75"/>
+<rect x="648.2" y="403.1" width="6.1" height="6" fill="#EF9F27"/>
 </g>
-<text x="619.3" y="342.7" font-size="10" font-weight="600" fill="#F1EFE8">Transport &amp;</text>
-<text x="619.3" y="354.7" font-size="10" font-weight="600" fill="#F1EFE8">Sync</text>
-<text x="619.3" y="376.7" font-size="18" font-weight="600" fill="#F1EFE8">71%</text>
-<text x="619.3" y="389.2" font-size="9.5" fill="#B4B2A9">12/17 done</text>
+<text x="583.6" y="363.7" font-size="12" font-weight="600" fill="#F1EFE8">Transport</text>
+<text x="583.6" y="377.7" font-size="12" font-weight="600" fill="#F1EFE8">&amp; Sync</text>
+<text x="670.5" y="363.7" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">71%</text>
+<text x="583.6" y="392.7" font-size="10" fill="#B4B2A9">12 of 17 done</text>
 </g>
 <g><title>Group Tracks &amp; Routing: 15 done, 1 in progress, 6 planned</title>
-<clipPath id="b3"><rect x="529.9" y="229.1" width="72.8" height="91.7" rx="6"/></clipPath>
+<clipPath id="b3"><rect x="469.7" y="238.7" width="67.6" height="101.1" rx="6"/></clipPath>
 <g clip-path="url(#b3)">
-<rect x="529.9" y="229.1" width="72.8" height="91.7" fill="#2C2C2A"/>
-<rect x="529.9" y="229.1" width="49.6" height="91.7" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="529.9" y="314.7" width="49.6" height="6" fill="#1D9E75"/>
-<rect x="579.5" y="314.7" width="3.3" height="6" fill="#EF9F27"/>
+<rect x="469.7" y="238.7" width="67.6" height="101.1" fill="#2C2C2A"/>
+<rect x="469.7" y="238.7" width="46.1" height="101.1" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="469.7" y="333.7" width="46.1" height="6" fill="#1D9E75"/>
+<rect x="515.8" y="333.7" width="3.1" height="6" fill="#EF9F27"/>
 </g>
-<text x="535.9" y="248.1" font-size="10" font-weight="600" fill="#F1EFE8">Group Tracks</text>
-<text x="535.9" y="260.1" font-size="10" font-weight="600" fill="#F1EFE8">&amp; Routing</text>
-<text x="535.9" y="282.1" font-size="18" font-weight="600" fill="#F1EFE8">68%</text>
-<text x="535.9" y="294.6" font-size="9.5" fill="#B4B2A9">15 of 22 done</text>
+<text x="475.7" y="257.7" font-size="10" font-weight="600" fill="#F1EFE8">Group</text>
+<text x="475.7" y="269.7" font-size="10" font-weight="600" fill="#F1EFE8">Tracks &amp;</text>
+<text x="475.7" y="281.7" font-size="10" font-weight="600" fill="#F1EFE8">Routing</text>
+<text x="475.7" y="303.7" font-size="18" font-weight="600" fill="#F1EFE8">68%</text>
+<text x="475.7" y="316.2" font-size="9.5" fill="#B4B2A9">15/22 done</text>
 </g>
 <g><title>Time-stretching &amp; Audio: 14 done, 2 in progress, 9 planned</title>
-<clipPath id="b4"><rect x="277.9" y="137.3" width="88.0" height="86.6" rx="6"/></clipPath>
+<clipPath id="b4"><rect x="284.6" y="141.5" width="91.3" height="85.5" rx="6"/></clipPath>
 <g clip-path="url(#b4)">
-<rect x="277.9" y="137.3" width="88.0" height="86.6" fill="#2C2C2A"/>
-<rect x="277.9" y="137.3" width="49.3" height="86.6" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="277.9" y="217.9" width="49.3" height="6" fill="#1D9E75"/>
-<rect x="327.1" y="217.9" width="7.0" height="6" fill="#EF9F27"/>
+<rect x="284.6" y="141.5" width="91.3" height="85.5" fill="#2C2C2A"/>
+<rect x="284.6" y="141.5" width="51.1" height="85.5" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="284.6" y="221.1" width="51.1" height="6" fill="#1D9E75"/>
+<rect x="335.7" y="221.1" width="7.3" height="6" fill="#EF9F27"/>
 </g>
-<text x="285.9" y="158.3" font-size="12" font-weight="600" fill="#F1EFE8">Time-stretch</text>
-<text x="285.9" y="172.3" font-size="12" font-weight="600" fill="#F1EFE8">ing &amp; Audio</text>
-<text x="285.9" y="194.3" font-size="18" font-weight="600" fill="#F1EFE8">56%</text>
-<text x="285.9" y="206.8" font-size="9.5" fill="#B4B2A9">14 of 25 done</text>
+<text x="292.6" y="162.5" font-size="12" font-weight="600" fill="#F1EFE8">Time-stretch</text>
+<text x="292.6" y="176.5" font-size="12" font-weight="600" fill="#F1EFE8">ing &amp; Audio</text>
+<text x="292.6" y="198.5" font-size="18" font-weight="600" fill="#F1EFE8">56%</text>
+<text x="292.6" y="211.0" font-size="9.5" fill="#B4B2A9">14 of 25 done</text>
 </g>
 <g><title>Built-in Devices &amp; FX: 20 done, 2 in progress, 128 planned</title>
-<clipPath id="b5"><rect x="1.5" y="304.5" width="273.4" height="174.0" rx="6"/></clipPath>
+<clipPath id="b5"><rect x="1.5" y="304.5" width="138.5" height="174.0" rx="6"/></clipPath>
 <g clip-path="url(#b5)">
-<rect x="1.5" y="304.5" width="273.4" height="174.0" fill="#2C2C2A"/>
-<rect x="1.5" y="304.5" width="36.5" height="174.0" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="1.5" y="472.5" width="36.5" height="6" fill="#1D9E75"/>
-<rect x="38.0" y="472.5" width="3.6" height="6" fill="#EF9F27"/>
+<rect x="1.5" y="304.5" width="138.5" height="174.0" fill="#2C2C2A"/>
+<rect x="1.5" y="304.5" width="18.5" height="174.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="1.5" y="472.5" width="18.5" height="6" fill="#1D9E75"/>
+<rect x="20.0" y="472.5" width="1.8" height="6" fill="#EF9F27"/>
 </g>
-<text x="9.5" y="325.5" font-size="13" font-weight="600" fill="#F1EFE8">Built-in Devices &amp; FX</text>
-<text x="9.5" y="358.8" font-size="28" font-weight="600" fill="#F1EFE8">13%</text>
-<text x="9.5" y="373.8" font-size="11" fill="#B4B2A9">20 of 150 done</text>
+<text x="9.5" y="325.5" font-size="13" font-weight="600" fill="#F1EFE8">Built-in Devices &amp;</text>
+<text x="9.5" y="340.5" font-size="13" font-weight="600" fill="#F1EFE8">FX</text>
+<text x="9.5" y="373.8" font-size="28" font-weight="600" fill="#F1EFE8">13%</text>
+<text x="9.5" y="388.8" font-size="11" fill="#B4B2A9">20 of 150 done</text>
 </g>
 <g><title>Modulators: 43 done, 0 in progress, 0 planned</title>
-<clipPath id="b6"><rect x="277.9" y="35.5" width="134.7" height="98.8" rx="6"/></clipPath>
+<clipPath id="b6"><rect x="284.6" y="35.5" width="132.5" height="103.0" rx="6"/></clipPath>
 <g clip-path="url(#b6)">
-<rect x="277.9" y="35.5" width="134.7" height="98.8" fill="#2C2C2A"/>
-<rect x="277.9" y="35.5" width="134.7" height="98.8" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="277.9" y="128.3" width="134.7" height="6" fill="#1D9E75"/>
+<rect x="284.6" y="35.5" width="132.5" height="103.0" fill="#2C2C2A"/>
+<rect x="284.6" y="35.5" width="132.5" height="103.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="284.6" y="132.5" width="132.5" height="6" fill="#1D9E75"/>
 </g>
-<text x="285.9" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Modulators</text>
-<text x="285.9" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">100%</text>
-<text x="285.9" y="104.8" font-size="11" fill="#B4B2A9">43 of 43 done</text>
+<text x="292.6" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Modulators</text>
+<text x="292.6" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">100%</text>
+<text x="292.6" y="104.8" font-size="11" fill="#B4B2A9">43 of 43 done</text>
 </g>
 <g><title>Grid Devices: 97 done, 0 in progress, 131 planned</title>
-<clipPath id="b7"><rect x="1.5" y="35.5" width="273.4" height="98.0" rx="6"/></clipPath>
+<clipPath id="b7"><rect x="1.5" y="35.5" width="280.1" height="98.0" rx="6"/></clipPath>
 <g clip-path="url(#b7)">
-<rect x="1.5" y="35.5" width="273.4" height="98.0" fill="#2C2C2A"/>
-<rect x="1.5" y="35.5" width="116.3" height="98.0" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="1.5" y="127.5" width="116.3" height="6" fill="#1D9E75"/>
+<rect x="1.5" y="35.5" width="280.1" height="98.0" fill="#2C2C2A"/>
+<rect x="1.5" y="35.5" width="119.2" height="98.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="1.5" y="127.5" width="119.2" height="6" fill="#1D9E75"/>
 </g>
 <text x="9.5" y="56.5" font-size="13" font-weight="600" fill="#F1EFE8">Grid Devices</text>
 <text x="9.5" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">43%</text>
 <text x="9.5" y="104.8" font-size="11" fill="#B4B2A9">97 of 228 done</text>
 </g>
 <g><title>Mixer &amp; I/O: 19 done, 0 in progress, 8 planned</title>
-<clipPath id="b8"><rect x="511.7" y="35.5" width="83.5" height="98.8" rx="6"/></clipPath>
+<clipPath id="b8"><rect x="514.5" y="35.5" width="82.1" height="103.0" rx="6"/></clipPath>
 <g clip-path="url(#b8)">
-<rect x="511.7" y="35.5" width="83.5" height="98.8" fill="#2C2C2A"/>
-<rect x="511.7" y="35.5" width="58.8" height="98.8" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="511.7" y="128.3" width="58.8" height="6" fill="#1D9E75"/>
+<rect x="514.5" y="35.5" width="82.1" height="103.0" fill="#2C2C2A"/>
+<rect x="514.5" y="35.5" width="57.7" height="103.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="514.5" y="132.5" width="57.7" height="6" fill="#1D9E75"/>
 </g>
-<text x="519.7" y="56.5" font-size="12" font-weight="600" fill="#F1EFE8">Mixer &amp; I/O</text>
-<text x="519.7" y="83.5" font-size="22" font-weight="600" fill="#F1EFE8">70%</text>
-<text x="519.7" y="97.5" font-size="10" fill="#B4B2A9">19 of 27 done</text>
+<text x="522.5" y="56.5" font-size="12" font-weight="600" fill="#F1EFE8">Mixer &amp; I/O</text>
+<text x="522.5" y="83.5" font-size="22" font-weight="600" fill="#F1EFE8">70%</text>
+<text x="522.5" y="97.5" font-size="10" fill="#B4B2A9">19 of 27 done</text>
 </g>
 <g><title>Browser &amp; Files: 15 done, 2 in progress, 7 planned</title>
-<clipPath id="b9"><rect x="277.9" y="316.6" width="88.0" height="83.0" rx="6"/></clipPath>
+<clipPath id="b9"><rect x="284.6" y="318.6" width="91.3" height="82.0" rx="6"/></clipPath>
 <g clip-path="url(#b9)">
-<rect x="277.9" y="316.6" width="88.0" height="83.0" fill="#2C2C2A"/>
-<rect x="277.9" y="316.6" width="55.0" height="83.0" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="277.9" y="393.6" width="55.0" height="6" fill="#1D9E75"/>
-<rect x="332.9" y="393.6" width="7.3" height="6" fill="#EF9F27"/>
+<rect x="284.6" y="318.6" width="91.3" height="82.0" fill="#2C2C2A"/>
+<rect x="284.6" y="318.6" width="57.1" height="82.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="284.6" y="394.6" width="57.1" height="6" fill="#1D9E75"/>
+<rect x="341.7" y="394.6" width="7.6" height="6" fill="#EF9F27"/>
 </g>
-<text x="285.9" y="337.6" font-size="12" font-weight="600" fill="#F1EFE8">Browser &amp;</text>
-<text x="285.9" y="351.6" font-size="12" font-weight="600" fill="#F1EFE8">Files</text>
-<text x="285.9" y="373.6" font-size="18" font-weight="600" fill="#F1EFE8">62%</text>
-<text x="285.9" y="386.1" font-size="9.5" fill="#B4B2A9">15 of 24 done</text>
+<text x="292.6" y="339.6" font-size="12" font-weight="600" fill="#F1EFE8">Browser &amp;</text>
+<text x="292.6" y="353.6" font-size="12" font-weight="600" fill="#F1EFE8">Files</text>
+<text x="292.6" y="375.6" font-size="18" font-weight="600" fill="#F1EFE8">62%</text>
+<text x="292.6" y="388.1" font-size="9.5" fill="#B4B2A9">15 of 24 done</text>
 </g>
 <g><title>MIDI &amp; Controllers: 9 done, 0 in progress, 12 planned</title>
-<clipPath id="b10"><rect x="605.7" y="229.1" width="72.8" height="91.7" rx="6"/></clipPath>
+<clipPath id="b10"><rect x="540.3" y="238.7" width="67.6" height="101.1" rx="6"/></clipPath>
 <g clip-path="url(#b10)">
-<rect x="605.7" y="229.1" width="72.8" height="91.7" fill="#2C2C2A"/>
-<rect x="605.7" y="229.1" width="31.2" height="91.7" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="605.7" y="314.7" width="31.2" height="6" fill="#1D9E75"/>
+<rect x="540.3" y="238.7" width="67.6" height="101.1" fill="#2C2C2A"/>
+<rect x="540.3" y="238.7" width="29.0" height="101.1" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="540.3" y="333.7" width="29.0" height="6" fill="#1D9E75"/>
 </g>
-<text x="611.7" y="248.1" font-size="10" font-weight="600" fill="#F1EFE8">MIDI &amp;</text>
-<text x="611.7" y="260.1" font-size="10" font-weight="600" fill="#F1EFE8">Controllers</text>
-<text x="611.7" y="282.1" font-size="18" font-weight="600" fill="#F1EFE8">43%</text>
-<text x="611.7" y="294.6" font-size="9.5" fill="#B4B2A9">9 of 21 done</text>
+<text x="546.3" y="257.7" font-size="10" font-weight="600" fill="#F1EFE8">MIDI &amp;</text>
+<text x="546.3" y="269.7" font-size="10" font-weight="600" fill="#F1EFE8">Controllers</text>
+<text x="546.3" y="291.7" font-size="18" font-weight="600" fill="#F1EFE8">43%</text>
+<text x="546.3" y="304.2" font-size="9.5" fill="#B4B2A9">9 of 21 done</text>
 </g>
 <g><title>UI &amp; Workflow: 20 done, 0 in progress, 10 planned</title>
-<clipPath id="b11"><rect x="415.6" y="35.5" width="93.1" height="98.8" rx="6"/></clipPath>
+<clipPath id="b11"><rect x="420.0" y="35.5" width="91.5" height="103.0" rx="6"/></clipPath>
 <g clip-path="url(#b11)">
-<rect x="415.6" y="35.5" width="93.1" height="98.8" fill="#2C2C2A"/>
-<rect x="415.6" y="35.5" width="62.1" height="98.8" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="415.6" y="128.3" width="62.1" height="6" fill="#1D9E75"/>
+<rect x="420.0" y="35.5" width="91.5" height="103.0" fill="#2C2C2A"/>
+<rect x="420.0" y="35.5" width="61.0" height="103.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="420.0" y="132.5" width="61.0" height="6" fill="#1D9E75"/>
 </g>
-<text x="423.6" y="56.5" font-size="12" font-weight="600" fill="#F1EFE8">UI &amp; Workflow</text>
-<text x="423.6" y="89.8" font-size="28" font-weight="600" fill="#F1EFE8">67%</text>
-<text x="423.6" y="104.8" font-size="11" fill="#B4B2A9">20 of 30 done</text>
+<text x="428.0" y="56.5" font-size="12" font-weight="600" fill="#F1EFE8">UI &amp;</text>
+<text x="428.0" y="70.5" font-size="12" font-weight="600" fill="#F1EFE8">Workflow</text>
+<text x="428.0" y="97.5" font-size="22" font-weight="600" fill="#F1EFE8">67%</text>
+<text x="428.0" y="111.5" font-size="10" fill="#B4B2A9">20 of 30 done</text>
 </g>
 <g><title>Build &amp; Platform: 8 done, 2 in progress, 3 planned, 1 open bugs</title>
-<clipPath id="b12"><rect x="368.8" y="137.3" width="75.2" height="88.8" rx="6"/></clipPath>
+<clipPath id="b12"><rect x="378.9" y="141.5" width="72.6" height="94.1" rx="6"/></clipPath>
 <g clip-path="url(#b12)">
-<rect x="368.8" y="137.3" width="75.2" height="88.8" fill="#2C2C2A"/>
-<rect x="368.8" y="137.3" width="46.3" height="88.8" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="368.8" y="220.1" width="46.3" height="6" fill="#1D9E75"/>
-<rect x="415.1" y="220.1" width="11.6" height="6" fill="#EF9F27"/>
+<rect x="378.9" y="141.5" width="72.6" height="94.1" fill="#2C2C2A"/>
+<rect x="378.9" y="141.5" width="44.7" height="94.1" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="378.9" y="229.7" width="44.7" height="6" fill="#1D9E75"/>
+<rect x="423.6" y="229.7" width="11.2" height="6" fill="#EF9F27"/>
 </g>
-<text x="374.8" y="156.3" font-size="10" font-weight="600" fill="#F1EFE8">Build &amp;</text>
-<text x="374.8" y="168.3" font-size="10" font-weight="600" fill="#F1EFE8">Platform</text>
-<text x="374.8" y="190.3" font-size="18" font-weight="600" fill="#F1EFE8">62%</text>
-<text x="374.8" y="202.8" font-size="9.5" fill="#B4B2A9">8/13</text>
-<rect x="414.0" y="200.1" width="22.0" height="16.0" rx="4" fill="#E24B4A"/>
-<text x="425.0" y="212.1" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">1</text>
+<text x="384.9" y="160.5" font-size="10" font-weight="600" fill="#F1EFE8">Build &amp;</text>
+<text x="384.9" y="172.5" font-size="10" font-weight="600" fill="#F1EFE8">Platform</text>
+<text x="384.9" y="194.5" font-size="18" font-weight="600" fill="#F1EFE8">62%</text>
+<text x="384.9" y="207.0" font-size="9.5" fill="#B4B2A9">8/13</text>
+<rect x="421.6" y="209.7" width="22.0" height="16.0" rx="4" fill="#E24B4A"/>
+<text x="432.6" y="221.7" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">1</text>
 </g>
 <g><title>VST3 &amp; CLAP: 5 done, 2 in progress, 5 planned</title>
-<clipPath id="b13"><rect x="545.1" y="323.7" width="65.2" height="102.2" rx="6"/></clipPath>
+<clipPath id="b13"><rect x="469.7" y="412.1" width="102.9" height="66.4" rx="6"/></clipPath>
 <g clip-path="url(#b13)">
-<rect x="545.1" y="323.7" width="65.2" height="102.2" fill="#2C2C2A"/>
-<rect x="545.1" y="323.7" width="27.2" height="102.2" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="545.1" y="419.9" width="27.2" height="6" fill="#1D9E75"/>
-<rect x="572.2" y="419.9" width="10.9" height="6" fill="#EF9F27"/>
+<rect x="469.7" y="412.1" width="102.9" height="66.4" fill="#2C2C2A"/>
+<rect x="469.7" y="412.1" width="42.9" height="66.4" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="469.7" y="472.5" width="42.9" height="6" fill="#1D9E75"/>
+<rect x="512.6" y="472.5" width="17.2" height="6" fill="#EF9F27"/>
 </g>
-<text x="551.1" y="342.7" font-size="10" font-weight="600" fill="#F1EFE8">VST3 &amp;</text>
-<text x="551.1" y="354.7" font-size="10" font-weight="600" fill="#F1EFE8">CLAP</text>
-<text x="551.1" y="376.7" font-size="18" font-weight="600" fill="#F1EFE8">42%</text>
-<text x="551.1" y="389.2" font-size="9.5" fill="#B4B2A9">5 of 12 done</text>
+<text x="477.7" y="433.1" font-size="12" font-weight="600" fill="#F1EFE8">VST3 &amp;</text>
+<text x="477.7" y="447.1" font-size="12" font-weight="600" fill="#F1EFE8">CLAP</text>
+<text x="564.6" y="433.1" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">42%</text>
+<text x="477.7" y="462.1" font-size="10" fill="#B4B2A9">5 of 12 done</text>
 </g>
 <g><title>Automation: 2 done, 2 in progress, 0 planned</title>
-<clipPath id="b14"><rect x="277.9" y="402.6" width="88.0" height="75.9" rx="6"/></clipPath>
+<clipPath id="b14"><rect x="284.6" y="403.6" width="91.3" height="74.9" rx="6"/></clipPath>
 <g clip-path="url(#b14)">
-<rect x="277.9" y="402.6" width="88.0" height="75.9" fill="#2C2C2A"/>
-<rect x="277.9" y="402.6" width="44.0" height="75.9" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="277.9" y="472.5" width="44.0" height="6" fill="#1D9E75"/>
-<rect x="321.9" y="472.5" width="44.0" height="6" fill="#EF9F27"/>
+<rect x="284.6" y="403.6" width="91.3" height="74.9" fill="#2C2C2A"/>
+<rect x="284.6" y="403.6" width="45.7" height="74.9" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="284.6" y="472.5" width="45.7" height="6" fill="#1D9E75"/>
+<rect x="330.2" y="472.5" width="45.7" height="6" fill="#EF9F27"/>
 </g>
-<text x="285.9" y="423.6" font-size="12" font-weight="600" fill="#F1EFE8">Automation</text>
-<text x="285.9" y="450.6" font-size="22" font-weight="600" fill="#F1EFE8">50%</text>
-<text x="285.9" y="464.6" font-size="10" fill="#B4B2A9">2 of 4 done</text>
+<text x="292.6" y="424.6" font-size="12" font-weight="600" fill="#F1EFE8">Automation</text>
+<text x="292.6" y="451.6" font-size="22" font-weight="600" fill="#F1EFE8">50%</text>
+<text x="292.6" y="465.6" font-size="10" fill="#B4B2A9">2 of 4 done</text>
 </g>
 <g><title>.DAWproject: 6 done, 0 in progress, 4 planned</title>
-<clipPath id="b15"><rect x="1.5" y="136.5" width="135.2" height="81.0" rx="6"/></clipPath>
+<clipPath id="b15"><rect x="1.5" y="136.5" width="138.5" height="81.0" rx="6"/></clipPath>
 <g clip-path="url(#b15)">
-<rect x="1.5" y="136.5" width="135.2" height="81.0" fill="#2C2C2A"/>
-<rect x="1.5" y="136.5" width="81.1" height="81.0" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="1.5" y="211.5" width="81.1" height="6" fill="#1D9E75"/>
+<rect x="1.5" y="136.5" width="138.5" height="81.0" fill="#2C2C2A"/>
+<rect x="1.5" y="136.5" width="83.1" height="81.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="1.5" y="211.5" width="83.1" height="6" fill="#1D9E75"/>
 </g>
 <text x="9.5" y="157.5" font-size="13" font-weight="600" fill="#F1EFE8">.DAWproject</text>
 <text x="9.5" y="184.5" font-size="22" font-weight="600" fill="#F1EFE8">60%</text>
 <text x="9.5" y="198.5" font-size="10" fill="#B4B2A9">6 of 10 done</text>
 </g>
 <g><title>.bwproject: 3 done, 0 in progress, 3 planned</title>
-<clipPath id="b16"><rect x="139.7" y="136.5" width="135.2" height="81.0" rx="6"/></clipPath>
+<clipPath id="b16"><rect x="143.0" y="136.5" width="138.5" height="81.0" rx="6"/></clipPath>
 <g clip-path="url(#b16)">
-<rect x="139.7" y="136.5" width="135.2" height="81.0" fill="#2C2C2A"/>
-<rect x="139.7" y="136.5" width="67.6" height="81.0" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="139.7" y="211.5" width="67.6" height="6" fill="#1D9E75"/>
+<rect x="143.0" y="136.5" width="138.5" height="81.0" fill="#2C2C2A"/>
+<rect x="143.0" y="136.5" width="69.3" height="81.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="143.0" y="211.5" width="69.3" height="6" fill="#1D9E75"/>
 </g>
-<text x="147.7" y="157.5" font-size="13" font-weight="600" fill="#F1EFE8">.bwproject</text>
-<text x="147.7" y="184.5" font-size="22" font-weight="600" fill="#F1EFE8">50%</text>
-<text x="147.7" y="198.5" font-size="10" fill="#B4B2A9">3 of 6 done</text>
+<text x="151.0" y="157.5" font-size="13" font-weight="600" fill="#F1EFE8">.bwproject</text>
+<text x="151.0" y="184.5" font-size="22" font-weight="600" fill="#F1EFE8">50%</text>
+<text x="151.0" y="198.5" font-size="10" fill="#B4B2A9">3 of 6 done</text>
 </g>
 <g><title>.bwtemplate: 4 done, 0 in progress, 0 planned</title>
-<clipPath id="b17"><rect x="1.5" y="220.5" width="135.2" height="81.0" rx="6"/></clipPath>
+<clipPath id="b17"><rect x="1.5" y="220.5" width="138.5" height="81.0" rx="6"/></clipPath>
 <g clip-path="url(#b17)">
-<rect x="1.5" y="220.5" width="135.2" height="81.0" fill="#2C2C2A"/>
-<rect x="1.5" y="220.5" width="135.2" height="81.0" fill="#1D9E75" fill-opacity="0.25"/>
-<rect x="1.5" y="295.5" width="135.2" height="6" fill="#1D9E75"/>
+<rect x="1.5" y="220.5" width="138.5" height="81.0" fill="#2C2C2A"/>
+<rect x="1.5" y="220.5" width="138.5" height="81.0" fill="#1D9E75" fill-opacity="0.25"/>
+<rect x="1.5" y="295.5" width="138.5" height="6" fill="#1D9E75"/>
 </g>
 <text x="9.5" y="241.5" font-size="13" font-weight="600" fill="#F1EFE8">.bwtemplate</text>
 <text x="9.5" y="268.5" font-size="22" font-weight="600" fill="#F1EFE8">100%</text>
 <text x="9.5" y="282.5" font-size="10" fill="#B4B2A9">4 of 4 done</text>
 </g>
 <g><title>.bwdevice: 0 done, 0 in progress, 5 planned</title>
-<clipPath id="b18"><rect x="139.7" y="220.5" width="135.2" height="81.0" rx="6"/></clipPath>
+<clipPath id="b18"><rect x="143.0" y="220.5" width="138.5" height="81.0" rx="6"/></clipPath>
 <g clip-path="url(#b18)">
-<rect x="139.7" y="220.5" width="135.2" height="81.0" fill="#2C2C2A"/>
+<rect x="143.0" y="220.5" width="138.5" height="81.0" fill="#2C2C2A"/>
 </g>
-<text x="147.7" y="241.5" font-size="13" font-weight="600" fill="#F1EFE8">.bwdevice</text>
-<text x="147.7" y="268.5" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="147.7" y="282.5" font-size="10" fill="#B4B2A9">0 of 5 done</text>
+<text x="151.0" y="241.5" font-size="13" font-weight="600" fill="#F1EFE8">.bwdevice</text>
+<text x="151.0" y="268.5" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="151.0" y="282.5" font-size="10" fill="#B4B2A9">0 of 5 done</text>
 </g>
 <g><title>.bwpreset: 0 done, 0 in progress, 5 planned</title>
-<clipPath id="b19"><rect x="368.8" y="397.4" width="82.3" height="81.1" rx="6"/></clipPath>
+<clipPath id="b19"><rect x="378.9" y="400.6" width="87.8" height="77.9" rx="6"/></clipPath>
 <g clip-path="url(#b19)">
-<rect x="368.8" y="397.4" width="82.3" height="81.1" fill="#2C2C2A"/>
+<rect x="378.9" y="400.6" width="87.8" height="77.9" fill="#2C2C2A"/>
 </g>
-<text x="376.8" y="418.4" font-size="12" font-weight="600" fill="#F1EFE8">.bwpreset</text>
-<text x="376.8" y="445.4" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="376.8" y="459.4" font-size="10" fill="#B4B2A9">0 of 5 done</text>
+<text x="386.9" y="421.6" font-size="12" font-weight="600" fill="#F1EFE8">.bwpreset</text>
+<text x="386.9" y="448.6" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="386.9" y="462.6" font-size="10" fill="#B4B2A9">0 of 5 done</text>
 </g>
 <g><title>.bwclip: 0 done, 0 in progress, 4 planned</title>
-<clipPath id="b20"><rect x="447.0" y="137.3" width="75.2" height="88.8" rx="6"/></clipPath>
+<clipPath id="b20"><rect x="454.6" y="141.5" width="72.6" height="94.1" rx="6"/></clipPath>
 <g clip-path="url(#b20)">
-<rect x="447.0" y="137.3" width="75.2" height="88.8" fill="#2C2C2A"/>
+<rect x="454.6" y="141.5" width="72.6" height="94.1" fill="#2C2C2A"/>
 </g>
-<text x="453.0" y="156.3" font-size="10" font-weight="600" fill="#F1EFE8">.bwclip</text>
-<text x="453.0" y="178.3" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="453.0" y="190.8" font-size="9.5" fill="#B4B2A9">0 of 4 done</text>
+<text x="460.6" y="160.5" font-size="10" font-weight="600" fill="#F1EFE8">.bwclip</text>
+<text x="460.6" y="182.5" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="460.6" y="195.0" font-size="9.5" fill="#B4B2A9">0 of 4 done</text>
 </g>
 <g><title>.bwmodulator: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b21"><rect x="603.3" y="137.3" width="75.2" height="88.8" rx="6"/></clipPath>
+<clipPath id="b21"><rect x="605.9" y="141.5" width="72.6" height="94.1" rx="6"/></clipPath>
 <g clip-path="url(#b21)">
-<rect x="603.3" y="137.3" width="75.2" height="88.8" fill="#2C2C2A"/>
+<rect x="605.9" y="141.5" width="72.6" height="94.1" fill="#2C2C2A"/>
 </g>
-<text x="609.3" y="156.3" font-size="10" font-weight="600" fill="#F1EFE8">.bwmodulator</text>
-<text x="609.3" y="178.3" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="609.3" y="190.8" font-size="9.5" fill="#B4B2A9">0 of 3 done</text>
+<text x="611.9" y="160.5" font-size="10" font-weight="600" fill="#F1EFE8">.bwmodulato</text>
+<text x="611.9" y="172.5" font-size="10" font-weight="600" fill="#F1EFE8">r</text>
+<text x="611.9" y="194.5" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="611.9" y="207.0" font-size="9.5" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.bwmodule: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b22"><rect x="368.8" y="229.1" width="82.3" height="81.1" rx="6"/></clipPath>
+<clipPath id="b22"><rect x="378.9" y="238.7" width="87.8" height="77.9" rx="6"/></clipPath>
 <g clip-path="url(#b22)">
-<rect x="368.8" y="229.1" width="82.3" height="81.1" fill="#2C2C2A"/>
+<rect x="378.9" y="238.7" width="87.8" height="77.9" fill="#2C2C2A"/>
 </g>
-<text x="376.8" y="250.1" font-size="12" font-weight="600" fill="#F1EFE8">.bwmodule</text>
-<text x="376.8" y="277.1" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="376.8" y="291.1" font-size="10" fill="#B4B2A9">0 of 3 done</text>
+<text x="386.9" y="259.7" font-size="12" font-weight="600" fill="#F1EFE8">.bwmodule</text>
+<text x="386.9" y="286.7" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="386.9" y="300.7" font-size="10" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.bwremotecontrols: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b23"><rect x="454.1" y="229.1" width="72.8" height="91.7" rx="6"/></clipPath>
+<clipPath id="b23"><rect x="143.0" y="304.5" width="138.5" height="174.0" rx="6"/></clipPath>
 <g clip-path="url(#b23)">
-<rect x="454.1" y="229.1" width="72.8" height="91.7" fill="#2C2C2A"/>
+<rect x="143.0" y="304.5" width="138.5" height="174.0" fill="#2C2C2A"/>
 </g>
-<text x="460.1" y="248.1" font-size="10" font-weight="600" fill="#F1EFE8">.bwremoteco</text>
-<text x="460.1" y="260.1" font-size="10" font-weight="600" fill="#F1EFE8">ntrols</text>
-<text x="460.1" y="282.1" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="460.1" y="294.6" font-size="9.5" fill="#B4B2A9">0 of 3 done</text>
+<text x="151.0" y="325.5" font-size="13" font-weight="600" fill="#F1EFE8">.bwremotecontrols</text>
+<text x="151.0" y="358.8" font-size="28" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="151.0" y="373.8" font-size="11" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.bwextension: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b24"><rect x="525.2" y="137.3" width="75.2" height="88.8" rx="6"/></clipPath>
+<clipPath id="b24"><rect x="530.2" y="141.5" width="72.6" height="94.1" rx="6"/></clipPath>
 <g clip-path="url(#b24)">
-<rect x="525.2" y="137.3" width="75.2" height="88.8" fill="#2C2C2A"/>
+<rect x="530.2" y="141.5" width="72.6" height="94.1" fill="#2C2C2A"/>
 </g>
-<text x="531.2" y="156.3" font-size="10" font-weight="600" fill="#F1EFE8">.bwextension</text>
-<text x="531.2" y="178.3" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="531.2" y="190.8" font-size="9.5" fill="#B4B2A9">0 of 3 done</text>
+<text x="536.2" y="160.5" font-size="10" font-weight="600" fill="#F1EFE8">.bwextension</text>
+<text x="536.2" y="182.5" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="536.2" y="195.0" font-size="9.5" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.bwpackage: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b25"><rect x="368.8" y="313.2" width="82.3" height="81.1" rx="6"/></clipPath>
+<clipPath id="b25"><rect x="378.9" y="319.6" width="87.8" height="77.9" rx="6"/></clipPath>
 <g clip-path="url(#b25)">
-<rect x="368.8" y="313.2" width="82.3" height="81.1" fill="#2C2C2A"/>
+<rect x="378.9" y="319.6" width="87.8" height="77.9" fill="#2C2C2A"/>
 </g>
-<text x="376.8" y="334.2" font-size="12" font-weight="600" fill="#F1EFE8">.bwpackage</text>
-<text x="376.8" y="361.2" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="376.8" y="375.2" font-size="10" fill="#B4B2A9">0 of 3 done</text>
+<text x="386.9" y="340.6" font-size="12" font-weight="600" fill="#F1EFE8">.bwpackage</text>
+<text x="386.9" y="367.6" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="386.9" y="381.6" font-size="10" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.multisample: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b26"><rect x="454.1" y="323.7" width="88.0" height="75.9" rx="6"/></clipPath>
+<clipPath id="b26"><rect x="610.9" y="238.7" width="67.6" height="101.1" rx="6"/></clipPath>
 <g clip-path="url(#b26)">
-<rect x="454.1" y="323.7" width="88.0" height="75.9" fill="#2C2C2A"/>
+<rect x="610.9" y="238.7" width="67.6" height="101.1" fill="#2C2C2A"/>
 </g>
-<text x="462.1" y="344.7" font-size="12" font-weight="600" fill="#F1EFE8">.multisample</text>
-<text x="462.1" y="371.7" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="462.1" y="385.7" font-size="10" fill="#B4B2A9">0 of 3 done</text>
+<text x="616.9" y="257.7" font-size="10" font-weight="600" fill="#F1EFE8">.multisampl</text>
+<text x="616.9" y="269.7" font-size="10" font-weight="600" fill="#F1EFE8">e</text>
+<text x="616.9" y="291.7" font-size="18" font-weight="600" fill="#F1EFE8">0%</text>
+<text x="616.9" y="304.2" font-size="9.5" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.wt: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b27"><rect x="545.1" y="428.9" width="133.4" height="49.6" rx="6"/></clipPath>
+<clipPath id="b27"><rect x="575.6" y="412.1" width="102.9" height="66.4" rx="6"/></clipPath>
 <g clip-path="url(#b27)">
-<rect x="545.1" y="428.9" width="133.4" height="49.6" fill="#2C2C2A"/>
+<rect x="575.6" y="412.1" width="102.9" height="66.4" fill="#2C2C2A"/>
 </g>
-<text x="553.1" y="449.9" font-size="13" font-weight="600" fill="#F1EFE8">.wt</text>
-<text x="670.5" y="449.9" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">0%</text>
-<text x="553.1" y="464.9" font-size="10" fill="#B4B2A9">0 of 3 done</text>
+<text x="583.6" y="433.1" font-size="12" font-weight="600" fill="#F1EFE8">.wt</text>
+<text x="670.5" y="433.1" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">0%</text>
+<text x="583.6" y="448.1" font-size="10" fill="#B4B2A9">0 of 3 done</text>
 </g>
 <g><title>.nitro: 0 done, 0 in progress, 3 planned</title>
-<clipPath id="b28"><rect x="454.1" y="402.6" width="88.0" height="75.9" rx="6"/></clipPath>
+<clipPath id="b28"><rect x="469.7" y="342.7" width="102.9" height="66.4" rx="6"/></clipPath>
 <g clip-path="url(#b28)">
-<rect x="454.1" y="402.6" width="88.0" height="75.9" fill="#2C2C2A"/>
+<rect x="469.7" y="342.7" width="102.9" height="66.4" fill="#2C2C2A"/>
 </g>
-<text x="462.1" y="423.6" font-size="12" font-weight="600" fill="#F1EFE8">.nitro</text>
-<text x="462.1" y="450.6" font-size="22" font-weight="600" fill="#F1EFE8">0%</text>
-<text x="462.1" y="464.6" font-size="10" fill="#B4B2A9">0 of 3 done</text>
+<text x="477.7" y="363.7" font-size="12" font-weight="600" fill="#F1EFE8">.nitro</text>
+<text x="564.6" y="363.7" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">0%</text>
+<text x="477.7" y="378.7" font-size="10" fill="#B4B2A9">0 of 3 done</text>
 </g>
 </svg>
