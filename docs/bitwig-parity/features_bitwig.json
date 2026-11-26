@@ -35,13 +35,13 @@
     ]
   },
   "summary": {
-    "areas": 19,
-    "features": 692,
+    "areas": 29,
+    "features": 725,
     "done": 329,
     "in_progress": 16,
-    "planned": 347,
+    "planned": 380,
     "bugs": 1,
-    "parity_percent": 48
+    "parity_percent": 45
   },
   "areas": [
     {
@@ -3968,6 +3968,251 @@
         {
           "id": "bd-05",
           "name": "Grid patch graph & browser preset loading",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwpreset",
+      "name": ".bwpreset",
+      "bitwig_reference": "Native Bitwig Studio device, rack and Grid preset container (.bwpreset, BtWg00030002) (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bpr-01",
+          "name": "BtWg00030002 preset container & metadata parser (.bwpreset)",
+          "status": "planned"
+        },
+        {
+          "id": "bpr-02",
+          "name": "Device parameter values & macro state import",
+          "status": "planned"
+        },
+        {
+          "id": "bpr-03",
+          "name": "Modulator slots & modulation routing import",
+          "status": "planned"
+        },
+        {
+          "id": "bpr-04",
+          "name": "Grid patch graph import (Poly/FX/Note Grid)",
+          "status": "planned"
+        },
+        {
+          "id": "bpr-05",
+          "name": "Browser preview & preset export (.bwpreset)",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwclip",
+      "name": ".bwclip",
+      "bitwig_reference": "Native Bitwig Studio clip container (.bwclip): MIDI/audio/hybrid clips, automation & launcher metadata (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bcl-01",
+          "name": "Binary clip container parser (.bwclip)",
+          "status": "planned"
+        },
+        {
+          "id": "bcl-02",
+          "name": "MIDI notes, micro-pitch & expression import",
+          "status": "planned"
+        },
+        {
+          "id": "bcl-03",
+          "name": "Audio clip, warp markers & embedded media",
+          "status": "planned"
+        },
+        {
+          "id": "bcl-04",
+          "name": "Clip automation envelopes & launch settings",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwmodulator",
+      "name": ".bwmodulator",
+      "bitwig_reference": "Native Bitwig Studio modulator container (.bwmodulator, BtWg00030004) for the 43 built-in modulators (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bmod-01",
+          "name": "BtWg00030004 modulator container & UUID resolver (.bwmodulator)",
+          "status": "planned"
+        },
+        {
+          "id": "bmod-02",
+          "name": "Modulator parameter schema & Default.bwpreset mapping",
+          "status": "planned"
+        },
+        {
+          "id": "bmod-03",
+          "name": "Equivalent Hikaru modulator instantiation",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwmodule",
+      "name": ".bwmodule",
+      "bitwig_reference": "Native Bitwig Studio Grid module container (.bwmodule, BtWg00030004) for the 228 Grid modules (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bgd-01",
+          "name": "BtWg00030004 Grid module container & UUID resolver (.bwmodule)",
+          "status": "planned"
+        },
+        {
+          "id": "bgd-02",
+          "name": "Port/signal topology & parameter schema extraction",
+          "status": "planned"
+        },
+        {
+          "id": "bgd-03",
+          "name": "OpenGrid node translation & fallback mapping",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwremotecontrols",
+      "name": ".bwremotecontrols",
+      "bitwig_reference": "Native Bitwig Studio remote control page mappings (.bwremotecontrols, BtWg00030002) (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "brc-01",
+          "name": "BtWg00030002 remote controls parser (.bwremotecontrols)",
+          "status": "planned"
+        },
+        {
+          "id": "brc-02",
+          "name": "8-knob page layout & parameter ID binding",
+          "status": "planned"
+        },
+        {
+          "id": "brc-03",
+          "name": "Hardware controller & user page export",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwextension",
+      "name": ".bwextension",
+      "bitwig_reference": "Native Bitwig Studio compiled controller extension package (.bwextension) (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bex-01",
+          "name": "Extension archive & manifest inspector (.bwextension)",
+          "status": "planned"
+        },
+        {
+          "id": "bex-02",
+          "name": "Controller surface & MIDI mapping bridge",
+          "status": "planned"
+        },
+        {
+          "id": "bex-03",
+          "name": "Built-in vendor controller profile parity",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "bwpackage",
+      "name": ".bwpackage",
+      "bitwig_reference": "Native Bitwig Studio Sound Package & content library bundle (.bwpackage) (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bpk-01",
+          "name": "Package archive & metadata parser (.bwpackage)",
+          "status": "planned"
+        },
+        {
+          "id": "bpk-02",
+          "name": "Sample, preset & clip asset indexing in Browser",
+          "status": "planned"
+        },
+        {
+          "id": "bpk-03",
+          "name": "Pack installation & dependency resolution",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "multisample",
+      "name": ".multisample",
+      "bitwig_reference": "Native Bitwig Studio Sampler multisample instrument container (.multisample) (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bms-01",
+          "name": "Container & XML/metadata parser (.multisample)",
+          "status": "planned"
+        },
+        {
+          "id": "bms-02",
+          "name": "Key zones, velocity layers & loop points",
+          "status": "planned"
+        },
+        {
+          "id": "bms-03",
+          "name": "Hikaru Sampler direct loading & export",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "wt",
+      "name": ".wt",
+      "bitwig_reference": "Native Bitwig Studio wavetable format (.wt) for Sampler, Polymer and Grid oscillators (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bwt-01",
+          "name": "Wavetable binary frame parser (.wt)",
+          "status": "planned"
+        },
+        {
+          "id": "bwt-02",
+          "name": "Single-cycle frame extraction & interpolation",
+          "status": "planned"
+        },
+        {
+          "id": "bwt-03",
+          "name": "Hikaru wavetable oscillator & export support",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "nitro",
+      "name": ".nitro",
+      "bitwig_reference": "Internal Bitwig Studio Nitro DSP graph format (.nitro / .nitrobin) used inside .bwdevice and .bwmodule (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bnt-01",
+          "name": "Nitro DSP graph / bytecode format analysis (.nitro/.nitrobin)",
+          "status": "planned"
+        },
+        {
+          "id": "bnt-02",
+          "name": "Standard DSP primitive mapping (nitro-std)",
+          "status": "planned"
+        },
+        {
+          "id": "bnt-03",
+          "name": "OpenGrid / hikaru_dsp shim execution bridge",
           "status": "planned"
         }
       ]
