@@ -330,6 +330,7 @@ def render(document: dict) -> str:
     area_totals = []
     present_under_grid = []
     present_bwrc = False
+    present_ms = False
     for area in areas:
         count = len(area.get("features", []))
         if not count:
@@ -340,6 +341,9 @@ def render(document: dict) -> str:
             continue
         if area_id == "bwremotecontrols":
             present_bwrc = True
+            continue
+        if area_id == "multisample":
+            present_ms = True
             continue
         area_totals.append((area_id, float(max(count, LEGIBILITY_FLOOR))))
 
@@ -378,11 +382,18 @@ def render(document: dict) -> str:
                     row_h,
                 )
 
-    if present_bwrc and "builtin-devices-fx" in rects:
+    if (present_bwrc or present_ms) and "builtin-devices-fx" in rects:
         bx, by, bw, bh = rects["builtin-devices-fx"]
         half_w = bw / 2.0
         rects["builtin-devices-fx"] = (bx, by, half_w, bh)
-        rects["bwremotecontrols"] = (bx + half_w, by, half_w, bh)
+        right_stack = [
+            k
+            for k, flag in (("bwremotecontrols", present_bwrc), ("multisample", present_ms))
+            if flag
+        ]
+        slot_h = bh / len(right_stack)
+        for idx, sub_id in enumerate(right_stack):
+            rects[sub_id] = (bx + half_w, by + idx * slot_h, half_w, slot_h)
 
     out: list[str] = []
     add = out.append
