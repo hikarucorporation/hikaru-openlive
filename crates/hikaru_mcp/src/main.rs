@@ -27,6 +27,47 @@ use hikaru_mcp::{Backend, Mode};
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // Si se pasaron archivos `.bwdevice` / `.bwpreset` por línea de comandos,
+    // los enchufamos al buzón compartido para que cualquier cliente MCP
+    // (como Antigravity) los vea en `hikaru://bitwig/dropped` e `inspect_bitwig_device`.
+    let mut bw_paths: Vec<PathBuf> = cli.artifacts.clone();
+    if let Some(ref p) = cli.bwdevice {
+        bw_paths.push(p.clone());
+    }
+    if !bw_paths.is_empty() {
+        for path in &bw_paths {
+            if hikaru_mcp_port::is_supported_bitwig_artifact(path) {
+                if let Err(err) = hikaru_mcp_port::record_bitwig_drop(path, "hikaru_mcp-cli") {
+                    eprintln!("[Hikaru MCP] no se pudo registrar {}: {err}", path.display());
+                }
+            }
+        }
+
+        // Si se invocó directo (`hikaru_mcp /ruta/Bit-8.bwdevice`) sin pedir
+        // transporte/consola/status, inspeccionamos en modo clean-room y salimos.
+        let modo_servidor_explicito =
+            cli.cli || cli.status || cli.port.is_some() || cli.socket.is_some();
+        if !modo_servidor_explicito && cli.transport == TransportArg::Stdio {
+            let mut results = Vec::new();
+            for path in &bw_paths {
+                match hikaru_mcp_port::bitwig::inspect_file(path, None) {
+                    Ok(info) => results.push(info),
+                    Err(err) => {
+                        eprintln!("[Hikaru MCP] error inspeccionando {}: {err}", path.display());
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            let out = if results.len() == 1 {
+                results.into_iter().next().unwrap()
+            } else {
+                serde_json::Value::Array(results)
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            return ExitCode::SUCCESS;
+        }
+    }
+
     // El proyecto: el que se pasó por línea de comandos, o el de la variable
     // de entorno, o el que se encuentre en el directorio actual.
     let ruta_proyecto = match resolver_proyecto(cli.project.as_deref()) {

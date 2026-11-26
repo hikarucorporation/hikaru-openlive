@@ -60,6 +60,14 @@ pub struct Cli {
     /// plugins sin levantar un agente de IA.
     #[arg(long)]
     pub cli: bool,
+
+    /// Ruta explícita a un `.bwdevice` o `.bwpreset` para enchufarlo al buzón MCP.
+    #[arg(long = "bwdevice", value_name = "RUTA")]
+    pub bwdevice: Option<PathBuf>,
+
+    /// Rutas posicionales a `.bwdevice` o `.bwpreset` para inspeccionar y enchufar al buzón MCP.
+    #[arg(value_name = "ARCHIVO_BW")]
+    pub artifacts: Vec<PathBuf>,
 }
 
 /// El modo de operación, como lo ve la línea de comandos.
@@ -136,5 +144,18 @@ mod tests {
     fn el_socket_por_omision_vive_en_el_runtime_dir() {
         let ruta = runtime_dir().join("hikaru-mcp-1.sock");
         assert!(ruta.to_string_lossy().contains("hikaru"));
+    }
+
+    #[test]
+    fn acepta_ruta_posicional_de_bwdevice() {
+        let cli = Cli::parse_from([
+            "hikaru_mcp",
+            "/opt/bitwig-studio/Library/devices/Bit-8.bwdevice",
+        ]);
+        assert_eq!(cli.artifacts.len(), 1);
+        assert_eq!(
+            cli.artifacts[0],
+            PathBuf::from("/opt/bitwig-studio/Library/devices/Bit-8.bwdevice")
+        );
     }
 }
