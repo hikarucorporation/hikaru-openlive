@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 329,
-    "in_progress": 16,
+    "done": 330,
+    "in_progress": 15,
     "planned": 380,
     "bugs": 1,
-    "parity_percent": 45
+    "parity_percent": 46
   },
   "areas": [
     {
@@ -989,9 +989,8 @@
         {
           "id": "dv-045",
           "name": "Flanger+",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_dsp/src/effects/flanger.rs",
-          "note": "Hikaru exposes the base device; the extended Bitwig variant is partial."
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/flanger_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openflanger_plus/mod.rs"
         },
         {
           "id": "dv-046",
