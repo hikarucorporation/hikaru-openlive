@@ -138,6 +138,13 @@ impl ServerHandler for HikaruServer {
             },
             "audit_project" => ToolCall::AuditProject,
             "project_info" => ToolCall::ProjectInfo,
+            "inspect_bitwig_device" => ToolCall::InspectBitwigDevice {
+                ruta: arg_str(&argumentos, "ruta"),
+                library_dir: arg_str(&argumentos, "library_dir"),
+            },
+            "list_bitwig_devices" => ToolCall::ListBitwigDevices {
+                ruta: arg_str(&argumentos, "ruta"),
+            },
             otra => {
                 return Err(McpError::invalid_params(
                     format!("no existe la herramienta '{otra}'"),
@@ -302,6 +309,30 @@ impl HikaruServer {
                     .map_err(|err| format!("la telemetría no es JSON válido: {err}"))
             }
             "hikaru://diagnostics/last-crash" => Ok(crate::crash::last()),
+            "hikaru://bitwig/dropped" => {
+                let inbox_path = hikaru_mcp_port::default_bitwig_inbox_path();
+                let inbox = hikaru_mcp_port::load_bitwig_inbox(&inbox_path);
+                let items: Vec<serde_json::Value> = inbox
+                    .entries
+                    .iter()
+                    .rev()
+                    .map(|rec| {
+                        let inspeccion = match crate::bitwig::inspect_file(&rec.path, None) {
+                            Ok(val) => val,
+                            Err(err) => serde_json::json!({ "error": err }),
+                        };
+                        serde_json::json!({
+                            "drop": rec,
+                            "inspeccion": inspeccion,
+                        })
+                    })
+                    .collect();
+                Ok(serde_json::json!({
+                    "inbox_path": inbox_path.display().to_string(),
+                    "total": items.len(),
+                    "artefactos": items,
+                }))
+            }
             otra => Err(format!("no existe el recurso '{otra}'")),
         }
     }
@@ -341,6 +372,13 @@ enum ToolCall {
     },
     AuditProject,
     ProjectInfo,
+    InspectBitwigDevice {
+        ruta: Option<String>,
+        library_dir: Option<String>,
+    },
+    ListBitwigDevices {
+        ruta: Option<String>,
+    },
 }
 
 /// Ejecuta la llamada y devuelve el resultado MCP.
@@ -524,6 +562,35 @@ fn ejecutar(backend: Arc<Backend>, llamada: ToolCall) -> CallToolResult {
                      --project <archivo.oplf|.opsf> o poné HIKARU_PROJECT.",
                 ),
             }
+        }
+
+        ToolCall::InspectBitwigDevice { ruta, library_dir } => {
+            let target_path = match ruta {
+                Some(p) => std::path::PathBuf::from(p),
+                None => {
+                    let inbox_path = hikaru_mcp_port::default_bitwig_inbox_path();
+                    match hikaru_mcp_port::latest_bitwig_drop(&inbox_path) {
+                        Some(rec) => rec.path,
+                        None => {
+                            return crate::tool_error(format!(
+                                "no se pasó 'ruta' y no hay ningún .bwdevice/.bwpreset arrastrado \
+                                 en {}. Pasá 'ruta' o arrastrá un archivo al DAW.",
+                                inbox_path.display()
+                            ));
+                        }
+                    }
+                }
+            };
+            let lib = library_dir.map(std::path::PathBuf::from);
+            match crate::bitwig::inspect_file(&target_path, lib.as_deref()) {
+                Ok(info) => crate::tool_ok(&info),
+                Err(err) => crate::tool_error(err),
+            }
+        }
+
+        ToolCall::ListBitwigDevices { ruta } => {
+            let dir = ruta.map(std::path::PathBuf::from);
+            crate::tool_ok(&crate::bitwig::list_devices(dir.as_deref()))
         }
     }
 }

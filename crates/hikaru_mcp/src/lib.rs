@@ -154,6 +154,7 @@ pub fn tool_ok(value: &Value) -> rmcp::model::CallToolResult {
     rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(texto)])
 }
 
+pub mod bitwig;
 pub mod catalog;
 pub mod cli;
 pub mod console;

@@ -2,7 +2,7 @@
 // GNU AGPLv3
 // crates/hikaru_gui/src/views/mcp_port_settings.rs
 
-use egui::{Button, Color32, Context, RichText, ScrollArea, Window};
+use egui::{Button, Color32, Context, Order, RichText, ScrollArea, Ui, Window};
 use hikaru_mcp_port::{McpPortConfig, McpServerConfig, McpTransport, PortSlotId};
 
 use crate::app::AppState;
@@ -18,12 +18,22 @@ pub struct McpPortSettingsState {
 
 impl Default for McpPortSettingsState {
     fn default() -> Self {
+        let default_path = hikaru_mcp_port::config::default_config_path();
+        let config = hikaru_mcp_port::config::load_config(&default_path).unwrap_or_default();
+        let active_count = config.enabled_ports().count();
+        let status_message = if config.enabled && active_count > 0 {
+            format!("Servidor MCP habilitado ({active_count} puerto(s) activo(s)).")
+        } else if !config.enabled && active_count > 0 {
+            format!("Servidor MCP deshabilitado ({active_count} puerto(s) listo(s)).")
+        } else {
+            "Servidor MCP detenido.".to_string()
+        };
         Self {
             is_open: false,
-            config: McpServerConfig::default(),
+            config,
             selected_port: None,
             show_advanced: false,
-            status_message: "Servidor MCP detenido.".to_string(),
+            status_message,
         }
     }
 }
@@ -82,6 +92,13 @@ impl McpPortSettingsState {
         if let Some(port) = self.config.slot_mut(id) {
             port.enabled = !port.enabled;
             let enabled = port.enabled;
+            if enabled {
+                self.config.enabled = true;
+            }
+            let _ = hikaru_mcp_port::config::save_config(
+                &self.config,
+                &hikaru_mcp_port::config::default_config_path(),
+            );
             self.status_message = if enabled {
                 format!("MCP Port {id} habilitado.")
             } else {
@@ -100,145 +117,187 @@ pub fn render(ctx: &Context, state: &mut AppState) {
 
     Window::new(RichText::new("HIKARU MCP PORT SETTINGS").strong().color(Color32::from_rgb(0, 255, 255)))
         .open(&mut is_open)
+        .order(Order::Foreground)
         .default_size([520.0, 440.0])
         .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
-
-            // Advanced Settings Toggle
-            let adv_text = if state.mcp_port_settings_state.show_advanced {
-                "[-] Ocultar Configuración Avanzada"
-            } else {
-                "[+] Mostrar Configuración Avanzada..."
-            };
-            if ui.add(Button::new(RichText::new(adv_text).size(11.0).color(TEXT_MUTED)).fill(SURFACE_BG)).clicked() {
-                state.mcp_port_settings_state.show_advanced = !state.mcp_port_settings_state.show_advanced;
-            }
-
-            if state.mcp_port_settings_state.show_advanced {
-                if let Some(sel) = state.mcp_port_settings_state.selected() {
-                    let sel_id = sel.id;
-                    let sel_transport = format!("{:?}", sel.transport);
-                    let sel_enabled = sel.enabled;
-
-                    egui::Frame::NONE
-                        .fill(Color32::from_rgb(0x1F, 0x22, 0x2A))
-                        .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
-                        .inner_margin(8.0)
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(format!("Detalles: MCP Port {sel_id}")).size(11.5).strong().color(ACCENT_ORANGE));
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("Estado:").size(11.0).color(TEXT_MUTED));
-                                if ui.add(Button::new(if sel_enabled { "Habilitado" } else { "Deshabilitado" }).fill(SURFACE_BG)).clicked() {
-                                    state.mcp_port_settings_state.toggle_port(sel_id);
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("Transporte:").size(11.0).color(TEXT_MUTED));
-                                if ui.add(Button::new(sel_transport).fill(SURFACE_BG)).clicked() {
-                                    state.mcp_port_settings_state.cycle_transport(sel_id);
-                                }
-                            });
-                        });
+            render_embedded(ui, state);
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(Button::new("Cerrar").fill(SURFACE_BG)).clicked() {
+                    state.mcp_port_settings_state.is_open = false;
                 }
-            }
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Puertos MCP Disponibles").size(11.5).strong().color(TEXT_PRIMARY));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(Button::new("+ Agregar Puerto").fill(SURFACE_BG)).clicked() {
-                        state.mcp_port_settings_state.add_port();
-                    }
-                });
-            });
-
-            // Ports list
-            let ports: Vec<(PortSlotId, bool, String)> = state
-                .mcp_port_settings_state
-                .config
-                .ports
-                .iter()
-                .map(|p| (p.id, p.enabled, format!("{:?}", p.transport)))
-                .collect();
-
-            let mut to_toggle = None;
-            let mut to_cycle = None;
-            let mut to_remove = None;
-            let mut to_select = None;
-
-            ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                for (id, enabled, transport_name) in ports {
-                    let is_sel = state.mcp_port_settings_state.selected_port == Some(id);
-                    let bg = if is_sel { Color32::from_rgb(0x2B, 0x2E, 0x38) } else { Color32::from_rgb(0x20, 0x23, 0x2C) };
-
-                    egui::Frame::NONE
-                        .fill(bg)
-                        .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
-                        .inner_margin(6.0)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let dot_color = if enabled { PLAY_GREEN } else { TEXT_DISABLED };
-                                let (dot_r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                                ui.painter().circle_filled(dot_r.center(), 3.5, dot_color);
-                                ui.label(RichText::new(format!("Port {id}")).strong().color(TEXT_PRIMARY));
-
-                                if ui.add(Button::new(if enabled { "Activo" } else { "Inactivo" }).small().fill(SURFACE_BG)).clicked() {
-                                    to_toggle = Some(id);
-                                }
-
-                                if ui.add(Button::new(transport_name).small().fill(SURFACE_BG)).clicked() {
-                                    to_cycle = Some(id);
-                                }
-
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.add(Button::new("x").small()).clicked() {
-                                        to_remove = Some(id);
-                                    }
-                                    if ui.add(Button::new("Editar").small().fill(SURFACE_BG)).clicked() {
-                                        to_select = Some(id);
-                                    }
-                                });
-                            });
-                        });
-                }
-            });
-
-            if let Some(id) = to_toggle {
-                state.mcp_port_settings_state.toggle_port(id);
-            }
-            if let Some(id) = to_cycle {
-                state.mcp_port_settings_state.cycle_transport(id);
-            }
-            if let Some(id) = to_remove {
-                state.mcp_port_settings_state.remove_port(id);
-            }
-            if let Some(id) = to_select {
-                state.mcp_port_settings_state.select(id);
-                state.mcp_port_settings_state.show_advanced = true;
-            }
-
-            ui.separator();
-
-            ui.label(RichText::new(&state.mcp_port_settings_state.status_message).size(10.5).color(TEXT_MUTED));
-
-            ui.horizontal(|ui| {
-                if ui.add(Button::new("Guardar y Lanzar Servidores").fill(Color32::from_rgb(0x1E, 0x88, 0xE5))).clicked() {
-                    let default_path = hikaru_mcp_port::config::default_config_path();
-                    let _ = hikaru_mcp_port::config::save_config(&state.mcp_port_settings_state.config, &default_path);
-                    crate::mcp_port_launcher::lanzar_slots_habilitados();
-                    state.mcp_port_settings_state.status_message = format!(
-                        "Configuración guardada. Servidores lanzados: {}",
-                        crate::mcp_port_launcher::lanzados()
-                    );
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(Button::new("Cerrar").fill(SURFACE_BG)).clicked() {
-                        state.mcp_port_settings_state.is_open = false;
-                    }
-                });
             });
         });
 
     state.mcp_port_settings_state.is_open = is_open;
+}
+
+/// Renderiza la configuración de puertos MCP embebida dentro del Dashboard.
+pub fn render_embedded(ui: &mut Ui, state: &mut AppState) {
+    ui.spacing_mut().item_spacing.y = 8.0;
+
+    // Master switch del servidor MCP + Guardar/Lanzar + Advanced Settings Toggle
+    ui.horizontal_wrapped(|ui| {
+        let master_enabled = state.mcp_port_settings_state.config.enabled;
+        let master_label = if master_enabled {
+            "Servidor MCP: Habilitado"
+        } else {
+            "Servidor MCP: Deshabilitado"
+        };
+        let master_bg = if master_enabled {
+            Color32::from_rgb(0x1E, 0x5E, 0x3A)
+        } else {
+            SURFACE_BG
+        };
+        if ui.add(Button::new(RichText::new(master_label).size(11.0).color(TEXT_PRIMARY)).fill(master_bg)).clicked() {
+            state.mcp_port_settings_state.config.enabled = !master_enabled;
+            let default_path = hikaru_mcp_port::config::default_config_path();
+            let _ = hikaru_mcp_port::config::save_config(&state.mcp_port_settings_state.config, &default_path);
+            if state.mcp_port_settings_state.config.enabled {
+                crate::mcp_port_launcher::lanzar_slots_habilitados();
+                state.mcp_port_settings_state.status_message = format!(
+                    "Servidor MCP habilitado y guardado. Servidores lanzados: {}",
+                    crate::mcp_port_launcher::lanzados()
+                );
+            } else {
+                state.mcp_port_settings_state.status_message =
+                    "Servidor MCP deshabilitado (guardado).".to_string();
+            }
+        }
+
+        if ui.add(Button::new(RichText::new("Guardar y Lanzar Servidores").size(11.0).color(TEXT_PRIMARY)).fill(Color32::from_rgb(0x1E, 0x88, 0xE5))).clicked() {
+            if state.mcp_port_settings_state.config.enabled_ports().next().is_some() {
+                state.mcp_port_settings_state.config.enabled = true;
+            }
+            let default_path = hikaru_mcp_port::config::default_config_path();
+            match hikaru_mcp_port::config::save_config(&state.mcp_port_settings_state.config, &default_path) {
+                Ok(()) => {
+                    crate::mcp_port_launcher::lanzar_slots_habilitados();
+                    state.mcp_port_settings_state.status_message = format!(
+                        "Configuración guardada en {}. Servidores lanzados: {}",
+                        default_path.display(),
+                        crate::mcp_port_launcher::lanzados()
+                    );
+                }
+                Err(err) => {
+                    state.mcp_port_settings_state.status_message = format!("Error guardando config: {err}");
+                }
+            }
+        }
+
+        let adv_text = if state.mcp_port_settings_state.show_advanced {
+            "[-] Ocultar Avanzada"
+        } else {
+            "[+] Avanzada..."
+        };
+        if ui.add(Button::new(RichText::new(adv_text).size(11.0).color(TEXT_MUTED)).fill(SURFACE_BG)).clicked() {
+            state.mcp_port_settings_state.show_advanced = !state.mcp_port_settings_state.show_advanced;
+        }
+    });
+
+    ui.label(RichText::new(&state.mcp_port_settings_state.status_message).size(10.5).color(TEXT_MUTED));
+
+    if state.mcp_port_settings_state.show_advanced {
+        if let Some(sel) = state.mcp_port_settings_state.selected() {
+            let sel_id = sel.id;
+            let sel_transport = format!("{:?}", sel.transport);
+            let sel_enabled = sel.enabled;
+
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(0x1F, 0x22, 0x2A))
+                .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new(format!("Detalles: MCP Port {sel_id}")).size(11.5).strong().color(ACCENT_ORANGE));
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Estado:").size(11.0).color(TEXT_MUTED));
+                        if ui.add(Button::new(if sel_enabled { "Habilitado" } else { "Deshabilitado" }).fill(SURFACE_BG)).clicked() {
+                            state.mcp_port_settings_state.toggle_port(sel_id);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Transporte:").size(11.0).color(TEXT_MUTED));
+                        if ui.add(Button::new(sel_transport).fill(SURFACE_BG)).clicked() {
+                            state.mcp_port_settings_state.cycle_transport(sel_id);
+                        }
+                    });
+                });
+        }
+    }
+
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Puertos MCP Disponibles").size(11.5).strong().color(TEXT_PRIMARY));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(Button::new("+ Agregar Puerto").fill(SURFACE_BG)).clicked() {
+                state.mcp_port_settings_state.add_port();
+            }
+        });
+    });
+
+    // Ports list
+    let ports: Vec<(PortSlotId, bool, String)> = state
+        .mcp_port_settings_state
+        .config
+        .ports
+        .iter()
+        .map(|p| (p.id, p.enabled, format!("{:?}", p.transport)))
+        .collect();
+
+    let mut to_toggle = None;
+    let mut to_cycle = None;
+    let mut to_remove = None;
+    let mut to_select = None;
+
+    ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
+        for (id, enabled, transport_name) in ports {
+            let is_sel = state.mcp_port_settings_state.selected_port == Some(id);
+            let bg = if is_sel { Color32::from_rgb(0x2B, 0x2E, 0x38) } else { Color32::from_rgb(0x20, 0x23, 0x2C) };
+
+            egui::Frame::NONE
+                .fill(bg)
+                .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
+                .inner_margin(6.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let dot_color = if enabled { PLAY_GREEN } else { TEXT_DISABLED };
+                        let (dot_r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                        ui.painter().circle_filled(dot_r.center(), 3.5, dot_color);
+                        ui.label(RichText::new(format!("Port {id}")).strong().color(TEXT_PRIMARY));
+
+                        if ui.add(Button::new(if enabled { "Activo" } else { "Inactivo" }).small().fill(SURFACE_BG)).clicked() {
+                            to_toggle = Some(id);
+                        }
+
+                        if ui.add(Button::new(transport_name).small().fill(SURFACE_BG)).clicked() {
+                            to_cycle = Some(id);
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(Button::new("x").small()).clicked() {
+                                to_remove = Some(id);
+                            }
+                            if ui.add(Button::new("Editar").small().fill(SURFACE_BG)).clicked() {
+                                to_select = Some(id);
+                            }
+                        });
+                    });
+                });
+        }
+    });
+
+    if let Some(id) = to_toggle {
+        state.mcp_port_settings_state.toggle_port(id);
+    }
+    if let Some(id) = to_cycle {
+        state.mcp_port_settings_state.cycle_transport(id);
+    }
+    if let Some(id) = to_remove {
+        state.mcp_port_settings_state.remove_port(id);
+    }
+    if let Some(id) = to_select {
+        state.mcp_port_settings_state.select(id);
+        state.mcp_port_settings_state.show_advanced = true;
+    }
 }

@@ -26,6 +26,8 @@ fn herramientas_despachadas() -> HashSet<&'static str> {
         "plugin_symbols",
         "audit_project",
         "project_info",
+        "inspect_bitwig_device",
+        "list_bitwig_devices",
     ]
     .into_iter()
     .collect()

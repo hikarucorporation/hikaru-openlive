@@ -2258,6 +2258,26 @@ impl eframe::App for HikaruApp {
         // Global Keyboard shortcuts
         // IMPORTANT: query `ctx.wants_keyboard_input()` OUTSIDE `ctx.input(...)`
         // to avoid re-entrant egui Context lock deadlock!
+        let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+        for dropped in dropped_files {
+            if let Some(path) = dropped.path {
+                if hikaru_mcp_port::is_supported_bitwig_artifact(&path) {
+                    match hikaru_mcp_port::record_bitwig_drop(&path, "gui-drop") {
+                        Ok(rec) => {
+                            eprintln!(
+                                "[Hikaru MCP Port] Bitwig artifact registrado (solo lectura): {} -> {}",
+                                rec.file_name,
+                                rec.path.display()
+                            );
+                        }
+                        Err(err) => {
+                            eprintln!("[Hikaru MCP Port] Error registrando drop Bitwig: {err}");
+                        }
+                    }
+                }
+            }
+        }
+
         let wants_keyboard_input = ctx.wants_keyboard_input();
         let mut pending_file_action: Option<crate::ui::file_menu::FileMenuAction> = None;
         ctx.input(|i| {

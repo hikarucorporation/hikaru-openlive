@@ -147,6 +147,35 @@ pub fn tools() -> Vec<ToolSpec> {
                           los plugins que usa cada pista.",
             params: vec![],
         },
+        ToolSpec {
+            name: "inspect_bitwig_device",
+            description: "Inspecciona en modo clean-room (solo lectura) un archivo .bwdevice o .bwpreset \
+                          de Bitwig Studio para leer su contrato público (UUID, categoría, topología, \
+                          parámetros CONTENTS, moduladores, cadenas anidadas) y mapearlo a hikaru_dsp \
+                          sin tocar SDKs propietarios ni payloads Nitro protegidos.",
+            params: vec![
+                Param::opt_string(
+                    "ruta",
+                    "Ruta al archivo .bwdevice o .bwpreset. Si se omite, inspecciona el último \
+                     artefacto arrastrado desde el gestor de archivos (Dolphin) a Hikaru OpenLive.",
+                ),
+                Param::opt_string(
+                    "library_dir",
+                    "Directorio opcional de biblioteca Bitwig (donde vive device-settings/<UUID>/Default.bwpreset) \
+                     para enriquecer un .bwdevice con su contrato público en claro.",
+                ),
+            ],
+        },
+        ToolSpec {
+            name: "list_bitwig_devices",
+            description: "Lista archivos .bwdevice/.bwpreset en un directorio (o en la biblioteca de \
+                          Bitwig si existe en disco) junto con el registro clean-room de \
+                          compatibilidad hacia los dispositivos nativos de hikaru_dsp.",
+            params: vec![Param::opt_string(
+                "ruta",
+                "Directorio opcional donde buscar archivos .bwdevice y .bwpreset.",
+            )],
+        },
     ]
 }
 
@@ -181,6 +210,13 @@ pub fn resources() -> Vec<ResourceSpec> {
             uri: "hikaru://diagnostics/last-crash",
             name: "Último crash",
             description: "El último fallo registrado por el host de plugins, con su stacktrace.",
+            mime_type: "application/json",
+        },
+        ResourceSpec {
+            uri: "hikaru://bitwig/dropped",
+            name: "Artefactos Bitwig arrastrados",
+            description: "Historial de archivos .bwdevice y .bwpreset arrastrados desde el sistema \
+                          hacia Hikaru OpenLive, junto con su contrato público en modo solo lectura.",
             mime_type: "application/json",
         },
     ]
@@ -231,6 +267,19 @@ pub fn prompts() -> Vec<PromptSpec> {
                 Reportá: recursos de audio que faltan, plugins que el proyecto pide y el host \
                 no tiene, y buses de ruteo que apuntan a pistas inexistentes. \
                 Para cada problema, decí qué archivo y qué pista lo causan.",
+        },
+        PromptSpec {
+            name: "inspeccionar-bwdevice",
+            description: "Analiza en modo clean-room (solo lectura) un .bwdevice o .bwpreset para \
+                          documentar su contrato público y mapearlo a hikaru_dsp.",
+            arguments: vec![("ruta", "Ruta al archivo .bwdevice o .bwpreset.", false)],
+            template: "Inspeccioná en modo clean-room el artefacto Bitwig '{ruta}'.\n\n\
+                1. Llamá a `inspect_bitwig_device` (si no se pasó ruta, tomará el último archivo \
+                   arrastrado desde Dolphin a Hikaru OpenLive vía `hikaru://bitwig/dropped`).\n\
+                2. Identificá su UUID, categoría, topología, parámetros públicos (`CONTENTS`), \
+                   moduladores y subcadenas.\n\
+                3. Verificá su mapeo en `compatibilidad_hikaru` hacia `hikaru_dsp` sin tocar \
+                   payloads protegidos Nitro ni SDKs propietarios.",
         },
     ]
 }

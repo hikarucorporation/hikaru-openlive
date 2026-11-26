@@ -32,10 +32,15 @@
  * proyecto, se puede linkear sin problemas.
  */
 
+pub mod bitwig_inbox;
 pub mod config;
 pub mod ipc;
 pub mod telemetry;
 
+pub use bitwig_inbox::{
+    default_bitwig_inbox_path, is_supported_bitwig_artifact, latest_bitwig_drop, load_bitwig_inbox,
+    record_bitwig_drop, record_bitwig_drop_to, BitwigDropInbox, BitwigDropRecord,
+};
 pub use config::{
     default_config_path, load_config, save_config, socket_path_in, ConfigError, ConfigIssue,
     McpPortConfig, McpServerConfig, McpTransport, PortSlotId, ServerFlags, DEFAULT_PORT_SLOTS,

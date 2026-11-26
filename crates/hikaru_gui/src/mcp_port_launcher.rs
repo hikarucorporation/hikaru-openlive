@@ -73,8 +73,11 @@ pub fn lanzar_slots_habilitados() {
         };
 
         // El ejecutable sale de server_flags (la misma línea de comandos que
-        // edita el usuario).
+        // edita el usuario). Si es el nombre por defecto `hikaru_mcp` y existe
+        // un binario hermano junto al ejecutable actual (ej. target/release/hikaru_mcp),
+        // lo usamos directamente para que funcione sin instalarlo en $PATH.
         let comando = &config.server_flags;
+        let executable_path = resolve_mcp_executable(&comando.executable);
 
         // El socket tiene que vivir en un directorio que exista.
         if let Some(dir) = socket.parent() {
@@ -93,7 +96,7 @@ pub fn lanzar_slots_habilitados() {
             let _ = std::fs::remove_file(&socket);
         }
 
-        let mut proceso = Command::new(&comando.executable);
+        let mut proceso = Command::new(&executable_path);
         proceso
             .args(&comando.args)
             .arg("--transport")
@@ -138,4 +141,19 @@ pub fn lanzar_slots_habilitados() {
 /// Cuántos servidores lanzó el DAW.
 pub fn lanzados() -> usize {
     PROCESOS_LANZADOS.lock().map(|g| g.len()).unwrap_or(0)
+}
+
+fn resolve_mcp_executable(configured: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(configured);
+    if configured == "hikaru_mcp" {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let sibling = dir.join("hikaru_mcp");
+                if sibling.is_file() {
+                    return sibling;
+                }
+            }
+        }
+    }
+    path.to_path_buf()
 }

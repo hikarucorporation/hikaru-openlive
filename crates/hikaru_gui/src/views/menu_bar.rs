@@ -123,7 +123,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 ui.close_menu();
             }
             if ui.button("Hikaru MCP Port Settings...").clicked() {
-                state.mcp_port_settings_state.open();
+                state.control_panel_state.open_mcp_servers();
                 ui.close_menu();
             }
             if ui.button("Control Panel / Dashboard...").clicked() {

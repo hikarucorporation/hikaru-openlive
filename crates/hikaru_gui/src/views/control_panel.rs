@@ -100,6 +100,12 @@ impl Default for ControlPanelState {
 }
 
 impl ControlPanelState {
+    pub fn open_mcp_servers(&mut self) {
+        self.is_open = true;
+        self.top_tab = DashboardTopTab::Settings;
+        self.sub_tab = DashboardSubTab::McpServers;
+    }
+
     pub fn record_recent(&mut self, path: &Path) {
         let p = path.to_path_buf();
         self.recent_projects.retain(|existing| existing != &p);
@@ -879,16 +885,7 @@ fn render_native_devices(ui: &mut Ui, state: &mut AppState) {
 fn render_mcp_tab(ui: &mut Ui, state: &mut AppState) {
     render_section_title(ui, "MCP Servers (Model Context Protocol)");
     ui.add_space(8.0);
-    ui.label(
-        RichText::new(&state.mcp_port_settings_state.status_message)
-            .size(12.0)
-            .color(TEXT_MUTED),
-    );
-    ui.add_space(12.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(200.0, 26.0), Sense::hover());
-    if paint_bitwig_button(ui, rect, "Configure MCP Ports...", ("mcp_open_btn", 0)) {
-        state.mcp_port_settings_state.open();
-    }
+    crate::views::mcp_port_settings::render_embedded(ui, state);
 }
 
 fn render_interface_tab(ui: &mut Ui, state: &mut AppState) {

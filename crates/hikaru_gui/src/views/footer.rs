@@ -346,10 +346,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         state.plugin_settings_state.is_open = !state.plugin_settings_state.is_open;
                     }
 
+                    let mcp_active = state.control_panel_state.is_open
+                        && state.control_panel_state.sub_tab
+                            == crate::views::control_panel::DashboardSubTab::McpServers;
                     if flat_icon_toggle(
                         ui,
                         vec2(20.0, 20.0),
-                        state.mcp_port_settings_state.is_open,
+                        mcp_active,
                         BW_ACCENT_ORANGE,
                         inactive_fg,
                         |p, r, fg| icons::paint_icon(p, r, icons::FILE_PAGE, fg, 1.35),
@@ -357,7 +360,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     .on_hover_text("Project & MCP Ports")
                     .clicked()
                     {
-                        state.mcp_port_settings_state.open();
+                        state.control_panel_state.open_mcp_servers();
                     }
 
                     if flat_icon_toggle(
