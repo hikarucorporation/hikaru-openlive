@@ -381,6 +381,12 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 FX_ORANGE,
                 "Multi-model analog phaser (GS 6-stage optical, EHx 4-stage OTA, MX 4-stage JFET, MF 12-stage synth) with Color, FB, Speed, Depth, Polarity Invert (∅) & Stereo (⚭).",
             ),
+            "Hikaru OpenFlanger+" | "OpenFlanger+" | "Flanger+" => (
+                BrowserRailTab::AudioFx,
+                None,
+                FX_ORANGE,
+                "Multi-model flanger (DP digital gritty, MX classic pedal, TFX smooth sparkly, WA wide studio) with Color, FB, Speed, Depth, Polarity Invert (∅) & Stereo (⚭).",
+            ),
             _ => (
                 BrowserRailTab::AudioFx,
                 None,
@@ -766,6 +772,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_openphaser_plus::is_openphaser_plus_name(&slot_name)
+                || crate::views::hikaru_native_plugins::hikaru_openflanger_plus::is_openflanger_plus_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
             {
                     if let Some(et_idx) = track_idx.checked_sub(1) {
@@ -825,6 +832,8 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                     || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                     || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot_name)
                     || crate::views::hikaru_native_plugins::hikaru_openphaser_plus::is_openphaser_plus_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_openflanger_plus::is_openflanger_plus_name(&slot_name)
+                || crate::views::hikaru_native_plugins::hikaru_openflanger_plus::is_openflanger_plus_name(&slot_name)
                     || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
                 {
                     if let Some(et_idx) = track_idx.checked_sub(1) {

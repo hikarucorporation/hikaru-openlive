@@ -2586,6 +2586,12 @@ impl<'a> AudioEngine<'a> {
             | "OpenPhaser"
             | "Phaser+"
             | "Hikaru Phaser+" => Box::new(hikaru_dsp::effects::PhaserPlusEffect::new(sample_rate)),
+            "Hikaru OpenFlanger+"
+            | "Hikaru OpenFlanger"
+            | "OpenFlanger+"
+            | "OpenFlanger"
+            | "Flanger+"
+            | "Hikaru Flanger+" => Box::new(hikaru_dsp::effects::FlangerPlusEffect::new(sample_rate)),
             _ => return Err(format!("Efecto nativo desconocido: {name}")),
         };
         Ok((instance, bit8_telemetry))

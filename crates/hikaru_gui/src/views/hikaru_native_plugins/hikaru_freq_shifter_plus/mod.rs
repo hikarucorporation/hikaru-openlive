@@ -117,6 +117,9 @@ pub fn clear_slot_state(track_idx: usize, slot_idx: usize) {
     crate::views::hikaru_native_plugins::hikaru_openphaser_plus::clear_wet_fx_state(
         track_idx, slot_idx,
     );
+    crate::views::hikaru_native_plugins::hikaru_openflanger_plus::clear_wet_fx_state(
+        track_idx, slot_idx,
+    );
     crate::views::hikaru_native_plugins::hikaru_ultracomb::ultracomb::clear_wet_fx_state(
         track_idx, slot_idx,
     );

@@ -8,6 +8,7 @@ pub mod ultracomb;
 pub mod phaser;
 pub mod phaser_plus;
 pub mod flanger;
+pub mod flanger_plus;
 pub mod lfo;
 pub mod open_harmonic; // ¡Nuevo integrante!
 pub mod openspectral_phaser; // OpenSpectral Phaser (EBPhaselock)
@@ -67,6 +68,13 @@ pub use phaser_plus::{
     PHP_PARAM_SPEED, PHP_PARAM_STEREO, PHP_PARAM_SYNC_DIV, PHP_PARAM_TEMPO_SYNC,
 };
 pub use flanger::Flanger;
+pub use flanger_plus::{
+    FlangerPlusEffect, FlangerPlusMode, FlangerPlusParams, FLANGER_PLUS_MAX_SPEED_HZ,
+    FLANGER_PLUS_MIN_SPEED_HZ, FLANGER_PLUS_PARAM_COUNT, FLANGER_SYNC_BEATS, FLANGER_SYNC_LABELS,
+    FLP_PARAM_COLOR, FLP_PARAM_DEPTH, FLP_PARAM_FEEDBACK, FLP_PARAM_MIX, FLP_PARAM_MODE,
+    FLP_PARAM_PHASE_INVERT, FLP_PARAM_SPEED, FLP_PARAM_STEREO, FLP_PARAM_SYNC_DIV,
+    FLP_PARAM_TEMPO_SYNC,
+};
 pub use lfo::{evaluate_waveform, LfoOscillator, LfoSyncMode, LfoWaveform, SyncRate};
 pub use open_harmonic::OpenHarmonicProcessor;
 pub use openspectral_phaser::*;

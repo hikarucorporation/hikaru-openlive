@@ -24,6 +24,8 @@ fn tier_s_native_effects_load_in_engine() {
         "Freq Shifter+",
         "Hikaru OpenPhaser+",
         "Phaser+",
+        "Hikaru OpenFlanger+",
+        "Flanger+",
     ];
     for (slot_idx, name) in names.iter().enumerate() {
         engine
