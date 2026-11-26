@@ -163,13 +163,10 @@
 <rect x="368.8" y="220.1" width="46.3" height="6" fill="#1D9E75"/>
 <rect x="415.1" y="220.1" width="11.6" height="6" fill="#EF9F27"/>
 </g>
-<text x="374.8" y="156.3" font-size="10" font-weight="600" fill="#F1EFE8">Bui</text>
-<text x="374.8" y="168.3" font-size="10" font-weight="600" fill="#F1EFE8">ld</text>
-<text x="374.8" y="180.3" font-size="10" font-weight="600" fill="#F1EFE8">&amp;</text>
-<text x="374.8" y="192.3" font-size="10" font-weight="600" fill="#F1EFE8">Pla</text>
-<text x="374.8" y="204.3" font-size="10" font-weight="600" fill="#F1EFE8">tfor</text>
-<text x="374.8" y="216.3" font-size="10" font-weight="600" fill="#F1EFE8">m</text>
-<text x="436.0" y="158.3" font-size="13" font-weight="600" text-anchor="end" fill="#F1EFE8">62%</text>
+<text x="374.8" y="156.3" font-size="10" font-weight="600" fill="#F1EFE8">Build &amp;</text>
+<text x="374.8" y="168.3" font-size="10" font-weight="600" fill="#F1EFE8">Platform</text>
+<text x="374.8" y="190.3" font-size="18" font-weight="600" fill="#F1EFE8">62%</text>
+<text x="374.8" y="202.8" font-size="9.5" fill="#B4B2A9">8/13</text>
 <rect x="414.0" y="200.1" width="22.0" height="16.0" rx="4" fill="#E24B4A"/>
 <text x="425.0" y="212.1" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">1</text>
 </g>

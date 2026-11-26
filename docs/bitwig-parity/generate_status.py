@@ -503,12 +503,12 @@ def render(document: dict) -> str:
         done_label = f"{area_done} of {area_total} done"
         short_label = f"{area_done}/{area_total} done"
 
-        def choose_sub_label(size: float) -> str:
-            if text_width(done_label, size) <= full_width:
-                return done_label
-            if text_width(short_label, size) <= full_width:
-                return short_label
-            return f"{area_done}/{area_total}"
+        def choose_sub_label(size: float, max_w: float | None = None) -> str | None:
+            limit = full_width if max_w is None else max_w
+            for candidate in (done_label, short_label, f"{area_done}/{area_total}"):
+                if text_width(candidate, size) <= limit:
+                    return candidate
+            return None
 
         metric_layout = None
         for min_w, pct_size, pct_gap, sub_size, sub_gap in (
@@ -518,20 +518,23 @@ def render(document: dict) -> str:
         ):
             if w < min_w or text_width(pct_text, pct_size) > full_width:
                 continue
-            sub_text = choose_sub_label(sub_size)
             pct_y = title_bottom + pct_gap
             sub_y = title_bottom + sub_gap
             if sub_y > bar_y - 6.0:
                 continue
+            avail_sub_w = full_width
             if show_badge and sub_y > badge_y - 3.0:
-                if title_x + text_width(sub_text, sub_size) > badge_x - 4.0:
-                    continue
+                avail_sub_w = min(avail_sub_w, badge_x - 4.0 - title_x)
+            sub_text = choose_sub_label(sub_size, avail_sub_w)
+            if sub_text is None:
+                continue
             metric_layout = (pct_size, pct_y, sub_size, sub_y, sub_text)
             break
 
         show_small = metric_layout is None and w >= 72 and h >= 36
         if show_small:
-            inner_width = max(10.0, w - 16.0 - 42.0) * 0.92
+            pct_w = text_width(pct_text, 13) + 6.0
+            inner_width = max(10.0, w - 2.0 * pad_x - pct_w)
             title_lines = fit_lines(name, inner_width, title_size, max_lines)
             title_bottom = title_y + (len(title_lines) - 1) * line_height
 
@@ -560,12 +563,13 @@ def render(document: dict) -> str:
             )
             sub_y = title_bottom + 15.0
             if sub_y <= bar_y - 4.0:
-                sub_text = choose_sub_label(10.0)
-                if not (
-                    show_badge
-                    and sub_y > badge_y - 3.0
-                    and title_x + text_width(sub_text, 10.0) > badge_x - 4.0
-                ):
+                avail_sub_w = (
+                    min(full_width, badge_x - 4.0 - title_x)
+                    if show_badge and sub_y > badge_y - 3.0
+                    else full_width
+                )
+                sub_text = choose_sub_label(10.0, avail_sub_w)
+                if sub_text is not None:
                     add(
                         f'<text x="{round1(title_x)}" y="{round1(sub_y)}" '
                         f'font-size="10" fill="{MUTED}">{escape(sub_text)}</text>'
