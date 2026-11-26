@@ -37,8 +37,8 @@
   "summary": {
     "areas": 18,
     "features": 687,
-    "done": 328,
-    "in_progress": 17,
+    "done": 329,
+    "in_progress": 16,
     "planned": 342,
     "bugs": 1,
     "parity_percent": 48
@@ -1203,9 +1203,9 @@
         {
           "id": "dv-087",
           "name": "Phaser+",
-          "status": "in_progress",
-          "evidence": "crates/hikaru_dsp/src/effects/phaser.rs",
-          "note": "Hikaru exposes the base device; the extended Bitwig variant is partial."
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/phaser_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openphaser_plus/mod.rs",
+          "note": "Hikaru OpenPhaser+ (GS / EHx / MX / MF multi-model TPT phaser with Color, FB, Speed, Depth, Polarity Invert, Stereo and Mix)."
         },
         {
           "id": "dv-088",

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="6296.0" viewBox="0 0 1400 6296.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 328 of 687 done">
-<title>Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 328 of 687 done</title>
-<desc>Feature-by-feature parity of Hikaru OpenLive against Bitwig Studio 5.3.13: 328 done, 17 in progress, 342 planned, 1 open bug(s).</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="6296.0" viewBox="0 0 1400 6296.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 329 of 687 done">
+<title>Hikaru OpenLive vs Bitwig Studio 5.3.13: every tracked feature by area, 329 of 687 done</title>
+<desc>Feature-by-feature parity of Hikaru OpenLive against Bitwig Studio 5.3.13: 329 done, 16 in progress, 342 planned, 1 open bug(s).</desc>
 <rect width="1400" height="6296.0" fill="#0d1117"/>
 <text x="32" y="48" font-size="25" font-weight="700" fill="#F1EFE8">Hikaru OpenLive vs Bitwig Studio 5.3.13</text>
 <text x="32" y="72" font-size="12.5" fill="#B4B2A9">Paridad funcional sobre un catálogo de 687 features · revisión 161983 · auditoría 2026-11-22 · workspace 2.24.0</text>
@@ -11,19 +11,19 @@
 <rect x="1134.0" y="38" width="9" height="9" rx="2" fill="#1D9E75"/>
 <text x="1150.0" y="47" font-size="12" fill="#B4B2A9">Hecho</text>
 <text x="32" y="138" font-size="52" font-weight="700" fill="#F1EFE8">48 %</text>
-<text x="32" y="160" font-size="12" fill="#B4B2A9">328 de 687 features implementadas</text>
-<text x="242.0" y="118" font-size="28" font-weight="700" fill="#1D9E75">328</text>
+<text x="32" y="160" font-size="12" fill="#B4B2A9">329 de 687 features implementadas</text>
+<text x="242.0" y="118" font-size="28" font-weight="700" fill="#1D9E75">329</text>
 <text x="242.0" y="138" font-size="11.5" fill="#B4B2A9">Hecho</text>
-<text x="392.0" y="118" font-size="28" font-weight="700" fill="#EF9F27">17</text>
+<text x="392.0" y="118" font-size="28" font-weight="700" fill="#EF9F27">16</text>
 <text x="392.0" y="138" font-size="11.5" fill="#B4B2A9">En progreso</text>
 <text x="542.0" y="118" font-size="28" font-weight="700" fill="#5F5E5A">342</text>
 <text x="542.0" y="138" font-size="11.5" fill="#B4B2A9">Pendiente</text>
 <text x="692.0" y="118" font-size="28" font-weight="700" fill="#E24B4A">1</text>
 <text x="692.0" y="138" font-size="11.5" fill="#B4B2A9">bug abierto</text>
 <rect x="32" y="180.0" width="1336" height="12.0" rx="6" fill="#2C2C2A"/>
-<rect x="32.0" y="180.0" width="637.9" height="12.0" fill="#1D9E75"/>
-<rect x="669.9" y="180.0" width="33.1" height="12.0" fill="#EF9F27"/>
-<text x="32" y="210.0" font-size="12" fill="#B4B2A9">131 de 193 features del catálogo de Bitwig (150 devices + 43 modulators) siguen pendientes.</text>
+<rect x="32.0" y="180.0" width="639.8" height="12.0" fill="#1D9E75"/>
+<rect x="671.8" y="180.0" width="31.1" height="12.0" fill="#EF9F27"/>
+<text x="32" y="210.0" font-size="12" fill="#B4B2A9">130 de 193 features del catálogo de Bitwig (150 devices + 43 modulators) siguen pendientes.</text>
 <text x="1368" y="210.0" font-size="12" text-anchor="end" fill="#B4B2A9">Verde = implementado · Naranja = en progreso · Gris = pendiente</text>
 <text x="32" y="250.0" font-size="11" letter-spacing="1.4" fill="#B4B2A9">RESUMEN POR ÁREA</text>
 <text x="32.0" y="275.0" font-size="12" fill="#F1EFE8">Clip Launcher</text>
@@ -48,8 +48,8 @@
 <text x="686.0" y="371.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">14/25 · 56 %</text>
 <text x="32.0" y="395.0" font-size="12" fill="#F1EFE8">Built-in Devices &amp; FX</text>
 <rect x="372.1" y="389.0" width="196.2" height="5" rx="2.5" fill="#2C2C2A"/>
-<rect x="372.1" y="389.0" width="24.9" height="5" rx="2.5" fill="#1D9E75"/>
-<text x="686.0" y="395.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">19/150 · 13 %</text>
+<rect x="372.1" y="389.0" width="26.2" height="5" rx="2.5" fill="#1D9E75"/>
+<text x="686.0" y="395.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">20/150 · 13 %</text>
 <text x="32.0" y="419.0" font-size="12" fill="#F1EFE8">Modulators</text>
 <rect x="372.1" y="413.0" width="196.2" height="5" rx="2.5" fill="#2C2C2A"/>
 <rect x="372.1" y="413.0" width="196.2" height="5" rx="2.5" fill="#1D9E75"/>
@@ -258,17 +258,16 @@
 <line x1="32" y1="1832.0" x2="1368" y2="1832.0" stroke="#5F5E5A" stroke-opacity="0.35" stroke-width="1"/>
 <text x="32" y="1824.0" font-size="11" letter-spacing="1.4" fill="#B4B2A9">CATÁLOGO DE BITWIG · 193 FEATURES</text>
 <text x="32" y="1862.0" font-size="15" font-weight="600" fill="#F1EFE8">Built-in Devices &amp; FX</text>
-<text x="1368" y="1862.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">19 de 150 · 13 %</text>
-<text x="1266.5" y="1862.0" font-size="11" text-anchor="end" fill="#B4B2A9">3 en progreso</text>
+<text x="1368" y="1862.0" font-size="11.5" text-anchor="end" fill="#B4B2A9">20 de 150 · 13 %</text>
+<text x="1266.5" y="1862.0" font-size="11" text-anchor="end" fill="#B4B2A9">2 en progreso</text>
 <rect x="32" y="1871.0" width="1336" height="4" rx="2" fill="#2C2C2A"/>
-<rect x="32.0" y="1871.0" width="169.2" height="4" fill="#1D9E75"/>
-<rect x="201.2" y="1871.0" width="26.7" height="4" fill="#EF9F27"/>
-<text x="32" y="1898.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#EF9F27" fill-opacity="0.9">EN PROGRESO · 3</text>
-<text x="32" y="1940.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#1D9E75" fill-opacity="0.9">HECHO · 19</text>
+<rect x="32.0" y="1871.0" width="178.1" height="4" fill="#1D9E75"/>
+<rect x="210.1" y="1871.0" width="17.8" height="4" fill="#EF9F27"/>
+<text x="32" y="1898.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#EF9F27" fill-opacity="0.9">EN PROGRESO · 2</text>
+<text x="32" y="1940.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#1D9E75" fill-opacity="0.9">HECHO · 20</text>
 <text x="32" y="2060.0" font-size="9.5" font-weight="600" letter-spacing="1.2" fill="#5F5E5A" fill-opacity="0.9">PENDIENTE · 128</text>
 <g><title>Filter+ (dv-043) — crates/hikaru_dsp/src/effects/filter.rs</title><rect x="32.0" y="1902.0" width="9" height="9" rx="2" fill="#EF9F27"/><text x="48.0" y="1911.0" font-size="12.5" fill="#F1EFE8">Filter+</text></g>
 <g><title>Flanger+ (dv-045) — crates/hikaru_dsp/src/effects/flanger.rs</title><rect x="257.0" y="1902.0" width="9" height="9" rx="2" fill="#EF9F27"/><text x="273.0" y="1911.0" font-size="12.5" fill="#F1EFE8">Flanger+</text></g>
-<g><title>Phaser+ (dv-087) — crates/hikaru_dsp/src/effects/phaser.rs</title><rect x="482.0" y="1902.0" width="9" height="9" rx="2" fill="#EF9F27"/><text x="498.0" y="1911.0" font-size="12.5" fill="#F1EFE8">Phaser+</text></g>
 <g><title>Bit-8 (dv-006) — crates/hikaru_dsp/src/effects/bit8.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="32.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Bit-8</text></g>
 <g><title>Chain (dv-008) — crates/hikaru_gui/src/views/dsp_rack.rs</title><rect x="257.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="1953.0" font-size="12.5" fill="#F1EFE8">Chain</text></g>
 <g><title>DC Offset (dv-016) — crates/hikaru_dsp/src/effects/dc_offset.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="482.0" y="1944.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="1953.0" font-size="12.5" fill="#F1EFE8">DC Offset</text></g>
@@ -279,15 +278,16 @@
 <g><title>Flanger (dv-044) — crates/hikaru_dsp/src/effects/flanger.rs</title><rect x="257.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Flanger</text></g>
 <g><title>Freq Shifter (dv-046) — crates/hikaru_dsp/src/effects/freq_shifter_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_freq_shifter_plus/mod.rs</title><rect x="482.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Freq Shifter</text></g>
 <g><title>Phaser (dv-086) — crates/hikaru_dsp/src/effects/phaser.rs</title><rect x="707.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Phaser</text></g>
-<g><title>Poly Grid (dv-089) — crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs</title><rect x="932.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Poly Grid</text></g>
-<g><title>Polymer (dv-090) — crates/hikaru_dsp/src/synth/open_poly.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openpoly/open_poly.rs</title><rect x="1157.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Polymer</text></g>
-<g><title>Ring-Mod (dv-098) — crates/hikaru_dsp/src/effects/ring_mod.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="32.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Ring-Mod</text></g>
-<g><title>Sampler (dv-100) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_sampler/sampler_editor.rs</title><rect x="257.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Sampler</text></g>
-<g><title>Test Tone (dv-107) — crates/hikaru_dsp/src/effects/test_tone.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="482.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Test Tone</text></g>
-<g><title>Time Shift (dv-108) — crates/hikaru_dsp/src/effects/time_shift.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="707.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Time Shift</text></g>
-<g><title>Tool (dv-109) — crates/hikaru_dsp/src/effects/tool.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="932.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Tool</text></g>
-<g><title>Tremolo (dv-114) — crates/hikaru_dsp/src/effects/tremolo.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="1157.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Tremolo</text></g>
-<g><title>Freq Shifter+ (dv-121) — crates/hikaru_dsp/src/effects/freq_shifter_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_freq_shifter_plus/mod.rs</title><rect x="32.0" y="2022.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2031.0" font-size="12.5" fill="#F1EFE8">Freq Shifter+</text></g>
+<g><title>Phaser+ (dv-087) — crates/hikaru_dsp/src/effects/phaser_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openphaser_plus/mod.rs</title><rect x="932.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Phaser+</text></g>
+<g><title>Poly Grid (dv-089) — crates/hikaru_dsp/src/synth/open_grid.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_opengrid/open_grid_ui.rs</title><rect x="1157.0" y="1970.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="1979.0" font-size="12.5" fill="#F1EFE8">Poly Grid</text></g>
+<g><title>Polymer (dv-090) — crates/hikaru_dsp/src/synth/open_poly.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openpoly/open_poly.rs</title><rect x="32.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Polymer</text></g>
+<g><title>Ring-Mod (dv-098) — crates/hikaru_dsp/src/effects/ring_mod.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="257.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Ring-Mod</text></g>
+<g><title>Sampler (dv-100) — crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_sampler/sampler_editor.rs</title><rect x="482.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="498.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Sampler</text></g>
+<g><title>Test Tone (dv-107) — crates/hikaru_dsp/src/effects/test_tone.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="707.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="723.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Test Tone</text></g>
+<g><title>Time Shift (dv-108) — crates/hikaru_dsp/src/effects/time_shift.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="932.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="948.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Time Shift</text></g>
+<g><title>Tool (dv-109) — crates/hikaru_dsp/src/effects/tool.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="1157.0" y="1996.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="1173.0" y="2005.0" font-size="12.5" fill="#F1EFE8">Tool</text></g>
+<g><title>Tremolo (dv-114) — crates/hikaru_dsp/src/effects/tremolo.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_tier_s_fx/mod.rs</title><rect x="32.0" y="2022.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="48.0" y="2031.0" font-size="12.5" fill="#F1EFE8">Tremolo</text></g>
+<g><title>Freq Shifter+ (dv-121) — crates/hikaru_dsp/src/effects/freq_shifter_plus.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_freq_shifter_plus/mod.rs</title><rect x="257.0" y="2022.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="273.0" y="2031.0" font-size="12.5" fill="#F1EFE8">Freq Shifter+</text></g>
 <g><title>Amp (dv-001)</title><rect x="32.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="48.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Amp</text></g>
 <g><title>Arpeggiator (dv-002)</title><rect x="257.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="273.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Arpeggiator</text></g>
 <g><title>Audio MOD (dv-003)</title><rect x="482.0" y="2064.0" width="9" height="9" rx="2" fill="#5F5E5A" fill-opacity="0.45"/><text x="498.0" y="2073.0" font-size="12.5" fill="#B4B2A9">Audio MOD</text></g>
@@ -923,5 +923,5 @@
 <g><title>New project from template workflow (bt-04)</title><rect x="842.0" y="6202.0" width="9" height="9" rx="2" fill="#1D9E75"/><text x="858.0" y="6211.0" font-size="12.5" fill="#F1EFE8">New project from template workflow</text></g>
 <line x1="32" y1="6252.0" x2="1368" y2="6252.0" stroke="#5F5E5A" stroke-opacity="0.35" stroke-width="1"/>
 <text x="32" y="6274.0" font-size="11" fill="#B4B2A9">Fuente: docs/bitwig-parity/features_bitwig.json · generado por generate_status.py · auditoría 2026-11-22 · referencia Bitwig Studio 5.3.13 (rev 161983)</text>
-<text x="1368" y="6274.0" font-size="11" text-anchor="end" fill="#B4B2A9">328 hechas · 17 en progreso · 342 pendientes</text>
+<text x="1368" y="6274.0" font-size="11" text-anchor="end" fill="#B4B2A9">329 hechas · 16 en progreso · 342 pendientes</text>
 </svg>

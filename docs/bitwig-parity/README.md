@@ -18,9 +18,9 @@ de la auditoría.
 
 ## Estado actual
 
-- **318 / 687** features `done` → **46 % de paridad**.
-- **17** en `in_progress`.
-- **352** `planned`.
+- **329 / 687** features `done` → **48 % de paridad**.
+- **16** en `in_progress`.
+- **342** `planned`.
 - **1** bug abierto ([issue #1](https://github.com/hikarucorporation/hikaru-openlive/issues/1), mapeado a `Build & Platform`).
 - El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 687 chips con nombre, estado y evidencia.
 

@@ -110,7 +110,7 @@ Método: lectura estática de todos los crates, sus módulos, tests y documentos
 | `hikaru_sequencer` | Matriz, estados de clip, cuantización | Implementado; follow actions y launch modes parciales |
 | `hikaru_audio_engine` | Mezcla, voces, WSOLA, warp, sampler/wavetable | Implementado; grupos y streaming de stretch parciales |
 | `hikaru_audio_drivers` | Backend ALSA | Implementado en Linux |
-| `hikaru_dsp` | Filtro, flanger, phaser, LFO, Ultracomb, OpenSpectral | Implementado |
+| `hikaru_dsp` | Filtro, flanger, phaser, OpenPhaser+, OpenFreqShifter+, Open8-Bit, LFO, Ultracomb, OpenSpectral | Implementado |
 | `hikaru_plugin_host` | Host VST3 y CLAP, wrapper nativo | Implementado; sandbox/latencia parciales |
 | `hikaru_midi` | Eventos MIDI, archivos, Launchpad, controladores | Base implementada; learn/MPE parciales |
 | `hikaru_gui` | Matrix, Arranger, Piano Roll, Mixer, Browser, DSP rack, grupos | Núcleo de la paridad actual |
@@ -146,7 +146,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Transport & Sync | 17 | 12 | 1 | 4 | 0 |
 | Group Tracks & Routing | 22 | 15 | 1 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
-| Built-in Devices & FX | 150 | 19 | 3 | 128 | 0 |
+| Built-in Devices & FX | 150 | 20 | 2 | 128 | 0 |
 | Modulators | 43 | 43 | 0 | 0 | 0 |
 | Grid Devices | 228 | 97 | 0 | 131 | 0 |
 | Mixer & I/O | 27 | 19 | 0 | 8 | 0 |
@@ -159,9 +159,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 3 | 0 | 3 | 0 |
 | .bwtemplate | 4 | 4 | 0 | 0 | 0 |
-| **Total** | **687** | **328** | **17** | **342** | **1** |
+| **Total** | **687** | **329** | **16** | **342** | **1** |
 
-Paridad global: **328 / 687 = 48 %**.
+Paridad global: **329 / 687 = 48 %**.
 
 ### Bugs abiertos
 
@@ -185,7 +185,7 @@ labels `area:` en el repositorio, así que el mapeo a área es manual.
 - Los 150 dispositivos y los 43 moduladores se cuentan **uno por uno** porque
   son artefactos reales del producto de referencia. Hikaru implementa
   equivalentes funcionales parciales (p. ej. `Polymer` ≈ Hikaru OpenPoly,
-  `Drum Machine` ≈ OpenDMS), no binarios.
+  `Drum Machine` ≈ OpenDMS, `Phaser+` ≈ Hikaru OpenPhaser+), no binarios.
 - Una feature se marca `done` sólo si hay código y, cuando existe, test que la
   respalde. `in_progress` significa modelo/UI parcial sin flujo completo.
 - El gráfico usa el mismo criterio que el status de Suhina: porcentaje =
