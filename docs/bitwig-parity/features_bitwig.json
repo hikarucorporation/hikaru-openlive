@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 330,
+    "done": 331,
     "in_progress": 15,
-    "planned": 380,
+    "planned": 379,
     "bugs": 1,
     "parity_percent": 46
   },
@@ -1066,7 +1066,8 @@
         {
           "id": "dv-060",
           "name": "LFO MOD",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/effects/lfo.rs, crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openmodulation/lfo_mod.rs"
         },
         {
           "id": "dv-061",
