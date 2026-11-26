@@ -185,9 +185,22 @@ fn sanitize_bpm(bpm: f64) -> f64 {
 // INSPECT / METADATA
 // =========================================================================
 
-/// `inspect` / `metadata`: vuelca los metadatos del proyecto.
+/// `inspect` / `metadata`: vuelca los metadatos del proyecto o un artefacto Bitwig (`.bwdevice`/`.bwpreset`).
 pub fn inspect(args: &InspectArgs, json: bool) -> ExitCode {
     let path = &args.path;
+
+    if hikaru_mcp_port::is_supported_bitwig_artifact(path) {
+        let info = match hikaru_mcp_port::bitwig::inspect_file(path, None) {
+            Ok(v) => v,
+            Err(err) => return fail_reading(path, &err, json),
+        };
+        if json {
+            println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
+        } else {
+            print!("{}", render_bitwig_summary(&info));
+        }
+        return ExitCode::SUCCESS;
+    }
 
     let summary = match format_of(path) {
         Some(Format::OpenLive) => match hikaru_openlive_file::parse(path) {
@@ -200,7 +213,7 @@ pub fn inspect(args: &InspectArgs, json: bool) -> ExitCode {
         },
         None => {
             eprintln!(
-                "[Hikaru] {} no es un proyecto de Hikaru: la extensión tiene que ser .oplf (OpenLive) o .opsf (OpenStudio).",
+                "[Hikaru] {} no es un archivo soportado: la extensión tiene que ser .oplf, .opsf, .bwdevice o .bwpreset.",
                 path.display()
             );
             return ExitCode::from(crate::EXIT_USAGE);
@@ -433,6 +446,51 @@ fn name_from_path(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default()
+}
+
+fn render_bitwig_summary(info: &Value) -> String {
+    let mut out = String::new();
+    let archivo = info["archivo"].as_str().unwrap_or("");
+    let ext = info["extension"].as_str().unwrap_or("");
+    let fmt = info["header"]["format_type"].as_str().unwrap_or("?");
+    let ver = info["header"]["version"].as_str().unwrap_or("?");
+    let rev = info["header"]["revision"].as_str().unwrap_or("?");
+    let protegido = info["contenido_protegido"].as_bool().unwrap_or(false);
+
+    out.push_str(&format!("Archivo:         {archivo} (.{ext})\n"));
+    out.push_str(&format!("Contenedor:      BtWg{ver}{fmt}{rev}\n"));
+    out.push_str(&format!("Modo:            clean-room solo lectura (protegido={protegido})\n"));
+
+    if let Some(compat) = info.get("compatibilidad_hikaru") {
+        let mapeo = compat["mapeo"].as_str().unwrap_or("?");
+        let modulo = compat["hikaru_module"].as_str().unwrap_or("?");
+        let status = compat["status"].as_str().unwrap_or("?");
+        out.push_str(&format!("Compatibilidad:  {mapeo} -> {modulo} [{status}]\n"));
+    }
+
+    let contract = info
+        .get("contrato_publico")
+        .or_else(|| info.get("default_bwpreset_publico").and_then(|d| d.get("contrato_publico")));
+    if let Some(c) = contract {
+        if let Some(name) = c["meta"]["device_name"].as_str() {
+            out.push_str(&format!("Dispositivo:     {name}\n"));
+        }
+        if let Some(uuid) = c["meta"]["device_id"].as_str() {
+            out.push_str(&format!("UUID:            {uuid}\n"));
+        }
+        if let Some(dtype) = c["meta"]["device_type"].as_str() {
+            out.push_str(&format!("Topología:       {dtype}\n"));
+        }
+        if let Some(params) = c["parametros_publicos"].as_array() {
+            out.push_str(&format!("Parámetros ({}):\n", params.len()));
+            for p in params.iter().take(24) {
+                let pname = p["nombre"].as_str().unwrap_or("?");
+                let pval = &p["valor"];
+                out.push_str(&format!("  - {pname} = {pval}\n"));
+            }
+        }
+    }
+    out
 }
 
 /// El resumen en texto, para el que no quiere parsear JSON.

@@ -58,7 +58,7 @@ pub fn is_supported_file(path: &PathBuf) -> bool {
 pub fn is_preset_file(path: &PathBuf) -> bool {
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
-        ext_str == "hdp"
+        matches!(ext_str.as_str(), "hdp" | "bwdevice" | "bwpreset")
     } else {
         false
     }
@@ -950,6 +950,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     slot_idx,
                     &path,
                 );
+            } else if hikaru_mcp_port::is_supported_bitwig_artifact(&path) {
+                state.explorer_state.selected_file = Some(path.clone());
+                state.explorer_state.cached_waveform.clear();
+                let _ = hikaru_mcp_port::record_bitwig_drop(&path, "explorer-select");
             } else {
                 state.explorer_state.selected_file = Some(path.clone());
                 state.explorer_state.load_waveform_peaks(&path, 128);

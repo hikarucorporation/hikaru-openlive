@@ -32,6 +32,7 @@
  * proyecto, se puede linkear sin problemas.
  */
 
+pub mod bitwig;
 pub mod bitwig_inbox;
 pub mod config;
 pub mod ipc;

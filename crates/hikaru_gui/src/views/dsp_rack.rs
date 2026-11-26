@@ -283,6 +283,34 @@ pub fn load_device_chain_dialog(app: &mut AppState, track_idx: usize) {
 }
 
 pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: &std::path::Path) {
+    if hikaru_mcp_port::is_supported_bitwig_artifact(path) {
+        let _ = hikaru_mcp_port::record_bitwig_drop(path, "dsp-rack-load");
+        let fallback_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Bitwig Device");
+        let inspected = hikaru_mcp_port::bitwig::inspect_file(path, None).ok();
+        let bw_name = inspected
+            .as_ref()
+            .and_then(|v| {
+                v["contrato_publico"]["meta"]["device_name"]
+                    .as_str()
+                    .or_else(|| v["nombre_inferido"].as_str())
+            })
+            .unwrap_or(fallback_stem);
+
+        let slot_name = hikaru_mcp_port::bitwig::resolve_hikaru_device_name(bw_name)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{bw_name} (Read-Only)"));
+
+        let new_slot = crate::views::mixer::DspSlot::new(0, slot_name);
+        if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+            track.effects.push(new_slot);
+            app.selected_slot_index = track.effects.len() - 1;
+        }
+        return;
+    }
+
     let Ok(preset) = hikaru_project_file::parse_hdp(path) else { return };
     if let Some(chain) = preset.chain {
         let dummy_track = hikaru_project_file::Track {
@@ -985,6 +1013,31 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     let well_rect = ui.available_rect_before_wrap();
     ui.allocate_rect(well_rect, Sense::hover());
     ui.painter().rect_filled(well_rect, 0.0, theme::BW_DARK_WELL);
+
+    // Aceptar drag & drop desde el Explorador interno (`.hdp`, `.bwdevice`, `.bwpreset`)
+    let is_dragging_preset = app
+        .dragged_sample
+        .as_ref()
+        .map(crate::views::explorer::is_preset_file)
+        .unwrap_or(false);
+    if is_dragging_preset {
+        let pointer_pos = ui.input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()));
+        let hovered = pointer_pos.map(|p| well_rect.contains(p)).unwrap_or(false);
+        if hovered {
+            ui.painter().rect_stroke(
+                well_rect.shrink(1.0),
+                2.0,
+                egui::Stroke::new(1.5_f32, theme::ACCENT_ORANGE),
+                egui::StrokeKind::Inside,
+            );
+            if ui.input(|i| i.pointer.any_released()) {
+                if let Some(path) = app.dragged_sample.take() {
+                    load_device_preset_from_path(app, track_idx, &path);
+                    app.show_dsp_rack = true;
+                }
+            }
+        }
+    }
     let content_rect = well_rect.shrink2(vec2(5.0, 4.0));
     let mut well_ui = ui.new_child(
         egui::UiBuilder::new()
