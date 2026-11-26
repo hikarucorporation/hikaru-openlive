@@ -331,6 +331,7 @@ def render(document: dict) -> str:
     present_under_grid = []
     present_bwrc = False
     present_ms = False
+    present_bwmod = False
     for area in areas:
         count = len(area.get("features", []))
         if not count:
@@ -344,6 +345,9 @@ def render(document: dict) -> str:
             continue
         if area_id == "multisample":
             present_ms = True
+            continue
+        if area_id == "bwmodulator":
+            present_bwmod = True
             continue
         area_totals.append((area_id, float(max(count, LEGIBILITY_FLOOR))))
 
@@ -381,6 +385,12 @@ def render(document: dict) -> str:
                     tile_w,
                     row_h,
                 )
+
+    if present_bwmod and "grid-devices" in rects:
+        gx, gy, gw, gh = rects["grid-devices"]
+        half_w = gw / 2.0
+        rects["grid-devices"] = (gx, gy, half_w, gh)
+        rects["bwmodulator"] = (gx + half_w, gy, half_w, gh)
 
     if (present_bwrc or present_ms) and "builtin-devices-fx" in rects:
         bx, by, bw, bh = rects["builtin-devices-fx"]
@@ -506,20 +516,17 @@ def render(document: dict) -> str:
         badge_y = bottom - 26.0
 
         # Title: 13 px normally, 12 px in narrow tiles, 10 px in compact tiles.
-        title_size = 13 if w >= 110 else (12 if w >= 78 else 10)
+        base_title_size = 13 if w >= 110 else (12 if w >= 78 else 10)
         pad_x = 8.0 if w >= 78 else 6.0
-        line_height = title_size + 2
         title_x = x + pad_x
         title_y = y + (21.0 if w >= 78 else 19.0)
-        max_lines = max(1, int((h - 14.0) / line_height))
 
         # First lay the title out at full width. Pick the largest stacked
         # percentage + count layout that fits above the bottom bar (and above
-        # the bug badge, if any). Only fall back to a compact top-right
-        # percentage when the tile is too short for stacked metrics.
+        # the bug badge, if any), stepping down the title size if needed. Only
+        # fall back to a compact top-right percentage when the tile is too
+        # short for stacked metrics.
         full_width = max(10.0, w - 2.0 * pad_x)
-        title_lines = fit_lines(name, full_width, title_size, max_lines)
-        title_bottom = title_y + (len(title_lines) - 1) * line_height
         pct_text = f"{percent}%"
         done_label = f"{area_done} of {area_total} done"
         short_label = f"{area_done}/{area_total} done"
@@ -531,33 +538,60 @@ def render(document: dict) -> str:
                     return candidate
             return None
 
+        title_sizes = tuple(s for s in (13, 12, 11, 10) if s <= base_title_size)
+        title_size = base_title_size
+        line_height = title_size + 2
+        max_lines = max(1, int((h - 14.0) / line_height))
+        title_lines = fit_lines(name, full_width, title_size, max_lines)
+        title_bottom = title_y + (len(title_lines) - 1) * line_height
+
         metric_layout = None
-        for min_w, pct_size, pct_gap, sub_size, sub_gap in (
-            (92.0, 28, 33.3, 11.0, 48.3),
-            (78.0, 22, 27.0, 10.0, 41.0),
-            (60.0, 18, 22.0, 9.5, 34.5),
-        ):
-            if w < min_w or text_width(pct_text, pct_size) > full_width:
-                continue
-            pct_y = title_bottom + pct_gap
-            sub_y = title_bottom + sub_gap
-            if sub_y > bar_y - 6.0:
-                continue
-            avail_sub_w = full_width
-            if show_badge and sub_y > badge_y - 3.0:
-                avail_sub_w = min(avail_sub_w, badge_x - 4.0 - title_x)
-            sub_text = choose_sub_label(sub_size, avail_sub_w)
-            if sub_text is None:
-                continue
-            metric_layout = (pct_size, pct_y, sub_size, sub_y, sub_text)
-            break
+        for cand_size in title_sizes:
+            cand_lh = cand_size + 2
+            cand_max_lines = max(1, int((h - 14.0) / cand_lh))
+            cand_lines = fit_lines(name, full_width, cand_size, cand_max_lines)
+            cand_bottom = title_y + (len(cand_lines) - 1) * cand_lh
+            for min_w, pct_size, pct_gap, sub_size, sub_gap in (
+                (92.0, 28, 33.3, 11.0, 48.3),
+                (78.0, 22, 27.0, 10.0, 41.0),
+                (60.0, 18, 22.0, 9.5, 34.5),
+            ):
+                if w < min_w or text_width(pct_text, pct_size) > full_width:
+                    continue
+                pct_y = cand_bottom + pct_gap
+                sub_y = cand_bottom + sub_gap
+                if sub_y > bar_y - 6.0:
+                    continue
+                avail_sub_w = full_width
+                if show_badge and sub_y > badge_y - 3.0:
+                    avail_sub_w = min(avail_sub_w, badge_x - 4.0 - title_x)
+                sub_text = choose_sub_label(sub_size, avail_sub_w)
+                if sub_text is None:
+                    continue
+                title_size = cand_size
+                line_height = cand_lh
+                title_lines = cand_lines
+                title_bottom = cand_bottom
+                metric_layout = (pct_size, pct_y, sub_size, sub_y, sub_text)
+                break
+            if metric_layout is not None:
+                break
 
         show_small = metric_layout is None and w >= 72 and h >= 36
         if show_small:
             pct_w = text_width(pct_text, 13) + 6.0
             inner_width = max(10.0, w - 2.0 * pad_x - pct_w)
-            title_lines = fit_lines(name, inner_width, title_size, max_lines)
-            title_bottom = title_y + (len(title_lines) - 1) * line_height
+            for cand_size in title_sizes:
+                cand_lh = cand_size + 2
+                cand_max_lines = max(1, int((h - 14.0) / cand_lh))
+                cand_lines = fit_lines(name, inner_width, cand_size, cand_max_lines)
+                cand_bottom = title_y + (len(cand_lines) - 1) * cand_lh
+                title_size = cand_size
+                line_height = cand_lh
+                title_lines = cand_lines
+                title_bottom = cand_bottom
+                if cand_bottom + 15.0 <= bar_y - 4.0:
+                    break
 
         for line_index, line in enumerate(title_lines):
             add(
