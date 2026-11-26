@@ -322,8 +322,8 @@ def render(document: dict) -> str:
     ref = f"{ref_name} {ref_version}".strip()
     product = document.get("product", "Hikaru OpenLive")
 
-    # Project-format tiles placed as a row directly underneath Grid Devices.
-    under_grid_ids = ("dawproject", "bwproject", "bwtemplate")
+    # Project- and device-format tiles placed directly underneath Grid Devices.
+    under_grid_ids = ("dawproject", "bwproject", "bwtemplate", "bwdevice")
     under_grid_set = set(under_grid_ids)
 
     areas = document.get("areas", [])
@@ -349,12 +349,30 @@ def render(document: dict) -> str:
 
     if present_under_grid and "grid-devices" in rects:
         gx, gy, gw, gh = rects["grid-devices"]
-        strip_h = 92.0
-        rects["grid-devices"] = (gx, gy, gw, gh - strip_h)
         ordered_sub = [k for k in under_grid_ids if k in present_under_grid]
-        tile_w = gw / len(ordered_sub)
-        for idx, sub_id in enumerate(ordered_sub):
-            rects[sub_id] = (gx + idx * tile_w, gy + gh - strip_h, tile_w, strip_h)
+        if len(ordered_sub) <= 3:
+            strip_h = 92.0
+            rects["grid-devices"] = (gx, gy, gw, gh - strip_h)
+            tile_w = gw / len(ordered_sub)
+            for idx, sub_id in enumerate(ordered_sub):
+                rects[sub_id] = (gx + idx * tile_w, gy + gh - strip_h, tile_w, strip_h)
+        else:
+            cols = 2
+            rows = (len(ordered_sub) + cols - 1) // cols
+            row_h = 84.0
+            strip_h = rows * row_h
+            rects["grid-devices"] = (gx, gy, gw, gh - strip_h)
+            tile_w = gw / cols
+            strip_y = gy + gh - strip_h
+            for idx, sub_id in enumerate(ordered_sub):
+                col = idx % cols
+                row = idx // cols
+                rects[sub_id] = (
+                    gx + col * tile_w,
+                    strip_y + row * row_h,
+                    tile_w,
+                    row_h,
+                )
 
     out: list[str] = []
     add = out.append

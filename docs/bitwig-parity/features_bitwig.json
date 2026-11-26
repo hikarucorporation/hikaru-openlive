@@ -35,11 +35,11 @@
     ]
   },
   "summary": {
-    "areas": 18,
-    "features": 687,
+    "areas": 19,
+    "features": 692,
     "done": 329,
     "in_progress": 16,
-    "planned": 342,
+    "planned": 347,
     "bugs": 1,
     "parity_percent": 48
   },
@@ -3936,6 +3936,39 @@
           "id": "bt-04",
           "name": "New project from template workflow",
           "status": "done"
+        }
+      ]
+    },
+    {
+      "id": "bwdevice",
+      "name": ".bwdevice",
+      "bitwig_reference": "Native Bitwig Studio device & preset container (.bwdevice) import/compatibility (Bitwig Studio 5.3.13).",
+      "bugs": 0,
+      "features": [
+        {
+          "id": "bd-01",
+          "name": "Binary container & metadata parser (.bwdevice)",
+          "status": "planned"
+        },
+        {
+          "id": "bd-02",
+          "name": "Device parameter values & macro mappings",
+          "status": "planned"
+        },
+        {
+          "id": "bd-03",
+          "name": "Modulator slots & modulation routings",
+          "status": "planned"
+        },
+        {
+          "id": "bd-04",
+          "name": "Nested device chains, layers & FX racks",
+          "status": "planned"
+        },
+        {
+          "id": "bd-05",
+          "name": "Grid patch graph & browser preset loading",
+          "status": "planned"
         }
       ]
     }

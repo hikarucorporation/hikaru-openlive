@@ -9,20 +9,20 @@ de la auditoría.
 
 | Archivo | Qué es |
 |---|---|
-| [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 18 áreas y 687 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
+| [`features_bitwig.json`](features_bitwig.json) | Base de datos de paridad: 19 áreas y 692 features con estado (`done`, `in_progress`, `planned`), evidencia de código y bugs abiertos. |
 | [`generate_status.py`](generate_status.py) | Generador autocontenido (sólo stdlib de Python). Lee el JSON y produce `status.svg` y `parity-detail.svg`; refresca el `summary` del JSON y la tabla de paridad de la auditoría para que nunca se desincronicen. |
 | [`status.svg`](status.svg) | Squarified treemap oscuro de 680×480, con leyenda, porcentaje global, barras de estado y badges de bugs. Es el archivo que muestra el `README.md` raíz. |
-| [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 687 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
+| [`parity-detail.svg`](parity-detail.svg) | Póster de 1400 px de ancho con las 692 features nombradas, agrupadas por área y ordenadas **en progreso → hecho → pendiente**, con barra por área, resumen superior y pie con la fuente. Se abre a tamaño completo desde el treemap. |
 | [`bitwig-5.3.13-parity-audit.md`](bitwig-5.3.13-parity-audit.md) | Auditoría completa: instalación local de Bitwig, catálogo de 150 dispositivos, 43 moduladores y 228 módulos de Grid, crates de Hikaru y metodología. |
 | `README.md` | Este índice. |
 
 ## Estado actual
 
-- **329 / 687** features `done` → **48 % de paridad**.
+- **329 / 692** features `done` → **48 % de paridad**.
 - **16** en `in_progress`.
-- **342** `planned`.
+- **347** `planned`.
 - **1** bug abierto ([issue #1](https://github.com/hikarucorporation/hikaru-openlive/issues/1), mapeado a `Build & Platform`).
-- El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 687 chips con nombre, estado y evidencia.
+- El detalle feature por feature está en [`parity-detail.svg`](parity-detail.svg): 692 chips con nombre, estado y evidencia.
 
 ## Regenerar
 
