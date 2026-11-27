@@ -386,6 +386,12 @@ fn build_bitwig_preset_items(
                     Color32::from_rgb(0x22, 0xC5, 0x5E),
                     None,
                 )
+            } else if p.file_kind == ".nitro" || p.file_kind == ".nitrobin" {
+                (
+                    BrowserRailTab::AudioFx,
+                    Color32::from_rgb(0xF4, 0x3F, 0x5E),
+                    None,
+                )
             } else if p.is_modulator {
                 (
                     BrowserRailTab::NoteFx,

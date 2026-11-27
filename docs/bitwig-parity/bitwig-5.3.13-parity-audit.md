@@ -170,10 +170,10 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .multisample | 3 | 3 | 0 | 0 | 0 |
 | .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
-| .nitro | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **725** | **366** | **15** | **344** | **1** |
+| .nitro | 3 | 3 | 0 | 0 | 0 |
+| **Total** | **725** | **369** | **15** | **341** | **1** |
 
-Paridad global: **366 / 725 = 50 %**.
+Paridad global: **369 / 725 = 51 %**.
 
 ### Bugs abiertos
 

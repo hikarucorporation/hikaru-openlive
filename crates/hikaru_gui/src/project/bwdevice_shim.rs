@@ -1389,6 +1389,8 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwmodule" => Some(".bwmodule"),
         "multisample" => Some(".multisample"),
         "bwpackage" => Some(".bwpackage"),
+        "nitro" => Some(".nitro"),
+        "nitrobin" => Some(".nitrobin"),
         _ => None,
     }
 }
@@ -1597,6 +1599,17 @@ fn scan_bitwig_preset_dir(
                 }
                 if has_clips && !tags.contains(&"Clips".to_string()) {
                     tags.push("Clips".to_string());
+                }
+            }
+        } else if file_kind == ".nitro" || file_kind == ".nitrobin" {
+            category = "Nitro DSP".to_string();
+            if let Ok(spec) = crate::project::nitro_shim::load_nitro_file(&path) {
+                device_name = spec.module_name.clone();
+                if !tags.contains(&"Nitro".to_string()) {
+                    tags.push("Nitro".to_string());
+                }
+                if !tags.contains(&"Grid".to_string()) {
+                    tags.push("Grid".to_string());
                 }
             }
         }

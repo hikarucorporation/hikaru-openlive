@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 366,
+    "done": 369,
     "in_progress": 15,
-    "planned": 344,
+    "planned": 341,
     "bugs": 1,
-    "parity_percent": 50
+    "parity_percent": 51
   },
   "areas": [
     {
@@ -4232,17 +4232,20 @@
         {
           "id": "bnt-01",
           "name": "Nitro DSP graph / bytecode format analysis (.nitro/.nitrobin)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/nitro_shim.rs"
         },
         {
           "id": "bnt-02",
           "name": "Standard DSP primitive mapping (nitro-std)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/nitro_shim.rs"
         },
         {
           "id": "bnt-03",
           "name": "OpenGrid / hikaru_dsp shim execution bridge",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/nitro_shim.rs"
         }
       ]
     }

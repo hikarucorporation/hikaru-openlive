@@ -79,6 +79,7 @@ pub mod bwtemplate;
 pub mod common;
 pub mod dawproject;
 pub mod multisample;
+pub mod nitro_shim;
 pub mod openlive;
 pub mod openstudio;
 
