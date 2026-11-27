@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 332,
+    "done": 336,
     "in_progress": 15,
-    "planned": 378,
+    "planned": 374,
     "bugs": 1,
     "parity_percent": 46
   },
@@ -3954,22 +3954,26 @@
         {
           "id": "bd-02",
           "name": "Device parameter values & macro mappings",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         },
         {
           "id": "bd-03",
           "name": "Modulator slots & modulation routings",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         },
         {
           "id": "bd-04",
           "name": "Nested device chains, layers & FX racks",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         },
         {
           "id": "bd-05",
           "name": "Grid patch graph & browser preset loading",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         }
       ]
     },

@@ -1,0 +1,1406 @@
+// Traductor clean-room de parámetros `CONTENTS` y `Default.bwremotecontrols` para `.bwdevice`.
+// GNU AGPLv3
+// crates/hikaru_gui/src/project/bwdevice_shim.rs
+//
+// Implementa la capa `bd-02` del diseño `BwDeviceShim` (tipo Wine/Proton):
+// - Registro `BwCompatibilityRegistry` que resuelve `(device_name, UUID)` hacia
+//   los dispositivos nativos de `hikaru_dsp` / `dsp_rack.rs` o hacia un
+//   `PassthroughPlaceholderShim` cuando aún no existe equivalente nativo.
+// - Extractor y normalizador de parámetros `CONTENTS` desde el AST de `btwg_reader`.
+// - Lector de páginas de macros / controles remotos (`Default.bwremotecontrols`,
+//   8 slots por página) vinculándolos a los parámetros del dispositivo.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+
+use hikaru_project_file::{
+    DeviceModulatorBayParams, ModulatorRouteParams, ModulatorSlotParams, OpenGridCableData,
+    OpenGridNodeData, OpenGridParams,
+};
+
+use crate::project::btwg_reader::{
+    BtWgContainerKind, BtWgDocument, BtWgHeader, BtWgObject, BtWgReader, BtWgValue,
+};
+use crate::views::hikaru_native_plugins::hikaru_openmodulation;
+
+/// Límite de profundidad al recorrer el AST para extraer parámetros.
+const MAX_PARAM_SCAN_DEPTH: usize = 32;
+
+/// Rango de normalización para convertir un valor crudo de Bitwig a `0.0..=1.0`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParamRange {
+    pub min: f64,
+    pub max: f64,
+}
+
+impl ParamRange {
+    pub const UNIT: Self = Self { min: 0.0, max: 1.0 };
+
+    pub fn normalize(self, raw: f64) -> f32 {
+        if !raw.is_finite() || (self.max - self.min).abs() < f64::EPSILON {
+            return 0.0;
+        }
+        ((raw - self.min) / (self.max - self.min)).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// Entrada del registro *clean-room* de compatibilidad de dispositivos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BwCompatTarget {
+    pub bitwig_name: &'static str,
+    pub canonical_uuid: Option<&'static str>,
+    pub hikaru_slot_name: &'static str,
+    pub category: &'static str,
+}
+
+/// Tabla de dispositivos nativos de Hikaru OpenLive disponibles como "Builtin DLLs".
+pub fn compatibility_targets() -> &'static [BwCompatTarget] {
+    &[
+        BwCompatTarget {
+            bitwig_name: "Bit-8",
+            canonical_uuid: None,
+            hikaru_slot_name: "Hikaru Open8-Bit",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "DC Offset",
+            canonical_uuid: None,
+            hikaru_slot_name: "DC Offset",
+            category: "Utility",
+        },
+        BwCompatTarget {
+            bitwig_name: "Tool",
+            canonical_uuid: None,
+            hikaru_slot_name: "Tool",
+            category: "Utility",
+        },
+        BwCompatTarget {
+            bitwig_name: "Dual Pan",
+            canonical_uuid: None,
+            hikaru_slot_name: "Dual Pan",
+            category: "Utility",
+        },
+        BwCompatTarget {
+            bitwig_name: "Test Tone",
+            canonical_uuid: None,
+            hikaru_slot_name: "Test Tone",
+            category: "Utility",
+        },
+        BwCompatTarget {
+            bitwig_name: "Time Shift",
+            canonical_uuid: None,
+            hikaru_slot_name: "Time Shift",
+            category: "Utility",
+        },
+        BwCompatTarget {
+            bitwig_name: "Tremolo",
+            canonical_uuid: None,
+            hikaru_slot_name: "Tremolo",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "Ring-Mod",
+            canonical_uuid: None,
+            hikaru_slot_name: "Ring-Mod",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "Phaser+",
+            canonical_uuid: None,
+            hikaru_slot_name: "Hikaru OpenPhaser+",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "Freq Shifter+",
+            canonical_uuid: None,
+            hikaru_slot_name: "Hikaru OpenFreqShifter+",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "Flanger+",
+            canonical_uuid: None,
+            hikaru_slot_name: "Hikaru OpenFlanger+",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "Comb",
+            canonical_uuid: Some("20e18780-8438-48d3-b234-40dcbaa947b8"),
+            hikaru_slot_name: "Hikaru OpenComb",
+            category: "Audio FX",
+        },
+        BwCompatTarget {
+            bitwig_name: "EQ-2",
+            canonical_uuid: Some("01af068e-1e49-4777-a6e6-7f1dc679227a"),
+            hikaru_slot_name: "OpenEQ3",
+            category: "EQ",
+        },
+        BwCompatTarget {
+            bitwig_name: "EQ-5",
+            canonical_uuid: None,
+            hikaru_slot_name: "OpenEQ3",
+            category: "EQ",
+        },
+        BwCompatTarget {
+            bitwig_name: "Polymer",
+            canonical_uuid: None,
+            hikaru_slot_name: "OpenPoly",
+            category: "Synth",
+        },
+        BwCompatTarget {
+            bitwig_name: "Polysynth",
+            canonical_uuid: None,
+            hikaru_slot_name: "OpenPoly",
+            category: "Synth",
+        },
+        BwCompatTarget {
+            bitwig_name: "Sampler",
+            canonical_uuid: None,
+            hikaru_slot_name: "Sampler",
+            category: "Sampler",
+        },
+        BwCompatTarget {
+            bitwig_name: "Drum Machine",
+            canonical_uuid: None,
+            hikaru_slot_name: "Hikaru OpenDMS",
+            category: "Drums",
+        },
+        BwCompatTarget {
+            bitwig_name: "Poly Grid",
+            canonical_uuid: None,
+            hikaru_slot_name: "OpenGrid",
+            category: "The Grid",
+        },
+        BwCompatTarget {
+            bitwig_name: "FX Grid",
+            canonical_uuid: None,
+            hikaru_slot_name: "OpenGrid",
+            category: "The Grid",
+        },
+        BwCompatTarget {
+            bitwig_name: "Note Grid",
+            canonical_uuid: Some("264d6f4e-5067-46c9-a4fa-a75a295d9e01"),
+            hikaru_slot_name: "OpenGrid",
+            category: "The Grid",
+        },
+    ]
+}
+
+/// Parámetro extraído y normalizado a `0.0..=1.0`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranslatedParam {
+    pub bitwig_name: String,
+    pub hikaru_name: String,
+    pub raw_value: f64,
+    pub normalized: f32,
+    pub mapped: bool,
+}
+
+/// Asignación de un control remoto / macro de `.bwremotecontrols` (8 slots por página).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacroMapping {
+    pub page_name: String,
+    pub slot_index: usize,
+    pub param_name: String,
+}
+
+/// Placeholder *lossless* para dispositivos Bitwig que aún no tienen equivalente nativo.
+#[derive(Debug, Clone)]
+pub struct PassthroughPlaceholderShim {
+    pub bitwig_name: String,
+    pub device_id: Option<String>,
+    pub preserved_ast: BtWgDocument,
+    pub read_only_params: Vec<TranslatedParam>,
+    pub macro_mappings: Vec<MacroMapping>,
+}
+
+/// Resultado de traducir un `.bwpreset` / `Default.bwpreset` hacia el rack de Hikaru.
+#[derive(Debug, Clone)]
+pub enum BwDeviceTranslation {
+    /// Mapeado a un dispositivo nativo de `hikaru_dsp` / `dsp_rack.rs`.
+    Builtin {
+        bitwig_name: String,
+        hikaru_slot_name: String,
+        device_id: Option<String>,
+        params: BTreeMap<String, TranslatedParam>,
+        macro_mappings: Vec<MacroMapping>,
+    },
+    /// Dispositivo aún sin equivalente nativo: se preserva en bypass limpio.
+    Placeholder(PassthroughPlaceholderShim),
+}
+
+/// Traduce un documento `BtWgDocument` (p. ej. `.bwpreset` o `Default.bwpreset`) y
+/// opcionalmente su `.bwremotecontrols` asociado al espacio de parámetros `0.0..=1.0`.
+pub fn translate_device_document(
+    doc: &BtWgDocument,
+    remote_controls: Option<&BtWgDocument>,
+) -> BwDeviceTranslation {
+    let bitwig_name = doc
+        .device_name()
+        .unwrap_or("Unknown Bitwig Device")
+        .to_string();
+    let device_id = doc.device_id().map(ToOwned::to_owned);
+
+    let target = lookup_compat_target(Some(&bitwig_name), device_id.as_deref());
+    let raw_params = extract_raw_params(doc);
+    let macro_mappings = remote_controls
+        .map(extract_remote_controls)
+        .unwrap_or_default();
+
+    match target {
+        Some(compat) => {
+            let mut params = BTreeMap::new();
+            for (name, raw) in raw_params {
+                let translated = translate_param_for_device(compat.bitwig_name, &name, raw);
+                params.insert(translated.hikaru_name.clone(), translated);
+            }
+            BwDeviceTranslation::Builtin {
+                bitwig_name,
+                hikaru_slot_name: compat.hikaru_slot_name.to_string(),
+                device_id,
+                params,
+                macro_mappings,
+            }
+        }
+        None => {
+            let read_only_params = raw_params
+                .into_iter()
+                .map(|(name, raw)| TranslatedParam {
+                    hikaru_name: name.clone(),
+                    bitwig_name: name,
+                    raw_value: raw,
+                    normalized: ParamRange::UNIT.normalize(raw),
+                    mapped: false,
+                })
+                .collect();
+
+            BwDeviceTranslation::Placeholder(PassthroughPlaceholderShim {
+                bitwig_name,
+                device_id,
+                preserved_ast: doc.clone(),
+                read_only_params,
+                macro_mappings,
+            })
+        }
+    }
+}
+
+/// Busca el dispositivo en `compatibility_targets()` por UUID o por nombre.
+pub fn lookup_compat_target(
+    name: Option<&str>,
+    uuid: Option<&str>,
+) -> Option<&'static BwCompatTarget> {
+    let targets = compatibility_targets();
+    if let Some(id) = uuid {
+        if let Some(found) = targets.iter().find(|t| {
+            t.canonical_uuid
+                .map(|cu| cu.eq_ignore_ascii_case(id))
+                .unwrap_or(false)
+        }) {
+            return Some(found);
+        }
+    }
+    let clean_name = name?.trim();
+    targets
+        .iter()
+        .find(|t| t.bitwig_name.eq_ignore_ascii_case(clean_name))
+}
+
+/// Traduce y normaliza un parámetro individual `(device_name, param_name, raw_value)`
+/// al rango `0.0..=1.0` de `PluginInstance`.
+pub fn translate_param_for_device(
+    bitwig_device: &str,
+    param_name: &str,
+    raw_value: f64,
+) -> TranslatedParam {
+    let dev_key = bitwig_device.trim().to_ascii_lowercase();
+    let param_key = param_name.trim().to_ascii_uppercase();
+
+    let mapping: Option<(&str, ParamRange)> = match (dev_key.as_str(), param_key.as_str()) {
+        ("tool", "GAIN" | "VOLUME") => Some(("gain", ParamRange { min: -36.0, max: 36.0 })),
+        ("tool", "WIDTH") => Some(("width", ParamRange { min: 0.0, max: 200.0 })),
+        ("tool", "PAN") => Some(("pan", ParamRange { min: -100.0, max: 100.0 })),
+        ("tool", "PHASE_L" | "INVERT_L") => Some(("invert_left", ParamRange::UNIT)),
+        ("tool", "PHASE_R" | "INVERT_R") => Some(("invert_right", ParamRange::UNIT)),
+
+        ("bit-8", "DRIVE") => Some(("drive", ParamRange::UNIT)),
+        ("bit-8", "CRUSH" | "BITS" | "BIT_DEPTH") => {
+            Some(("bit_depth", ParamRange { min: 1.0, max: 24.0 }))
+        }
+        ("bit-8", "DOWNSAMPLE" | "RATE" | "SAMPLE_RATE") => {
+            Some(("sample_rate_div", ParamRange { min: 1.0, max: 64.0 }))
+        }
+        ("bit-8", "MIX") => Some(("mix", ParamRange::UNIT)),
+
+        ("comb", "FREQUENCY" | "PITCH") => Some(("frequency", ParamRange { min: 20.0, max: 20000.0 })),
+        ("comb", "FEEDBACK") => Some(("feedback", ParamRange { min: -100.0, max: 100.0 })),
+        ("comb", "POLARITY") => Some(("polarity", ParamRange::UNIT)),
+
+        ("eq-2" | "eq-5", "LO_GAIN") => Some(("low_gain", ParamRange { min: -24.0, max: 24.0 })),
+        ("eq-2" | "eq-5", "LO_FREQ") => Some(("low_freq", ParamRange { min: 20.0, max: 2000.0 })),
+        ("eq-2" | "eq-5", "HI_GAIN") => Some(("high_gain", ParamRange { min: -24.0, max: 24.0 })),
+        ("eq-2" | "eq-5", "HI_FREQ") => Some(("high_freq", ParamRange { min: 500.0, max: 20000.0 })),
+
+        ("tremolo", "RATE") => Some(("rate", ParamRange { min: 0.05, max: 40.0 })),
+        ("tremolo", "DEPTH") => Some(("depth", ParamRange::UNIT)),
+        ("tremolo", "SHAPE") => Some(("shape", ParamRange::UNIT)),
+
+        ("dual pan", "PAN_L") => Some(("pan_left", ParamRange { min: -100.0, max: 100.0 })),
+        ("dual pan", "PAN_R") => Some(("pan_right", ParamRange { min: -100.0, max: 100.0 })),
+
+        _ => None,
+    };
+
+    match mapping {
+        Some((hikaru_name, range)) => TranslatedParam {
+            bitwig_name: param_name.to_string(),
+            hikaru_name: hikaru_name.to_string(),
+            raw_value,
+            normalized: range.normalize(raw_value),
+            mapped: true,
+        },
+        None => TranslatedParam {
+            bitwig_name: param_name.to_string(),
+            hikaru_name: param_name.to_ascii_lowercase(),
+            raw_value,
+            normalized: ParamRange::UNIT.normalize(raw_value),
+            mapped: false,
+        },
+    }
+}
+
+/// Extrae pares `(nombre_parametro, valor_numerico)` desde el árbol `body` del `BtWgDocument`.
+pub fn extract_raw_params(doc: &BtWgDocument) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    if let Some(root) = &doc.body {
+        scan_object_params(root, &mut out, 0);
+    }
+    out
+}
+
+fn scan_object_params(obj: &BtWgObject, out: &mut Vec<(String, f64)>, depth: usize) {
+    if depth > MAX_PARAM_SCAN_DEPTH {
+        return;
+    }
+
+    let mut first_str: Option<&str> = None;
+    let mut first_num: Option<f64> = None;
+
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::Str(s) if !s.is_empty() && first_str.is_none() => {
+                first_str = Some(s.as_str());
+            }
+            BtWgValue::F64(v) if v.is_finite() && first_num.is_none() => {
+                first_num = Some(*v);
+            }
+            BtWgValue::F32(v) if v.is_finite() && first_num.is_none() => {
+                first_num = Some(*v as f64);
+            }
+            BtWgValue::I32(v) if first_num.is_none() => {
+                first_num = Some(*v as f64);
+            }
+            BtWgValue::Bool(v) if first_num.is_none() => {
+                first_num = Some(if *v { 1.0 } else { 0.0 });
+            }
+            BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
+                scan_object_params(child, out, depth + 1);
+            }
+            BtWgValue::ObjList(list) => {
+                for child in list {
+                    scan_object_params(child, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let (Some(name), Some(val)) = (first_str, first_num) {
+        if out.len() < 512 {
+            out.push((name.to_string(), val));
+        }
+    }
+}
+
+/// Extrae asignaciones de páginas de 8 controles remotos desde un `.bwremotecontrols`.
+pub fn extract_remote_controls(doc: &BtWgDocument) -> Vec<MacroMapping> {
+    let mut out = Vec::new();
+    if let Some(root) = &doc.body {
+        scan_remote_pages(root, "Default", &mut out, 0);
+    }
+    out
+}
+
+fn scan_remote_pages(
+    obj: &BtWgObject,
+    current_page: &str,
+    out: &mut Vec<MacroMapping>,
+    depth: usize,
+) {
+    if depth > MAX_PARAM_SCAN_DEPTH {
+        return;
+    }
+
+    let mut page_name = current_page.to_string();
+    let mut slot_index: Option<usize> = None;
+    let mut param_name: Option<String> = None;
+
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::Str(s) if !s.is_empty() => {
+                if param_name.is_none() {
+                    param_name = Some(s.clone());
+                } else {
+                    page_name = s.clone();
+                }
+            }
+            BtWgValue::I32(idx) if (0..8).contains(idx) && slot_index.is_none() => {
+                slot_index = Some(*idx as usize);
+            }
+            BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
+                scan_remote_pages(child, &page_name, out, depth + 1);
+            }
+            BtWgValue::ObjList(list) => {
+                for (i, child) in list.iter().enumerate() {
+                    let before = out.len();
+                    scan_remote_pages(child, &page_name, out, depth + 1);
+                    if out.len() == before {
+                        if let Some(BtWgValue::Str(s)) = child.fields.iter().find_map(|(_, v)| {
+                            matches!(v, BtWgValue::Str(st) if !st.is_empty()).then_some(v)
+                        }) {
+                            out.push(MacroMapping {
+                                page_name: page_name.clone(),
+                                slot_index: i % 8,
+                                param_name: s.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let (Some(idx), Some(name)) = (slot_index, param_name) {
+        out.push(MacroMapping {
+            page_name,
+            slot_index: idx,
+            param_name: name,
+        });
+    }
+}
+
+/// Normaliza un nombre de modulador de Bitwig al identificador aceptado por
+/// `hikaru_openmodulation::ModulatorKind::from_name`.
+pub fn normalize_bitwig_modulator_kind(bitwig_name: &str) -> Option<&'static str> {
+    match bitwig_name.trim().to_ascii_lowercase().as_str() {
+        "classic lfo" | "lfo" => Some("Classic LFO"),
+        "beat lfo" => Some("Beat LFO"),
+        "random" => Some("Random"),
+        "sample and hold" | "sample & hold" | "s&h" => Some("Sample and Hold"),
+        "vibrato" => Some("Vibrato"),
+        "wavetable lfo" => Some("Wavetable LFO"),
+        "macro" => Some("Macro"),
+        "macro-4" | "macro 4" => Some("Macro-4"),
+        "button" => Some("Button"),
+        "buttons" => Some("Buttons"),
+        "xy" => Some("XY"),
+        "vector-4" | "vector 4" => Some("Vector-4"),
+        "vector-8" | "vector 8" => Some("Vector-8"),
+        "globals" => Some("Globals"),
+        "math" => Some("Math"),
+        "adsr" => Some("ADSR"),
+        "ahdsr" => Some("AHDSR"),
+        "4-stage" | "four stage" => Some("4-Stage"),
+        "ahd on release" => Some("AHD on Release"),
+        "steps" => Some("Steps"),
+        "parsec" => Some("Parsec"),
+        "envelope follower" => Some("Envelope Follower"),
+        "audio sidechain" => Some("Audio Sidechain"),
+        "note sidechain" => Some("Note Sidechain"),
+        "expressions" => Some("Expressions"),
+        "keytrack+" | "keytrack" => Some("Keytrack+"),
+        "relative keytrack" => Some("Relative Keytrack"),
+        "pitch-12" | "pitch 12" => Some("Pitch-12"),
+        "note counter" => Some("Note Counter"),
+        "voice control" => Some("Voice Control"),
+        _ => None,
+    }
+}
+
+/// Extrae los slots de moduladores (`MODULATORS`) y las tuplas `ObjKeyRef` (`0x1a`)
+/// desde un `BtWgDocument`, resolviendo referencias en la tabla 1-based DFS y
+/// construyendo un `DeviceModulatorBayParams` listo para `hikaru_openmodulation`.
+pub fn extract_modulators_to_bay(
+    doc: &BtWgDocument,
+    bitwig_device_name: &str,
+) -> DeviceModulatorBayParams {
+    let mut slots_by_obj_id: BTreeMap<u32, ModulatorSlotParams> = BTreeMap::new();
+    let mut pending_routes: Vec<(u32, ModulatorRouteParams)> = Vec::new();
+
+    if let Some(root) = &doc.body {
+        scan_modulators_and_keys(
+            root,
+            doc,
+            bitwig_device_name,
+            &mut slots_by_obj_id,
+            &mut pending_routes,
+            0,
+        );
+    }
+
+    // Asignar cada ruta resuelta al slot correspondiente (o crear un Macro fallback
+    // si la referencia apunta a un objeto sin nombre explícito de modulador).
+    for (target_obj_id, route) in pending_routes {
+        if let Some(slot) = slots_by_obj_id.get_mut(&target_obj_id) {
+            slot.routes.push(route);
+        } else {
+            let inferred_kind = doc
+                .resolve_ref(target_obj_id)
+                .and_then(|obj| {
+                    obj.fields.iter().find_map(|(_, v)| match v {
+                        BtWgValue::Str(s) => normalize_bitwig_modulator_kind(s),
+                        _ => None,
+                    })
+                })
+                .unwrap_or("Macro");
+
+            let entry = slots_by_obj_id
+                .entry(target_obj_id)
+                .or_insert_with(|| ModulatorSlotParams {
+                    id: target_obj_id.max(1),
+                    kind: inferred_kind.to_string(),
+                    enabled: true,
+                    params: Vec::new(),
+                    bool_flags: Vec::new(),
+                    mode_idx: 0,
+                    routes: Vec::new(),
+                });
+            entry.routes.push(route);
+        }
+    }
+
+    let slots: Vec<ModulatorSlotParams> = slots_by_obj_id.into_values().collect();
+    DeviceModulatorBayParams {
+        open: !slots.is_empty(),
+        slots,
+    }
+}
+
+fn scan_modulators_and_keys(
+    obj: &BtWgObject,
+    doc: &BtWgDocument,
+    bitwig_device_name: &str,
+    slots_by_obj_id: &mut BTreeMap<u32, ModulatorSlotParams>,
+    pending_routes: &mut Vec<(u32, ModulatorRouteParams)>,
+    depth: usize,
+) {
+    if depth > MAX_PARAM_SCAN_DEPTH {
+        return;
+    }
+
+    // 1. Detectar si este objeto representa un slot de modulador conocido.
+    let mut mod_kind: Option<&'static str> = None;
+    let mut enabled = true;
+    let mut scalar_params: Vec<f32> = Vec::new();
+    let mut local_amount: Option<f32> = None;
+
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::Str(s) if mod_kind.is_none() => {
+                mod_kind = normalize_bitwig_modulator_kind(s);
+            }
+            BtWgValue::Bool(b) => {
+                enabled = *b;
+            }
+            BtWgValue::F64(v) if v.is_finite() => {
+                let fv = *v as f32;
+                scalar_params.push(fv);
+                if local_amount.is_none() && (-1.0..=1.0).contains(&fv) {
+                    local_amount = Some(fv);
+                }
+            }
+            BtWgValue::F32(v) if v.is_finite() => {
+                scalar_params.push(*v);
+                if local_amount.is_none() && (-1.0..=1.0).contains(v) {
+                    local_amount = Some(*v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(kind_name) = mod_kind {
+        slots_by_obj_id
+            .entry(obj.obj_id)
+            .or_insert_with(|| ModulatorSlotParams {
+                id: obj.obj_id.max(1),
+                kind: kind_name.to_string(),
+                enabled,
+                params: scalar_params,
+                bool_flags: Vec::new(),
+                mode_idx: 0,
+                routes: Vec::new(),
+            });
+    }
+
+    // 2. Recorrer tuplas `ObjKeyRef` (`0x1a`) e hijos recursivos.
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::ObjKeyRef { obj_id, key } => {
+                let translated_target =
+                    translate_param_for_device(bitwig_device_name, key, 0.0).hikaru_name;
+                let amount = local_amount.unwrap_or(0.25);
+                pending_routes.push((
+                    *obj_id,
+                    ModulatorRouteParams {
+                        out_idx: 0,
+                        target: translated_target,
+                        amount,
+                    },
+                ));
+            }
+            BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
+                scan_modulators_and_keys(
+                    child,
+                    doc,
+                    bitwig_device_name,
+                    slots_by_obj_id,
+                    pending_routes,
+                    depth + 1,
+                );
+            }
+            BtWgValue::ObjList(list) => {
+                for child in list {
+                    scan_modulators_and_keys(
+                        child,
+                        doc,
+                        bitwig_device_name,
+                        slots_by_obj_id,
+                        pending_routes,
+                        depth + 1,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extrae los moduladores y rutas de un `BtWgDocument` y los aplica directamente
+/// al Device Modulator Bay de `hikaru_openmodulation` para `(track_idx, slot_idx)`.
+pub fn apply_modulators_to_rack_slot(
+    track_idx: usize,
+    slot_idx: usize,
+    doc: &BtWgDocument,
+    bitwig_device_name: &str,
+) -> DeviceModulatorBayParams {
+    let bay_params = extract_modulators_to_bay(doc, bitwig_device_name);
+    if !bay_params.slots.is_empty() {
+        hikaru_openmodulation::restore_bay_params(track_idx, slot_idx, &bay_params);
+    }
+    bay_params
+}
+
+// =========================================================================
+// bd-04: Cadenas anidadas (`Chain`, `FX Layer`, `Wet FX`, `Multiband`)
+// =========================================================================
+
+/// Tipo de cadena anidada dentro de un dispositivo Bitwig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedChainKind {
+    WetFx,
+    FxLayer,
+    DeviceChain,
+    Multiband,
+}
+
+/// Cadena anidada de dispositivos hijos (equivale a `wet_fx_chain` / layers en `dsp_rack.rs`).
+#[derive(Debug, Clone)]
+pub struct NestedDeviceChain {
+    pub kind: NestedChainKind,
+    pub label: String,
+    pub devices: Vec<BwDeviceNode>,
+}
+
+/// Nodo completo de dispositivo traducido (parámetros + moduladores + cadenas anidadas).
+#[derive(Debug, Clone)]
+pub struct BwDeviceNode {
+    pub translation: BwDeviceTranslation,
+    pub modulators: DeviceModulatorBayParams,
+    pub nested_chains: Vec<NestedDeviceChain>,
+}
+
+/// Traduce un `BtWgDocument` completo incluyendo parámetros, moduladores y
+/// cadenas anidadas (`Wet FX`, `FX Layer`, `Chain`, `Multiband`).
+pub fn translate_device_tree(
+    doc: &BtWgDocument,
+    remote_controls: Option<&BtWgDocument>,
+) -> BwDeviceNode {
+    let translation = translate_device_document(doc, remote_controls);
+    let dev_name = match &translation {
+        BwDeviceTranslation::Builtin { bitwig_name, .. } => bitwig_name.as_str(),
+        BwDeviceTranslation::Placeholder(p) => p.bitwig_name.as_str(),
+    };
+    let modulators = extract_modulators_to_bay(doc, dev_name);
+    let mut nested_chains = Vec::new();
+    if let Some(root) = &doc.body {
+        collect_nested_chains(root, doc, &mut nested_chains, 0);
+    }
+    BwDeviceNode {
+        translation,
+        modulators,
+        nested_chains,
+    }
+}
+
+fn classify_chain_label(label: &str) -> Option<NestedChainKind> {
+    let lower = label.trim().to_ascii_lowercase();
+    if lower.contains("wet") {
+        Some(NestedChainKind::WetFx)
+    } else if lower.contains("layer") {
+        Some(NestedChainKind::FxLayer)
+    } else if lower.contains("multiband") || lower.contains("band") {
+        Some(NestedChainKind::Multiband)
+    } else if lower == "fx" || lower == "chain" || lower.contains("chain") {
+        Some(NestedChainKind::DeviceChain)
+    } else {
+        None
+    }
+}
+
+fn collect_nested_chains(
+    obj: &BtWgObject,
+    doc: &BtWgDocument,
+    out: &mut Vec<NestedDeviceChain>,
+    depth: usize,
+) {
+    if depth > MAX_PARAM_SCAN_DEPTH {
+        return;
+    }
+
+    let chain_label = obj.fields.iter().find_map(|(_, v)| match v {
+        BtWgValue::Str(s) if classify_chain_label(s).is_some() => Some(s.clone()),
+        _ => None,
+    });
+
+    for (fid, val) in &obj.fields {
+        match val {
+            BtWgValue::ObjList(list) if !list.is_empty() => {
+                let kind_opt = chain_label
+                    .as_deref()
+                    .and_then(classify_chain_label)
+                    .or((*fid == 0x144).then_some(NestedChainKind::DeviceChain));
+
+                if let Some(kind) = kind_opt {
+                    let mut devices = Vec::new();
+                    for child in list {
+                        if let Some(node) = build_nested_device_node(child, doc, depth + 1) {
+                            devices.push(node);
+                        }
+                    }
+                    if !devices.is_empty() {
+                        out.push(NestedDeviceChain {
+                            kind,
+                            label: chain_label.clone().unwrap_or_else(|| "Chain".to_string()),
+                            devices,
+                        });
+                        continue;
+                    }
+                }
+
+                for child in list {
+                    collect_nested_chains(child, doc, out, depth + 1);
+                }
+            }
+            BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
+                collect_nested_chains(child, doc, out, depth + 1);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn build_nested_device_node(
+    obj: &BtWgObject,
+    doc: &BtWgDocument,
+    depth: usize,
+) -> Option<BwDeviceNode> {
+    if depth > MAX_PARAM_SCAN_DEPTH {
+        return None;
+    }
+    let child_name = obj.fields.iter().find_map(|(_, v)| match v {
+        BtWgValue::Str(s) if lookup_compat_target(Some(s), None).is_some() => Some(s.clone()),
+        _ => None,
+    })?;
+
+    let mut sub_doc = BtWgDocument {
+        header: doc.header.clone(),
+        kind: BtWgContainerKind::PublicAst,
+        meta: None,
+        body: Some(obj.clone()),
+        objects_by_id: doc.objects_by_id.clone(),
+    };
+    // Si el objeto hijo no tiene `meta`, construimos la traducción directamente
+    let raw_params = extract_raw_params(&sub_doc);
+    let target = lookup_compat_target(Some(&child_name), None);
+    let translation = match target {
+        Some(compat) => {
+            let mut params = BTreeMap::new();
+            for (name, raw) in raw_params {
+                let translated = translate_param_for_device(compat.bitwig_name, &name, raw);
+                params.insert(translated.hikaru_name.clone(), translated);
+            }
+            BwDeviceTranslation::Builtin {
+                bitwig_name: child_name.clone(),
+                hikaru_slot_name: compat.hikaru_slot_name.to_string(),
+                device_id: None,
+                params,
+                macro_mappings: Vec::new(),
+            }
+        }
+        None => unreachable!(),
+    };
+
+    let modulators = extract_modulators_to_bay(&sub_doc, &child_name);
+    let mut nested_chains = Vec::new();
+    collect_nested_chains(obj, &sub_doc, &mut nested_chains, depth + 1);
+    sub_doc.body = None;
+
+    Some(BwDeviceNode {
+        translation,
+        modulators,
+        nested_chains,
+    })
+}
+
+// =========================================================================
+// bd-05: Traducción de Grid patches (`OpenGridParams`) y Browser (.bwpreset/.bwdevice)
+// =========================================================================
+
+fn normalize_grid_module_kind(raw: &str) -> Option<&'static str> {
+    let lower = raw.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "wavetable" => Some("Wavetable"),
+        "osc" | "sine" | "saw" | "triangle" | "pulse" => Some("Oscillator"),
+        "svf" | "filter" | "lowpass" | "highpass" => Some("Filter"),
+        "adsr" | "envelope" => Some("ADSR"),
+        "lfo" | "classic lfo" => Some("LFO"),
+        "mixer" | "mix" => Some("Mixer"),
+        "audio out" | "out" => Some("Audio Out"),
+        "note in" | "pitch" => Some("Note In"),
+        "noise" => Some("Noise"),
+        "delay" => Some("Delay"),
+        "gain" | "level" => Some("Gain"),
+        _ => None,
+    }
+}
+
+/// Traduce un patch público de `Poly Grid` / `FX Grid` / `Note Grid` (`.bwpreset`)
+/// hacia `OpenGridParams` de `hikaru_opengrid`.
+pub fn translate_grid_patch(doc: &BtWgDocument) -> OpenGridParams {
+    let mut params = OpenGridParams {
+        preset_name: doc
+            .device_name()
+            .unwrap_or("Imported Bitwig Grid")
+            .to_string(),
+        ..OpenGridParams::default()
+    };
+
+    let mut obj_to_node_id: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut raw_cables: Vec<(u32, u32)> = Vec::new();
+
+    if let Some(root) = &doc.body {
+        scan_grid_nodes(
+            root,
+            &mut params.nodes,
+            &mut obj_to_node_id,
+            &mut raw_cables,
+            0,
+        );
+    }
+
+    for (from_obj_id, to_obj_id) in raw_cables {
+        if let (Some(&from_node), Some(&to_node)) = (
+            obj_to_node_id.get(&from_obj_id),
+            obj_to_node_id.get(&to_obj_id),
+        ) {
+            if from_node != to_node {
+                params.cables.push(OpenGridCableData {
+                    from_node,
+                    from_port: 0,
+                    to_node,
+                    to_port: 0,
+                });
+            }
+        }
+    }
+
+    params
+}
+
+fn scan_grid_nodes(
+    obj: &BtWgObject,
+    nodes: &mut Vec<OpenGridNodeData>,
+    obj_to_node_id: &mut BTreeMap<u32, u32>,
+    raw_cables: &mut Vec<(u32, u32)>,
+    depth: usize,
+) {
+    if depth > MAX_PARAM_SCAN_DEPTH {
+        return;
+    }
+
+    let mut module_kind: Option<&'static str> = None;
+    let mut scalar_params = [0.0f32; 6];
+    let mut param_idx = 0usize;
+
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::Str(s) if module_kind.is_none() => {
+                module_kind = normalize_grid_module_kind(s);
+            }
+            BtWgValue::F64(v) if v.is_finite() && param_idx < 6 => {
+                scalar_params[param_idx] = *v as f32;
+                param_idx += 1;
+            }
+            BtWgValue::F32(v) if v.is_finite() && param_idx < 6 => {
+                scalar_params[param_idx] = *v;
+                param_idx += 1;
+            }
+            BtWgValue::Ref(target_id) => {
+                raw_cables.push((*target_id, obj.obj_id));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(kind) = module_kind {
+        let node_id = (nodes.len() as u32) + 1;
+        let col = (nodes.len() % 4) as f32;
+        let row = (nodes.len() / 4) as f32;
+        nodes.push(OpenGridNodeData {
+            id: node_id,
+            kind: kind.to_string(),
+            pos: [120.0 + col * 160.0, 90.0 + row * 120.0],
+            params: scalar_params,
+            bypassed: false,
+        });
+        obj_to_node_id.insert(obj.obj_id, node_id);
+    }
+
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
+                scan_grid_nodes(child, nodes, obj_to_node_id, raw_cables, depth + 1);
+            }
+            BtWgValue::ObjList(list) => {
+                for child in list {
+                    scan_grid_nodes(child, nodes, obj_to_node_id, raw_cables, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Devuelve `true` si la ruta corresponde a un `.bwdevice` o `.bwpreset` cargable desde el browser.
+pub fn is_bitwig_browser_artifact(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("bwdevice") || ext.eq_ignore_ascii_case("bwpreset"))
+        .unwrap_or(false)
+}
+
+/// Carga un `.bwpreset` o `.bwdevice` desde el browser (`explorer.rs` / `popup_browser.rs`)
+/// devolviendo el árbol traducido `BwDeviceNode` listo para instanciar en el rack.
+pub fn load_bitwig_browser_item(
+    path: &Path,
+    library_dir: Option<&Path>,
+) -> Result<BwDeviceNode, String> {
+    let bytes =
+        fs::read(path).map_err(|err| format!("no se pudo leer '{}': {err}", path.display()))?;
+    let header = BtWgHeader::parse(&bytes)?;
+
+    match header.kind() {
+        BtWgContainerKind::PublicAst => {
+            let doc = BtWgReader::parse_document(&bytes)?;
+            Ok(translate_device_tree(&doc, None))
+        }
+        BtWgContainerKind::ProtectedDevice => {
+            let meta = BtWgReader::inspect_bwdevice_file(path, library_dir)?;
+            if let Some(companion) = meta.companion_preset {
+                Ok(translate_device_tree(&companion, None))
+            } else {
+                // Sin companion preset: resolvemos por nombre del archivo hacia `Builtin` o `Placeholder`.
+                let compat = lookup_compat_target(Some(&meta.device_stem), None);
+                let translation = match compat {
+                    Some(c) => BwDeviceTranslation::Builtin {
+                        bitwig_name: meta.device_stem.clone(),
+                        hikaru_slot_name: c.hikaru_slot_name.to_string(),
+                        device_id: None,
+                        params: BTreeMap::new(),
+                        macro_mappings: Vec::new(),
+                    },
+                    None => BwDeviceTranslation::Placeholder(PassthroughPlaceholderShim {
+                        bitwig_name: meta.device_stem.clone(),
+                        device_id: None,
+                        preserved_ast: BtWgDocument {
+                            header: meta.header,
+                            kind: BtWgContainerKind::ProtectedDevice,
+                            meta: None,
+                            body: None,
+                            objects_by_id: BTreeMap::new(),
+                        },
+                        read_only_params: Vec::new(),
+                        macro_mappings: Vec::new(),
+                    }),
+                };
+                Ok(BwDeviceNode {
+                    translation,
+                    modulators: DeviceModulatorBayParams::default(),
+                    nested_chains: Vec::new(),
+                })
+            }
+        }
+        BtWgContainerKind::Unknown => Err(format!(
+            "tipo BtWg '{}' no soportado en '{}'",
+            header.format_type,
+            path.display()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::btwg::BtWgWriter;
+    use crate::project::btwg_reader::BtWgReader;
+
+    fn wrap_btwg_0002(meta_bytes: &[u8], body_bytes: &[u8]) -> Vec<u8> {
+        let header_len = 43usize;
+        let body_offset = header_len + meta_bytes.len();
+        let header = format!("BtWg0003000200ba{body_offset:08x}000000000000000000\n");
+        let mut out = Vec::with_capacity(body_offset + body_bytes.len());
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(meta_bytes);
+        out.extend_from_slice(body_bytes);
+        out
+    }
+
+    fn build_tool_preset_bytes() -> Vec<u8> {
+        let mut meta = BtWgWriter::new();
+        meta.begin_obj(4);
+        meta.raw_str("meta");
+        meta.named_field_str("device_name", "Tool");
+        meta.named_field_str("device_id", "00000000-0000-4000-8000-000000000002");
+        meta.end_obj();
+
+        let mut body = BtWgWriter::new();
+        body.begin_obj(0x561);
+        body.field_obj_list_start(0x140);
+
+        body.begin_obj(0x2c1);
+        body.field_str(0x10, "GAIN");
+        body.field_f64(0x11, 0.0); // 0 dB -> 0.5 normalizado en [-36, 36]
+        body.end_obj();
+
+        body.begin_obj(0x2c1);
+        body.field_str(0x10, "WIDTH");
+        body.field_f64(0x11, 100.0); // 100% -> 0.5 normalizado en [0, 200]
+        body.end_obj();
+
+        body.begin_obj(0x2c1);
+        body.field_str(0x10, "PHASE_L");
+        body.field_bool(0x11, true); // 1.0
+        body.end_obj();
+
+        body.obj_list_end();
+        body.end_obj();
+
+        wrap_btwg_0002(&meta.into_bytes(), &body.into_bytes())
+    }
+
+    fn build_remote_controls_bytes() -> Vec<u8> {
+        let mut meta = BtWgWriter::new();
+        meta.begin_obj(4);
+        meta.raw_str("meta");
+        meta.named_field_str("device_name", "Tool");
+        meta.end_obj();
+
+        let mut body = BtWgWriter::new();
+        body.begin_obj(0x600);
+        body.field_str(0x01, "Main");
+        body.field_obj_list_start(0x02);
+
+        body.begin_obj(0x601);
+        body.field_i32(0x10, 0);
+        body.field_str(0x11, "GAIN");
+        body.end_obj();
+
+        body.begin_obj(0x601);
+        body.field_i32(0x10, 1);
+        body.field_str(0x11, "WIDTH");
+        body.end_obj();
+
+        body.obj_list_end();
+        body.end_obj();
+
+        wrap_btwg_0002(&meta.into_bytes(), &body.into_bytes())
+    }
+
+    #[test]
+    fn traduce_parametros_tool_y_remote_controls() {
+        let preset_doc = BtWgReader::parse_document(&build_tool_preset_bytes())
+            .expect("parsea preset Tool");
+        let rc_doc = BtWgReader::parse_document(&build_remote_controls_bytes())
+            .expect("parsea remote controls");
+
+        let translated = translate_device_document(&preset_doc, Some(&rc_doc));
+        match translated {
+            BwDeviceTranslation::Builtin {
+                hikaru_slot_name,
+                params,
+                macro_mappings,
+                ..
+            } => {
+                assert_eq!(hikaru_slot_name, "Tool");
+                let gain = params.get("gain").expect("parámetro gain");
+                assert!(gain.mapped);
+                assert!((gain.normalized - 0.5).abs() < 1e-5);
+
+                let width = params.get("width").expect("parámetro width");
+                assert!(width.mapped);
+                assert!((width.normalized - 0.5).abs() < 1e-5);
+
+                let inv_l = params.get("invert_left").expect("parámetro invert_left");
+                assert_eq!(inv_l.normalized, 1.0);
+
+                assert_eq!(macro_mappings.len(), 2);
+                assert_eq!(macro_mappings[0].slot_index, 0);
+                assert_eq!(macro_mappings[0].param_name, "GAIN");
+                assert_eq!(macro_mappings[1].slot_index, 1);
+                assert_eq!(macro_mappings[1].param_name, "WIDTH");
+            }
+            BwDeviceTranslation::Placeholder(_) => panic!("Tool debe mapearse a Builtin"),
+        }
+    }
+
+    #[test]
+    fn dispositivo_sin_equivalente_usa_passthrough_placeholder_shim() {
+        let mut meta = BtWgWriter::new();
+        meta.begin_obj(4);
+        meta.raw_str("meta");
+        meta.named_field_str("device_name", "Note Transpose");
+        meta.named_field_str("device_id", "0815cd9e-3a31-4429-a268-dabd952a3b68");
+        meta.end_obj();
+
+        let mut body = BtWgWriter::new();
+        body.begin_obj(0x561);
+        body.field_str(0x10, "SEMITONES");
+        body.field_f64(0x11, 0.75);
+        body.end_obj();
+
+        let bytes = wrap_btwg_0002(&meta.into_bytes(), &body.into_bytes());
+        let doc = BtWgReader::parse_document(&bytes).expect("parsea Note Transpose");
+
+        match translate_device_document(&doc, None) {
+            BwDeviceTranslation::Placeholder(shim) => {
+                assert_eq!(shim.bitwig_name, "Note Transpose");
+                assert_eq!(shim.read_only_params.len(), 1);
+                assert_eq!(shim.read_only_params[0].bitwig_name, "SEMITONES");
+                assert!(!shim.read_only_params[0].mapped);
+                assert_eq!(shim.preserved_ast.device_name(), Some("Note Transpose"));
+            }
+            BwDeviceTranslation::Builtin { .. } => {
+                panic!("Note Transpose debe caer en PassthroughPlaceholderShim")
+            }
+        }
+    }
+
+    #[test]
+    fn extrae_y_aplica_moduladores_y_rutas_0x1a_hacia_openmodulation() {
+        let mut meta = BtWgWriter::new();
+        meta.begin_obj(4);
+        meta.raw_str("meta");
+        meta.named_field_str("device_name", "Tool");
+        meta.end_obj();
+
+        let mut body = BtWgWriter::new();
+        let root_id = body.begin_obj(0x561);
+        assert_eq!(root_id, 1);
+
+        body.field_obj_list_start(0x150);
+        let lfo_id = body.begin_obj(0x700);
+        assert_eq!(lfo_id, 2);
+        body.field_str(0x10, "Classic LFO");
+        body.field_f64(0x11, 2.5);
+        body.end_obj();
+
+        let macro_id = body.begin_obj(0x700);
+        assert_eq!(macro_id, 3);
+        body.field_str(0x10, "Macro");
+        body.field_f64(0x11, 0.5);
+        body.end_obj();
+        body.obj_list_end();
+
+        // Tuplas 0x1a `obj_key_ref` apuntando a los moduladores 2 y 3 con amount
+        body.field_obj_header(0x160, 0x710);
+        body.field_f64(0x01, 0.45);
+        body.field_obj_key_ref(0x02, lfo_id, "GAIN");
+        body.end_obj();
+
+        body.field_obj_header(0x160, 0x710);
+        body.field_f64(0x01, -0.30);
+        body.field_obj_key_ref(0x02, macro_id, "WIDTH");
+        body.end_obj();
+
+        body.end_obj();
+
+        let bytes = wrap_btwg_0002(&meta.into_bytes(), &body.into_bytes());
+        let doc = BtWgReader::parse_document(&bytes).expect("parsea preset con moduladores");
+
+        let bay = apply_modulators_to_rack_slot(99, 7, &doc, "Tool");
+        assert!(bay.open);
+        assert_eq!(bay.slots.len(), 2);
+
+        let lfo_slot = bay.slots.iter().find(|s| s.kind == "Classic LFO").expect("slot LFO");
+        assert_eq!(lfo_slot.routes.len(), 1);
+        assert_eq!(lfo_slot.routes[0].target, "gain");
+        assert!((lfo_slot.routes[0].amount - 0.45).abs() < 1e-5);
+
+        let macro_slot = bay.slots.iter().find(|s| s.kind == "Macro").expect("slot Macro");
+        assert_eq!(macro_slot.routes.len(), 1);
+        assert_eq!(macro_slot.routes[0].target, "width");
+        assert!((macro_slot.routes[0].amount - (-0.30)).abs() < 1e-5);
+
+        // Verifica que `hikaru_openmodulation` restauró el estado en vivo
+        let live_bay = crate::views::hikaru_native_plugins::hikaru_openmodulation::bay::get_bay_state(99, 7);
+        assert_eq!(live_bay.slots.len(), 2);
+    }
+
+    #[test]
+    fn traduce_cadenas_anidadas_wet_fx_y_fx_layer() {
+        let mut meta = BtWgWriter::new();
+        meta.begin_obj(4);
+        meta.raw_str("meta");
+        meta.named_field_str("device_name", "Bit-8");
+        meta.end_obj();
+
+        let mut body = BtWgWriter::new();
+        body.begin_obj(0x561);
+        body.field_str(0x10, "DRIVE");
+        body.field_f64(0x11, 0.4);
+
+        // Cadena anidada "Wet FX" con un Comb y un Tool adentro
+        body.field_obj_header(0x143, 0x800);
+        body.field_str(0x01, "Wet FX");
+        body.field_obj_list_start(0x144);
+
+        body.begin_obj(0x561);
+        body.field_str(0x01, "Comb");
+        body.field_str(0x10, "FREQUENCY");
+        body.field_f64(0x11, 440.0);
+        body.end_obj();
+
+        body.begin_obj(0x561);
+        body.field_str(0x01, "Tool");
+        body.field_str(0x10, "WIDTH");
+        body.field_f64(0x11, 150.0);
+        body.end_obj();
+
+        body.obj_list_end();
+        body.end_obj();
+        body.end_obj();
+
+        let bytes = wrap_btwg_0002(&meta.into_bytes(), &body.into_bytes());
+        let doc = BtWgReader::parse_document(&bytes).expect("parsea Bit-8 con Wet FX");
+        let tree = translate_device_tree(&doc, None);
+
+        assert_eq!(tree.nested_chains.len(), 1);
+        let wet = &tree.nested_chains[0];
+        assert_eq!(wet.kind, NestedChainKind::WetFx);
+        assert_eq!(wet.devices.len(), 2);
+
+        match &wet.devices[0].translation {
+            BwDeviceTranslation::Builtin {
+                hikaru_slot_name, ..
+            } => assert_eq!(hikaru_slot_name, "Hikaru OpenComb"),
+            _ => panic!("Comb debe mapearse a Hikaru OpenComb"),
+        }
+        match &wet.devices[1].translation {
+            BwDeviceTranslation::Builtin {
+                hikaru_slot_name, ..
+            } => assert_eq!(hikaru_slot_name, "Tool"),
+            _ => panic!("Tool debe mapearse a Tool"),
+        }
+    }
+
+    #[test]
+    fn traduce_patch_grid_y_carga_desde_browser() {
+        let mut meta = BtWgWriter::new();
+        meta.begin_obj(4);
+        meta.raw_str("meta");
+        meta.named_field_str("device_name", "Poly Grid");
+        meta.end_obj();
+
+        let mut body = BtWgWriter::new();
+        let root_id = body.begin_obj(0x561);
+        assert_eq!(root_id, 1);
+
+        body.field_obj_list_start(0x200);
+        let osc_id = body.begin_obj(0x900);
+        assert_eq!(osc_id, 2);
+        body.field_str(0x01, "Wavetable");
+        body.field_f64(0x02, 0.5);
+        body.end_obj();
+
+        let filt_id = body.begin_obj(0x900);
+        assert_eq!(filt_id, 3);
+        body.field_str(0x01, "SVF");
+        body.field_f64(0x02, 0.8);
+        body.field_ref(0x03, osc_id);
+        body.end_obj();
+
+        let out_id = body.begin_obj(0x900);
+        assert_eq!(out_id, 4);
+        body.field_str(0x01, "Audio Out");
+        body.field_ref(0x03, filt_id);
+        body.end_obj();
+
+        body.obj_list_end();
+        body.end_obj();
+
+        let bytes = wrap_btwg_0002(&meta.into_bytes(), &body.into_bytes());
+        let doc = BtWgReader::parse_document(&bytes).expect("parsea Poly Grid");
+        let grid = translate_grid_patch(&doc);
+
+        assert_eq!(grid.preset_name, "Poly Grid");
+        assert_eq!(grid.nodes.len(), 3);
+        assert_eq!(grid.nodes[0].kind, "Wavetable");
+        assert_eq!(grid.nodes[1].kind, "Filter");
+        assert_eq!(grid.nodes[2].kind, "Audio Out");
+        assert_eq!(grid.cables.len(), 2);
+        assert_eq!(grid.cables[0].from_node, 1);
+        assert_eq!(grid.cables[0].to_node, 2);
+        assert_eq!(grid.cables[1].from_node, 2);
+        assert_eq!(grid.cables[1].to_node, 3);
+
+        // Prueba carga unificada desde browser con archivo temporal .bwpreset
+        let dir = std::env::temp_dir().join(format!("hikaru_bw_browser_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("crea temp dir");
+        let preset_path = dir.join("Poly Grid.bwpreset");
+        fs::write(&preset_path, &bytes).expect("escribe preset");
+
+        assert!(is_bitwig_browser_artifact(&preset_path));
+        let loaded = load_bitwig_browser_item(&preset_path, None).expect("carga desde browser");
+        match loaded.translation {
+            BwDeviceTranslation::Builtin {
+                hikaru_slot_name, ..
+            } => assert_eq!(hikaru_slot_name, "OpenGrid"),
+            _ => panic!("Poly Grid debe mapearse a OpenGrid"),
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
