@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 331,
+    "done": 332,
     "in_progress": 15,
-    "planned": 379,
+    "planned": 378,
     "bugs": 1,
     "parity_percent": 46
   },
@@ -3948,7 +3948,8 @@
         {
           "id": "bd-01",
           "name": "Binary container & metadata parser (.bwdevice)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/btwg_reader.rs"
         },
         {
           "id": "bd-02",

@@ -67,6 +67,7 @@ use std::path::{Path, PathBuf};
 use crate::app::{AppMode, AppState};
 
 pub mod btwg;
+pub mod btwg_reader;
 pub mod bwproject;
 pub mod bwtemplate;
 pub mod common;

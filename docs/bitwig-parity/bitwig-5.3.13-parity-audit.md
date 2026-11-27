@@ -159,7 +159,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .DAWproject | 10 | 6 | 0 | 4 | 0 |
 | .bwproject | 6 | 3 | 0 | 3 | 0 |
 | .bwtemplate | 4 | 4 | 0 | 0 | 0 |
-| .bwdevice | 5 | 0 | 0 | 5 | 0 |
+| .bwdevice | 5 | 1 | 0 | 4 | 0 |
 | .bwpreset | 5 | 0 | 0 | 5 | 0 |
 | .bwclip | 4 | 0 | 0 | 4 | 0 |
 | .bwmodulator | 3 | 0 | 0 | 3 | 0 |
@@ -171,9 +171,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .wt | 3 | 0 | 0 | 3 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **725** | **331** | **15** | **379** | **1** |
+| **Total** | **725** | **332** | **15** | **378** | **1** |
 
-Paridad global: **331 / 725 = 46 %**.
+Paridad global: **332 / 725 = 46 %**.
 
 ### Bugs abiertos
 
