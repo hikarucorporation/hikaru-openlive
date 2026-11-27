@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 342,
+    "done": 347,
     "in_progress": 15,
-    "planned": 368,
+    "planned": 363,
     "bugs": 1,
-    "parity_percent": 47
+    "parity_percent": 48
   },
   "areas": [
     {
@@ -3986,27 +3986,32 @@
         {
           "id": "bpr-01",
           "name": "BtWg00030002 preset container & metadata parser (.bwpreset)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/btwg_reader.rs"
         },
         {
           "id": "bpr-02",
           "name": "Device parameter values & macro state import",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         },
         {
           "id": "bpr-03",
           "name": "Modulator slots & modulation routing import",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/dsp_rack.rs"
         },
         {
           "id": "bpr-04",
           "name": "Grid patch graph import (Poly/FX/Note Grid)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         },
         {
           "id": "bpr-05",
           "name": "Browser preview & preset export (.bwpreset)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/popup_browser.rs"
         }
       ]
     },

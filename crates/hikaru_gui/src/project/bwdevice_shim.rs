@@ -12,13 +12,14 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hikaru_project_file::{
     DeviceModulatorBayParams, ModulatorRouteParams, ModulatorSlotParams, OpenGridCableData,
     OpenGridNodeData, OpenGridParams,
 };
 
+use crate::project::btwg::BtWgWriter;
 use crate::project::btwg_reader::{
     BtWgContainerKind, BtWgDocument, BtWgHeader, BtWgObject, BtWgReader, BtWgValue,
 };
@@ -379,7 +380,7 @@ pub fn extract_raw_params(doc: &BtWgDocument) -> Vec<(String, f64)> {
 }
 
 fn scan_object_params(obj: &BtWgObject, out: &mut Vec<(String, f64)>, depth: usize) {
-    if depth > MAX_PARAM_SCAN_DEPTH {
+    if depth > MAX_PARAM_SCAN_DEPTH || obj.cls == 0x0500 {
         return;
     }
 
@@ -437,7 +438,7 @@ fn scan_remote_pages(
     out: &mut Vec<MacroMapping>,
     depth: usize,
 ) {
-    if depth > MAX_PARAM_SCAN_DEPTH {
+    if depth > MAX_PARAM_SCAN_DEPTH || obj.cls == 0x0500 {
         return;
     }
 
@@ -595,7 +596,7 @@ fn scan_modulators_and_keys(
     pending_routes: &mut Vec<(u32, ModulatorRouteParams)>,
     depth: usize,
 ) {
-    if depth > MAX_PARAM_SCAN_DEPTH {
+    if depth > MAX_PARAM_SCAN_DEPTH || obj.cls == 0x0500 {
         return;
     }
 
@@ -775,7 +776,7 @@ fn collect_nested_chains(
     out: &mut Vec<NestedDeviceChain>,
     depth: usize,
 ) {
-    if depth > MAX_PARAM_SCAN_DEPTH {
+    if depth > MAX_PARAM_SCAN_DEPTH || obj.cls == 0x0500 {
         return;
     }
 
@@ -946,7 +947,7 @@ fn scan_grid_nodes(
     raw_cables: &mut Vec<(u32, u32)>,
     depth: usize,
 ) {
-    if depth > MAX_PARAM_SCAN_DEPTH {
+    if depth > MAX_PARAM_SCAN_DEPTH || obj.cls == 0x0500 {
         return;
     }
 
@@ -1068,6 +1069,479 @@ pub fn load_bitwig_browser_item(
             path.display()
         )),
     }
+}
+
+// =========================================================================
+// bpr-05: Browser discovery, preview & preset export (.bwpreset)
+// =========================================================================
+
+/// Entrada descubierta de preset/dispositivo/modulador Bitwig en disco para el browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableBitwigPreset {
+    pub id: String,
+    pub name: String,
+    pub device_name: String,
+    pub category: String,
+    pub creator: String,
+    pub location: String,
+    pub file_kind: String,
+    pub tags: Vec<String>,
+    pub description: String,
+    pub path: PathBuf,
+    pub is_grid: bool,
+    pub is_modulator: bool,
+    pub is_fx: bool,
+}
+
+/// Resumen ligero para previsualización en el panel derecho del Pop-up Browser.
+#[derive(Debug, Clone, Default)]
+pub struct BwPresetPreview {
+    pub device_name: String,
+    pub preset_name: String,
+    pub creator: String,
+    pub category: String,
+    pub container_kind: String,
+    pub param_count: usize,
+    pub sample_params: Vec<(String, f32)>,
+    pub modulator_count: usize,
+    pub modulator_kinds: Vec<String>,
+    pub grid_node_count: usize,
+    pub grid_cable_count: usize,
+    pub error: Option<String>,
+}
+
+/// Especificación para exportar un dispositivo / rack / patch Grid de Hikaru a `.bwpreset`.
+#[derive(Debug, Clone)]
+pub struct BwPresetExportSpec {
+    pub device_name: String,
+    pub preset_name: String,
+    pub creator: String,
+    pub category: String,
+    pub comment: String,
+    pub params: Vec<(String, f64)>,
+    pub modulators: DeviceModulatorBayParams,
+    pub grid: Option<OpenGridParams>,
+    pub remote_labels: Vec<(usize, String)>,
+}
+
+fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "bwpreset" => Some(".bwpreset"),
+        "bwdevice" => Some(".bwdevice"),
+        "bwmodulator" => Some(".bwmodulator"),
+        _ => None,
+    }
+}
+
+fn classify_bitwig_device_role(device_name: &str, category: &str, file_kind: &str) -> (bool, bool, bool) {
+    let dev_low = device_name.to_ascii_lowercase();
+    let cat_low = category.to_ascii_lowercase();
+    let is_grid = dev_low.contains("grid");
+    let is_mod = file_kind == ".bwmodulator" || cat_low.contains("modulat");
+    let is_inst = cat_low.contains("synth")
+        || cat_low.contains("instrument")
+        || cat_low.contains("sampler")
+        || cat_low.contains("drum")
+        || matches!(
+            dev_low.as_str(),
+            "polymer" | "polysynth" | "phase-4" | "fm-4" | "sampler" | "drum machine" | "poly grid"
+        );
+    let is_fx = !is_mod && !is_inst;
+    (is_grid, is_mod, is_fx)
+}
+
+fn scan_bitwig_preset_dir(
+    dir: &Path,
+    location_label: &str,
+    depth: usize,
+    max_depth: usize,
+    max_items: usize,
+    out: &mut Vec<AvailableBitwigPreset>,
+) {
+    if depth > max_depth || out.len() >= max_items || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+
+    for path in paths {
+        if out.len() >= max_items {
+            break;
+        }
+        if path.is_dir() {
+            scan_bitwig_preset_dir(&path, location_label, depth + 1, max_depth, max_items, out);
+            continue;
+        }
+        let Some(file_kind) = is_bitwig_catalog_ext(&path) else {
+            continue;
+        };
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Preset")
+            .to_string();
+
+        let mut device_name = stem.clone();
+        let mut category = String::from("Bitwig Preset");
+        let mut creator = String::from("Bitwig");
+        let mut tags = vec![file_kind.trim_start_matches('.').to_string()];
+
+        if file_kind == ".bwpreset" {
+            if let Ok(bytes) = fs::read(&path) {
+                if let Ok(doc) = BtWgReader::parse_document(&bytes) {
+                    if let Some(dn) = doc.device_name() {
+                        device_name = dn.to_string();
+                    }
+                    if let Some(meta) = &doc.meta {
+                        for (k, v) in &meta.named_fields {
+                            match (k.as_str(), v) {
+                                ("preset_category", BtWgValue::Str(s)) if !s.trim().is_empty() => {
+                                    category = s.clone();
+                                }
+                                ("creator", BtWgValue::Str(s)) if !s.trim().is_empty() => {
+                                    creator = s.clone();
+                                }
+                                ("tags", BtWgValue::Str(s)) if !s.trim().is_empty() => {
+                                    for t in s.split(|c: char| c == ',' || c.is_whitespace()) {
+                                        let trimmed = t.trim();
+                                        if !trimmed.is_empty() {
+                                            tags.push(trimmed.to_string());
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        } else if file_kind == ".bwdevice" {
+            category = "Bitwig Device".to_string();
+        } else if file_kind == ".bwmodulator" {
+            category = "Modulator".to_string();
+        }
+
+        if let Some(compat) = lookup_compat_target(Some(&device_name), None) {
+            if category == "Bitwig Preset" || category == "Bitwig Device" {
+                category = compat.category.to_string();
+            }
+        }
+
+        let (is_grid, is_modulator, is_fx) =
+            classify_bitwig_device_role(&device_name, &category, file_kind);
+
+        let description = format!(
+            "{} ({}) · {} · {}",
+            device_name,
+            file_kind,
+            category,
+            path.display()
+        );
+
+        out.push(AvailableBitwigPreset {
+            id: format!("bw:{}:{}", file_kind, path.display()),
+            name: stem,
+            device_name,
+            category,
+            creator,
+            location: location_label.to_string(),
+            file_kind: file_kind.to_string(),
+            tags,
+            description,
+            path,
+            is_grid,
+            is_modulator,
+            is_fx,
+        });
+    }
+}
+
+/// Descubre `.bwpreset`, `.bwdevice` y `.bwmodulator` en las bibliotecas estándar de Bitwig
+/// y carpetas locales del workspace (con límite de profundidad para mantener el browser fluido).
+pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigPreset> {
+    let mut candidates: Vec<(PathBuf, &'static str)> = Vec::new();
+    if let Some(dir) = extra_dir {
+        candidates.push((dir.to_path_buf(), "Custom Library"));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        candidates.push((home.join("Bitwig Studio/Library/Presets"), "Bitwig Library"));
+        candidates.push((home.join("Bitwig Studio/Library/Devices"), "Bitwig Library"));
+        candidates.push((home.join("Bitwig Studio/Library/Modulators"), "Bitwig Library"));
+        candidates.push((
+            home.join("Documents/Bitwig Studio/Library/Presets"),
+            "User Presets",
+        ));
+        candidates.push((home.join("Music/Bitwig Studio/Presets"), "User Presets"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push((cwd.join("presets"), "Workspace Presets"));
+        candidates.push((cwd.join("assets/presets"), "Workspace Presets"));
+    }
+
+    let mut out = Vec::new();
+    for (dir, label) in candidates {
+        scan_bitwig_preset_dir(&dir, label, 0, 4, 400, &mut out);
+        if out.len() >= 400 {
+            break;
+        }
+    }
+    out
+}
+
+/// Extrae una vista previa estructurada de un `.bwpreset` / `.bwdevice` para el Pop-up Browser.
+pub fn inspect_bwpreset_preview(path: &Path) -> BwPresetPreview {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Preset")
+        .to_string();
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(err) => {
+            return BwPresetPreview {
+                preset_name: stem,
+                error: Some(err.to_string()),
+                ..BwPresetPreview::default()
+            };
+        }
+    };
+    let header = match BtWgHeader::parse(&bytes) {
+        Ok(h) => h,
+        Err(err) => {
+            return BwPresetPreview {
+                preset_name: stem,
+                error: Some(err),
+                ..BwPresetPreview::default()
+            };
+        }
+    };
+
+    match header.kind() {
+        BtWgContainerKind::PublicAst => match BtWgReader::parse_document(&bytes) {
+            Ok(doc) => {
+                let device_name = doc.device_name().unwrap_or(&stem).to_string();
+                let mut creator = "Bitwig".to_string();
+                let mut category = "Preset".to_string();
+                let mut preset_name = stem.clone();
+                if let Some(meta) = &doc.meta {
+                    for (k, v) in &meta.named_fields {
+                        if let BtWgValue::Str(s) = v {
+                            if !s.trim().is_empty() {
+                                match k.as_str() {
+                                    "creator" => creator = s.clone(),
+                                    "preset_category" => category = s.clone(),
+                                    "preset_name" => preset_name = s.clone(),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                let node = translate_device_tree(&doc, None);
+                let (param_count, sample_params) = match &node.translation {
+                    BwDeviceTranslation::Builtin { params, .. } => {
+                        let list = params
+                            .iter()
+                            .take(6)
+                            .map(|(k, p)| (k.clone(), p.normalized))
+                            .collect();
+                        (params.len(), list)
+                    }
+                    BwDeviceTranslation::Placeholder(p) => {
+                        let list = p
+                            .read_only_params
+                            .iter()
+                            .take(6)
+                            .map(|tp| (tp.bitwig_name.clone(), tp.normalized))
+                            .collect();
+                        (p.read_only_params.len(), list)
+                    }
+                };
+                let modulator_kinds: Vec<String> = node
+                    .modulators
+                    .slots
+                    .iter()
+                    .map(|s| s.kind.clone())
+                    .collect();
+                let is_grid = device_name.to_ascii_lowercase().contains("grid");
+                let (grid_node_count, grid_cable_count) = if is_grid {
+                    let g = translate_grid_patch(&doc);
+                    (g.nodes.len(), g.cables.len())
+                } else {
+                    (0, 0)
+                };
+
+                BwPresetPreview {
+                    device_name,
+                    preset_name,
+                    creator,
+                    category,
+                    container_kind: "BtWg00030002 (Public AST)".to_string(),
+                    param_count,
+                    sample_params,
+                    modulator_count: modulator_kinds.len(),
+                    modulator_kinds,
+                    grid_node_count,
+                    grid_cable_count,
+                    error: None,
+                }
+            }
+            Err(err) => BwPresetPreview {
+                preset_name: stem,
+                container_kind: "BtWg00030002".to_string(),
+                error: Some(err),
+                ..BwPresetPreview::default()
+            },
+        },
+        BtWgContainerKind::ProtectedDevice => BwPresetPreview {
+            device_name: stem.clone(),
+            preset_name: stem,
+            creator: "Bitwig".to_string(),
+            category: "Protected Device".to_string(),
+            container_kind: "BtWg00030004 (Protected)".to_string(),
+            ..BwPresetPreview::default()
+        },
+        BtWgContainerKind::Unknown => BwPresetPreview {
+            device_name: stem.clone(),
+            preset_name: stem,
+            container_kind: format!("Unknown ({})", header.format_type),
+            error: Some(format!("formato BtWg '{}' no soportado", header.format_type)),
+            ..BwPresetPreview::default()
+        },
+    }
+}
+
+/// Serializa una especificación de preset de dispositivo / rack / Grid a bytes `.bwpreset` (`BtWg00030002`).
+pub fn serialize_bwpreset_bytes(spec: &BwPresetExportSpec) -> Vec<u8> {
+    let mut meta = BtWgWriter::new();
+    meta.begin_obj(4);
+    meta.raw_str("meta");
+    meta.named_field_str("device_name", &spec.device_name);
+    meta.named_field_str("preset_name", &spec.preset_name);
+    meta.named_field_str(
+        "creator",
+        if spec.creator.trim().is_empty() {
+            "Hikaru OpenLive"
+        } else {
+            &spec.creator
+        },
+    );
+    meta.named_field_str(
+        "preset_category",
+        if spec.category.trim().is_empty() {
+            "Hikaru Preset"
+        } else {
+            &spec.category
+        },
+    );
+    if !spec.comment.trim().is_empty() {
+        meta.named_field_str("comment", &spec.comment);
+    }
+    meta.end_obj();
+    let meta_bytes = meta.into_bytes();
+
+    let mut body = BtWgWriter::new();
+    body.begin_obj(0x0010);
+    body.field_str(0x01, &spec.device_name);
+    body.field_str(0x02, &spec.preset_name);
+
+    // Parámetros del dispositivo (cada parámetro en su propio subobjeto nombre + f64)
+    if spec.params.is_empty() {
+        body.field_empty_obj_list(0x10);
+    } else {
+        body.field_obj_list_start(0x10);
+        for (pname, pval) in &spec.params {
+            body.begin_obj(0x0500);
+            body.field_str(0x01, pname);
+            body.field_f64(0x02, *pval);
+            body.end_obj();
+        }
+        body.obj_list_end();
+    }
+
+    // Grafo OpenGrid (si aplica): nodos + cables con `Ref` 1-based DFS
+    if let Some(grid) = &spec.grid {
+        if grid.nodes.is_empty() {
+            body.field_empty_obj_list(0x20);
+        } else {
+            body.field_obj_list_start(0x20);
+            let mut node_to_obj: BTreeMap<u32, u32> = BTreeMap::new();
+            for node in &grid.nodes {
+                let obj_id = body.begin_obj(0x0900);
+                node_to_obj.insert(node.id, obj_id);
+                body.field_str(0x01, &node.kind);
+                for (pidx, pv) in node.params.iter().enumerate() {
+                    body.field_f64((0x10 + pidx) as u32, *pv as f64);
+                }
+                for cable in &grid.cables {
+                    if cable.to_node == node.id {
+                        if let Some(&src_obj_id) = node_to_obj.get(&cable.from_node) {
+                            body.field_ref(0x03, src_obj_id);
+                        }
+                    }
+                }
+                body.end_obj();
+            }
+            body.obj_list_end();
+        }
+    }
+
+    // Moduladores y rutas de modulación `0x1a`
+    if !spec.modulators.slots.is_empty() {
+        body.field_obj_list_start(0x30);
+        for mslot in &spec.modulators.slots {
+            let mod_obj_id = body.begin_obj(0x0700);
+            body.field_str(0x01, &mslot.kind);
+            if !mslot.routes.is_empty() {
+                body.field_obj_list_start(0x1a);
+                for route in &mslot.routes {
+                    body.begin_obj(0x0710);
+                    body.field_obj_key_ref(0x02, mod_obj_id, &route.target);
+                    body.field_f64(0x05, route.amount as f64);
+                    body.end_obj();
+                }
+                body.obj_list_end();
+            }
+            body.end_obj();
+        }
+        body.obj_list_end();
+    }
+
+    // Etiquetas de controles remotos / macros
+    if !spec.remote_labels.is_empty() {
+        body.field_obj_list_start(0x40);
+        for (slot_idx, label) in &spec.remote_labels {
+            body.begin_obj(0x0800);
+            body.field_i32(0x01, *slot_idx as i32);
+            body.field_str(0x02, label);
+            body.end_obj();
+        }
+        body.obj_list_end();
+    }
+
+    body.end_obj();
+    let body_bytes = body.into_bytes();
+
+    // Header estándar BtWg00030002 (43 bytes con '\n' + meta + body)
+    let header_len = 43usize;
+    let body_offset = header_len + meta_bytes.len();
+    let header = format!("BtWg0003000200ba{body_offset:08x}000000000000000000\n");
+    let mut out = Vec::with_capacity(body_offset + body_bytes.len());
+    out.extend_from_slice(header.as_bytes());
+    out.extend_from_slice(&meta_bytes);
+    out.extend_from_slice(&body_bytes);
+    out
+}
+
+/// Exporta una especificación a un archivo `.bwpreset` en disco.
+pub fn export_bwpreset_file(spec: &BwPresetExportSpec, path: &Path) -> Result<(), String> {
+    let bytes = serialize_bwpreset_bytes(spec);
+    fs::write(path, bytes)
+        .map_err(|err| format!("no se pudo escribir '{}': {err}", path.display()))
 }
 
 #[cfg(test)]
@@ -1400,6 +1874,83 @@ mod tests {
             } => assert_eq!(hikaru_slot_name, "OpenGrid"),
             _ => panic!("Poly Grid debe mapearse a OpenGrid"),
         }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bpr05_exporta_descubre_y_previsualiza_bwpreset_roundtrip() {
+        let mut grid = OpenGridParams::default();
+        grid.preset_name = "Acid Lead".to_string();
+        grid.nodes = vec![
+            OpenGridNodeData {
+                id: 1,
+                kind: "Wavetable".to_string(),
+                pos: [120.0, 90.0],
+                params: [0.4, 0.0, 0.0, 0.0, 0.0, 0.0],
+                bypassed: false,
+            },
+            OpenGridNodeData {
+                id: 2,
+                kind: "Filter".to_string(),
+                pos: [280.0, 90.0],
+                params: [0.75, 0.25, 0.0, 0.0, 0.0, 0.0],
+                bypassed: false,
+            },
+        ];
+        grid.cables = vec![OpenGridCableData {
+            from_node: 1,
+            from_port: 0,
+            to_node: 2,
+            to_port: 0,
+        }];
+
+        let spec = BwPresetExportSpec {
+            device_name: "Poly Grid".to_string(),
+            preset_name: "Acid Lead".to_string(),
+            creator: "Hikaru OpenLive".to_string(),
+            category: "Synth".to_string(),
+            comment: "Exported from test".to_string(),
+            params: vec![("GAIN".to_string(), 0.75), ("CUTOFF".to_string(), 0.62)],
+            modulators: DeviceModulatorBayParams {
+                open: true,
+                slots: vec![ModulatorSlotParams {
+                    kind: "Macro".to_string(),
+                    routes: vec![ModulatorRouteParams {
+                        target: "cutoff".to_string(),
+                        amount: 0.45,
+                        out_idx: 0,
+                    }],
+                    ..ModulatorSlotParams::default()
+                }],
+            },
+            grid: Some(grid),
+            remote_labels: vec![(0, "Cutoff".to_string())],
+        };
+
+        let dir = std::env::temp_dir().join(format!("hikaru_bpr05_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("crea temp dir");
+        let preset_path = dir.join("Acid Lead.bwpreset");
+
+        export_bwpreset_file(&spec, &preset_path).expect("exporta .bwpreset");
+
+        let discovered = discover_bitwig_presets(Some(&dir));
+        let found = discovered
+            .iter()
+            .find(|p| p.path == preset_path)
+            .expect("bwpreset visible en discover_bitwig_presets");
+        assert_eq!(found.file_kind, ".bwpreset");
+        assert_eq!(found.device_name, "Poly Grid");
+        assert!(found.is_grid);
+
+        let preview = inspect_bwpreset_preview(&preset_path);
+        assert!(preview.error.is_none(), "preview error: {:?}", preview.error);
+        assert_eq!(preview.device_name, "Poly Grid");
+        assert_eq!(preview.preset_name, "Acid Lead");
+        assert_eq!(preview.modulator_count, 1);
+        assert_eq!(preview.grid_node_count, 2);
+        assert_eq!(preview.grid_cable_count, 1);
 
         let _ = fs::remove_dir_all(&dir);
     }

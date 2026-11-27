@@ -15,6 +15,9 @@ use hikaru_plugin_host::{PluginDescriptor, PluginFormat, PluginKind};
 
 use crate::app::AppState;
 use crate::audio_proxy::GuiCommand;
+use crate::project::bwdevice_shim::{
+    discover_bitwig_presets, inspect_bwpreset_preview, AvailableBitwigPreset, BwPresetPreview,
+};
 use crate::theme;
 use crate::ui::fonts;
 use crate::ui::icons;
@@ -151,6 +154,7 @@ pub enum BrowserPayload {
     External(PluginDescriptor),
     Modulator { kind: ModulatorKind },
     Wavetable(WavetableSource),
+    BitwigPreset(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +189,8 @@ pub struct PopupBrowserState {
     pub focus_search: bool,
     pub wavetable_catalog: Vec<AvailableWavetable>,
     pub wavetable_preview_cache: Option<(String, Arc<OpenPolyWavetableData>)>,
+    pub bitwig_preset_catalog: Vec<AvailableBitwigPreset>,
+    pub bitwig_preset_preview_cache: Option<(String, BwPresetPreview)>,
 }
 
 impl Default for PopupBrowserState {
@@ -203,11 +209,18 @@ impl Default for PopupBrowserState {
             focus_search: false,
             wavetable_catalog: Vec::new(),
             wavetable_preview_cache: None,
+            bitwig_preset_catalog: Vec::new(),
+            bitwig_preset_preview_cache: None,
         }
     }
 }
 
 impl PopupBrowserState {
+    fn refresh_bitwig_presets(&mut self) {
+        self.bitwig_preset_catalog = discover_bitwig_presets(None);
+        self.bitwig_preset_preview_cache = None;
+    }
+
     pub fn open_new_instrument(&mut self) {
         self.open = true;
         self.mode = BrowserTargetMode::NewInstrumentTrack;
@@ -217,6 +230,7 @@ impl PopupBrowserState {
         self.search_query.clear();
         self.selected_item_idx = 0;
         self.focus_search = true;
+        self.refresh_bitwig_presets();
     }
 
     pub fn open_insert_device(&mut self, track_idx: usize) {
@@ -228,6 +242,7 @@ impl PopupBrowserState {
         self.search_query.clear();
         self.selected_item_idx = 0;
         self.focus_search = true;
+        self.refresh_bitwig_presets();
     }
 
     pub fn open_insert_wet_fx(&mut self, track_idx: usize, parent_slot_idx: usize) {
@@ -242,6 +257,7 @@ impl PopupBrowserState {
         self.search_query.clear();
         self.selected_item_idx = 0;
         self.focus_search = true;
+        self.refresh_bitwig_presets();
     }
 
     pub fn open_insert_modulator(&mut self, track_idx: usize, slot_idx: usize) {
@@ -257,6 +273,7 @@ impl PopupBrowserState {
         self.search_query.clear();
         self.selected_item_idx = 0;
         self.focus_search = true;
+        self.refresh_bitwig_presets();
     }
 
     pub fn open_select_wavetable(
@@ -316,6 +333,48 @@ fn build_wavetable_items(catalog: &[AvailableWavetable]) -> Vec<BrowserItem> {
                 quick: Some(QuickInstrumentFilter::Synth),
                 badge_color: INST_YELLOW,
                 payload: BrowserPayload::Wavetable(wt.source.clone()),
+            }
+        })
+        .collect()
+}
+
+fn build_bitwig_preset_items(
+    catalog: &[AvailableBitwigPreset],
+    modulators_only: bool,
+) -> Vec<BrowserItem> {
+    catalog
+        .iter()
+        .filter(|p| if modulators_only { p.is_modulator } else { !p.is_modulator })
+        .map(|p| {
+            let (rail, badge_color, quick) = if p.is_modulator {
+                (
+                    BrowserRailTab::NoteFx,
+                    MOD_ARROW_CYAN,
+                    Some(QuickInstrumentFilter::Modulation),
+                )
+            } else if p.is_fx {
+                (BrowserRailTab::AudioFx, FX_ORANGE, None)
+            } else {
+                (
+                    BrowserRailTab::Instruments,
+                    INST_YELLOW,
+                    Some(QuickInstrumentFilter::Synth),
+                )
+            };
+            BrowserItem {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                category: p.category.clone(),
+                creator: p.creator.clone(),
+                location: p.location.clone(),
+                file_kind: p.file_kind.clone(),
+                device_type: p.device_name.clone(),
+                tags: p.tags.clone(),
+                description: p.description.clone(),
+                rail,
+                quick,
+                badge_color,
+                payload: BrowserPayload::BitwigPreset(p.path.clone()),
             }
         })
         .collect()
@@ -772,9 +831,58 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 slot.external = Some(desc.clone());
                 slot
             }
-            BrowserPayload::Modulator { .. } | BrowserPayload::Wavetable(_) => DspSlot::default(),
+            BrowserPayload::Modulator { .. }
+            | BrowserPayload::Wavetable(_)
+            | BrowserPayload::BitwigPreset(_) => DspSlot::default(),
         }
     };
+
+    if let BrowserPayload::BitwigPreset(path) = &item.payload {
+        match state.popup_browser.mode {
+            BrowserTargetMode::NewInstrumentTrack => {
+                state.matrix_state.add_track();
+                state.audio_proxy.send(GuiCommand::AddTrack);
+                let new_idx = state.matrix_state.tracks.len();
+                let mut tr = Track::new(new_idx, item.name.clone(), false);
+                tr.matrix_idx = Some(new_idx - 1);
+                if let Some(last) = state.matrix_state.tracks.last_mut() {
+                    last.name = item.name.clone();
+                }
+                state.live_tracks.push(tr.clone());
+                state.studio_tracks.push(tr);
+                let mixer_idx = state.current_tracks().len().saturating_sub(1);
+                state.selected_track_index = mixer_idx;
+                state.selected_fx_index = None;
+                crate::views::dsp_rack::load_device_preset_from_path(state, mixer_idx, path);
+                state.show_dsp_rack = true;
+            }
+            BrowserTargetMode::InsertDevice { track_idx } => {
+                crate::views::dsp_rack::load_device_preset_from_path(state, track_idx, path);
+                state.selected_track_index = track_idx;
+                state.show_dsp_rack = true;
+            }
+            BrowserTargetMode::InsertModulator {
+                track_idx,
+                slot_idx,
+            } => {
+                if crate::project::bwmodulator_shim::is_bwmodulator_file(path) {
+                    if let Ok(translation) =
+                        crate::project::bwmodulator_shim::load_bwmodulator_file(path, None)
+                    {
+                        crate::project::bwmodulator_shim::instantiate_bwmodulator_in_bay(
+                            track_idx,
+                            slot_idx,
+                            &translation,
+                        );
+                        state.project_dirty = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        state.popup_browser.open = false;
+        return;
+    }
 
     match state.popup_browser.mode {
         BrowserTargetMode::NewInstrumentTrack => {
@@ -995,11 +1103,25 @@ pub fn render(ctx: &Context, state: &mut AppState) {
     dim_painter.rect_filled(screen, 0.0, Color32::from_black_alpha(70));
 
     let all_items = match state.popup_browser.mode {
-        BrowserTargetMode::InsertModulator { .. } => build_modulator_items(),
+        BrowserTargetMode::InsertModulator { .. } => {
+            let mut items = build_modulator_items();
+            items.extend(build_bitwig_preset_items(
+                &state.popup_browser.bitwig_preset_catalog,
+                true,
+            ));
+            items
+        }
         BrowserTargetMode::SelectWavetable { .. } => {
             build_wavetable_items(&state.popup_browser.wavetable_catalog)
         }
-        _ => build_catalog_items(&state.plugin_settings_state.discovered_plugins),
+        _ => {
+            let mut items = build_catalog_items(&state.plugin_settings_state.discovered_plugins);
+            items.extend(build_bitwig_preset_items(
+                &state.popup_browser.bitwig_preset_catalog,
+                false,
+            ));
+            items
+        }
     };
 
     // Filter by rail + favorites + quick filter
@@ -1717,7 +1839,25 @@ pub fn render(ctx: &Context, state: &mut AppState) {
 
             if let Some(sel_item) = filtered_items.get(state.popup_browser.selected_item_idx) {
                 let mut wt_preview: Option<Arc<OpenPolyWavetableData>> = None;
-                if let BrowserPayload::Wavetable(source) = &sel_item.payload {
+                let mut bw_preview: Option<BwPresetPreview> = None;
+                if let BrowserPayload::BitwigPreset(path) = &sel_item.payload {
+                    let needs_load = state
+                        .popup_browser
+                        .bitwig_preset_preview_cache
+                        .as_ref()
+                        .is_none_or(|(id, _)| id != &sel_item.id);
+                    if needs_load {
+                        let preview = inspect_bwpreset_preview(path);
+                        state.popup_browser.bitwig_preset_preview_cache =
+                            Some((sel_item.id.clone(), preview));
+                    }
+                    bw_preview = state
+                        .popup_browser
+                        .bitwig_preset_preview_cache
+                        .as_ref()
+                        .filter(|(id, _)| id == &sel_item.id)
+                        .map(|(_, p)| p.clone());
+                } else if let BrowserPayload::Wavetable(source) = &sel_item.payload {
                     let needs_load = state
                         .popup_browser
                         .wavetable_preview_cache
@@ -1813,6 +1953,55 @@ pub fn render(ctx: &Context, state: &mut AppState) {
                                     .font(fonts::regular(9.5))
                                     .color(theme::TEXT_MUTED),
                             );
+                        } else if let Some(bw) = bw_preview {
+                            let (icon_r, _) =
+                                ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+                            paint_device_badge(ui.painter(), icon_r, sel_item);
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&bw.preset_name)
+                                    .font(fonts::semibold(12.0))
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                RichText::new(format!("{} · {}", bw.device_name, sel_item.file_kind))
+                                    .font(fonts::regular(10.0))
+                                    .color(sel_item.badge_color),
+                            );
+                            ui.label(
+                                RichText::new(format!("{} · {}", bw.creator, bw.category))
+                                    .font(fonts::regular(9.5))
+                                    .color(theme::TEXT_MUTED),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} params · {} mods",
+                                    bw.param_count, bw.modulator_count
+                                ))
+                                .font(fonts::regular(9.5))
+                                .color(Color32::from_rgb(0x9E, 0xD2, 0xFF)),
+                            );
+                            if bw.grid_node_count > 0 {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Grid: {} nodes · {} cables",
+                                        bw.grid_node_count, bw.grid_cable_count
+                                    ))
+                                    .font(fonts::regular(9.5))
+                                    .color(INST_YELLOW),
+                                );
+                            }
+                            if !bw.sample_params.is_empty() {
+                                ui.add_space(4.0);
+                                for (pname, pval) in bw.sample_params.iter().take(4) {
+                                    ui.label(
+                                        RichText::new(format!("{}: {:.0}%", pname, pval * 100.0))
+                                            .font(fonts::regular(9.0))
+                                            .color(Color32::from_rgb(0xB4, 0xB8, 0xC0)),
+                                    );
+                                }
+                            }
                         } else {
                             let (icon_r, _) =
                                 ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());

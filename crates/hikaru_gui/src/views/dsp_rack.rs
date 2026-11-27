@@ -274,13 +274,197 @@ pub fn save_device_chain_dialog(app: &AppState, track_idx: usize) {
     }
 }
 
+pub fn build_bwpreset_export_spec(
+    slot: &crate::views::mixer::DspSlot,
+    track_idx: usize,
+    slot_idx: usize,
+) -> crate::project::bwdevice_shim::BwPresetExportSpec {
+    let mut params = Vec::new();
+    if let Some(poly) = &slot.open_poly {
+        params.push(("CUTOFF".to_string(), ((poly.filter_cutoff_hz - 20.0) / 19980.0).clamp(0.0, 1.0) as f64));
+        params.push(("RESONANCE".to_string(), poly.filter_resonance as f64));
+        params.push(("DRIVE".to_string(), poly.filter_drive as f64));
+        params.push(("OUTPUT".to_string(), poly.output_gain as f64));
+        params.push(("WIDTH".to_string(), poly.stereo_width as f64));
+        params.push(("SUB_LEVEL".to_string(), poly.sub_level as f64));
+        params.push(("NOISE_LEVEL".to_string(), poly.noise_level as f64));
+    }
+    for p in &slot.cached_params {
+        params.push((p.info.name.clone(), p.value as f64));
+    }
+
+    let grid = slot.open_grid.as_ref().map(|g| g.to_project_params());
+    let modulators =
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::capture_bay_params(
+            track_idx,
+            slot_idx,
+            slot.modulators_open,
+        )
+        .unwrap_or_default();
+
+    let remote_labels = slot
+        .remotes
+        .pages
+        .first()
+        .map(|page| {
+            page.slots
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| {
+                    s.custom_label
+                        .as_ref()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(|l| (i, l.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let device_name = if slot.is_open_grid() {
+        "Poly Grid".to_string()
+    } else if slot.is_open_poly() {
+        "Polymer".to_string()
+    } else {
+        slot.name.clone()
+    };
+
+    let preset_name = if slot.preset_name.trim().is_empty() || slot.preset_name == "init" {
+        slot.name.clone()
+    } else {
+        slot.preset_name.clone()
+    };
+
+    crate::project::bwdevice_shim::BwPresetExportSpec {
+        device_name,
+        preset_name,
+        creator: format!("Hikaru OpenLive {}", crate::version::VERSION),
+        category: if slot.is_open_grid() {
+            "The Grid".to_string()
+        } else if slot.is_open_poly() {
+            "Synth".to_string()
+        } else {
+            "Audio FX".to_string()
+        },
+        comment: format!("Exported from Hikaru OpenLive slot '{}'", slot.name),
+        params,
+        modulators,
+        grid,
+        remote_labels,
+    }
+}
+
+pub fn export_device_bwpreset_dialog(app: &AppState, track_idx: usize, slot_idx: usize) {
+    let Some(track) = app.current_tracks().get(track_idx) else { return };
+    let Some(slot) = track.effects.get(slot_idx) else { return };
+    let default_name = format!("{}.bwpreset", slot.name.to_lowercase().replace(' ', "_"));
+    if let Some(path) = rfd::FileDialog::new()
+        .set_file_name(&default_name)
+        .add_filter("Bitwig Preset (*.bwpreset)", &["bwpreset"])
+        .save_file()
+    {
+        let spec = build_bwpreset_export_spec(slot, track_idx, slot_idx);
+        let _ = crate::project::bwdevice_shim::export_bwpreset_file(&spec, &path);
+    }
+}
+
 pub fn load_device_chain_dialog(app: &mut AppState, track_idx: usize) {
     if let Some(path) = rfd::FileDialog::new()
-        .add_filter(hikaru_project_file::HDP_FILE_FILTER, &[hikaru_project_file::HDP_EXTENSION])
+        .add_filter(
+            "Presets (Hikaru .hdp / Bitwig .bwpreset, .bwdevice)",
+            &[hikaru_project_file::HDP_EXTENSION, "bwpreset", "bwdevice", "bwmodulator"],
+        )
         .pick_file()
     {
         load_device_preset_from_path(app, track_idx, &path);
     }
+}
+
+fn apply_open_poly_translated_params(
+    poly: &mut crate::views::hikaru_native_plugins::hikaru_openpoly::HikaruOpenPoly,
+    params: &std::collections::BTreeMap<String, crate::project::bwdevice_shim::TranslatedParam>,
+) {
+    for (k, tp) in params {
+        let low = k.to_ascii_lowercase();
+        let v = tp.normalized.clamp(0.0, 1.0);
+        if low.contains("cutoff") || low == "freq" {
+            poly.filter_cutoff_hz = 20.0 + v * 19980.0;
+        } else if low.contains("reso") {
+            poly.filter_resonance = v;
+        } else if low.contains("drive") {
+            poly.filter_drive = v;
+        } else if low.contains("sub") {
+            poly.sub_level = v;
+        } else if low.contains("noise") {
+            poly.noise_level = v;
+        } else if low.contains("width") {
+            poly.stereo_width = v;
+        } else if low.contains("output") || low == "gain" || low == "mix" {
+            poly.output_gain = v;
+        } else if low.contains("attack") {
+            poly.amp_attack_ms = 1.0 + v * 2000.0;
+        } else if low.contains("decay") {
+            poly.amp_decay_ms = 5.0 + v * 3000.0;
+        } else if low.contains("sustain") {
+            poly.amp_sustain = v;
+        } else if low.contains("release") {
+            poly.amp_release_ms = 5.0 + v * 4000.0;
+        }
+    }
+    poly.params_rev = poly.params_rev.wrapping_add(1);
+}
+
+fn slot_from_bw_node(
+    node: &crate::project::bwdevice_shim::BwDeviceNode,
+    preset_stem: &str,
+    grid_patch: Option<&hikaru_project_file::OpenGridParams>,
+) -> crate::views::mixer::DspSlot {
+    let (slot_name, params_opt, macro_mappings) = match &node.translation {
+        crate::project::bwdevice_shim::BwDeviceTranslation::Builtin {
+            hikaru_slot_name,
+            params,
+            macro_mappings,
+            ..
+        } => (hikaru_slot_name.clone(), Some(params), macro_mappings.as_slice()),
+        crate::project::bwdevice_shim::BwDeviceTranslation::Placeholder(p) => (
+            format!("{} (Read-Only)", p.bitwig_name),
+            None,
+            p.macro_mappings.as_slice(),
+        ),
+    };
+
+    let mut slot = crate::views::mixer::DspSlot::new(0, slot_name);
+    slot.preset_name = preset_stem.to_string();
+    slot.modulators_open = !node.modulators.slots.is_empty() || node.modulators.open;
+
+    if let Some(params) = params_opt {
+        if slot.is_open_poly() {
+            apply_open_poly_translated_params(slot.open_poly_mut(), params);
+            slot.open_poly_mut().preset_name = preset_stem.to_string();
+        }
+    }
+    if slot.is_open_grid() {
+        if let Some(gp) = grid_patch {
+            slot.open_grid_mut().apply_project_params(gp);
+            slot.open_grid_mut().preset_name = preset_stem.to_string();
+        }
+    }
+
+    if let Some(page) = slot.remotes.pages.first_mut() {
+        for m in macro_mappings {
+            if let Some(rslot) = page.slots.get_mut(m.slot_index) {
+                rslot.custom_label = Some(m.param_name.clone());
+            }
+        }
+    }
+
+    for chain in &node.nested_chains {
+        for child_node in &chain.devices {
+            slot.wet_fx_chain
+                .push(slot_from_bw_node(child_node, preset_stem, None));
+        }
+    }
+
+    slot
 }
 
 pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: &std::path::Path) {
@@ -306,12 +490,54 @@ pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: 
         return;
     }
 
-    if hikaru_mcp_port::is_supported_bitwig_artifact(path) {
+    if crate::project::bwdevice_shim::is_bitwig_browser_artifact(path) {
         let _ = hikaru_mcp_port::record_bitwig_drop(path, "dsp-rack-load");
         let fallback_stem = path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("Bitwig Device");
+            .unwrap_or("Bitwig Preset");
+
+        if let Ok(node) = crate::project::bwdevice_shim::load_bitwig_browser_item(path, None) {
+            let grid_patch = std::fs::read(path).ok().and_then(|bytes| {
+                let doc = crate::project::btwg_reader::BtWgReader::parse_document(&bytes).ok()?;
+                Some(crate::project::bwdevice_shim::translate_grid_patch(&doc))
+            });
+
+            let new_slot = slot_from_bw_node(&node, fallback_stem, grid_patch.as_ref());
+            let slot_name = new_slot.name.clone();
+            let mut inserted_slot = None;
+            if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+                let idx = track.effects.len();
+                track.effects.push(new_slot);
+                app.selected_slot_index = idx;
+                inserted_slot = Some(idx);
+            }
+            if let Some(slot_idx) = inserted_slot {
+                crate::views::hikaru_native_plugins::hikaru_openmodulation::restore_bay_params(
+                    track_idx,
+                    slot_idx,
+                    &node.modulators,
+                );
+                if crate::views::hikaru_native_plugins::hikaru_opencomb::is_opencomb_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_openphaser_plus::is_openphaser_plus_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_openflanger_plus::is_openflanger_plus_name(&slot_name)
+                    || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
+                {
+                    if let Some(et_idx) = track_idx.checked_sub(1) {
+                        app.audio_proxy.send(crate::audio_proxy::GuiCommand::LoadNativeEffect {
+                            track_idx: et_idx,
+                            slot_idx,
+                            name: slot_name,
+                        });
+                    }
+                }
+                app.project_dirty = true;
+            }
+            return;
+        }
+
         let inspected = hikaru_mcp_port::bitwig::inspect_file(path, None).ok();
         let bw_name = inspected
             .as_ref()
@@ -2323,12 +2549,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                     .color(theme::ACCENT_ORANGE),
                             );
                             ui.separator();
-                            if ui.button("📂 Cargar Preset / Cadena (*.hdp)...").clicked() {
+                            if ui.button("📂 Cargar Preset (.hdp / .bwpreset / .bwdevice)...").clicked() {
                                 load_device_chain_dialog(app, track_idx);
                                 ui.close_menu();
                             }
                             if ui.button("💾 Guardar Cadena de Pista (*.hdp)...").clicked() {
                                 save_device_chain_dialog(app, track_idx);
+                                ui.close_menu();
+                            }
+                            if ui.button("💾 Exportar Dispositivo (.bwpreset)...").clicked() {
+                                let slot_idx = app.selected_slot_index;
+                                export_device_bwpreset_dialog(app, track_idx, slot_idx);
                                 ui.close_menu();
                             }
                         });
