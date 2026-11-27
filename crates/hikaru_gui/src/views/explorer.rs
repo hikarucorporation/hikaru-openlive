@@ -521,7 +521,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         tr.effects.push(slot);
                                         state.selected_slot_index = new_slot_idx;
                                         state.show_dsp_rack = true;
-                                        if plugin.name == "Hikaru Ultracomb"
+                                        if crate::views::hikaru_native_plugins::hikaru_opencomb::is_opencomb_name(plugin.name)
                                             || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(plugin.name)
                                             || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(plugin.name)
                                             || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(plugin.name)

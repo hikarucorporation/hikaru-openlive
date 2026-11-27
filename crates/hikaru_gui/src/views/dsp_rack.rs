@@ -15,6 +15,9 @@ use crate::views::hikaru_native_plugins::hikaru_opengrid::{
     self, OPEN_GRID_COMPACT_CARD_WIDTH,
 };
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{self, MODULATION_CARD_WIDTH};
+use crate::views::hikaru_native_plugins::hikaru_opencomb::{
+    self, OPENCOMB_CARD_WIDTH, OPENCOMB_WET_CARD_WIDTH,
+};
 use crate::views::hikaru_native_plugins::hikaru_openflanger_plus::{
     self, OPEN_FLANGER_PLUS_CARD_WIDTH, OPEN_FLANGER_PLUS_WET_CARD_WIDTH,
 };
@@ -65,8 +68,8 @@ pub const PLUGIN_CATALOG: [PluginEntry; 19] = [
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Hikaru Ultracomb",
-        label: "Hikaru Ultracomb Filter",
+        name: "Hikaru OpenComb",
+        label: "Hikaru OpenComb",
     },
     PluginEntry {
         category: "Audio FX",
@@ -210,6 +213,7 @@ pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize)
     hikaru_freq_shifter_plus::clear_slot_state(track_idx, slot_idx);
     hikaru_openphaser_plus::clear_slot_state(track_idx, slot_idx);
     hikaru_openflanger_plus::clear_slot_state(track_idx, slot_idx);
+    hikaru_opencomb::clear_slot_state(track_idx, slot_idx);
     let wkey = crate::views::external_plugins_settings::slot_window_key(track_idx, slot_idx);
     app.plugin_settings_state.close_window(&wkey);
     for wet_idx in 0..removed.wet_fx_chain.len() {
@@ -220,10 +224,7 @@ pub fn remove_device_slot(app: &mut AppState, track_idx: usize, slot_idx: usize)
     }
 
     if removed.external.is_some()
-        || matches!(
-            removed.name.as_str(),
-            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
-        )
+        || hikaru_opencomb::is_opencomb_name(&removed.name)
         || hikaru_bit8::is_bit8_name(&removed.name)
         || hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&removed.name)
         || hikaru_openphaser_plus::is_openphaser_plus_name(&removed.name)
@@ -603,11 +604,8 @@ fn wet_fx_nested_card_width(wet_slot: &crate::views::mixer::DspSlot) -> f32 {
         OPEN_PHASER_PLUS_WET_CARD_WIDTH
     } else if hikaru_openflanger_plus::is_openflanger_plus_name(&wet_slot.name) {
         OPEN_FLANGER_PLUS_WET_CARD_WIDTH
-    } else if matches!(
-        wet_slot.name.as_str(),
-        "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
-    ) {
-        crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH
+    } else if hikaru_opencomb::is_opencomb_name(&wet_slot.name) {
+        OPENCOMB_WET_CARD_WIDTH
     } else {
         220.0
     }
@@ -890,11 +888,8 @@ fn render_bit8_wet_fx_chain(
                 parent_slot_idx,
                 wet_idx,
             );
-        } else if matches!(
-            wet_slot.name.as_str(),
-            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb"
-        ) {
-            crate::views::hikaru_native_plugins::hikaru_ultracomb::ultracomb::render_wet_fx_module(
+        } else if hikaru_opencomb::is_opencomb_name(&wet_slot.name) {
+            hikaru_opencomb::render_wet_fx_module(
                 &mut body_ui,
                 app,
                 track_idx,
@@ -941,11 +936,7 @@ fn render_bit8_wet_fx_chain(
         );
         hikaru_openphaser_plus::remove_wet_fx_slot_state(track_idx, parent_slot_idx, rem_idx);
         hikaru_openflanger_plus::remove_wet_fx_slot_state(track_idx, parent_slot_idx, rem_idx);
-        crate::views::hikaru_native_plugins::hikaru_ultracomb::ultracomb::remove_wet_fx_slot_state(
-            track_idx,
-            parent_slot_idx,
-            rem_idx,
-        );
+        hikaru_opencomb::remove_wet_fx_slot_state(track_idx, parent_slot_idx, rem_idx);
         if let Some(et_idx) = track_idx.checked_sub(1) {
             app.audio_proxy
                 .send(crate::audio_proxy::GuiCommand::RemoveBit8WetFx {
@@ -1127,7 +1118,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
                                 "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
                                 "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
-                                "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => crate::views::hikaru_native_plugins::ULTRACOMB_CARD_WIDTH,
+                                name if hikaru_opencomb::is_opencomb_name(name) => OPENCOMB_CARD_WIDTH,
                                 name if hikaru_bit8::is_bit8_name(name) => {
                                     hikaru_bit8::card_width_for_slot(track_idx, slot_idx)
                                 }
@@ -1977,13 +1968,61 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         slot_idx,
                                     );
                                 }
-                                "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
-                                    crate::views::hikaru_native_plugins::hikaru_ultracomb::render_module(
-                                        &mut body_ui,
-                                        app,
-                                        track_idx,
-                                        slot_idx,
+                                name if hikaru_opencomb::is_opencomb_name(name) => {
+                                    let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                                    let sb_out = render_bitwig_device_sidebar(
+                                        ui,
+                                        sb_rect,
+                                        ("oc_sb", track_idx, slot_idx),
+                                        "OPENCOMB",
+                                        slot.active,
+                                        is_selected,
                                     );
+                                    if sb_out.toggled_power {
+                                        let mut new_active = None;
+                                        if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                            if let Some(s) = t.effects.get_mut(slot_idx) {
+                                                s.active = !s.active;
+                                                new_active = Some(s.active);
+                                            }
+                                        }
+                                        if let (Some(et_idx), Some(active)) = (track_idx.checked_sub(1), new_active) {
+                                            app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginActive {
+                                                track_idx: et_idx,
+                                                slot_idx,
+                                                active,
+                                            });
+                                        }
+                                    }
+                                    if sb_out.clicked_title {
+                                        app.selected_slot_index = slot_idx;
+                                        app.matrix_state.selected_scene = None;
+                                    }
+                                    let preset_popup_id = ui.id().with(("oc_preset_popup", track_idx, slot_idx));
+                                    if sb_out.clicked_folder {
+                                        ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
+                                    }
+                                    egui::popup_below_widget(
+                                        ui,
+                                        preset_popup_id,
+                                        &sb_out.folder_resp,
+                                        egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        |ui| {
+                                            hikaru_opencomb::render_preset_menu(ui, app, track_idx, slot_idx);
+                                        },
+                                    );
+
+                                    let oc_body_rect = Rect::from_min_max(
+                                        pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
+                                        pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                                    );
+                                    let mut oc_body_ui = ui.new_child(
+                                        egui::UiBuilder::new()
+                                            .max_rect(oc_body_rect)
+                                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                                    );
+                                    oc_body_ui.set_clip_rect(oc_body_rect.intersect(ui.clip_rect()));
+                                    hikaru_opencomb::render_module(&mut oc_body_ui, app, track_idx, slot_idx);
                                 }
                                 name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
                                     crate::views::hikaru_native_plugins::hikaru_tier_s_fx::render_module(

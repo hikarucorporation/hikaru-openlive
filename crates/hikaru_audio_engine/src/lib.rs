@@ -2536,9 +2536,13 @@ impl<'a> AudioEngine<'a> {
     > {
         let mut bit8_telemetry = None;
         let instance: Box<dyn PluginInstance> = match name {
-            "Hikaru Ultracomb" | "Hikaru Ultracomb Filter" | "Ultracomb" => {
-                Box::new(hikaru_dsp::effects::UltracombFilter::new(sample_rate))
-            }
+            "Hikaru OpenComb"
+            | "OpenComb"
+            | "Comb"
+            | "Hikaru Comb"
+            | "Hikaru Ultracomb"
+            | "Hikaru Ultracomb Filter"
+            | "Ultracomb" => Box::new(hikaru_dsp::effects::OpenCombFilter::new(sample_rate)),
             "Tool" | "Hikaru Tool" => {
                 Box::new(hikaru_dsp::effects::ToolEffect::new(sample_rate))
             }
@@ -3004,7 +3008,7 @@ impl<'a> AudioEngine<'a> {
                 node.set_param_normalized(param_id, value);
             } else if let Some(node) = self.track_effects[track_idx]
                 .iter_mut()
-                .find(|n| n.name == "Hikaru Ultracomb")
+                .find(|n| n.name == "Hikaru OpenComb" || n.name == "Hikaru Ultracomb")
             {
                 node.set_param_normalized(param_id, value);
             }

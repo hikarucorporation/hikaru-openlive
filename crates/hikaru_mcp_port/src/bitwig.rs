@@ -526,7 +526,7 @@ pub fn compatibility_registry() -> &'static [BwCompatibilityEntry] {
             category: "Audio FX",
             topology: "audio_to_audio",
             hikaru_crate: "hikaru_dsp",
-            hikaru_module: "crates/hikaru_dsp/src/effects/ultracomb.rs",
+            hikaru_module: "crates/hikaru_dsp/src/effects/opencomb.rs",
             implementation_status: "builtin_ready",
         },
         BwCompatibilityEntry {
@@ -1154,7 +1154,7 @@ mod tests {
         );
         assert_eq!(
             parsed["compatibilidad_hikaru"]["hikaru_module"],
-            "crates/hikaru_dsp/src/effects/ultracomb.rs"
+            "crates/hikaru_dsp/src/effects/opencomb.rs"
         );
 
         let params = parsed["contrato_publico"]["parametros_publicos"]
@@ -1191,7 +1191,7 @@ mod tests {
         assert_eq!(info["nombre_inferido"], "Comb");
         assert_eq!(
             info["compatibilidad_hikaru"]["hikaru_module"],
-            "crates/hikaru_dsp/src/effects/ultracomb.rs"
+            "crates/hikaru_dsp/src/effects/opencomb.rs"
         );
         assert_eq!(
             info["default_bwpreset_publico"]["contrato_publico"]["meta"]["device_name"],

@@ -4,7 +4,7 @@ pub mod dc_offset;
 pub mod dual_pan;
 pub mod filter;
 pub mod freq_shifter_plus;
-pub mod ultracomb;
+pub mod opencomb;
 pub mod phaser;
 pub mod phaser_plus;
 pub mod flanger;
@@ -58,7 +58,11 @@ pub use freq_shifter_plus::{
     FSP_PARAM_SHIFT_NORM, FSP_PARAM_SHIFT_UNIT, FSP_PARAM_STEREO_TWIST, FSP_PARAM_WET_GAIN_DB,
     FSP_PARAM_WIDTH,
 };
-pub use ultracomb::{CombFilter, UltracombFilter, UltracombParams};
+pub use opencomb::{
+    format_freq_label, freq_hz_to_note_label, OpenCombFilter, OpenCombParams,
+    OPENCOMB_DEFAULT_FREQ_HZ, OPENCOMB_MAX_FREQ_HZ, OPENCOMB_MIN_FREQ_HZ, OPENCOMB_PARAM_COUNT,
+    OPENCOMB_PARAM_FEEDBACK, OPENCOMB_PARAM_FREQ, OPENCOMB_PARAM_MIX,
+};
 pub use phaser::Phaser;
 pub use phaser_plus::{
     PhaserPlusEffect, PhaserPlusMode, PhaserPlusParams, PHASER_PLUS_MAX_SPEED_HZ,

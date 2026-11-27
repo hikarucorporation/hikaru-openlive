@@ -315,11 +315,11 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 FX_ORANGE,
                 "Multi-stage spectral phaser with stereo spread and feedback control.",
             ),
-            "Hikaru Ultracomb" => (
+            "Hikaru OpenComb" | "Hikaru Ultracomb" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
-                "Resonant comb filter and stereo delay resonator.",
+                "Clean stereo comb filter with bipolar feedback, XY frequency pad, and mix.",
             ),
             "Tool" => (
                 BrowserRailTab::AudioFx,
@@ -725,7 +725,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                     });
                 }
                 state.request_external_params(&desc);
-            } else if slot_name == "Hikaru Ultracomb"
+            } else if crate::views::hikaru_native_plugins::hikaru_opencomb::is_opencomb_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(&slot_name)
@@ -768,7 +768,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                         });
                     }
                     state.request_external_params(&desc);
-                } else if slot_name == "Hikaru Ultracomb"
+                } else if crate::views::hikaru_native_plugins::hikaru_opencomb::is_opencomb_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot_name)
                 || crate::views::hikaru_native_plugins::hikaru_openphaser_plus::is_openphaser_plus_name(&slot_name)
@@ -828,7 +828,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                         });
                     }
                     state.request_external_params(&desc);
-                } else if slot_name == "Hikaru Ultracomb"
+                } else if crate::views::hikaru_native_plugins::hikaru_opencomb::is_opencomb_name(&slot_name)
                     || crate::views::hikaru_native_plugins::hikaru_bit8::is_bit8_name(&slot_name)
                     || crate::views::hikaru_native_plugins::hikaru_freq_shifter_plus::is_freq_shifter_plus_name(&slot_name)
                     || crate::views::hikaru_native_plugins::hikaru_openphaser_plus::is_openphaser_plus_name(&slot_name)
