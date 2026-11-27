@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 339,
+    "done": 342,
     "in_progress": 15,
-    "planned": 371,
+    "planned": 368,
     "bugs": 1,
     "parity_percent": 47
   },
@@ -4047,17 +4047,20 @@
         {
           "id": "bmod-01",
           "name": "BtWg00030004 modulator container & UUID resolver (.bwmodulator)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/btwg_reader.rs"
         },
         {
           "id": "bmod-02",
           "name": "Modulator parameter schema & Default.bwpreset mapping",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwmodulator_shim.rs"
         },
         {
           "id": "bmod-03",
           "name": "Equivalent Hikaru modulator instantiation",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwmodulator_shim.rs"
         }
       ]
     },

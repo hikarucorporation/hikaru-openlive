@@ -237,6 +237,17 @@ pub struct BwDeviceMetadata {
     pub companion_preset: Option<BtWgDocument>,
 }
 
+/// Resultado de abrir un `.bwmodulator` en modo *clean-room* (sin tocar su payload protegido).
+#[derive(Debug, Clone)]
+pub struct BwModulatorMetadata {
+    pub header: BtWgHeader,
+    pub file_name: String,
+    pub modulator_stem: String,
+    pub resolved_uuid: Option<String>,
+    pub companion_preset_path: Option<PathBuf>,
+    pub companion_preset: Option<BtWgDocument>,
+}
+
 /// Lector binario secuencial de contenedores `BtWg00030002`.
 pub struct BtWgReader<'a> {
     data: &'a [u8],
@@ -337,6 +348,52 @@ impl<'a> BtWgReader<'a> {
             header,
             file_name,
             device_stem,
+            companion_preset_path,
+            companion_preset,
+        })
+    }
+
+    /// Identifica un `.bwmodulator` (`BtWg00030004`) de forma *clean-room*, resuelve su UUID
+    /// público desde el preset compañero (si existe) y expone su contrato inicial.
+    pub fn inspect_bwmodulator_file(
+        path: &Path,
+        library_dir: Option<&Path>,
+    ) -> Result<BwModulatorMetadata, String> {
+        let bytes = fs::read(path)
+            .map_err(|err| format!("no se pudo leer '{}': {err}", path.display()))?;
+        let header = BtWgHeader::parse(&bytes)?;
+        if header.kind() != BtWgContainerKind::ProtectedDevice {
+            return Err(format!(
+                "se esperaba contenedor BtWg tipo '0004' (.bwmodulator), se encontró '{}'",
+                header.format_type
+            ));
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown.bwmodulator")
+            .to_string();
+        let modulator_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let companion_preset_path = find_companion_preset(path, &modulator_stem, library_dir);
+        let companion_preset = companion_preset_path
+            .as_ref()
+            .and_then(|p| fs::read(p).ok())
+            .and_then(|b| Self::parse_document(&b).ok());
+        let resolved_uuid = companion_preset
+            .as_ref()
+            .and_then(|doc| doc.device_id().map(ToOwned::to_owned));
+
+        Ok(BwModulatorMetadata {
+            header,
+            file_name,
+            modulator_stem,
+            resolved_uuid,
             companion_preset_path,
             companion_preset,
         })

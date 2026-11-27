@@ -284,6 +284,28 @@ pub fn load_device_chain_dialog(app: &mut AppState, track_idx: usize) {
 }
 
 pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: &std::path::Path) {
+    if crate::project::bwmodulator_shim::is_bwmodulator_file(path) {
+        if let Ok(translation) =
+            crate::project::bwmodulator_shim::load_bwmodulator_file(path, None)
+        {
+            let slot_idx = app
+                .current_tracks()
+                .get(track_idx)
+                .and_then(|t| {
+                    (!t.effects.is_empty())
+                        .then(|| app.selected_slot_index.min(t.effects.len() - 1))
+                })
+                .unwrap_or(0);
+            crate::project::bwmodulator_shim::instantiate_bwmodulator_in_bay(
+                track_idx,
+                slot_idx,
+                &translation,
+            );
+            let _ = hikaru_mcp_port::record_bitwig_drop(path, "dsp-rack-modulator-load");
+        }
+        return;
+    }
+
     if hikaru_mcp_port::is_supported_bitwig_artifact(path) {
         let _ = hikaru_mcp_port::record_bitwig_drop(path, "dsp-rack-load");
         let fallback_stem = path

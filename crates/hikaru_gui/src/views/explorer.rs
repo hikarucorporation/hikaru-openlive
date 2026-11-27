@@ -58,7 +58,10 @@ pub fn is_supported_file(path: &PathBuf) -> bool {
 pub fn is_preset_file(path: &PathBuf) -> bool {
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
-        matches!(ext_str.as_str(), "hdp" | "bwdevice" | "bwpreset")
+        matches!(
+            ext_str.as_str(),
+            "hdp" | "bwdevice" | "bwpreset" | "bwmodulator"
+        )
     } else {
         false
     }
