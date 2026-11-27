@@ -27,6 +27,7 @@ pub struct ExplorerEntry {
     pub is_midi: bool,
     pub is_preset: bool,
     pub is_bwclip: bool,
+    pub is_bwextension: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,11 +54,19 @@ pub fn default_start_path() -> PathBuf {
 }
 
 pub fn is_supported_file(path: &PathBuf) -> bool {
-    is_audio_file(path) || is_midi_file(path) || is_preset_file(path) || is_bwclip_file(path)
+    is_audio_file(path)
+        || is_midi_file(path)
+        || is_preset_file(path)
+        || is_bwclip_file(path)
+        || is_bwextension_file(path)
 }
 
 pub fn is_bwclip_file(path: &PathBuf) -> bool {
     crate::project::bwclip::is_bwclip_file(path)
+}
+
+pub fn is_bwextension_file(path: &PathBuf) -> bool {
+    crate::project::bwextension_shim::is_bwextension_file(path)
 }
 
 pub fn is_preset_file(path: &PathBuf) -> bool {
@@ -188,11 +197,13 @@ impl FileExplorerState {
                         is_midi: false,
                         is_preset: false,
                         is_bwclip: false,
+                        is_bwextension: false,
                     });
                 } else if is_supported_file(&path) {
                     let is_midi = is_midi_file(&path);
                     let is_preset = is_preset_file(&path);
                     let is_bwclip = is_bwclip_file(&path);
+                    let is_bwextension = is_bwextension_file(&path);
                     files.push(ExplorerEntry {
                         name: name.to_string(),
                         path,
@@ -200,6 +211,7 @@ impl FileExplorerState {
                         is_midi,
                         is_preset,
                         is_bwclip,
+                        is_bwextension,
                     });
                 }
             }
@@ -704,6 +716,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                     BrowserBadgeKind::DeviceNote,
                                     Color32::from_rgb(0x4C, 0xC9, 0xF0),
                                 )
+                            } else if entry.is_bwextension {
+                                (
+                                    BrowserBadgeKind::DeviceNote,
+                                    Color32::from_rgb(0xA7, 0x8B, 0xFA),
+                                )
                             } else if entry.is_midi {
                                 (
                                     BrowserBadgeKind::DeviceNote,
@@ -985,6 +1002,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             speed: state.explorer_state.current_speed(project_bpm),
                         });
                     }
+                }
+            } else if is_bwextension_file(&path) {
+                state.explorer_state.selected_file = Some(path.clone());
+                state.explorer_state.cached_waveform.clear();
+                let _ = hikaru_mcp_port::record_bitwig_drop(&path, "explorer-select");
+                if let Ok(report) =
+                    crate::project::bwextension_shim::inspect_bwextension_file(&path)
+                {
+                    crate::project::bwextension_shim::apply_bwextension_to_app(state, &report);
                 }
             } else if hikaru_mcp_port::is_supported_bitwig_artifact(&path) {
                 state.explorer_state.selected_file = Some(path.clone());

@@ -1385,6 +1385,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwmodulator" => Some(".bwmodulator"),
         "bwremotecontrols" => Some(".bwremotecontrols"),
         "bwclip" => Some(".bwclip"),
+        "bwextension" => Some(".bwextension"),
         _ => None,
     }
 }
@@ -1507,6 +1508,26 @@ fn scan_bitwig_preset_dir(
                     }
                 }
             }
+        } else if file_kind == ".bwextension" {
+            category = "Controller Extension".to_string();
+            if let Ok(report) = crate::project::bwextension_shim::inspect_bwextension_file(&path) {
+                device_name = report.manifest.title.clone();
+                creator = report.manifest.vendor.clone();
+                if let Some(profile) = report.matched_profile {
+                    if !tags.contains(&profile.vendor.to_string()) {
+                        tags.push(profile.vendor.to_string());
+                    }
+                    if profile.pad_grid.is_some() && !tags.contains(&"Pads".to_string()) {
+                        tags.push("Pads".to_string());
+                    }
+                    if profile.encoders > 0 && !tags.contains(&"Encoders".to_string()) {
+                        tags.push("Encoders".to_string());
+                    }
+                }
+                if !tags.contains(&"Controller".to_string()) {
+                    tags.push("Controller".to_string());
+                }
+            }
         }
 
         if let Some(compat) = lookup_compat_target(Some(&device_name), None) {
@@ -1574,12 +1595,27 @@ pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigP
         ));
         candidates.push((home.join("Music/Bitwig Studio/Presets"), "User Presets"));
         candidates.push((home.join("Music/Bitwig Studio/Clips"), "User Clips"));
+        candidates.push((home.join("Bitwig Studio/Extensions"), "User Extensions"));
+        candidates.push((
+            home.join("Documents/Bitwig Studio/Extensions"),
+            "User Extensions",
+        ));
+        candidates.push((
+            home.join("Bitwig Studio/Library/Extensions"),
+            "Bitwig Library",
+        ));
     }
+    candidates.push((
+        PathBuf::from("/opt/bitwig-studio/Library/Extensions"),
+        "Bitwig Library",
+    ));
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push((cwd.join("presets"), "Workspace Presets"));
         candidates.push((cwd.join("assets/presets"), "Workspace Presets"));
         candidates.push((cwd.join("clips"), "Workspace Clips"));
         candidates.push((cwd.join("assets/clips"), "Workspace Clips"));
+        candidates.push((cwd.join("extensions"), "Workspace Extensions"));
+        candidates.push((cwd.join("assets/extensions"), "Workspace Extensions"));
     }
 
     let mut out = Vec::new();
@@ -1599,6 +1635,51 @@ pub fn inspect_bwpreset_preview(path: &Path) -> BwPresetPreview {
         .and_then(|s| s.to_str())
         .unwrap_or("Preset")
         .to_string();
+
+    if crate::project::bwextension_shim::is_bwextension_file(path) {
+        return match crate::project::bwextension_shim::inspect_bwextension_file(path) {
+            Ok(report) => {
+                let mut sample_params = vec![
+                    ("Encoders".to_string(), report.surface_mapping.encoders as f32),
+                    ("Faders".to_string(), report.surface_mapping.faders as f32),
+                    (
+                        "Base CC".to_string(),
+                        report.surface_mapping.cc_bank_base as f32,
+                    ),
+                    (
+                        "Classes".to_string(),
+                        report.manifest.class_count as f32,
+                    ),
+                ];
+                if let Some((cols, rows)) = report.surface_mapping.pad_grid {
+                    sample_params.push(("Pads".to_string(), (cols as f32) * (rows as f32)));
+                }
+                BwPresetPreview {
+                    device_name: report
+                        .matched_profile
+                        .map(|p| p.model_family.to_string())
+                        .unwrap_or_else(|| report.manifest.vendor.clone()),
+                    preset_name: report.manifest.title.clone(),
+                    creator: report.manifest.vendor.clone(),
+                    category: "Controller Extension".to_string(),
+                    container_kind: "Bitwig Extension (.bwextension)".to_string(),
+                    param_count: report.surface_mapping.bindings.len(),
+                    sample_params,
+                    modulator_count: report.manifest.extension_classes.len(),
+                    modulator_kinds: report.manifest.extension_classes.clone(),
+                    grid_node_count: 0,
+                    grid_cable_count: 0,
+                    error: None,
+                }
+            }
+            Err(err) => BwPresetPreview {
+                preset_name: stem,
+                container_kind: "Bitwig Extension (.bwextension)".to_string(),
+                error: Some(err),
+                ..BwPresetPreview::default()
+            },
+        };
+    }
 
     if crate::project::bwclip::is_bwclip_file(path) {
         return match crate::project::bwclip::load_bwclip_file(path) {
@@ -2452,6 +2533,38 @@ mod tests {
             .expect(".bwremotecontrols visible en discover_bitwig_presets");
         assert_eq!(found.file_kind, ".bwremotecontrols");
         assert_eq!(found.category, "Remote Controls");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bex_descubre_e_inspecciona_bwextension_en_browser() {
+        let dir = std::env::temp_dir().join(format!("hikaru_bex_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("crea temp dir");
+        let ext_path = dir.join("LaunchpadProMk3.bwextension");
+        let zip = crate::project::bwextension_shim::build_synthetic_bwextension_zip(
+            "Launchpad Pro Mk3",
+            "Novation",
+            "2.1.0",
+            &["com.bitwig.extensions.controllers.novation.launchpad_pro_mk3.LaunchpadProMk3ExtensionDefinition"],
+        );
+        fs::write(&ext_path, zip).expect("escribe .bwextension");
+
+        let discovered = discover_bitwig_presets(Some(&dir));
+        let found = discovered
+            .iter()
+            .find(|p| p.path == ext_path)
+            .expect(".bwextension visible en discover_bitwig_presets");
+        assert_eq!(found.file_kind, ".bwextension");
+        assert_eq!(found.category, "Controller Extension");
+        assert_eq!(found.creator, "Novation");
+
+        let preview = inspect_bwpreset_preview(&ext_path);
+        assert!(preview.error.is_none(), "preview error: {:?}", preview.error);
+        assert_eq!(preview.preset_name, "Launchpad Pro Mk3");
+        assert_eq!(preview.container_kind, "Bitwig Extension (.bwextension)");
+        assert!(preview.param_count > 0);
 
         let _ = fs::remove_dir_all(&dir);
     }

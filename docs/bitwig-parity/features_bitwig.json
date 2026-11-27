@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 354,
+    "done": 357,
     "in_progress": 15,
-    "planned": 356,
+    "planned": 353,
     "bugs": 1,
     "parity_percent": 49
   },
@@ -4128,17 +4128,20 @@
         {
           "id": "bex-01",
           "name": "Extension archive & manifest inspector (.bwextension)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwextension_shim.rs"
         },
         {
           "id": "bex-02",
           "name": "Controller surface & MIDI mapping bridge",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwextension_shim.rs"
         },
         {
           "id": "bex-03",
           "name": "Built-in vendor controller profile parity",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwextension_shim.rs"
         }
       ]
     },
