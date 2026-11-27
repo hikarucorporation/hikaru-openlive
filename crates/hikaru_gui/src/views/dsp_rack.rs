@@ -448,7 +448,7 @@ fn render_bitwig_device_sidebar(
     let fld_r = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 32.0), vec2(13.0, 13.0));
     let fld_resp = ui
         .interact(fld_r, ui.id().with((id_salt, "fld")), Sense::click())
-        .on_hover_text("Presets & Wavetable (.wav / .hdp)");
+        .on_hover_text("Presets & Wavetable (.wav / .wt / .hdp)");
     icons::paint_icon(
         ui.painter(),
         fld_r,

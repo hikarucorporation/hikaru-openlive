@@ -1939,7 +1939,7 @@ pub fn sibling_tables(path: Option<&std::path::PathBuf>) -> Vec<std::path::PathB
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out: Vec<std::path::PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("wav")))
+        .filter(|p| wavetable_io::is_supported_wavetable_extension(p))
         .collect();
     out.sort();
 

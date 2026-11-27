@@ -780,10 +780,7 @@ fn scan_wav_dir(
         }
         if p.is_dir() {
             scan_wav_dir(&p, root_label, depth + 1, max_depth, seen, out, limit);
-        } else if p
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-        {
+        } else if wavetable_io::is_supported_wavetable_extension(&p) {
             let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
             if !seen.insert(canon) {
                 continue;
@@ -792,22 +789,81 @@ fn scan_wav_dir(
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Wavetable".to_string());
+            let ext_upper = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_uppercase())
+                .unwrap_or_else(|| "WAV".to_string());
             let category = p
                 .parent()
                 .and_then(|par| par.file_name())
                 .map(|s| s.to_string_lossy().to_string())
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "User WAV".to_string());
+                .unwrap_or_else(|| format!("User {ext_upper}"));
             out.push(AvailableWavetable {
                 id: format!("wt:file:{}", p.display()),
                 name,
                 category,
                 location: root_label.to_string(),
-                description: format!("WAV wavetable file: {}", p.display()),
+                description: format!("{ext_upper} wavetable file: {}", p.display()),
                 source: WavetableSource::File(p),
             });
         }
     }
+}
+
+fn hikaru_openlive_config_dir() -> Option<std::path::PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.trim().is_empty() {
+            return Some(std::path::PathBuf::from(xdg).join("hikaru-openlive"));
+        }
+    }
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .map(|h| std::path::PathBuf::from(h).join(".config").join("hikaru-openlive"))
+}
+
+fn expand_tilde(raw: &str, home: Option<&Path>) -> std::path::PathBuf {
+    let trimmed = raw.trim();
+    if let Some(h) = home {
+        if trimmed == "~" {
+            return h.to_path_buf();
+        }
+        if let Some(rest) = trimmed.strip_prefix("~/") {
+            return h.join(rest);
+        }
+    }
+    std::path::PathBuf::from(trimmed)
+}
+
+/// Crea `~/.config/hikaru-openlive/` (y `wavetables/` + `wavetable-paths.txt`) si no existen,
+/// y devuelve las rutas configuradas en `wavetable-paths.txt`.
+fn ensure_wavetable_config_dirs(home: Option<&Path>) -> (Option<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    let Some(cfg_dir) = hikaru_openlive_config_dir() else {
+        return (None, Vec::new());
+    };
+    let wt_dir = cfg_dir.join("wavetables");
+    let _ = std::fs::create_dir_all(&wt_dir);
+
+    let paths_file = cfg_dir.join("wavetable-paths.txt");
+    if !paths_file.exists() {
+        let default_contents = "# Directorios adicionales de wavetables (.wav / .wt), uno por línea.\n# Se admite \"~/\" al inicio de la ruta.\n~/.BitwigStudio\n";
+        let _ = std::fs::write(&paths_file, default_contents);
+    }
+
+    let mut extra_paths = Vec::new();
+    if let Ok(contents) = std::fs::read_to_string(&paths_file) {
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            extra_paths.push(expand_tilde(trimmed, home));
+        }
+    }
+
+    (Some(wt_dir), extra_paths)
 }
 
 pub fn discover_available_wavetables(extra_dir: Option<&Path>) -> Vec<AvailableWavetable> {
@@ -872,7 +928,7 @@ pub fn discover_available_wavetables(extra_dir: Option<&Path>) -> Vec<AvailableW
 
     let mut seen = std::collections::HashSet::new();
     let mut disk_items = Vec::new();
-    let limit = 400usize;
+    let limit = 2000usize;
 
     if let Some(dir) = extra_dir {
         scan_wav_dir(dir, "Current Folder", 0, 2, &mut seen, &mut disk_items, limit);
@@ -895,21 +951,42 @@ pub fn discover_available_wavetables(extra_dir: Option<&Path>) -> Vec<AvailableW
         }
     }
 
-    if let Ok(home) = std::env::var("HOME") {
-        let h = std::path::PathBuf::from(home);
+    let home_dir = std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .map(std::path::PathBuf::from);
+    let (config_wt_dir, configured_paths) = ensure_wavetable_config_dirs(home_dir.as_deref());
+
+    if let Some(cfg_wt) = config_wt_dir {
+        scan_wav_dir(&cfg_wt, "Hikaru Library", 0, 4, &mut seen, &mut disk_items, limit);
+    }
+    for cfg_path in configured_paths {
+        let label = if cfg_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case(".BitwigStudio"))
+        {
+            "Bitwig Library"
+        } else {
+            "User Wavetables"
+        };
+        scan_wav_dir(&cfg_path, label, 0, 8, &mut seen, &mut disk_items, limit);
+    }
+
+    if let Some(h) = home_dir {
         let user_dirs = [
-            (h.join("Wavetables"), "User Wavetables"),
-            (h.join("Documentos/Wavetables"), "User Wavetables"),
-            (h.join("Documents/Wavetables"), "User Wavetables"),
-            (h.join("Música/Wavetables"), "User Wavetables"),
-            (h.join("Music/Wavetables"), "User Wavetables"),
-            (h.join(".local/share/hikaru/wavetables"), "Hikaru Library"),
-            (h.join(".config/hikaru/wavetables"), "Hikaru Library"),
-            (h.join("Bitwig Studio/Library/Wavetables"), "Bitwig Library"),
-            (h.join(".local/share/vital"), "Vital Library"),
+            (h.join("Wavetables"), "User Wavetables", 4usize),
+            (h.join("Documentos/Wavetables"), "User Wavetables", 4),
+            (h.join("Documents/Wavetables"), "User Wavetables", 4),
+            (h.join("Música/Wavetables"), "User Wavetables", 4),
+            (h.join("Music/Wavetables"), "User Wavetables", 4),
+            (h.join(".local/share/hikaru/wavetables"), "Hikaru Library", 4),
+            (h.join(".config/hikaru/wavetables"), "Hikaru Library", 4),
+            (h.join("Bitwig Studio/Library/Wavetables"), "Bitwig Library", 4),
+            (h.join(".local/share/vital"), "Vital Library", 4),
         ];
-        for (dir, label) in user_dirs {
-            scan_wav_dir(&dir, label, 0, 4, &mut seen, &mut disk_items, limit);
+        for (dir, label, depth) in user_dirs {
+            scan_wav_dir(&dir, label, 0, depth, &mut seen, &mut disk_items, limit);
         }
     }
 
@@ -928,6 +1005,27 @@ pub fn load_wavetable_from_path(poly: &mut HikaruOpenPoly, path: &Path) -> bool 
             true
         }
         Err(_) => false,
+    }
+}
+
+pub fn export_openpoly_wt(poly: &HikaruOpenPoly) {
+    let stem = poly
+        .table
+        .name
+        .to_lowercase()
+        .replace(' ', "_")
+        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+    let default_name = if stem.is_empty() {
+        "wavetable.wt".to_string()
+    } else {
+        format!("{stem}.wt")
+    };
+    if let Some(path) = rfd::FileDialog::new()
+        .set_file_name(&default_name)
+        .add_filter("Wavetable (*.wt)", &["wt"])
+        .save_file()
+    {
+        let _ = wavetable_io::save_wt_wavetable(&path, &poly.table);
     }
 }
 

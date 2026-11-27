@@ -331,10 +331,16 @@ impl std::error::Error for WavetableError {}
 
 /// Extensiones que se ofrecen al elegir archivo.
 ///
-/// Sólo WAV: los otros formatos (FLAC, AIFF) requieren otro decoder, y
-/// `hound` no los trae. Preferirlo así es mejor que dejar que el diálogo de
-/// archivos ofrezca algo que después no se puede cargar.
-pub const WAVETABLE_EXTENSIONS: [&str; 1] = ["wav"];
+/// Soporta `.wav` (RIFF PCM/Float vía `hound`) y `.wt` (formato binario abierto
+/// `vawt` de Surge / Vember Audio, usado también por Bitwig Studio).
+pub const WAVETABLE_EXTENSIONS: [&str; 2] = ["wav", "wt"];
+
+/// Devuelve `true` si la ruta tiene una extensión de wavetable soportada (`.wav` o `.wt`).
+pub fn is_supported_wavetable_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| WAVETABLE_EXTENSIONS.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed)))
+}
 
 /// El `.wav` de la wavetable inicial, embebido en el binario.
 ///
@@ -380,7 +386,7 @@ pub fn bundled_wavetable(max_frames: usize) -> Result<Wavetable, WavetableError>
     })
 }
 
-/// Carga una wavetable desde un `.wav`.
+/// Carga una wavetable desde un archivo `.wav` o `.wt`.
 ///
 /// `max_frames` recorta archivos con muchos ciclos: un `.wav` de una pista
 /// entera de dos minutos tiene 4 millones de samples y 2000 frames, y 2000
@@ -391,15 +397,159 @@ pub fn load_wavetable(path: &Path, max_frames: usize) -> Result<Wavetable, Wavet
         .map(|stem| stem.to_string_lossy().to_string())
         .unwrap_or_else(|| "Wavetable".to_string());
 
-    let reader = crate::wav_io::open(path).map_err(|error| WavetableError::Open {
-        path: path.to_path_buf(),
-        source: error.to_string(),
-    })?;
+    let is_wt = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("wt"));
 
-    let mut table = decode_reader(reader, max_frames)?;
+    let mut table = if is_wt {
+        let file = std::fs::File::open(path).map_err(|error| WavetableError::Open {
+            path: path.to_path_buf(),
+            source: error.to_string(),
+        })?;
+        decode_wt_reader(std::io::BufReader::new(file), path, max_frames)?
+    } else {
+        let reader = crate::wav_io::open(path).map_err(|error| WavetableError::Open {
+            path: path.to_path_buf(),
+            source: error.to_string(),
+        })?;
+        decode_reader(reader, max_frames)?
+    };
+
     table.name = name;
     table.path = Some(path.to_path_buf());
     Ok(table)
+}
+
+/// Decodifica una wavetable en formato binario abierto `.wt` (`vawt` de Surge / Vember Audio).
+///
+/// Cabecera de 12 bytes en little-endian:
+/// - `0..4`: magic `"vawt"`
+/// - `4..8`: `wave_size` (`u32`, muestras por ciclo)
+/// - `8..10`: `wave_count` (`u16`, cantidad de ciclos/frames)
+/// - `10..12`: `flags` (`u16`: bit `0x04` = `i16` vs `f32`, bit `0x08` = rango completo 16-bit vs 15-bit)
+pub fn decode_wt_reader<R: std::io::Read>(
+    mut reader: R,
+    path: &Path,
+    max_frames: usize,
+) -> Result<Wavetable, WavetableError> {
+    let mut header = [0u8; 12];
+    reader.read_exact(&mut header).map_err(|error| WavetableError::Open {
+        path: path.to_path_buf(),
+        source: format!("no se pudo leer la cabecera .wt: {error}"),
+    })?;
+
+    if &header[0..4] != b"vawt" {
+        return Err(WavetableError::Open {
+            path: path.to_path_buf(),
+            source: "cabecera .wt inválida (se esperaba 'vawt')".to_string(),
+        });
+    }
+
+    let wave_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+    let wave_count = u16::from_le_bytes([header[8], header[9]]) as usize;
+    let flags = u16::from_le_bytes([header[10], header[11]]);
+
+    if wave_size == 0 || wave_count == 0 {
+        return Err(WavetableError::NoSamples { path: path.to_path_buf() });
+    }
+
+    let is_int16 = (flags & 0x04) != 0;
+    let is_full_range_i16 = (flags & 0x08) != 0;
+    let int16_scale = if is_full_range_i16 { 32768.0f32 } else { 16384.0f32 };
+    let bytes_per_sample = if is_int16 { 2usize } else { 4usize };
+
+    let frames = wave_count.min(max_frames.max(1));
+    let frame_byte_len = wave_size
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(|| WavetableError::Open {
+            path: path.to_path_buf(),
+            source: "tamaño de frame .wt fuera de rango".to_string(),
+        })?;
+
+    let mut raw_frame = vec![0u8; frame_byte_len];
+    let mut frame_f32 = vec![0.0f32; wave_size];
+    let mut samples = Vec::with_capacity(frames * FRAME_SAMPLES);
+    let mut total_clipped = 0usize;
+
+    for _ in 0..frames {
+        reader.read_exact(&mut raw_frame).map_err(|error| WavetableError::Open {
+            path: path.to_path_buf(),
+            source: format!("datos .wt truncados: {error}"),
+        })?;
+
+        if is_int16 {
+            for (dst, chunk) in frame_f32.iter_mut().zip(raw_frame.chunks_exact(2)) {
+                let v = i16::from_le_bytes([chunk[0], chunk[1]]);
+                *dst = v as f32 / int16_scale;
+            }
+        } else {
+            for (dst, chunk) in frame_f32.iter_mut().zip(raw_frame.chunks_exact(4)) {
+                *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            }
+        }
+
+        let (norm_frame, clipped) = normalize(&frame_f32, wave_size, FRAME_SAMPLES);
+        total_clipped += clipped;
+        samples.extend_from_slice(&norm_frame);
+    }
+
+    if total_clipped > 0 {
+        eprintln!("[Hikaru] {}: {total_clipped} muestras fuera de rango, recortadas", path.display());
+    }
+
+    Ok(Wavetable {
+        name: String::new(),
+        path: None,
+        samples,
+        frames,
+    })
+}
+
+/// Codifica una [`Wavetable`] al formato binario abierto `.wt` (`vawt` float32).
+///
+/// Usa `flags = 0x0000` (`float32` little-endian) para conservar máxima precisión
+/// sin cuantización de 16 bits, compatible con Bitwig Studio y Surge XT.
+pub fn encode_wt_bytes(table: &Wavetable) -> Result<Vec<u8>, WavetableError> {
+    if table.samples.is_empty() {
+        return Err(WavetableError::NoSamples {
+            path: table
+                .path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(&table.name)),
+        });
+    }
+
+    let frames = table.frames.max(1).min(u16::MAX as usize);
+    let wave_size = FRAME_SAMPLES;
+    let mut out = Vec::with_capacity(12 + frames * wave_size * 4);
+    out.extend_from_slice(b"vawt");
+    out.extend_from_slice(&(wave_size as u32).to_le_bytes());
+    out.extend_from_slice(&(frames as u16).to_le_bytes());
+    out.extend_from_slice(&0x0000u16.to_le_bytes());
+
+    for frame_idx in 0..frames {
+        let frame = table.frame(frame_idx as f32, false);
+        for &sample in &frame {
+            let clean = if sample.is_finite() {
+                sample.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            out.extend_from_slice(&clean.to_le_bytes());
+        }
+    }
+
+    Ok(out)
+}
+
+/// Exporta una [`Wavetable`] a un archivo `.wt` en disco.
+pub fn save_wt_wavetable(path: &Path, table: &Wavetable) -> Result<(), WavetableError> {
+    let bytes = encode_wt_bytes(table)?;
+    std::fs::write(path, bytes).map_err(|error| WavetableError::Open {
+        path: path.to_path_buf(),
+        source: error.to_string(),
+    })
 }
 
 /// Decodifica un `WavReader` ya abierto a una wavetable usable.
@@ -616,5 +766,96 @@ mod tests {
         let table = Wavetable::default_sine();
         assert_eq!(table.frames, 1);
         assert_eq!(table.samples.len(), TABLE_RESOLUTION);
+    }
+
+    fn build_wt_header(wave_size: u32, wave_count: u16, flags: u16) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(12);
+        buf.extend_from_slice(b"vawt");
+        buf.extend_from_slice(&wave_size.to_le_bytes());
+        buf.extend_from_slice(&wave_count.to_le_bytes());
+        buf.extend_from_slice(&flags.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn decodes_wt_int16_full_range_and_resamples_frames() {
+        // 2 frames de 256 samples, flags = 0x0C (int16 + full-range 16-bit)
+        let wave_size = 256usize;
+        let wave_count = 2usize;
+        let mut bytes = build_wt_header(wave_size as u32, wave_count as u16, 0x000C);
+        for frame in 0..wave_count {
+            for i in 0..wave_size {
+                let phase = i as f32 / wave_size as f32;
+                let val = if frame == 0 {
+                    (std::f32::consts::TAU * phase).sin()
+                } else {
+                    2.0 * phase - 1.0
+                };
+                let sample_i16 = (val * 32767.0).round() as i16;
+                bytes.extend_from_slice(&sample_i16.to_le_bytes());
+            }
+        }
+
+        let path = Path::new("test_i16.wt");
+        let table = decode_wt_reader(std::io::Cursor::new(&bytes), path, 256)
+            .expect("debe decodificar .wt int16");
+        assert_eq!(table.frames, 2);
+        assert_eq!(table.samples.len(), 2 * FRAME_SAMPLES);
+        assert!(table.samples.iter().all(|v| v.is_finite() && (-1.0..=1.0).contains(v)));
+        assert!(rms_difference(frame_of(&table, 0), frame_of(&table, 1)) > 0.2);
+    }
+
+    #[test]
+    fn decodes_wt_float32_and_respects_max_frames() {
+        // 4 frames de 128 samples en float32 (flags = 0x0000), recortado a 2 frames
+        let wave_size = 128usize;
+        let wave_count = 4usize;
+        let mut bytes = build_wt_header(wave_size as u32, wave_count as u16, 0x0000);
+        for frame in 0..wave_count {
+            let amp = (frame + 1) as f32 / wave_count as f32;
+            for i in 0..wave_size {
+                let val = amp * (std::f32::consts::TAU * i as f32 / wave_size as f32).sin();
+                bytes.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+
+        let path = Path::new("test_f32.wt");
+        let table = decode_wt_reader(std::io::Cursor::new(&bytes), path, 2)
+            .expect("debe decodificar .wt float32");
+        assert_eq!(table.frames, 2);
+        assert_eq!(table.samples.len(), 2 * FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn rejects_invalid_wt_magic() {
+        let mut bytes = build_wt_header(256, 1, 0x000C);
+        bytes[0..4].copy_from_slice(b"RIFF");
+        let err = decode_wt_reader(std::io::Cursor::new(&bytes), Path::new("bad.wt"), 256)
+            .expect_err("debe rechazar cabecera que no sea vawt");
+        assert!(err.to_string().contains("vawt"));
+    }
+
+    #[test]
+    fn encodes_and_roundtrips_wt_float32() {
+        let original = Wavetable::default_table();
+        let bytes = encode_wt_bytes(&original).expect("debe codificar .wt");
+        assert_eq!(&bytes[0..4], b"vawt");
+        assert_eq!(bytes.len(), 12 + original.frames * FRAME_SAMPLES * 4);
+
+        let decoded = decode_wt_reader(
+            std::io::Cursor::new(&bytes),
+            Path::new("roundtrip.wt"),
+            original.frames,
+        )
+        .expect("debe decodificar el .wt exportado");
+
+        assert_eq!(decoded.frames, original.frames);
+        assert_eq!(decoded.samples.len(), original.samples.len());
+        for frame_idx in 0..original.frames {
+            assert!(
+                rms_difference(frame_of(&original, frame_idx), frame_of(&decoded, frame_idx))
+                    < 1.0e-6
+            );
+        }
     }
 }

@@ -1459,3 +1459,51 @@ fn open_flanger_plus_registers_in_catalog_and_renders_in_dsp_rack() {
         "Hikaru OpenFlanger+ debe sincronizar sus parámetros iniciales al motor (recibidos: {param_updates})"
     );
 }
+
+#[test]
+fn hikaru_openpoly_discovers_and_loads_wt_wavetables() {
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openpoly::{
+        discover_available_wavetables, load_wavetable_from_source,
+    };
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openwavetable::wavetable_io::FRAME_SAMPLES;
+
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "hikaru_wt_test_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    std::fs::create_dir_all(&tmp_dir).expect("crear dir temporal");
+
+    // Crear un .wt válido (2 frames de 256 samples, flags=0x0C i16 full-range)
+    let wt_path = tmp_dir.join("Bitwig Style Test.wt");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"vawt");
+    bytes.extend_from_slice(&256u32.to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&0x000Cu16.to_le_bytes());
+    for frame in 0..2 {
+        for i in 0..256 {
+            let phase = i as f32 / 256.0;
+            let v = if frame == 0 {
+                (std::f32::consts::TAU * phase).sin()
+            } else {
+                2.0 * phase - 1.0
+            };
+            bytes.extend_from_slice(&((v * 32767.0).round() as i16).to_le_bytes());
+        }
+    }
+    std::fs::write(&wt_path, &bytes).expect("escribir .wt temporal");
+
+    let catalog = discover_available_wavetables(Some(&tmp_dir));
+    let found = catalog
+        .iter()
+        .find(|entry| entry.name == "Bitwig Style Test")
+        .expect("discover_available_wavetables debe descubrir archivos .wt");
+
+    let loaded = load_wavetable_from_source(&found.source)
+        .expect("load_wavetable_from_source debe cargar el .wt descubierto");
+    assert_eq!(loaded.frames, 2);
+    assert_eq!(loaded.samples.len(), 2 * FRAME_SAMPLES);
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}

@@ -168,12 +168,12 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .bwextension | 3 | 0 | 0 | 3 | 0 |
 | .bwpackage | 3 | 0 | 0 | 3 | 0 |
 | .multisample | 3 | 0 | 0 | 3 | 0 |
-| .wt | 3 | 0 | 0 | 3 | 0 |
+| .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **725** | **336** | **15** | **374** | **1** |
+| **Total** | **725** | **339** | **15** | **371** | **1** |
 
-Paridad global: **336 / 725 = 46 %**.
+Paridad global: **339 / 725 = 47 %**.
 
 ### Bugs abiertos
 

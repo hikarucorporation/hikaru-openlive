@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 336,
+    "done": 339,
     "in_progress": 15,
-    "planned": 374,
+    "planned": 371,
     "bugs": 1,
-    "parity_percent": 46
+    "parity_percent": 47
   },
   "areas": [
     {
@@ -4185,17 +4185,17 @@
         {
           "id": "bwt-01",
           "name": "Wavetable binary frame parser (.wt)",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "bwt-02",
           "name": "Single-cycle frame extraction & interpolation",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "bwt-03",
           "name": "Hikaru wavetable oscillator & export support",
-          "status": "planned"
+          "status": "done"
         }
       ]
     },

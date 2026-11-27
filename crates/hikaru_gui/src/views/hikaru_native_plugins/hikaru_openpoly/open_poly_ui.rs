@@ -20,7 +20,8 @@ use crate::ui::fonts;
 use crate::views::hikaru_native_plugins::hikaru_openmodulation;
 
 use super::open_poly::{
-    load_openpoly_preset, save_openpoly_preset, HikaruOpenPoly, FACTORY_PRESETS,
+    export_openpoly_wt, load_openpoly_preset, save_openpoly_preset, HikaruOpenPoly,
+    FACTORY_PRESETS,
 };
 
 /// Full width of Hikaru OpenPoly card in DSP Rack (including 22px left sidebar & Modulators strip).
@@ -124,8 +125,18 @@ pub fn render_preset_menu(ui: &mut Ui, app: &mut AppState, track_idx: usize, slo
         }
     }
     ui.separator();
-    if ui.button("Load Wavetable (.wav) from Explorer").clicked() {
+    if ui.button("Load Wavetable (.wav / .wt) from Explorer").clicked() {
         crate::views::explorer::begin_wavetable_pick(app, track_idx, slot_idx);
+        ui.close_menu();
+    }
+    if ui.button("Export Wavetable (*.wt)...").clicked() {
+        if let Some(track) = app.current_tracks().get(track_idx) {
+            if let Some(slot) = track.effects.get(slot_idx) {
+                if let Some(ref poly) = slot.open_poly {
+                    export_openpoly_wt(poly);
+                }
+            }
+        }
         ui.close_menu();
     }
     if ui.button("Save Preset (*.hdp)...").clicked() {
