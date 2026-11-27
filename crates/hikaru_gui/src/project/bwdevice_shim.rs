@@ -349,6 +349,24 @@ pub fn translate_param_for_device(
         ("dual pan", "PAN_L") => Some(("pan_left", ParamRange { min: -100.0, max: 100.0 })),
         ("dual pan", "PAN_R") => Some(("pan_right", ParamRange { min: -100.0, max: 100.0 })),
 
+        ("polymer" | "polysynth", "CUTOFF" | "FILTER_CUTOFF" | "FREQUENCY" | "FREQ") => {
+            Some(("cutoff", ParamRange { min: 20.0, max: 20000.0 }))
+        }
+        ("polymer" | "polysynth", "RESONANCE" | "RESO") => Some(("resonance", ParamRange::UNIT)),
+        ("polymer" | "polysynth", "DRIVE") => Some(("drive", ParamRange::UNIT)),
+        ("polymer" | "polysynth", "OUTPUT" | "GAIN" | "VOLUME") => {
+            Some(("output_gain", ParamRange { min: -60.0, max: 6.0 }))
+        }
+        ("polymer" | "polysynth", "WIDTH") => Some(("width", ParamRange { min: 0.0, max: 200.0 })),
+        ("polymer" | "polysynth", "SUB_LEVEL" | "SUB") => Some(("sub_level", ParamRange::UNIT)),
+        ("polymer" | "polysynth", "NOISE_LEVEL" | "NOISE") => {
+            Some(("noise_level", ParamRange::UNIT))
+        }
+        ("polymer" | "polysynth", "ATTACK") => Some(("attack", ParamRange::UNIT)),
+        ("polymer" | "polysynth", "DECAY") => Some(("decay", ParamRange::UNIT)),
+        ("polymer" | "polysynth", "SUSTAIN") => Some(("sustain", ParamRange::UNIT)),
+        ("polymer" | "polysynth", "RELEASE") => Some(("release", ParamRange::UNIT)),
+
         _ => None,
     };
 

@@ -384,30 +384,72 @@ fn apply_open_poly_translated_params(
     params: &std::collections::BTreeMap<String, crate::project::bwdevice_shim::TranslatedParam>,
 ) {
     for (k, tp) in params {
-        let low = k.to_ascii_lowercase();
+        let low = k.trim().to_ascii_lowercase();
+        let raw = tp.raw_value;
         let v = tp.normalized.clamp(0.0, 1.0);
-        if low.contains("cutoff") || low == "freq" {
-            poly.filter_cutoff_hz = 20.0 + v * 19980.0;
-        } else if low.contains("reso") {
-            poly.filter_resonance = v;
-        } else if low.contains("drive") {
-            poly.filter_drive = v;
-        } else if low.contains("sub") {
-            poly.sub_level = v;
-        } else if low.contains("noise") {
-            poly.noise_level = v;
-        } else if low.contains("width") {
-            poly.stereo_width = v;
-        } else if low.contains("output") || low == "gain" || low == "mix" {
-            poly.output_gain = v;
-        } else if low.contains("attack") {
-            poly.amp_attack_ms = 1.0 + v * 2000.0;
-        } else if low.contains("decay") {
-            poly.amp_decay_ms = 5.0 + v * 3000.0;
-        } else if low.contains("sustain") {
-            poly.amp_sustain = v;
-        } else if low.contains("release") {
-            poly.amp_release_ms = 5.0 + v * 4000.0;
+        match low.as_str() {
+            "cutoff" | "filter_cutoff" | "freq" | "frequency" => {
+                if (20.0..=20000.0).contains(&raw) {
+                    // Evitar que un parámetro de submódulo (ej. 29 Hz) cierre el filtro principal
+                    poly.filter_cutoff_hz = (raw as f32).clamp(240.0, 20000.0);
+                } else if raw > 0.0 && raw <= 1.0 {
+                    poly.filter_cutoff_hz =
+                        (20.0 * 1000.0_f32.powf(raw as f32)).clamp(240.0, 20000.0);
+                }
+            }
+            "resonance" | "reso" | "filter_resonance" => {
+                if (0.0..=1.0).contains(&raw) {
+                    poly.filter_resonance = v;
+                }
+            }
+            "drive" | "filter_drive" => {
+                if raw >= 0.0 {
+                    poly.filter_drive = v;
+                }
+            }
+            "sub_level" | "sub" => {
+                if (0.0..=1.0).contains(&raw) {
+                    poly.sub_level = v;
+                }
+            }
+            "noise_level" | "noise" => {
+                if (0.0..=1.0).contains(&raw) {
+                    poly.noise_level = v;
+                }
+            }
+            "width" | "stereo_width" => {
+                if raw >= 0.0 {
+                    poly.stereo_width = v;
+                }
+            }
+            "output_gain" | "output" | "gain" | "volume" => {
+                if raw < 0.0 && raw >= -60.0 {
+                    poly.output_gain = 10.0_f32.powf((raw as f32) / 20.0).clamp(0.65, 1.0);
+                } else if raw > 0.0 && raw <= 1.0 {
+                    poly.output_gain = (raw as f32).clamp(0.65, 1.0);
+                }
+            }
+            "attack" | "amp_attack" => {
+                if raw >= 0.0 {
+                    poly.amp_attack_ms = 1.0 + v * 2000.0;
+                }
+            }
+            "decay" | "amp_decay" => {
+                if raw >= 0.0 {
+                    poly.amp_decay_ms = 5.0 + v * 3000.0;
+                }
+            }
+            "sustain" | "amp_sustain" => {
+                if raw > 0.0 && raw <= 1.0 {
+                    poly.amp_sustain = v.clamp(0.35, 1.0);
+                }
+            }
+            "release" | "amp_release" => {
+                if raw >= 0.0 {
+                    poly.amp_release_ms = 5.0 + v * 4000.0;
+                }
+            }
+            _ => {}
         }
     }
     poly.params_rev = poly.params_rev.wrapping_add(1);
