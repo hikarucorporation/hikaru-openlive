@@ -1,6 +1,7 @@
 # Hikaru OpenLive
 
 ![BANNER](/assets/hikaru-openlive-banner-1.png)
+[![As seen on Open Source Alternatives](https://www.opensourcealternatives.to/badge-osa.svg)](https://www.opensourcealternatives.to)
 
 ## 📊 Feature Parity vs Bitwig Studio 5.3.13
 
