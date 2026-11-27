@@ -661,6 +661,128 @@ fn hikaru_openpoly_catalog_presets_roundtrip_and_audio_engine() {
 }
 
 #[test]
+fn hikaru_openpoly_wavetable_click_opens_menu_and_loads_available_wavetables() {
+    use hikaru_gui::app::AppState;
+    use hikaru_gui::audio_proxy::AudioProxy;
+    use hikaru_gui::views::hikaru_native_plugins::hikaru_openpoly::{
+        discover_available_wavetables, load_wavetable_from_source, open_poly_ui,
+    };
+    use hikaru_gui::views::mixer::DspSlot;
+    use hikaru_gui::views::popup_browser::{self, BrowserTargetMode};
+
+    // 1. Discover built-in + disk wavetables and verify every built-in loads cleanly
+    let catalog = discover_available_wavetables(None);
+    assert!(
+        catalog.len() >= 7,
+        "Debe descubrir al menos las 7 wavetables integradas (encontradas={})",
+        catalog.len()
+    );
+    for entry in catalog.iter().take(7) {
+        let loaded = load_wavetable_from_source(&entry.source);
+        assert!(loaded.is_some(), "Debe poder cargar la wavetable '{}'", entry.name);
+        let wt = loaded.unwrap();
+        assert!(!wt.samples.is_empty());
+        assert!(wt.frames >= 1);
+    }
+
+    // 2. Render OpenPoly in egui and click inside the wavetable display area
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let clock = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let level = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let mut app = AppState::new(AudioProxy::new(tx), clock, level, None);
+    let mut slot = DspSlot::new(0, "OpenPoly".to_string());
+    slot.open_poly_mut().modulators_open = false;
+    app.live_tracks[1].effects.push(slot);
+    assert!(!app.popup_browser.open);
+
+    let ctx = egui::Context::default();
+    hikaru_gui::ui::fonts::ensure_installed(&ctx);
+    let click_pos = egui::pos2(60.0, 62.0);
+    // Warm-up frame so egui registers widget hit-test rects before pointer press
+    let raw_warmup = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0))),
+        ..Default::default()
+    };
+    let _ = ctx.run(raw_warmup, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            open_poly_ui::render_module(ui, &mut app, 1, 0);
+        });
+    });
+
+    let mut raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0))),
+        ..Default::default()
+    };
+    raw.events.push(egui::Event::PointerMoved(click_pos));
+    raw.events.push(egui::Event::PointerButton {
+        pos: click_pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            open_poly_ui::render_module(ui, &mut app, 1, 0);
+        });
+    });
+
+    let mut raw_release = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0))),
+        ..Default::default()
+    };
+    raw_release.events.push(egui::Event::PointerMoved(click_pos));
+    raw_release.events.push(egui::Event::PointerButton {
+        pos: click_pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw_release, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            open_poly_ui::render_module(ui, &mut app, 1, 0);
+        });
+    });
+
+    assert!(
+        app.popup_browser.open,
+        "Hacer click dentro del visor wavetable de OpenPoly debe abrir el menú de wavetables"
+    );
+    assert_eq!(
+        app.popup_browser.mode,
+        BrowserTargetMode::SelectWavetable {
+            track_idx: 1,
+            slot_idx: 0,
+        }
+    );
+    assert!(!app.popup_browser.wavetable_catalog.is_empty());
+
+    // 3. Render the wavetable popup browser and confirm selection with Enter
+    app.popup_browser.selected_item_idx = 1; // Standard Four
+    let mut raw_enter = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0))),
+        ..Default::default()
+    };
+    raw_enter.events.push(egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw_enter, |ctx| {
+        popup_browser::render(ctx, &mut app);
+    });
+
+    assert!(!app.popup_browser.open, "Enter debe confirmar la wavetable y cerrar el menú");
+    let chosen_name = app.live_tracks[1].effects[0]
+        .open_poly
+        .as_ref()
+        .map(|p| p.table.name.as_str())
+        .unwrap_or("");
+    assert_eq!(chosen_name, "Standard Four");
+}
+
+#[test]
 fn hikaru_opengrid_rack_card_editor_presets_roundtrip_and_audio_engine() {
     use hikaru_audio_engine::AudioEngine;
     use hikaru_core::{AudioBuffer, SampleRate};

@@ -601,6 +601,326 @@ impl HikaruOpenPoly {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinWavetableKind {
+    BasicShapes,
+    StandardFour,
+    HarmonicSweep,
+    PureSine,
+    PwmSweep,
+    DigitalFm,
+    FormantChoir,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WavetableSource {
+    Builtin(BuiltinWavetableKind),
+    File(std::path::PathBuf),
+}
+
+#[derive(Debug, Clone)]
+pub struct AvailableWavetable {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub location: String,
+    pub description: String,
+    pub source: WavetableSource,
+}
+
+fn synthesize_pwm_sweep() -> Wavetable {
+    let frames = 16usize;
+    let mut samples = Vec::with_capacity(frames * FRAME_SAMPLES);
+    for f in 0..frames {
+        let duty = 0.50 - 0.44 * (f as f32 / (frames - 1) as f32);
+        for i in 0..FRAME_SAMPLES {
+            let p = i as f32 / FRAME_SAMPLES as f32;
+            let mut acc = 0.0f32;
+            for h in 1..=24 {
+                let hf = h as f32;
+                let coeff = (std::f32::consts::PI * hf * duty).sin() / hf;
+                acc += coeff * (std::f32::consts::TAU * hf * p).cos();
+            }
+            samples.push((acc * 1.15).clamp(-1.0, 1.0));
+        }
+    }
+    Wavetable {
+        name: "PWM Sweep".to_string(),
+        path: None,
+        samples,
+        frames,
+    }
+}
+
+fn synthesize_digital_fm() -> Wavetable {
+    let frames = 16usize;
+    let mut samples = Vec::with_capacity(frames * FRAME_SAMPLES);
+    for f in 0..frames {
+        let mod_idx = 3.8 * (f as f32 / (frames - 1) as f32);
+        for i in 0..FRAME_SAMPLES {
+            let p = i as f32 / FRAME_SAMPLES as f32;
+            let mod_sig = (std::f32::consts::TAU * 2.0 * p).sin();
+            let v = (std::f32::consts::TAU * p + mod_idx * mod_sig).sin();
+            samples.push(v.clamp(-1.0, 1.0));
+        }
+    }
+    Wavetable {
+        name: "Digital FM".to_string(),
+        path: None,
+        samples,
+        frames,
+    }
+}
+
+fn synthesize_formant_choir() -> Wavetable {
+    let frames = 16usize;
+    let mut samples = Vec::with_capacity(frames * FRAME_SAMPLES);
+    let formants: [(f32, f32); 4] = [(3.0, 7.0), (4.0, 11.0), (5.0, 9.0), (2.0, 6.0)];
+    for f in 0..frames {
+        let t = f as f32 / (frames - 1) as f32;
+        let seg = t * (formants.len() - 1) as f32;
+        let i0 = (seg.floor() as usize).min(formants.len() - 1);
+        let i1 = (i0 + 1).min(formants.len() - 1);
+        let frac = seg - i0 as f32;
+        let f1 = formants[i0].0 + (formants[i1].0 - formants[i0].0) * frac;
+        let f2 = formants[i0].1 + (formants[i1].1 - formants[i0].1) * frac;
+
+        let mut frame = vec![0.0f32; FRAME_SAMPLES];
+        let mut peak = 1.0e-6f32;
+        for (i, out) in frame.iter_mut().enumerate() {
+            let p = i as f32 / FRAME_SAMPLES as f32;
+            let mut acc = 0.0f32;
+            for h in 1..=20 {
+                let hf = h as f32;
+                let w1 = (-((hf - f1) * 0.75).powi(2)).exp();
+                let w2 = 0.7 * (-((hf - f2) * 0.65).powi(2)).exp();
+                let amp = (0.35 / hf) + w1 + w2;
+                acc += amp * (std::f32::consts::TAU * hf * p).sin();
+            }
+            *out = acc;
+            peak = peak.max(acc.abs());
+        }
+        for v in &mut frame {
+            *v = (*v / peak).clamp(-1.0, 1.0);
+        }
+        samples.extend_from_slice(&frame);
+    }
+    Wavetable {
+        name: "Formant Choir".to_string(),
+        path: None,
+        samples,
+        frames,
+    }
+}
+
+pub fn load_wavetable_from_source(source: &WavetableSource) -> Option<Wavetable> {
+    match source {
+        WavetableSource::Builtin(BuiltinWavetableKind::BasicShapes) => {
+            let mut table = wavetable_io::bundled_wavetable(MAX_FRAMES)
+                .unwrap_or_else(|_| Wavetable::default_table());
+            if table.frames <= 1 {
+                table = Wavetable::default_table();
+            }
+            table.name = wavetable_io::BUNDLED_WAVETABLE_NAME.to_string();
+            table.path = None;
+            Some(table)
+        }
+        WavetableSource::Builtin(BuiltinWavetableKind::StandardFour) => {
+            let data = OpenPolyWavetableData::standard_four(FRAME_SAMPLES);
+            Some(Wavetable {
+                name: "Standard Four".to_string(),
+                path: None,
+                samples: data.samples,
+                frames: data.frames,
+            })
+        }
+        WavetableSource::Builtin(BuiltinWavetableKind::HarmonicSweep) => {
+            let mut t = Wavetable::default_table();
+            t.name = "Harmonic Sweep".to_string();
+            t.path = None;
+            Some(t)
+        }
+        WavetableSource::Builtin(BuiltinWavetableKind::PureSine) => {
+            let mut t = Wavetable::default_sine();
+            t.name = "Pure Sine".to_string();
+            Some(t)
+        }
+        WavetableSource::Builtin(BuiltinWavetableKind::PwmSweep) => Some(synthesize_pwm_sweep()),
+        WavetableSource::Builtin(BuiltinWavetableKind::DigitalFm) => Some(synthesize_digital_fm()),
+        WavetableSource::Builtin(BuiltinWavetableKind::FormantChoir) => {
+            Some(synthesize_formant_choir())
+        }
+        WavetableSource::File(path) => wavetable_io::load_wavetable(path, MAX_FRAMES).ok(),
+    }
+}
+
+fn scan_wav_dir(
+    dir: &Path,
+    root_label: &str,
+    depth: usize,
+    max_depth: usize,
+    seen: &mut std::collections::HashSet<std::path::PathBuf>,
+    out: &mut Vec<AvailableWavetable>,
+    limit: usize,
+) {
+    if depth > max_depth || out.len() >= limit || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|ent| ent.path()))
+        .collect();
+    paths.sort();
+
+    for p in paths {
+        if out.len() >= limit {
+            break;
+        }
+        if p.is_dir() {
+            scan_wav_dir(&p, root_label, depth + 1, max_depth, seen, out, limit);
+        } else if p
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+        {
+            let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+            if !seen.insert(canon) {
+                continue;
+            }
+            let name = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Wavetable".to_string());
+            let category = p
+                .parent()
+                .and_then(|par| par.file_name())
+                .map(|s| s.to_string_lossy().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "User WAV".to_string());
+            out.push(AvailableWavetable {
+                id: format!("wt:file:{}", p.display()),
+                name,
+                category,
+                location: root_label.to_string(),
+                description: format!("WAV wavetable file: {}", p.display()),
+                source: WavetableSource::File(p),
+            });
+        }
+    }
+}
+
+pub fn discover_available_wavetables(extra_dir: Option<&Path>) -> Vec<AvailableWavetable> {
+    let mut items = vec![
+        AvailableWavetable {
+            id: "wt:builtin:basic_shapes".to_string(),
+            name: wavetable_io::BUNDLED_WAVETABLE_NAME.to_string(),
+            category: "Basic".to_string(),
+            location: "Factory".to_string(),
+            description: "Bundled multi-frame basic shapes wavetable (Sine, Triangle, Saw, Square).".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::BasicShapes),
+        },
+        AvailableWavetable {
+            id: "wt:builtin:standard_four".to_string(),
+            name: "Standard Four".to_string(),
+            category: "Basic".to_string(),
+            location: "Factory".to_string(),
+            description: "Classic 4-frame morphing wavetable: Sine -> Triangle -> Saw -> Square.".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::StandardFour),
+        },
+        AvailableWavetable {
+            id: "wt:builtin:harmonic_sweep".to_string(),
+            name: "Harmonic Sweep".to_string(),
+            category: "Harmonics".to_string(),
+            location: "Factory".to_string(),
+            description: "Additive harmonic sweep from soft fundamental sine to dense sawtooth.".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::HarmonicSweep),
+        },
+        AvailableWavetable {
+            id: "wt:builtin:pure_sine".to_string(),
+            name: "Pure Sine".to_string(),
+            category: "Basic".to_string(),
+            location: "Factory".to_string(),
+            description: "Single-cycle pure sine wave.".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::PureSine),
+        },
+        AvailableWavetable {
+            id: "wt:builtin:pwm_sweep".to_string(),
+            name: "PWM Sweep".to_string(),
+            category: "Analog".to_string(),
+            location: "Factory".to_string(),
+            description: "16-frame band-limited pulse width modulation sweep.".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::PwmSweep),
+        },
+        AvailableWavetable {
+            id: "wt:builtin:digital_fm".to_string(),
+            name: "Digital FM".to_string(),
+            category: "Digital".to_string(),
+            location: "Factory".to_string(),
+            description: "16-frame 2-operator phase modulation sweep.".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::DigitalFm),
+        },
+        AvailableWavetable {
+            id: "wt:builtin:formant_choir".to_string(),
+            name: "Formant Choir".to_string(),
+            category: "Vocal".to_string(),
+            location: "Factory".to_string(),
+            description: "16-frame vowel formant morphing wavetable.".to_string(),
+            source: WavetableSource::Builtin(BuiltinWavetableKind::FormantChoir),
+        },
+    ];
+
+    let mut seen = std::collections::HashSet::new();
+    let mut disk_items = Vec::new();
+    let limit = 400usize;
+
+    if let Some(dir) = extra_dir {
+        scan_wav_dir(dir, "Current Folder", 0, 2, &mut seen, &mut disk_items, limit);
+    }
+
+    let assets_wt = std::path::PathBuf::from("assets/wavetables");
+    scan_wav_dir(&assets_wt, "Project Assets", 0, 2, &mut seen, &mut disk_items, limit);
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            scan_wav_dir(
+                &exe_dir.join("assets/wavetables"),
+                "App Assets",
+                0,
+                2,
+                &mut seen,
+                &mut disk_items,
+                limit,
+            );
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let h = std::path::PathBuf::from(home);
+        let user_dirs = [
+            (h.join("Wavetables"), "User Wavetables"),
+            (h.join("Documentos/Wavetables"), "User Wavetables"),
+            (h.join("Documents/Wavetables"), "User Wavetables"),
+            (h.join("Música/Wavetables"), "User Wavetables"),
+            (h.join("Music/Wavetables"), "User Wavetables"),
+            (h.join(".local/share/hikaru/wavetables"), "Hikaru Library"),
+            (h.join(".config/hikaru/wavetables"), "Hikaru Library"),
+            (h.join("Bitwig Studio/Library/Wavetables"), "Bitwig Library"),
+            (h.join(".local/share/vital"), "Vital Library"),
+        ];
+        for (dir, label) in user_dirs {
+            scan_wav_dir(&dir, label, 0, 4, &mut seen, &mut disk_items, limit);
+        }
+    }
+
+    let sys_bw = Path::new("/opt/bitwig-studio/Library/wavetables");
+    scan_wav_dir(sys_bw, "Bitwig Library", 0, 3, &mut seen, &mut disk_items, limit);
+
+    disk_items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    items.extend(disk_items);
+    items
+}
+
 pub fn load_wavetable_from_path(poly: &mut HikaruOpenPoly, path: &Path) -> bool {
     match wavetable_io::load_wavetable(path, MAX_FRAMES) {
         Ok(table) => {

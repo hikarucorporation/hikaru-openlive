@@ -178,6 +178,7 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
 
     let mut dirty = false;
     let mut request_wav_browser = false;
+    let mut request_wavetable_menu = false;
     let mut request_add_modulator = false;
     let mut request_insert_device = false;
 
@@ -226,6 +227,7 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
         slot_idx,
         &mut dirty,
         &mut request_wav_browser,
+        &mut request_wavetable_menu,
     );
     render_sub_section(ui, sub_rect, &mut poly, &mut dirty, track_idx, slot_idx);
     render_noise_section(ui, noise_rect, &mut poly, &mut dirty, track_idx, slot_idx);
@@ -279,8 +281,8 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
         &mut request_insert_device,
     );
 
-    // Reserve exact bounding area so parent layout stays bounded
-    ui.allocate_rect(avail, Sense::hover());
+    // Reserve exact bounding area so parent layout stays bounded without intercepting clicks
+    ui.advance_cursor_after_rect(avail);
 
     if dirty {
         poly.mark_params_dirty();
@@ -293,6 +295,29 @@ pub fn render_module(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_idx
         }
     }
 
+    if request_wavetable_menu {
+        let (cur_name, extra_dir) = app
+            .current_tracks()
+            .get(track_idx)
+            .and_then(|t| t.effects.get(slot_idx))
+            .and_then(|s| s.open_poly.as_ref())
+            .map(|p| {
+                (
+                    Some(p.table.name.clone()),
+                    p.table
+                        .path
+                        .as_ref()
+                        .and_then(|pt| pt.parent().map(|d| d.to_path_buf())),
+                )
+            })
+            .unwrap_or((None, None));
+        app.popup_browser.open_select_wavetable(
+            track_idx,
+            slot_idx,
+            cur_name.as_deref(),
+            extra_dir,
+        );
+    }
     if request_wav_browser {
         crate::views::explorer::begin_wavetable_pick(app, track_idx, slot_idx);
     }
@@ -314,6 +339,7 @@ fn render_oscillator_section(
     slot_idx: usize,
     dirty: &mut bool,
     request_wav_browser: &mut bool,
+    request_wavetable_menu: &mut bool,
 ) {
     paint_panel(ui, rect, PANEL_BORDER);
     let p = ui.painter().clone();
@@ -415,6 +441,27 @@ fn render_oscillator_section(
     // Middle area: Waveform visual canvas (left) + Index & Fold knobs (right)
     let wave_r = Rect::from_min_size(pos2(rect.min.x + 6.0, hdr_r.max.y + 3.0), vec2(114.0, 68.0));
     paint_osc_display(ui, wave_r, poly, mod_index_delta);
+    if poly.osc_type == OpenPolyOscType::Wavetable {
+        let wave_resp = ui
+            .interact(
+                wave_r,
+                ui.id().with(("poly_wt_display", track_idx, slot_idx)),
+                Sense::click(),
+            )
+            .on_hover_text("Click to choose available wavetable");
+        if wave_resp.hovered() {
+            p.rect_stroke(
+                wave_r,
+                2.5,
+                Stroke::new(1.0_f32, OSC_AMBER),
+                egui::StrokeKind::Inside,
+            );
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        if wave_resp.clicked() {
+            *request_wavetable_menu = true;
+        }
+    }
 
     // Table / Osc subtitle directly under waveform
     let sub_lbl = if poly.osc_type == OpenPolyOscType::Wavetable {

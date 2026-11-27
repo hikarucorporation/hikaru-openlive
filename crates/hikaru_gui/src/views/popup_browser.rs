@@ -3,11 +3,14 @@
 // crates/hikaru_gui/src/views/popup_browser.rs
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use egui::{
     pos2, vec2, Align, Align2, Color32, Context, FontId, Id, Key, Layout, Order, Rect, RichText,
     ScrollArea, Sense, Stroke, TextEdit, UiBuilder,
 };
+use hikaru_dsp::synth::open_poly::{eval_osc_preview, OpenPolyOscType, OpenPolyWavetableData};
 use hikaru_plugin_host::{PluginDescriptor, PluginFormat, PluginKind};
 
 use crate::app::AppState;
@@ -19,6 +22,10 @@ use crate::views::dsp_rack::PLUGIN_CATALOG;
 use crate::views::hikaru_native_plugins::hikaru_openmodulation::{
     self, ModulatorKind, MODULATOR_CATALOG, MOD_ARROW_CYAN,
 };
+use crate::views::hikaru_native_plugins::hikaru_openpoly::{
+    self, AvailableWavetable, WavetableSource,
+};
+use crate::views::hikaru_native_plugins::hikaru_openwavetable::wavetable_io::FRAME_SAMPLES;
 use crate::views::mixer::{DspSlot, Track};
 
 // Bitwig Pop-up Browser palette (matched to Bitwig Studio 5.x)
@@ -50,6 +57,7 @@ pub enum BrowserTargetMode {
     InsertDevice { track_idx: usize },
     InsertModulator { track_idx: usize, slot_idx: usize },
     InsertWetFx { track_idx: usize, parent_slot_idx: usize },
+    SelectWavetable { track_idx: usize, slot_idx: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -142,6 +150,7 @@ pub enum BrowserPayload {
     Native { name: String },
     External(PluginDescriptor),
     Modulator { kind: ModulatorKind },
+    Wavetable(WavetableSource),
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +183,8 @@ pub struct PopupBrowserState {
     pub selected_item_idx: usize,
     pub favorites: HashSet<String>,
     pub focus_search: bool,
+    pub wavetable_catalog: Vec<AvailableWavetable>,
+    pub wavetable_preview_cache: Option<(String, Arc<OpenPolyWavetableData>)>,
 }
 
 impl Default for PopupBrowserState {
@@ -190,6 +201,8 @@ impl Default for PopupBrowserState {
             selected_item_idx: 0,
             favorites: HashSet::new(),
             focus_search: false,
+            wavetable_catalog: Vec::new(),
+            wavetable_preview_cache: None,
         }
     }
 }
@@ -245,6 +258,67 @@ impl PopupBrowserState {
         self.selected_item_idx = 0;
         self.focus_search = true;
     }
+
+    pub fn open_select_wavetable(
+        &mut self,
+        track_idx: usize,
+        slot_idx: usize,
+        current_table_name: Option<&str>,
+        extra_dir: Option<PathBuf>,
+    ) {
+        self.open = true;
+        self.mode = BrowserTargetMode::SelectWavetable {
+            track_idx,
+            slot_idx,
+        };
+        self.active_rail = BrowserRailTab::Everything;
+        self.metadata_tab = MetadataFilterTab::Category;
+        self.quick_filter = None;
+        self.selected_filter_value = None;
+        self.search_query.clear();
+        self.wavetable_catalog =
+            hikaru_openpoly::discover_available_wavetables(extra_dir.as_deref());
+        self.wavetable_preview_cache = None;
+        self.selected_item_idx = current_table_name
+            .and_then(|name| {
+                self.wavetable_catalog
+                    .iter()
+                    .position(|w| w.name.eq_ignore_ascii_case(name))
+            })
+            .unwrap_or(0);
+        self.focus_search = true;
+    }
+}
+
+fn build_wavetable_items(catalog: &[AvailableWavetable]) -> Vec<BrowserItem> {
+    catalog
+        .iter()
+        .map(|wt| {
+            let file_kind = match &wt.source {
+                WavetableSource::Builtin(_) => "Built-in Wavetable".to_string(),
+                WavetableSource::File(_) => "WAV Wavetable".to_string(),
+            };
+            BrowserItem {
+                id: wt.id.clone(),
+                name: wt.name.clone(),
+                category: wt.category.clone(),
+                creator: if matches!(wt.source, WavetableSource::Builtin(_)) {
+                    "Hikaru".to_string()
+                } else {
+                    "User".to_string()
+                },
+                location: wt.location.clone(),
+                file_kind,
+                device_type: "OpenPoly".to_string(),
+                tags: vec![wt.category.clone(), "Wavetable".to_string()],
+                description: wt.description.clone(),
+                rail: BrowserRailTab::Instruments,
+                quick: Some(QuickInstrumentFilter::Synth),
+                badge_color: INST_YELLOW,
+                payload: BrowserPayload::Wavetable(wt.source.clone()),
+            }
+        })
+        .collect()
 }
 
 fn build_modulator_items() -> Vec<BrowserItem> {
@@ -562,6 +636,25 @@ fn paint_piano_badge(painter: &egui::Painter, rect: Rect, bg: Color32) {
 }
 
 fn paint_device_badge(painter: &egui::Painter, rect: Rect, item: &BrowserItem) {
+    if matches!(item.payload, BrowserPayload::Wavetable(_)) {
+        painter.rect_filled(rect, 3.5, Color32::from_rgb(0x28, 0x22, 0x14));
+        painter.rect_stroke(
+            rect,
+            3.5,
+            Stroke::new(1.0_f32, Color32::from_rgb(0x6E, 0x54, 0x1E)),
+            egui::StrokeKind::Inside,
+        );
+        let inner = rect.shrink(rect.width() * 0.16);
+        let pts: Vec<egui::Pos2> = (0..=10)
+            .map(|i| {
+                let t = i as f32 / 10.0;
+                let y = (t * std::f32::consts::TAU).sin() * (inner.height() * 0.38);
+                pos2(inner.min.x + t * inner.width(), inner.center().y - y)
+            })
+            .collect();
+        painter.add(egui::Shape::line(pts, Stroke::new(1.4_f32, INST_YELLOW)));
+        return;
+    }
     match item.rail {
         BrowserRailTab::Instruments => paint_piano_badge(painter, rect, item.badge_color),
         BrowserRailTab::AudioFx => {
@@ -679,7 +772,7 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 slot.external = Some(desc.clone());
                 slot
             }
-            BrowserPayload::Modulator { .. } => DspSlot::default(),
+            BrowserPayload::Modulator { .. } | BrowserPayload::Wavetable(_) => DspSlot::default(),
         }
     };
 
@@ -794,6 +887,21 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
                 state.project_dirty = true;
             }
         }
+        BrowserTargetMode::SelectWavetable {
+            track_idx,
+            slot_idx,
+        } => {
+            if let BrowserPayload::Wavetable(source) = &item.payload {
+                if let Some(table) = hikaru_openpoly::load_wavetable_from_source(source) {
+                    if let Some(track) = state.current_tracks_mut().get_mut(track_idx) {
+                        if let Some(slot) = track.effects.get_mut(slot_idx) {
+                            slot.open_poly_mut().load_wavetable(table);
+                            state.project_dirty = true;
+                        }
+                    }
+                }
+            }
+        }
         BrowserTargetMode::InsertWetFx {
             track_idx,
             parent_slot_idx,
@@ -859,7 +967,10 @@ pub fn render(ctx: &Context, state: &mut AppState) {
     // Auto-scan VST3/CLAP plugins the first time the Pop-up Browser is opened
     if !state.plugin_settings_state.has_scanned_once
         && !state.plugin_settings_state.is_scanning
-        && !matches!(state.popup_browser.mode, BrowserTargetMode::InsertModulator { .. })
+        && !matches!(
+            state.popup_browser.mode,
+            BrowserTargetMode::InsertModulator { .. } | BrowserTargetMode::SelectWavetable { .. }
+        )
     {
         state.plugin_settings_state.start_scan();
     }
@@ -885,6 +996,9 @@ pub fn render(ctx: &Context, state: &mut AppState) {
 
     let all_items = match state.popup_browser.mode {
         BrowserTargetMode::InsertModulator { .. } => build_modulator_items(),
+        BrowserTargetMode::SelectWavetable { .. } => {
+            build_wavetable_items(&state.popup_browser.wavetable_catalog)
+        }
         _ => build_catalog_items(&state.plugin_settings_state.discovered_plugins),
     };
 
@@ -1131,10 +1245,18 @@ pub fn render(ctx: &Context, state: &mut AppState) {
 
                     // Header: "All Instruments" + Favorite Star toggle
                     let (hdr_r, _) = ui.allocate_exact_size(vec2(sb_w, 20.0), Sense::hover());
+                    let header_title = if matches!(
+                        state.popup_browser.mode,
+                        BrowserTargetMode::SelectWavetable { .. }
+                    ) {
+                        "Wavetables"
+                    } else {
+                        state.popup_browser.active_rail.title()
+                    };
                     ui.painter().text(
                         pos2(hdr_r.min.x + 2.0, hdr_r.center().y),
                         Align2::LEFT_CENTER,
-                        state.popup_browser.active_rail.title(),
+                        header_title,
                         fonts::semibold(11.5),
                         Color32::from_rgb(0xDD, 0xE0, 0xE6),
                     );
@@ -1427,11 +1549,19 @@ pub fn render(ctx: &Context, state: &mut AppState) {
                         pos2(sb_rect.min.x + 24.0, sb_rect.min.y + 3.0),
                         pos2(sb_rect.max.x - 24.0, sb_rect.max.y - 2.0),
                     );
+                    let search_hint = if matches!(
+                        state.popup_browser.mode,
+                        BrowserTargetMode::SelectWavetable { .. }
+                    ) {
+                        "Search wavetables..."
+                    } else {
+                        "Search devices & plugins..."
+                    };
                     let te_resp = ui.put(
                         edit_rect,
                         TextEdit::singleline(&mut state.popup_browser.search_query)
                             .frame(false)
-                            .hint_text("Search devices & plugins...")
+                            .hint_text(search_hint)
                             .font(fonts::regular(11.5))
                             .text_color(Color32::from_rgb(0xEC, 0xEE, 0xF2)),
                     );
@@ -1475,8 +1605,16 @@ pub fn render(ctx: &Context, state: &mut AppState) {
                             if filtered_items.is_empty() {
                                 ui.add_space(24.0);
                                 ui.vertical_centered(|ui| {
+                                    let empty_msg = if matches!(
+                                        state.popup_browser.mode,
+                                        BrowserTargetMode::SelectWavetable { .. }
+                                    ) {
+                                        "No matching wavetables"
+                                    } else {
+                                        "No matching instruments or devices"
+                                    };
                                     ui.label(
-                                        RichText::new("No matching instruments or devices")
+                                        RichText::new(empty_msg)
                                             .font(fonts::regular(11.0))
                                             .color(theme::TEXT_MUTED),
                                     );
@@ -1578,29 +1716,122 @@ pub fn render(ctx: &Context, state: &mut AppState) {
             );
 
             if let Some(sel_item) = filtered_items.get(state.popup_browser.selected_item_idx) {
+                let mut wt_preview: Option<Arc<OpenPolyWavetableData>> = None;
+                if let BrowserPayload::Wavetable(source) = &sel_item.payload {
+                    let needs_load = state
+                        .popup_browser
+                        .wavetable_preview_cache
+                        .as_ref()
+                        .is_none_or(|(id, _)| id != &sel_item.id);
+                    if needs_load {
+                        if let Some(table) = hikaru_openpoly::load_wavetable_from_source(source) {
+                            let data = Arc::new(OpenPolyWavetableData::new(
+                                table.samples,
+                                table.frames,
+                                FRAME_SAMPLES,
+                            ));
+                            state.popup_browser.wavetable_preview_cache =
+                                Some((sel_item.id.clone(), data));
+                        } else {
+                            state.popup_browser.wavetable_preview_cache = None;
+                        }
+                    }
+                    wt_preview = state
+                        .popup_browser
+                        .wavetable_preview_cache
+                        .as_ref()
+                        .filter(|(id, _)| id == &sel_item.id)
+                        .map(|(_, data)| data.clone());
+                }
+
                 ui.allocate_new_ui(
                     UiBuilder::new()
                         .max_rect(preview_rect.shrink(4.0))
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         ui.add_space(6.0);
-                        let (icon_r, _) =
-                            ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
-                        paint_device_badge(ui.painter(), icon_r, sel_item);
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new(&sel_item.name)
-                                .font(fonts::semibold(12.0))
-                                .color(Color32::WHITE),
-                        );
-                        ui.label(
-                            RichText::new(format!(
-                                "{} · {}",
-                                sel_item.creator, sel_item.file_kind
-                            ))
-                            .font(fonts::regular(10.0))
-                            .color(theme::TEXT_MUTED),
-                        );
+                        if let Some(wt_data) = wt_preview {
+                            let (wt_box, _) = ui.allocate_exact_size(
+                                vec2(ui.available_width(), 82.0),
+                                Sense::hover(),
+                            );
+                            ui.painter().rect_filled(wt_box, 3.0, WELL_BG);
+                            ui.painter().rect_stroke(
+                                wt_box,
+                                3.0,
+                                Stroke::new(1.0_f32, Color32::from_rgb(0x2D, 0x30, 0x38)),
+                                egui::StrokeKind::Inside,
+                            );
+                            let slices = 7usize;
+                            let samples = 44usize;
+                            let pad_x = 12.0;
+                            let w = wt_box.width() - pad_x * 2.0 - 18.0;
+                            let amp = wt_box.height() * 0.20;
+                            for s in (0..slices).rev() {
+                                let depth = s as f32 / (slices - 1) as f32;
+                                let ox = wt_box.min.x + pad_x + depth * 18.0;
+                                let oy = wt_box.center().y + 11.0 - depth * 22.0;
+                                let is_front = s == 0;
+                                let mut pts = Vec::with_capacity(samples + 1);
+                                for i in 0..=samples {
+                                    let t = i as f32 / samples as f32;
+                                    let v = eval_osc_preview(
+                                        OpenPolyOscType::Wavetable,
+                                        t,
+                                        depth,
+                                        0.0,
+                                        Some(&wt_data),
+                                    );
+                                    pts.push(pos2(ox + t * w, oy - v * amp));
+                                }
+                                let col = if is_front {
+                                    INST_YELLOW
+                                } else {
+                                    Color32::from_rgba_unmultiplied(0xC8, 0x8E, 0x22, 115)
+                                };
+                                ui.painter().add(egui::Shape::line(
+                                    pts,
+                                    Stroke::new(if is_front { 1.6_f32 } else { 1.0_f32 }, col),
+                                ));
+                            }
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&sel_item.name)
+                                    .font(fonts::semibold(12.0))
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {} frames",
+                                    sel_item.category, wt_data.frames
+                                ))
+                                .font(fonts::regular(10.0))
+                                .color(INST_YELLOW),
+                            );
+                            ui.label(
+                                RichText::new(format!("{} · {}", sel_item.location, sel_item.file_kind))
+                                    .font(fonts::regular(9.5))
+                                    .color(theme::TEXT_MUTED),
+                            );
+                        } else {
+                            let (icon_r, _) =
+                                ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+                            paint_device_badge(ui.painter(), icon_r, sel_item);
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(&sel_item.name)
+                                    .font(fonts::semibold(12.0))
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    sel_item.creator, sel_item.file_kind
+                                ))
+                                .font(fonts::regular(10.0))
+                                .color(theme::TEXT_MUTED),
+                            );
+                        }
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(&sel_item.description)

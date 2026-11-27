@@ -20,8 +20,9 @@ pub mod open_poly;
 pub mod open_poly_ui;
 
 pub use open_poly::{
-    load_openpoly_preset, load_wavetable_from_path, save_openpoly_preset, HikaruOpenPoly,
-    OpenPolyFactoryPreset, FACTORY_PRESETS,
+    discover_available_wavetables, load_openpoly_preset, load_wavetable_from_path,
+    load_wavetable_from_source, save_openpoly_preset, AvailableWavetable, BuiltinWavetableKind,
+    HikaruOpenPoly, OpenPolyFactoryPreset, WavetableSource, FACTORY_PRESETS,
 };
 pub use open_poly_ui::{
     render_module, OPEN_POLY_CARD_WIDTH, OPEN_POLY_COMPACT_CARD_WIDTH,
