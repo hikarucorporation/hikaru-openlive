@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 363,
+    "done": 366,
     "in_progress": 15,
-    "planned": 347,
+    "planned": 344,
     "bugs": 1,
     "parity_percent": 50
   },
@@ -4157,17 +4157,20 @@
         {
           "id": "bpk-01",
           "name": "Package archive & metadata parser (.bwpackage)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwpackage.rs"
         },
         {
           "id": "bpk-02",
           "name": "Sample, preset & clip asset indexing in Browser",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwdevice_shim.rs"
         },
         {
           "id": "bpk-03",
           "name": "Pack installation & dependency resolution",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwpackage.rs"
         }
       ]
     },

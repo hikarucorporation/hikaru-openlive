@@ -1388,6 +1388,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwextension" => Some(".bwextension"),
         "bwmodule" => Some(".bwmodule"),
         "multisample" => Some(".multisample"),
+        "bwpackage" => Some(".bwpackage"),
         _ => None,
     }
 }
@@ -1558,6 +1559,46 @@ fn scan_bitwig_preset_dir(
             if !tags.contains(&"Sampler".to_string()) {
                 tags.push("Sampler".to_string());
             }
+        } else if file_kind == ".bwpackage" {
+            category = "Sound Package".to_string();
+            if let Ok(pkg) = crate::project::bwpackage::load_bwpackage_file(&path) {
+                device_name = pkg.manifest.name.clone();
+                if !pkg.manifest.category.trim().is_empty() {
+                    category = format!("Sound Package · {}", pkg.manifest.category);
+                }
+                if !pkg.manifest.creator.trim().is_empty() {
+                    creator = pkg.manifest.creator.clone();
+                }
+                for t in &pkg.manifest.tags {
+                    if !tags.contains(t) {
+                        tags.push(t.clone());
+                    }
+                }
+                if !tags.contains(&"Package".to_string()) {
+                    tags.push("Package".to_string());
+                }
+                let has_audio = pkg
+                    .assets
+                    .iter()
+                    .any(|a| a.kind == crate::project::bwpackage::BwPackageAssetKind::Audio);
+                let has_presets = pkg
+                    .assets
+                    .iter()
+                    .any(|a| a.kind == crate::project::bwpackage::BwPackageAssetKind::Preset);
+                let has_clips = pkg
+                    .assets
+                    .iter()
+                    .any(|a| a.kind == crate::project::bwpackage::BwPackageAssetKind::Clip);
+                if has_audio && !tags.contains(&"Samples".to_string()) {
+                    tags.push("Samples".to_string());
+                }
+                if has_presets && !tags.contains(&"Presets".to_string()) {
+                    tags.push("Presets".to_string());
+                }
+                if has_clips && !tags.contains(&"Clips".to_string()) {
+                    tags.push("Clips".to_string());
+                }
+            }
         }
 
         if let Some(compat) = lookup_compat_target(Some(&device_name), None) {
@@ -1602,7 +1643,12 @@ pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigP
     if let Some(dir) = extra_dir {
         candidates.push((dir.to_path_buf(), "Custom Library"));
     }
+    candidates.push((
+        crate::project::bwpackage::default_packages_library_dir(),
+        "Installed Packages",
+    ));
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        candidates.push((home.join("Bitwig Studio/Installed Packages"), "Bitwig Packages"));
         candidates.push((home.join("Bitwig Studio/Library/Presets"), "Bitwig Library"));
         candidates.push((home.join("Bitwig Studio/Library/Devices"), "Bitwig Library"));
         candidates.push((home.join("Bitwig Studio/Library/Modulators"), "Bitwig Library"));

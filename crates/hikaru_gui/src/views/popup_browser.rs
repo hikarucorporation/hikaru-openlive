@@ -380,6 +380,12 @@ fn build_bitwig_preset_items(
                     INST_YELLOW,
                     Some(QuickInstrumentFilter::Synth),
                 )
+            } else if p.file_kind == ".bwpackage" {
+                (
+                    BrowserRailTab::Instruments,
+                    Color32::from_rgb(0x22, 0xC5, 0x5E),
+                    None,
+                )
             } else if p.is_modulator {
                 (
                     BrowserRailTab::NoteFx,
@@ -907,6 +913,15 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
         if crate::project::bwextension_shim::is_bwextension_file(path) {
             if let Ok(report) = crate::project::bwextension_shim::inspect_bwextension_file(path) {
                 crate::project::bwextension_shim::apply_bwextension_to_app(state, &report);
+                let _ = hikaru_mcp_port::record_bitwig_drop(path, "popup-browser");
+            }
+            state.popup_browser.open = false;
+            return;
+        }
+        if crate::project::bwpackage::is_bwpackage_file(path) {
+            let pkg_root = crate::project::bwpackage::default_packages_library_dir();
+            if crate::project::bwpackage::install_bwpackage_to(path, &pkg_root).is_ok() {
+                state.popup_browser.bitwig_preset_catalog = discover_bitwig_presets(None);
                 let _ = hikaru_mcp_port::record_bitwig_drop(path, "popup-browser");
             }
             state.popup_browser.open = false;

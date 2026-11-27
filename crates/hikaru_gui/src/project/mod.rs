@@ -73,6 +73,7 @@ pub mod bwdevice_shim;
 pub mod bwextension_shim;
 pub mod bwmodulator_shim;
 pub mod bwmodule_shim;
+pub mod bwpackage;
 pub mod bwproject;
 pub mod bwtemplate;
 pub mod common;
