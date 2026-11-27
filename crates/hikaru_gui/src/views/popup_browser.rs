@@ -346,7 +346,13 @@ fn build_bitwig_preset_items(
         .iter()
         .filter(|p| if modulators_only { p.is_modulator } else { !p.is_modulator })
         .map(|p| {
-            let (rail, badge_color, quick) = if p.is_modulator {
+            let (rail, badge_color, quick) = if p.file_kind == ".bwremotecontrols" {
+                (
+                    BrowserRailTab::AudioFx,
+                    MOD_ARROW_CYAN,
+                    Some(QuickInstrumentFilter::Modulation),
+                )
+            } else if p.is_modulator {
                 (
                     BrowserRailTab::NoteFx,
                     MOD_ARROW_CYAN,
@@ -838,6 +844,22 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
     };
 
     if let BrowserPayload::BitwigPreset(path) = &item.payload {
+        if crate::project::bwdevice_shim::is_bwremotecontrols_file(path) {
+            let track_idx = match state.popup_browser.mode {
+                BrowserTargetMode::InsertDevice { track_idx } => track_idx,
+                BrowserTargetMode::InsertModulator { track_idx, .. } => track_idx,
+                _ => state.safe_track_index(),
+            };
+            let _ = crate::views::remote_controls::load_bwremotecontrols_from_path(
+                state,
+                track_idx,
+                None,
+                path,
+            );
+            state.show_dsp_rack = true;
+            state.popup_browser.open = false;
+            return;
+        }
         match state.popup_browser.mode {
             BrowserTargetMode::NewInstrumentTrack => {
                 state.matrix_state.add_track();

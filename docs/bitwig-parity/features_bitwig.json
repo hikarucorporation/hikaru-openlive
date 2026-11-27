@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 347,
+    "done": 350,
     "in_progress": 15,
-    "planned": 363,
+    "planned": 360,
     "bugs": 1,
     "parity_percent": 48
   },
@@ -4101,17 +4101,17 @@
         {
           "id": "brc-01",
           "name": "BtWg00030002 remote controls parser (.bwremotecontrols)",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "brc-02",
           "name": "8-knob page layout & parameter ID binding",
-          "status": "planned"
+          "status": "done"
         },
         {
           "id": "brc-03",
           "name": "Hardware controller & user page export",
-          "status": "planned"
+          "status": "done"
         }
       ]
     },

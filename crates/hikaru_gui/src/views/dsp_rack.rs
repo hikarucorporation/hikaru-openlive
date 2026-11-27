@@ -370,8 +370,14 @@ pub fn export_device_bwpreset_dialog(app: &AppState, track_idx: usize, slot_idx:
 pub fn load_device_chain_dialog(app: &mut AppState, track_idx: usize) {
     if let Some(path) = rfd::FileDialog::new()
         .add_filter(
-            "Presets (Hikaru .hdp / Bitwig .bwpreset, .bwdevice)",
-            &[hikaru_project_file::HDP_EXTENSION, "bwpreset", "bwdevice", "bwmodulator"],
+            "Presets (Hikaru .hdp / Bitwig .bwpreset, .bwdevice, .bwremotecontrols)",
+            &[
+                hikaru_project_file::HDP_EXTENSION,
+                "bwpreset",
+                "bwdevice",
+                "bwmodulator",
+                "bwremotecontrols",
+            ],
         )
         .pick_file()
     {
@@ -491,12 +497,17 @@ fn slot_from_bw_node(
         }
     }
 
-    if let Some(page) = slot.remotes.pages.first_mut() {
-        for m in macro_mappings {
-            if let Some(rslot) = page.slots.get_mut(m.slot_index) {
-                rslot.custom_label = Some(m.param_name.clone());
-            }
-        }
+    if !macro_mappings.is_empty() {
+        let cached = slot.cached_params.clone();
+        let is_poly = slot.is_open_poly();
+        crate::views::remote_controls::bind_macro_mappings_to_state(
+            &mut slot.remotes,
+            macro_mappings,
+            0,
+            0,
+            &cached,
+            is_poly,
+        );
     }
 
     for chain in &node.nested_chains {
@@ -510,6 +521,17 @@ fn slot_from_bw_node(
 }
 
 pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: &std::path::Path) {
+    if crate::project::bwdevice_shim::is_bwremotecontrols_file(path) {
+        let _ = crate::views::remote_controls::load_bwremotecontrols_from_path(
+            app,
+            track_idx,
+            None,
+            path,
+        );
+        let _ = hikaru_mcp_port::record_bitwig_drop(path, "dsp-rack-remotecontrols-load");
+        return;
+    }
+
     if crate::project::bwmodulator_shim::is_bwmodulator_file(path) {
         if let Ok(translation) =
             crate::project::bwmodulator_shim::load_bwmodulator_file(path, None)
@@ -555,6 +577,33 @@ pub fn load_device_preset_from_path(app: &mut AppState, track_idx: usize, path: 
                 inserted_slot = Some(idx);
             }
             if let Some(slot_idx) = inserted_slot {
+                if let Some(dev) = app
+                    .current_tracks_mut()
+                    .get_mut(track_idx)
+                    .and_then(|t| t.effects.get_mut(slot_idx))
+                {
+                    let macro_mappings = match &node.translation {
+                        crate::project::bwdevice_shim::BwDeviceTranslation::Builtin {
+                            macro_mappings,
+                            ..
+                        } => macro_mappings.as_slice(),
+                        crate::project::bwdevice_shim::BwDeviceTranslation::Placeholder(p) => {
+                            p.macro_mappings.as_slice()
+                        }
+                    };
+                    if !macro_mappings.is_empty() {
+                        let cached = dev.cached_params.clone();
+                        let is_poly = dev.is_open_poly();
+                        crate::views::remote_controls::bind_macro_mappings_to_state(
+                            &mut dev.remotes,
+                            macro_mappings,
+                            track_idx,
+                            slot_idx,
+                            &cached,
+                            is_poly,
+                        );
+                    }
+                }
                 crate::views::hikaru_native_plugins::hikaru_openmodulation::restore_bay_params(
                     track_idx,
                     slot_idx,

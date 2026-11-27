@@ -72,6 +72,8 @@ pub enum RemoteTarget {
 pub struct RemoteControlSlot {
     pub target: Option<RemoteTarget>,
     pub custom_label: Option<String>,
+    pub param_id: Option<String>,
+    pub midi_cc: Option<u8>,
     pub value: f32,
     pub default_value: f32,
 }
@@ -81,6 +83,8 @@ impl Default for RemoteControlSlot {
         Self {
             target: None,
             custom_label: None,
+            param_id: None,
+            midi_cc: None,
             value: 0.5,
             default_value: 0.5,
         }
@@ -98,6 +102,8 @@ impl RemoteControlSlot {
     pub fn unmap(&mut self) {
         self.target = None;
         self.custom_label = None;
+        self.param_id = None;
+        self.midi_cc = None;
         self.value = 0.5;
         self.default_value = 0.5;
     }
@@ -1162,6 +1168,47 @@ fn render_remotes_body(
                 }
                 ui.close_menu();
             }
+            if ui.button("Assign 8-Knob MIDI Bank (CC 21..28)").clicked() {
+                with_scope_remotes_mut(app, scope, |remotes| {
+                    assign_hardware_cc_bank(remotes, 21);
+                });
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("Import .bwremotecontrols...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Bitwig Remote Controls", &["bwremotecontrols"])
+                    .pick_file()
+                {
+                    let (ti, si) = match scope {
+                        RemoteScope::Project => (app.safe_track_index(), None),
+                        RemoteScope::Track(t) => (t, None),
+                        RemoteScope::Device {
+                            track_idx,
+                            slot_idx,
+                        } => (track_idx, Some(slot_idx)),
+                    };
+                    let _ = load_bwremotecontrols_from_path(app, ti, si, &path);
+                }
+                ui.close_menu();
+            }
+            if ui.button("Export .bwremotecontrols...").clicked() {
+                let (dev_name, spec) = export_scope_spec(app, scope);
+                let default_name = format!(
+                    "{}.bwremotecontrols",
+                    dev_name.unwrap_or_else(|| "Default".to_string())
+                );
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(&default_name)
+                    .add_filter("Bitwig Remote Controls", &["bwremotecontrols"])
+                    .save_file()
+                {
+                    let _ = crate::project::bwdevice_shim::export_bwremotecontrols_file(
+                        &spec, &path,
+                    );
+                }
+                ui.close_menu();
+            }
         },
     );
 
@@ -1301,6 +1348,16 @@ fn render_remotes_body(
                 ];
             }
 
+            if let Some(cc) = slot.midi_cc {
+                ui.painter().text(
+                    pos2(cell_rect.max.x - 3.0, cell_rect.min.y + 4.0),
+                    Align2::RIGHT_TOP,
+                    format!("CC{cc}"),
+                    fonts::regular(7.0),
+                    REMOTE_CYAN,
+                );
+            }
+
             ui.painter().text(
                 pos2(cell_rect.center().x, cell_rect.max.y - 8.0),
                 Align2::CENTER_CENTER,
@@ -1313,9 +1370,13 @@ fn render_remotes_body(
                 },
             );
 
+            let cc_info = slot
+                .midi_cc
+                .map(|c| format!(" [MIDI CC {c}]"))
+                .unwrap_or_default();
             resp.clone().on_hover_text(format!(
-                "{}: {}\nDrag to adjust · Double-click to reset · Right-click for menu",
-                label, val_text
+                "{}: {}{}\nDrag to adjust · Double-click to reset · Right-click for menu",
+                label, val_text, cc_info
             ));
 
             resp.context_menu(|ui| {
@@ -1325,6 +1386,31 @@ fn render_remotes_body(
                     write_target_normalized(app, &target, slot.default_value);
                     ui.close_menu();
                 }
+                ui.menu_button("Hardware MIDI CC", |ui| {
+                    let bank_cc = 21 + (slot_i as u8);
+                    if ui.button(format!("Slot Bank CC {bank_cc}")).clicked() {
+                        set_slot_midi_cc(app, scope, slot_i, Some(bank_cc));
+                        ui.close_menu();
+                    }
+                    for (cc, desc) in [
+                        (1u8, "CC 1 (Mod Wheel)"),
+                        (7u8, "CC 7 (Volume)"),
+                        (10u8, "CC 10 (Pan)"),
+                        (74u8, "CC 74 (Cutoff)"),
+                    ] {
+                        if ui.button(desc).clicked() {
+                            set_slot_midi_cc(app, scope, slot_i, Some(cc));
+                            ui.close_menu();
+                        }
+                    }
+                    if slot.midi_cc.is_some() {
+                        ui.separator();
+                        if ui.button("Clear MIDI CC").clicked() {
+                            set_slot_midi_cc(app, scope, slot_i, None);
+                            ui.close_menu();
+                        }
+                    }
+                });
                 if ui.button("Delete Remote Control").clicked() {
                     match scope {
                         RemoteScope::Project => {
@@ -2084,6 +2170,364 @@ pub fn render_track_panel(
     }
 }
 
+fn with_scope_remotes_mut<F>(app: &mut AppState, scope: RemoteScope, f: F)
+where
+    F: FnOnce(&mut RemoteControlsState),
+{
+    match scope {
+        RemoteScope::Project => f(&mut app.project_remotes),
+        RemoteScope::Track(ti) => {
+            if let Some(t) = app.current_tracks_mut().get_mut(ti) {
+                f(&mut t.remotes);
+            }
+        }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            if let Some(dev) = app
+                .current_tracks_mut()
+                .get_mut(track_idx)
+                .and_then(|t| t.effects.get_mut(slot_idx))
+            {
+                f(&mut dev.remotes);
+            }
+        }
+    }
+}
+
+fn set_slot_midi_cc(app: &mut AppState, scope: RemoteScope, slot_i: usize, cc: Option<u8>) {
+    with_scope_remotes_mut(app, scope, |remotes| {
+        if let Some(s) = remotes.active_page_mut().slots.get_mut(slot_i) {
+            s.midi_cc = cc;
+        }
+    });
+}
+
+fn normalize_param_key(s: &str) -> String {
+    s.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn resolve_target_for_param(
+    track_idx: usize,
+    slot_idx: usize,
+    param_name: &str,
+    param_id: Option<&str>,
+    cached_params: &[crate::views::mixer::ExternalParamState],
+    is_open_poly: bool,
+) -> Option<RemoteTarget> {
+    let key_name = normalize_param_key(param_name);
+    let key_id = param_id.map(normalize_param_key).unwrap_or_default();
+
+    for (pi, cp) in cached_params.iter().enumerate() {
+        let cname = normalize_param_key(&cp.info.name);
+        if (!key_id.is_empty() && cname == key_id)
+            || (!key_name.is_empty() && (cname == key_name || cname.contains(&key_name)))
+        {
+            return Some(RemoteTarget::DeviceParam {
+                track_idx,
+                slot_idx,
+                param_idx: pi,
+            });
+        }
+    }
+
+    if is_open_poly {
+        let candidate = if !key_id.is_empty() {
+            key_id.as_str()
+        } else {
+            key_name.as_str()
+        };
+        if candidate.contains("cutoff") || candidate.contains("freq") {
+            return Some(RemoteTarget::OpenPolyCutoff {
+                track_idx,
+                slot_idx,
+            });
+        }
+        if candidate.contains("reso") || candidate == "q" {
+            return Some(RemoteTarget::OpenPolyReso {
+                track_idx,
+                slot_idx,
+            });
+        }
+        if candidate.contains("drive") || candidate.contains("saturat") {
+            return Some(RemoteTarget::OpenPolyDrive {
+                track_idx,
+                slot_idx,
+            });
+        }
+        if !param_name.trim().is_empty() {
+            return Some(RemoteTarget::OpenPolyNamedParam {
+                track_idx,
+                param: param_name.trim().to_string(),
+            });
+        }
+    }
+
+    None
+}
+
+/// Aplica un `BwRemoteControlsSpec` (`.bwremotecontrols`) a un `RemoteControlsState`,
+/// creando todas las páginas de 8 knobs y resolviendo los bindings por parámetro/ID.
+pub fn apply_bwremotecontrols_to_state(
+    remotes: &mut RemoteControlsState,
+    spec: &crate::project::bwdevice_shim::BwRemoteControlsSpec,
+    track_idx: usize,
+    slot_idx: usize,
+    cached_params: &[crate::views::mixer::ExternalParamState],
+    is_open_poly: bool,
+) -> usize {
+    if spec.pages.is_empty() {
+        return 0;
+    }
+    remotes.pages.clear();
+    let mut bound_count = 0usize;
+
+    for page_spec in &spec.pages {
+        let mut page = RemoteControlPage::new(page_spec.name.clone());
+        for s in &page_spec.slots {
+            let idx = s.slot_index % REMOTE_SLOTS_PER_PAGE;
+            let slot = &mut page.slots[idx];
+            slot.custom_label = Some(s.param_name.clone());
+            slot.param_id = s.param_id.clone();
+            slot.midi_cc = s.midi_cc;
+            if let Some(target) = resolve_target_for_param(
+                track_idx,
+                slot_idx,
+                &s.param_name,
+                s.param_id.as_deref(),
+                cached_params,
+                is_open_poly,
+            ) {
+                let def = default_norm_for_target(&target);
+                slot.target = Some(target);
+                slot.value = def;
+                slot.default_value = def;
+                bound_count += 1;
+            }
+        }
+        remotes.pages.push(page);
+    }
+
+    remotes.active_page = 0;
+    remotes.remotes_open = true;
+    bound_count
+}
+
+/// Convierte `Vec<MacroMapping>` (p. ej. de `BwDeviceTranslation`) en páginas de 8 knobs
+/// dentro de `RemoteControlsState` y vincula sus parámetros.
+pub fn bind_macro_mappings_to_state(
+    remotes: &mut RemoteControlsState,
+    mappings: &[crate::project::bwdevice_shim::MacroMapping],
+    track_idx: usize,
+    slot_idx: usize,
+    cached_params: &[crate::views::mixer::ExternalParamState],
+    is_open_poly: bool,
+) -> usize {
+    if mappings.is_empty() {
+        return 0;
+    }
+    let mut spec = crate::project::bwdevice_shim::BwRemoteControlsSpec::default();
+    for m in mappings {
+        let page = if let Some(existing) = spec.pages.iter_mut().find(|p| p.name == m.page_name) {
+            existing
+        } else {
+            spec.pages
+                .push(crate::project::bwdevice_shim::RemoteControlPageSpec {
+                    name: m.page_name.clone(),
+                    tags: Vec::new(),
+                    slots: Vec::new(),
+                });
+            spec.pages.last_mut().unwrap()
+        };
+        page.slots
+            .push(crate::project::bwdevice_shim::RemoteControlSlotSpec {
+                slot_index: m.slot_index % REMOTE_SLOTS_PER_PAGE,
+                param_name: m.param_name.clone(),
+                param_id: None,
+                midi_cc: None,
+            });
+    }
+    apply_bwremotecontrols_to_state(
+        remotes,
+        &spec,
+        track_idx,
+        slot_idx,
+        cached_params,
+        is_open_poly,
+    )
+}
+
+/// Carga un archivo `.bwremotecontrols` desde disco y lo aplica al dispositivo seleccionado
+/// (o a los Remote Controls de la pista si no hay dispositivo seleccionado).
+pub fn load_bwremotecontrols_from_path(
+    app: &mut AppState,
+    track_idx: usize,
+    slot_idx: Option<usize>,
+    path: &std::path::Path,
+) -> Result<usize, String> {
+    let spec = crate::project::bwdevice_shim::load_bwremotecontrols_file(path)?;
+    let target_slot = slot_idx.or_else(|| {
+        app.current_tracks()
+            .get(track_idx)
+            .and_then(|t| (!t.effects.is_empty()).then(|| app.selected_slot_index.min(t.effects.len() - 1)))
+    });
+
+    let count = if let Some(si) = target_slot {
+        if let Some(dev) = app
+            .current_tracks_mut()
+            .get_mut(track_idx)
+            .and_then(|t| t.effects.get_mut(si))
+        {
+            let cached = dev.cached_params.clone();
+            let is_poly = dev.is_open_poly();
+            apply_bwremotecontrols_to_state(&mut dev.remotes, &spec, track_idx, si, &cached, is_poly)
+        } else {
+            0
+        }
+    } else if let Some(tr) = app.current_tracks_mut().get_mut(track_idx) {
+        apply_bwremotecontrols_to_state(&mut tr.remotes, &spec, track_idx, 0, &[], false)
+    } else {
+        0
+    };
+
+    app.project_dirty = true;
+    Ok(count)
+}
+
+/// Serializa el `RemoteControlsState` actual a `BwRemoteControlsSpec` para exportar `.bwremotecontrols`.
+pub fn export_state_to_bwremotecontrols_spec(
+    remotes: &RemoteControlsState,
+    device_name: Option<&str>,
+    device_id: Option<&str>,
+) -> crate::project::bwdevice_shim::BwRemoteControlsSpec {
+    let pages = remotes
+        .pages
+        .iter()
+        .map(|pg| {
+            let mut slots = Vec::new();
+            for (idx, s) in pg.slots.iter().enumerate() {
+                if let Some(label) = s
+                    .custom_label
+                    .clone()
+                    .or_else(|| s.target.as_ref().map(|t| format!("{t:?}")))
+                {
+                    slots.push(crate::project::bwdevice_shim::RemoteControlSlotSpec {
+                        slot_index: idx,
+                        param_name: label,
+                        param_id: s.param_id.clone(),
+                        midi_cc: s.midi_cc,
+                    });
+                }
+            }
+            crate::project::bwdevice_shim::RemoteControlPageSpec {
+                name: pg.name.clone(),
+                tags: Vec::new(),
+                slots,
+            }
+        })
+        .collect();
+
+    crate::project::bwdevice_shim::BwRemoteControlsSpec {
+        device_name: device_name.map(str::to_string),
+        device_id: device_id.map(str::to_string),
+        creator: Some("Hikaru OpenLive".to_string()),
+        pages,
+    }
+}
+
+fn export_scope_spec(
+    app: &AppState,
+    scope: RemoteScope,
+) -> (Option<String>, crate::project::bwdevice_shim::BwRemoteControlsSpec) {
+    match scope {
+        RemoteScope::Project => (
+            Some("Project".to_string()),
+            export_state_to_bwremotecontrols_spec(&app.project_remotes, Some("Project"), None),
+        ),
+        RemoteScope::Track(ti) => {
+            let tr = app.current_tracks().get(ti);
+            let name = tr.map(|t| t.name.clone());
+            let spec = tr
+                .map(|t| export_state_to_bwremotecontrols_spec(&t.remotes, name.as_deref(), None))
+                .unwrap_or_default();
+            (name, spec)
+        }
+        RemoteScope::Device {
+            track_idx,
+            slot_idx,
+        } => {
+            let dev = app
+                .current_tracks()
+                .get(track_idx)
+                .and_then(|t| t.effects.get(slot_idx));
+            let name = dev.map(|d| d.name.clone());
+            let spec = dev
+                .map(|d| export_state_to_bwremotecontrols_spec(&d.remotes, name.as_deref(), None))
+                .unwrap_or_default();
+            (name, spec)
+        }
+    }
+}
+
+/// Asigna un banco de 8 encoders MIDI hardware consecutivos (`base_cc..base_cc+8`)
+/// a los 8 slots de la página activa.
+pub fn assign_hardware_cc_bank(remotes: &mut RemoteControlsState, base_cc: u8) {
+    let page = remotes.active_page_mut();
+    for (i, slot) in page.slots.iter_mut().enumerate() {
+        slot.midi_cc = Some(base_cc.saturating_add(i as u8).min(127));
+    }
+}
+
+/// Aplica un mensaje MIDI CC (`0..=127`) entrante desde un controlador hardware a todos
+/// los slots mapeados a ese CC en la página activa de Proyecto, Pista seleccionada y Dispositivo seleccionado.
+pub fn apply_hardware_midi_cc(app: &mut AppState, cc: u8, value_0_to_127: u8) -> usize {
+    let norm = (value_0_to_127.min(127) as f32) / 127.0;
+    let mut updates: Vec<(RemoteTarget, f32)> = Vec::new();
+
+    for slot in &mut app.project_remotes.active_page_mut().slots {
+        if slot.midi_cc == Some(cc) {
+            slot.value = norm;
+            if let Some(t) = &slot.target {
+                updates.push((t.clone(), norm));
+            }
+        }
+    }
+
+    let tr_idx = app.safe_track_index();
+    let sl_idx = app.selected_slot_index;
+    if let Some(tr) = app.current_tracks_mut().get_mut(tr_idx) {
+        for slot in &mut tr.remotes.active_page_mut().slots {
+            if slot.midi_cc == Some(cc) {
+                slot.value = norm;
+                if let Some(t) = &slot.target {
+                    updates.push((t.clone(), norm));
+                }
+            }
+        }
+        if let Some(dev) = tr.effects.get_mut(sl_idx) {
+            for slot in &mut dev.remotes.active_page_mut().slots {
+                if slot.midi_cc == Some(cc) {
+                    slot.value = norm;
+                    if let Some(t) = &slot.target {
+                        updates.push((t.clone(), norm));
+                    }
+                }
+            }
+        }
+    }
+
+    let count = updates.len();
+    for (target, val) in updates {
+        write_target_normalized(app, &target, val);
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2157,5 +2601,80 @@ mod tests {
         state.active_page_mut().slots[3].assign(target.clone(), 0.75, 0.5);
         assert_eq!(state.active_page_ref().slots[3].target, Some(target));
         assert!((state.active_page_ref().slots[3].value - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bwremotecontrols_binds_pages_param_ids_and_midi_cc_bank() {
+        let spec = crate::project::bwdevice_shim::BwRemoteControlsSpec {
+            device_name: Some("OpenPoly".to_string()),
+            device_id: None,
+            creator: Some("Hikaru".to_string()),
+            pages: vec![
+                crate::project::bwdevice_shim::RemoteControlPageSpec {
+                    name: "Filter".to_string(),
+                    tags: vec![],
+                    slots: vec![
+                        crate::project::bwdevice_shim::RemoteControlSlotSpec {
+                            slot_index: 0,
+                            param_name: "Cutoff".to_string(),
+                            param_id: Some("cutoff".to_string()),
+                            midi_cc: Some(74),
+                        },
+                        crate::project::bwdevice_shim::RemoteControlSlotSpec {
+                            slot_index: 1,
+                            param_name: "Resonance".to_string(),
+                            param_id: Some("reso".to_string()),
+                            midi_cc: None,
+                        },
+                    ],
+                },
+                crate::project::bwdevice_shim::RemoteControlPageSpec {
+                    name: "Drive".to_string(),
+                    tags: vec![],
+                    slots: vec![crate::project::bwdevice_shim::RemoteControlSlotSpec {
+                        slot_index: 0,
+                        param_name: "Drive".to_string(),
+                        param_id: Some("drive".to_string()),
+                        midi_cc: None,
+                    }],
+                },
+            ],
+        };
+
+        let mut state = RemoteControlsState::default();
+        let bound = apply_bwremotecontrols_to_state(&mut state, &spec, 2, 1, &[], true);
+        assert_eq!(bound, 3);
+        assert_eq!(state.pages.len(), 2);
+        assert_eq!(state.pages[0].name, "Filter");
+        assert_eq!(
+            state.pages[0].slots[0].target,
+            Some(RemoteTarget::OpenPolyCutoff {
+                track_idx: 2,
+                slot_idx: 1
+            })
+        );
+        assert_eq!(state.pages[0].slots[0].midi_cc, Some(74));
+        assert_eq!(
+            state.pages[0].slots[1].target,
+            Some(RemoteTarget::OpenPolyReso {
+                track_idx: 2,
+                slot_idx: 1
+            })
+        );
+        assert_eq!(
+            state.pages[1].slots[0].target,
+            Some(RemoteTarget::OpenPolyDrive {
+                track_idx: 2,
+                slot_idx: 1
+            })
+        );
+
+        assign_hardware_cc_bank(&mut state, 21);
+        assert_eq!(state.active_page_ref().slots[0].midi_cc, Some(21));
+        assert_eq!(state.active_page_ref().slots[7].midi_cc, Some(28));
+
+        let exported = export_state_to_bwremotecontrols_spec(&state, Some("OpenPoly"), None);
+        assert_eq!(exported.pages.len(), 2);
+        assert_eq!(exported.pages[0].slots[0].midi_cc, Some(21));
     }
 }

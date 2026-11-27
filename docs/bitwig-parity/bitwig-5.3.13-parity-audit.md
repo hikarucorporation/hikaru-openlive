@@ -164,16 +164,16 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .bwclip | 4 | 0 | 0 | 4 | 0 |
 | .bwmodulator | 3 | 3 | 0 | 0 | 0 |
 | .bwmodule | 3 | 0 | 0 | 3 | 0 |
-| .bwremotecontrols | 3 | 0 | 0 | 3 | 0 |
+| .bwremotecontrols | 3 | 3 | 0 | 0 | 0 |
 | .bwextension | 3 | 0 | 0 | 3 | 0 |
 | .bwpackage | 3 | 0 | 0 | 3 | 0 |
 | .multisample | 3 | 0 | 0 | 3 | 0 |
 | .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **725** | **347** | **15** | **363** | **1** |
+| **Total** | **725** | **350** | **15** | **360** | **1** |
 
-Paridad global: **347 / 725 = 48 %**.
+Paridad global: **350 / 725 = 48 %**.
 
 ### Bugs abiertos
 

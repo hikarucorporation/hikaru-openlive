@@ -205,6 +205,49 @@ pub struct MacroMapping {
     pub param_name: String,
 }
 
+/// Slot individual (0..8) dentro de una página de `.bwremotecontrols`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteControlSlotSpec {
+    pub slot_index: usize,
+    pub param_name: String,
+    pub param_id: Option<String>,
+    pub midi_cc: Option<u8>,
+}
+
+/// Página nombrada de 8 controles remotos dentro de un `.bwremotecontrols`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteControlPageSpec {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub slots: Vec<RemoteControlSlotSpec>,
+}
+
+/// Documento completo `.bwremotecontrols` (`BtWg00030002`) parseado o listo para exportar.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BwRemoteControlsSpec {
+    pub device_name: Option<String>,
+    pub device_id: Option<String>,
+    pub creator: Option<String>,
+    pub pages: Vec<RemoteControlPageSpec>,
+}
+
+impl BwRemoteControlsSpec {
+    /// Aplana las páginas a `Vec<MacroMapping>` para compatibilidad con `BwDeviceTranslation`.
+    pub fn to_macro_mappings(&self) -> Vec<MacroMapping> {
+        let mut out = Vec::new();
+        for page in &self.pages {
+            for slot in &page.slots {
+                out.push(MacroMapping {
+                    page_name: page.name.clone(),
+                    slot_index: slot.slot_index,
+                    param_name: slot.param_name.clone(),
+                });
+            }
+        }
+        out
+    }
+}
+
 /// Placeholder *lossless* para dispositivos Bitwig que aún no tienen equivalente nativo.
 #[derive(Debug, Clone)]
 pub struct PassthroughPlaceholderShim {
@@ -441,19 +484,162 @@ fn scan_object_params(obj: &BtWgObject, out: &mut Vec<(String, f64)>, depth: usi
     }
 }
 
-/// Extrae asignaciones de páginas de 8 controles remotos desde un `.bwremotecontrols`.
-pub fn extract_remote_controls(doc: &BtWgDocument) -> Vec<MacroMapping> {
-    let mut out = Vec::new();
-    if let Some(root) = &doc.body {
-        scan_remote_pages(root, "Default", &mut out, 0);
-    }
-    out
+/// Devuelve `true` si la ruta corresponde a un archivo `.bwremotecontrols`.
+pub fn is_bwremotecontrols_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("bwremotecontrols"))
+        .unwrap_or(false)
 }
 
-fn scan_remote_pages(
+/// Parsea un documento `BtWg00030002` (`.bwremotecontrols`) en páginas con nombre,
+/// tags, slots 0..8, IDs de parámetro y CC MIDI opcionales.
+pub fn parse_bwremotecontrols_doc(doc: &BtWgDocument) -> BwRemoteControlsSpec {
+    let mut spec = BwRemoteControlsSpec {
+        device_name: doc.device_name().map(str::to_string),
+        device_id: doc.device_id().map(str::to_string),
+        creator: None,
+        pages: Vec::new(),
+    };
+    if let Some(meta) = &doc.meta {
+        for (k, v) in &meta.named_fields {
+            if k == "creator" {
+                if let BtWgValue::Str(s) = v {
+                    if !s.trim().is_empty() {
+                        spec.creator = Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut raw_mappings = Vec::new();
+    let mut page_tags_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut slot_meta_map: BTreeMap<(String, usize), (Option<String>, Option<u8>)> =
+        BTreeMap::new();
+
+    if let Some(root) = &doc.body {
+        scan_remote_pages_detailed(
+            root,
+            "Perform",
+            &mut raw_mappings,
+            &mut page_tags_map,
+            &mut slot_meta_map,
+            0,
+        );
+    }
+
+    let mut page_order: Vec<String> = Vec::new();
+    let mut pages_by_name: BTreeMap<String, Vec<RemoteControlSlotSpec>> = BTreeMap::new();
+    for m in raw_mappings {
+        if !pages_by_name.contains_key(&m.page_name) {
+            page_order.push(m.page_name.clone());
+        }
+        let (param_id, midi_cc) = slot_meta_map
+            .get(&(m.page_name.clone(), m.slot_index))
+            .cloned()
+            .unwrap_or((None, None));
+        let slots = pages_by_name.entry(m.page_name).or_default();
+        if let Some(existing) = slots.iter_mut().find(|s| s.slot_index == m.slot_index) {
+            existing.param_name = m.param_name;
+            if param_id.is_some() {
+                existing.param_id = param_id;
+            }
+            if midi_cc.is_some() {
+                existing.midi_cc = midi_cc;
+            }
+        } else {
+            slots.push(RemoteControlSlotSpec {
+                slot_index: m.slot_index,
+                param_name: m.param_name,
+                param_id,
+                midi_cc,
+            });
+        }
+    }
+
+    for pname in page_order {
+        let mut slots = pages_by_name.remove(&pname).unwrap_or_default();
+        slots.sort_by_key(|s| s.slot_index);
+        let tags = page_tags_map.remove(&pname).unwrap_or_default();
+        spec.pages.push(RemoteControlPageSpec {
+            name: pname,
+            tags,
+            slots,
+        });
+    }
+
+    spec
+}
+
+/// Carga y parsea un archivo `.bwremotecontrols` desde disco.
+pub fn load_bwremotecontrols_file(path: &Path) -> Result<BwRemoteControlsSpec, String> {
+    let bytes =
+        fs::read(path).map_err(|err| format!("no se pudo leer '{}': {err}", path.display()))?;
+    let header = BtWgHeader::parse(&bytes)?;
+    if header.kind() != BtWgContainerKind::PublicAst {
+        return Err(format!(
+            "'{}' no es un contenedor BtWg00030002 válido",
+            path.display()
+        ));
+    }
+    let doc = BtWgReader::parse_document(&bytes)?;
+    Ok(parse_bwremotecontrols_doc(&doc))
+}
+
+/// Busca un archivo `.bwremotecontrols` / `Default.bwremotecontrols` compañero para un
+/// `.bwdevice` o `.bwpreset` en disco o en las carpetas `device-settings`.
+pub fn find_companion_bwremotecontrols(
+    artifact_path: &Path,
+    library_dir: Option<&Path>,
+    device_id: Option<&str>,
+) -> Option<BtWgDocument> {
+    let mut candidates = Vec::new();
+    candidates.push(artifact_path.with_extension("bwremotecontrols"));
+    if let Some(parent) = artifact_path.parent() {
+        candidates.push(parent.join("Default.bwremotecontrols"));
+    }
+
+    let mut lib_roots = Vec::new();
+    if let Some(dir) = library_dir {
+        lib_roots.push(dir.to_path_buf());
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        lib_roots.push(home.join("Bitwig Studio/Library"));
+        lib_roots.push(home.join("Documents/Bitwig Studio/Library"));
+    }
+    lib_roots.push(PathBuf::from("/opt/bitwig-studio/Library"));
+
+    if let Some(id) = device_id.filter(|s| !s.trim().is_empty()) {
+        for root in &lib_roots {
+            candidates.push(root.join("device-settings").join(id).join("Default.bwremotecontrols"));
+            candidates.push(root.join(id).join("Default.bwremotecontrols"));
+        }
+    }
+
+    for cand in candidates {
+        if cand.is_file() {
+            if let Ok(bytes) = fs::read(&cand) {
+                if let Ok(doc) = BtWgReader::parse_document(&bytes) {
+                    return Some(doc);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extrae asignaciones de páginas de 8 controles remotos desde un `.bwremotecontrols`.
+pub fn extract_remote_controls(doc: &BtWgDocument) -> Vec<MacroMapping> {
+    parse_bwremotecontrols_doc(doc).to_macro_mappings()
+}
+
+fn scan_remote_pages_detailed(
     obj: &BtWgObject,
     current_page: &str,
     out: &mut Vec<MacroMapping>,
+    page_tags: &mut BTreeMap<String, Vec<String>>,
+    slot_meta: &mut BTreeMap<(String, usize), (Option<String>, Option<u8>)>,
     depth: usize,
 ) {
     if depth > MAX_PARAM_SCAN_DEPTH || obj.cls == 0x0500 {
@@ -463,26 +649,61 @@ fn scan_remote_pages(
     let mut page_name = current_page.to_string();
     let mut slot_index: Option<usize> = None;
     let mut param_name: Option<String> = None;
+    let mut param_id: Option<String> = None;
+    let mut midi_cc: Option<u8> = None;
 
-    for (_, val) in &obj.fields {
+    for (fid, val) in &obj.fields {
         match val {
             BtWgValue::Str(s) if !s.is_empty() => {
-                if param_name.is_none() {
-                    param_name = Some(s.clone());
-                } else {
+                if obj.cls == 0x0810 && *fid == 0x01 {
                     page_name = s.clone();
+                } else if obj.cls == 0x0810 && *fid == 0x02 {
+                    page_tags
+                        .entry(page_name.clone())
+                        .or_default()
+                        .extend(
+                            s.split(',')
+                                .map(str::trim)
+                                .filter(|t| !t.is_empty())
+                                .map(str::to_string),
+                        );
+                } else if obj.cls == 0x0800 && *fid == 0x03 {
+                    param_id = Some(s.clone());
+                } else if param_name.is_none() {
+                    param_name = Some(s.clone());
+                } else if obj.cls != 0x0800 {
+                    page_name = s.clone();
+                } else if param_id.is_none() {
+                    param_id = Some(s.clone());
                 }
             }
-            BtWgValue::I32(idx) if (0..8).contains(idx) && slot_index.is_none() => {
+            BtWgValue::I32(idx) if (0..8).contains(idx) && slot_index.is_none() && *fid != 0x04 => {
                 slot_index = Some(*idx as usize);
             }
+            BtWgValue::I32(cc) if *fid == 0x04 && (0..=127).contains(cc) => {
+                midi_cc = Some(*cc as u8);
+            }
             BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
-                scan_remote_pages(child, &page_name, out, depth + 1);
+                scan_remote_pages_detailed(
+                    child,
+                    &page_name,
+                    out,
+                    page_tags,
+                    slot_meta,
+                    depth + 1,
+                );
             }
             BtWgValue::ObjList(list) => {
                 for (i, child) in list.iter().enumerate() {
                     let before = out.len();
-                    scan_remote_pages(child, &page_name, out, depth + 1);
+                    scan_remote_pages_detailed(
+                        child,
+                        &page_name,
+                        out,
+                        page_tags,
+                        slot_meta,
+                        depth + 1,
+                    );
                     if out.len() == before {
                         if let Some(BtWgValue::Str(s)) = child.fields.iter().find_map(|(_, v)| {
                             matches!(v, BtWgValue::Str(st) if !st.is_empty()).then_some(v)
@@ -501,6 +722,9 @@ fn scan_remote_pages(
     }
 
     if let (Some(idx), Some(name)) = (slot_index, param_name) {
+        if param_id.is_some() || midi_cc.is_some() {
+            slot_meta.insert((page_name.clone(), idx), (param_id, midi_cc));
+        }
         out.push(MacroMapping {
             page_name,
             slot_index: idx,
@@ -1043,12 +1267,23 @@ pub fn load_bitwig_browser_item(
     match header.kind() {
         BtWgContainerKind::PublicAst => {
             let doc = BtWgReader::parse_document(&bytes)?;
-            Ok(translate_device_tree(&doc, None))
+            let companion_rc = find_companion_bwremotecontrols(path, library_dir, doc.device_id());
+            Ok(translate_device_tree(&doc, companion_rc.as_ref()))
         }
         BtWgContainerKind::ProtectedDevice => {
             let meta = BtWgReader::inspect_bwdevice_file(path, library_dir)?;
+            let companion_id = meta
+                .companion_preset
+                .as_ref()
+                .and_then(|d| d.device_id())
+                .map(str::to_string);
+            let companion_rc = find_companion_bwremotecontrols(
+                path,
+                library_dir,
+                companion_id.as_deref(),
+            );
             if let Some(companion) = meta.companion_preset {
-                Ok(translate_device_tree(&companion, None))
+                Ok(translate_device_tree(&companion, companion_rc.as_ref()))
             } else {
                 // Sin companion preset: resolvemos por nombre del archivo hacia `Builtin` o `Placeholder`.
                 let compat = lookup_compat_target(Some(&meta.device_stem), None);
@@ -1148,6 +1383,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwpreset" => Some(".bwpreset"),
         "bwdevice" => Some(".bwdevice"),
         "bwmodulator" => Some(".bwmodulator"),
+        "bwremotecontrols" => Some(".bwremotecontrols"),
         _ => None,
     }
 }
@@ -1241,6 +1477,23 @@ fn scan_bitwig_preset_dir(
             category = "Bitwig Device".to_string();
         } else if file_kind == ".bwmodulator" {
             category = "Modulator".to_string();
+        } else if file_kind == ".bwremotecontrols" {
+            category = "Remote Controls".to_string();
+            if let Ok(rc_spec) = load_bwremotecontrols_file(&path) {
+                if let Some(dn) = rc_spec.device_name {
+                    device_name = dn;
+                }
+                if let Some(cr) = rc_spec.creator {
+                    creator = cr;
+                }
+                for page in &rc_spec.pages {
+                    for t in &page.tags {
+                        if !tags.contains(t) {
+                            tags.push(t.clone());
+                        }
+                    }
+                }
+            }
         }
 
         if let Some(compat) = lookup_compat_target(Some(&device_name), None) {
@@ -1290,8 +1543,16 @@ pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigP
         candidates.push((home.join("Bitwig Studio/Library/Devices"), "Bitwig Library"));
         candidates.push((home.join("Bitwig Studio/Library/Modulators"), "Bitwig Library"));
         candidates.push((
+            home.join("Bitwig Studio/Library/Remote Controls"),
+            "Bitwig Library",
+        ));
+        candidates.push((
             home.join("Documents/Bitwig Studio/Library/Presets"),
             "User Presets",
+        ));
+        candidates.push((
+            home.join("Documents/Bitwig Studio/Library/Remote Controls"),
+            "User Remote Controls",
         ));
         candidates.push((home.join("Music/Bitwig Studio/Presets"), "User Presets"));
     }
@@ -1558,6 +1819,94 @@ pub fn serialize_bwpreset_bytes(spec: &BwPresetExportSpec) -> Vec<u8> {
 /// Exporta una especificación a un archivo `.bwpreset` en disco.
 pub fn export_bwpreset_file(spec: &BwPresetExportSpec, path: &Path) -> Result<(), String> {
     let bytes = serialize_bwpreset_bytes(spec);
+    fs::write(path, bytes)
+        .map_err(|err| format!("no se pudo escribir '{}': {err}", path.display()))
+}
+
+/// Serializa una especificación de páginas de controles remotos a bytes `.bwremotecontrols`
+/// (`BtWg00030002`), compatible con `BtWgReader::parse_document` y `parse_bwremotecontrols_doc`.
+pub fn serialize_bwremotecontrols_bytes(spec: &BwRemoteControlsSpec) -> Vec<u8> {
+    let mut meta = BtWgWriter::new();
+    meta.begin_obj(4);
+    meta.raw_str("meta");
+    if let Some(dev_name) = spec.device_name.as_deref().filter(|s| !s.trim().is_empty()) {
+        meta.named_field_str("device_name", dev_name);
+    }
+    if let Some(dev_id) = spec.device_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        meta.named_field_str("device_id", dev_id);
+    }
+    meta.named_field_str(
+        "creator",
+        spec.creator
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("Hikaru OpenLive"),
+    );
+    meta.named_field_str("preset_category", "Remote Controls");
+    meta.end_obj();
+    let meta_bytes = meta.into_bytes();
+
+    let mut body = BtWgWriter::new();
+    body.begin_obj(0x0012);
+    if let Some(dev_name) = spec.device_name.as_deref() {
+        body.field_str(0x01, dev_name);
+    }
+    if let Some(dev_id) = spec.device_id.as_deref() {
+        body.field_str(0x02, dev_id);
+    }
+
+    if spec.pages.is_empty() {
+        body.field_empty_obj_list(0x40);
+    } else {
+        body.field_obj_list_start(0x40);
+        for page in &spec.pages {
+            body.begin_obj(0x0810);
+            body.field_str(0x01, &page.name);
+            if !page.tags.is_empty() {
+                body.field_str(0x02, &page.tags.join(", "));
+            }
+            if page.slots.is_empty() {
+                body.field_empty_obj_list(0x10);
+            } else {
+                body.field_obj_list_start(0x10);
+                for slot in &page.slots {
+                    body.begin_obj(0x0800);
+                    body.field_i32(0x01, (slot.slot_index % 8) as i32);
+                    body.field_str(0x02, &slot.param_name);
+                    if let Some(pid) = slot.param_id.as_deref().filter(|s| !s.trim().is_empty()) {
+                        body.field_str(0x03, pid);
+                    }
+                    if let Some(cc) = slot.midi_cc {
+                        body.field_i32(0x04, cc as i32);
+                    }
+                    body.end_obj();
+                }
+                body.obj_list_end();
+            }
+            body.end_obj();
+        }
+        body.obj_list_end();
+    }
+
+    body.end_obj();
+    let body_bytes = body.into_bytes();
+
+    let header_len = 43usize;
+    let body_offset = header_len + meta_bytes.len();
+    let header = format!("BtWg0003000200ba{body_offset:08x}000000000000000000\n");
+    let mut out = Vec::with_capacity(body_offset + body_bytes.len());
+    out.extend_from_slice(header.as_bytes());
+    out.extend_from_slice(&meta_bytes);
+    out.extend_from_slice(&body_bytes);
+    out
+}
+
+/// Exporta una especificación `.bwremotecontrols` a disco.
+pub fn export_bwremotecontrols_file(
+    spec: &BwRemoteControlsSpec,
+    path: &Path,
+) -> Result<(), String> {
+    let bytes = serialize_bwremotecontrols_bytes(spec);
     fs::write(path, bytes)
         .map_err(|err| format!("no se pudo escribir '{}': {err}", path.display()))
 }
@@ -1969,6 +2318,76 @@ mod tests {
         assert_eq!(preview.modulator_count, 1);
         assert_eq!(preview.grid_node_count, 2);
         assert_eq!(preview.grid_cable_count, 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn brc_exporta_descubre_y_carga_bwremotecontrols_roundtrip() {
+        let spec = BwRemoteControlsSpec {
+            device_name: Some("Polymer".to_string()),
+            device_id: Some("uuid-polymer-123".to_string()),
+            creator: Some("Hikaru OpenLive".to_string()),
+            pages: vec![
+                RemoteControlPageSpec {
+                    name: "Perform".to_string(),
+                    tags: vec!["Synth".to_string(), "Main".to_string()],
+                    slots: vec![
+                        RemoteControlSlotSpec {
+                            slot_index: 0,
+                            param_name: "Cutoff".to_string(),
+                            param_id: Some("CONTENTS/FILTER/CUTOFF".to_string()),
+                            midi_cc: Some(21),
+                        },
+                        RemoteControlSlotSpec {
+                            slot_index: 1,
+                            param_name: "Resonance".to_string(),
+                            param_id: Some("CONTENTS/FILTER/RESO".to_string()),
+                            midi_cc: Some(22),
+                        },
+                    ],
+                },
+                RemoteControlPageSpec {
+                    name: "Envelope".to_string(),
+                    tags: vec!["Env".to_string()],
+                    slots: vec![RemoteControlSlotSpec {
+                        slot_index: 0,
+                        param_name: "Attack".to_string(),
+                        param_id: Some("CONTENTS/ENV/ATTACK".to_string()),
+                        midi_cc: Some(23),
+                    }],
+                },
+            ],
+        };
+
+        let dir = std::env::temp_dir().join(format!("hikaru_brc_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("crea temp dir");
+        let rc_path = dir.join("Polymer.bwremotecontrols");
+
+        export_bwremotecontrols_file(&spec, &rc_path).expect("exporta .bwremotecontrols");
+        assert!(is_bwremotecontrols_file(&rc_path));
+
+        let parsed = load_bwremotecontrols_file(&rc_path).expect("carga .bwremotecontrols");
+        assert_eq!(parsed.device_name.as_deref(), Some("Polymer"));
+        assert_eq!(parsed.pages.len(), 2);
+        assert_eq!(parsed.pages[0].name, "Perform");
+        assert_eq!(parsed.pages[0].slots.len(), 2);
+        assert_eq!(parsed.pages[0].slots[0].param_name, "Cutoff");
+        assert_eq!(
+            parsed.pages[0].slots[0].param_id.as_deref(),
+            Some("CONTENTS/FILTER/CUTOFF")
+        );
+        assert_eq!(parsed.pages[0].slots[0].midi_cc, Some(21));
+        assert_eq!(parsed.pages[1].name, "Envelope");
+
+        let discovered = discover_bitwig_presets(Some(&dir));
+        let found = discovered
+            .iter()
+            .find(|p| p.path == rc_path)
+            .expect(".bwremotecontrols visible en discover_bitwig_presets");
+        assert_eq!(found.file_kind, ".bwremotecontrols");
+        assert_eq!(found.category, "Remote Controls");
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -52,11 +52,15 @@ pub fn default_bitwig_inbox_path() -> PathBuf {
     default_runtime_dir().join("dropped-bitwig-files.json")
 }
 
-/// Devuelve `true` si la extensión corresponde a `.bwdevice` o `.bwpreset`.
+/// Devuelve `true` si la extensión corresponde a `.bwdevice`, `.bwpreset` o `.bwremotecontrols`.
 pub fn is_supported_bitwig_artifact(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("bwdevice") || ext.eq_ignore_ascii_case("bwpreset"))
+        .map(|ext| {
+            ext.eq_ignore_ascii_case("bwdevice")
+                || ext.eq_ignore_ascii_case("bwpreset")
+                || ext.eq_ignore_ascii_case("bwremotecontrols")
+        })
         .unwrap_or(false)
 }
 

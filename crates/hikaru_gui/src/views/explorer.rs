@@ -60,7 +60,7 @@ pub fn is_preset_file(path: &PathBuf) -> bool {
         let ext_str = ext.to_string_lossy().to_lowercase();
         matches!(
             ext_str.as_str(),
-            "hdp" | "bwdevice" | "bwpreset" | "bwmodulator"
+            "hdp" | "bwdevice" | "bwpreset" | "bwmodulator" | "bwremotecontrols"
         )
     } else {
         false
