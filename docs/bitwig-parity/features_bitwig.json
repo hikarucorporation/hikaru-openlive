@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 357,
+    "done": 360,
     "in_progress": 15,
-    "planned": 353,
+    "planned": 350,
     "bugs": 1,
-    "parity_percent": 49
+    "parity_percent": 50
   },
   "areas": [
     {
@@ -4082,17 +4082,20 @@
         {
           "id": "bgd-01",
           "name": "BtWg00030004 Grid module container & UUID resolver (.bwmodule)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwmodule_shim.rs"
         },
         {
           "id": "bgd-02",
           "name": "Port/signal topology & parameter schema extraction",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwmodule_shim.rs"
         },
         {
           "id": "bgd-03",
           "name": "OpenGrid node translation & fallback mapping",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwmodule_shim.rs"
         }
       ]
     },

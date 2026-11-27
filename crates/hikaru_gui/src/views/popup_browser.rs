@@ -368,6 +368,12 @@ fn build_bitwig_preset_items(
                     MOD_ARROW_CYAN,
                     Some(QuickInstrumentFilter::Modulation),
                 )
+            } else if p.file_kind == ".bwmodule" {
+                (
+                    BrowserRailTab::Instruments,
+                    INST_YELLOW,
+                    Some(QuickInstrumentFilter::Synth),
+                )
             } else if p.is_modulator {
                 (
                     BrowserRailTab::NoteFx,

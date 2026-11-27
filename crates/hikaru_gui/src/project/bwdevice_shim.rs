@@ -1386,6 +1386,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwremotecontrols" => Some(".bwremotecontrols"),
         "bwclip" => Some(".bwclip"),
         "bwextension" => Some(".bwextension"),
+        "bwmodule" => Some(".bwmodule"),
         _ => None,
     }
 }
@@ -1393,7 +1394,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
 fn classify_bitwig_device_role(device_name: &str, category: &str, file_kind: &str) -> (bool, bool, bool) {
     let dev_low = device_name.to_ascii_lowercase();
     let cat_low = category.to_ascii_lowercase();
-    let is_grid = dev_low.contains("grid");
+    let is_grid = dev_low.contains("grid") || file_kind == ".bwmodule";
     let is_mod = file_kind == ".bwmodulator" || cat_low.contains("modulat");
     let is_inst = cat_low.contains("synth")
         || cat_low.contains("instrument")
@@ -1528,6 +1529,15 @@ fn scan_bitwig_preset_dir(
                     tags.push("Controller".to_string());
                 }
             }
+        } else if file_kind == ".bwmodule" {
+            category = "Grid Module".to_string();
+            if let Ok(translation) = crate::project::bwmodule_shim::load_bwmodule_file(&path, None) {
+                device_name = translation.schema.bitwig_name.clone();
+                category = format!("Grid · {}", translation.schema.category.label());
+                if !tags.contains(&"Grid".to_string()) {
+                    tags.push("Grid".to_string());
+                }
+            }
         }
 
         if let Some(compat) = lookup_compat_target(Some(&device_name), None) {
@@ -1609,6 +1619,10 @@ pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigP
         PathBuf::from("/opt/bitwig-studio/Library/Extensions"),
         "Bitwig Library",
     ));
+    candidates.push((
+        PathBuf::from("/opt/bitwig-studio/Library/modules"),
+        "Bitwig Library",
+    ));
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push((cwd.join("presets"), "Workspace Presets"));
         candidates.push((cwd.join("assets/presets"), "Workspace Presets"));
@@ -1635,6 +1649,40 @@ pub fn inspect_bwpreset_preview(path: &Path) -> BwPresetPreview {
         .and_then(|s| s.to_str())
         .unwrap_or("Preset")
         .to_string();
+
+    if crate::project::bwmodule_shim::is_bwmodule_file(path) {
+        return match crate::project::bwmodule_shim::load_bwmodule_file(path, None) {
+            Ok(translation) => {
+                let sample_params = translation
+                    .schema
+                    .params
+                    .values()
+                    .take(6)
+                    .map(|p| (p.bitwig_name.clone(), p.normalized))
+                    .collect();
+                BwPresetPreview {
+                    device_name: translation.schema.bitwig_name.clone(),
+                    preset_name: stem,
+                    creator: "Bitwig".to_string(),
+                    category: format!("Grid · {}", translation.schema.category.label()),
+                    container_kind: "Bitwig Grid Module (.bwmodule)".to_string(),
+                    param_count: translation.schema.params.len(),
+                    sample_params,
+                    modulator_count: 0,
+                    modulator_kinds: Vec::new(),
+                    grid_node_count: 1,
+                    grid_cable_count: 0,
+                    error: None,
+                }
+            }
+            Err(err) => BwPresetPreview {
+                preset_name: stem,
+                container_kind: "Bitwig Grid Module (.bwmodule)".to_string(),
+                error: Some(err),
+                ..BwPresetPreview::default()
+            },
+        };
+    }
 
     if crate::project::bwextension_shim::is_bwextension_file(path) {
         return match crate::project::bwextension_shim::inspect_bwextension_file(path) {
