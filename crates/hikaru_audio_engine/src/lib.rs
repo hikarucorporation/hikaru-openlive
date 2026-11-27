@@ -4640,6 +4640,20 @@ impl<'a> AudioEngine<'a> {
         }
     }
 
+    pub fn set_track_sampler_zones(
+        &mut self,
+        track_idx: usize,
+        zones: Vec<hikaru_dsp::synth::sampler::SamplerZoneData>,
+    ) {
+        let ti = track_idx.min(15);
+        if zones.is_empty() {
+            self.track_sampler_samples[ti] = None;
+            self.sampler_voice_pool.kill_track_notes(ti);
+        } else {
+            self.track_sampler_samples[ti] = Some(Arc::new(SamplerSampleData::from_zones(zones)));
+        }
+    }
+
     pub fn set_track_sampler_params(&mut self, track_idx: usize, params: SamplerDspParams) {
         let ti = track_idx.min(15);
         self.track_sampler_params[ti] = params;

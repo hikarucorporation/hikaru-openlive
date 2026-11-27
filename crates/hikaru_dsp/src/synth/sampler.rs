@@ -34,11 +34,33 @@ pub enum SamplerFilterMode {
 }
 
 #[derive(Debug, Clone)]
+pub struct SamplerZoneData {
+    pub sample: Arc<SamplerSampleData>,
+    pub key_low: u8,
+    pub key_high: u8,
+    pub root_note: u8,
+    pub vel_low: u8,
+    pub vel_high: u8,
+    pub tune_cents: f32,
+    pub gain_db: f32,
+    pub pan: f32,
+    pub play_start: f32,
+    pub play_end: f32,
+    pub loop_mode: SamplerLoopMode,
+    pub loop_start: f32,
+    pub loop_len: f32,
+    pub loop_crossfade: f32,
+    pub reverse: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct SamplerSampleData {
     pub samples: Vec<f32>,
     pub channels: usize,
     pub sample_rate: f32,
     pub total_frames: usize,
+    /// Optional multi-zone key/velocity layers (used by `.multisample` instruments).
+    pub zones: Vec<SamplerZoneData>,
 }
 
 impl SamplerSampleData {
@@ -50,7 +72,63 @@ impl SamplerSampleData {
             channels: ch,
             sample_rate: if sample_rate > 0.0 { sample_rate } else { 44100.0 },
             total_frames,
+            zones: Vec::new(),
         }
+    }
+
+    pub fn from_zones(zones: Vec<SamplerZoneData>) -> Self {
+        let (samples, channels, sample_rate, total_frames) = if let Some(first) = zones.first() {
+            (
+                first.sample.samples.clone(),
+                first.sample.channels,
+                first.sample.sample_rate,
+                first.sample.total_frames,
+            )
+        } else {
+            (Vec::new(), 1, 44100.0, 0)
+        };
+        Self {
+            samples,
+            channels,
+            sample_rate,
+            total_frames,
+            zones,
+        }
+    }
+
+    /// Selects the best matching zone for a given MIDI note and normalized velocity (0..1).
+    pub fn select_zone(&self, pitch: u8, velocity_0_1: f32) -> Option<(usize, &SamplerZoneData)> {
+        if self.zones.is_empty() {
+            return None;
+        }
+        let vel = (velocity_0_1.clamp(0.0, 1.0) * 127.0).round() as u8;
+        if let Some(found) = self
+            .zones
+            .iter()
+            .enumerate()
+            .find(|(_, z)| {
+                z.sample.total_frames > 0
+                    && pitch >= z.key_low
+                    && pitch <= z.key_high
+                    && vel >= z.vel_low
+                    && vel <= z.vel_high
+            })
+        {
+            return Some(found);
+        }
+        if let Some(found) = self
+            .zones
+            .iter()
+            .enumerate()
+            .find(|(_, z)| z.sample.total_frames > 0 && pitch >= z.key_low && pitch <= z.key_high)
+        {
+            return Some(found);
+        }
+        self.zones
+            .iter()
+            .enumerate()
+            .filter(|(_, z)| z.sample.total_frames > 0)
+            .min_by_key(|(_, z)| (z.root_note as i16 - pitch as i16).abs())
     }
 
     #[inline]
@@ -311,6 +389,7 @@ pub struct SamplerVoice {
     pub track_idx: usize,
     pub pitch: u8,
     pub velocity: f32,
+    pub zone_idx: Option<usize>,
     pub frame_pos: f64,
     pub direction: f64, // +1.0 forward, -1.0 backward (ping-pong or reverse)
     pub current_pitch: f32,
@@ -329,6 +408,7 @@ impl SamplerVoice {
             track_idx: 0,
             pitch: 60,
             velocity: 1.0,
+            zone_idx: None,
             frame_pos: 0.0,
             direction: 1.0,
             current_pitch: 60.0,
@@ -486,10 +566,21 @@ impl SamplerVoicePool {
                 .unwrap_or(0)
         };
 
-        let start_frac = params.play_start.clamp(0.0, 0.999) as f64;
-        let end_frac = params.play_end.clamp(start_frac as f32 + 0.001, 1.0) as f64;
-        let start_frame = start_frac * (sample.total_frames - 1) as f64;
-        let end_frame = end_frac * (sample.total_frames - 1) as f64;
+        let selected_zone = sample.select_zone(pitch, velocity);
+        let (zone_idx, zone_frames, z_play_start, z_play_end, z_reverse) =
+            if let Some((zi, z)) = selected_zone {
+                (Some(zi), z.sample.total_frames, z.play_start, z.play_end, z.reverse)
+            } else {
+                (None, sample.total_frames, params.play_start, params.play_end, params.reverse)
+            };
+        if zone_frames == 0 {
+            return;
+        }
+
+        let start_frac = z_play_start.clamp(0.0, 0.999) as f64;
+        let end_frac = z_play_end.clamp(start_frac as f32 + 0.001, 1.0) as f64;
+        let start_frame = start_frac * (zone_frames - 1) as f64;
+        let end_frame = end_frac * (zone_frames - 1) as f64;
 
         let initial_pitch = if params.glide_ms > 0.5 {
             self.last_pitch_per_track[ti].unwrap_or(pitch as f32)
@@ -503,8 +594,9 @@ impl SamplerVoicePool {
         v.track_idx = ti;
         v.pitch = pitch;
         v.velocity = velocity.clamp(0.0, 1.0);
-        v.frame_pos = if params.reverse { end_frame } else { start_frame };
-        v.direction = if params.reverse { -1.0 } else { 1.0 };
+        v.zone_idx = zone_idx;
+        v.frame_pos = if z_reverse { end_frame } else { start_frame };
+        v.direction = if z_reverse { -1.0 } else { 1.0 };
         v.current_pitch = initial_pitch;
         v.target_pitch = pitch as f32;
         v.env_stage = SamplerEnvStage::Attack;
@@ -574,23 +666,10 @@ impl SamplerVoicePool {
         frames: usize,
         host_sample_rate: f32,
     ) {
-        if sample.total_frames == 0 || (gain_l == 0.0 && gain_r == 0.0) {
+        if (sample.total_frames == 0 && sample.zones.is_empty()) || (gain_l == 0.0 && gain_r == 0.0) {
             return;
         }
         let ti = track_idx.min(15);
-        let max_frame = (sample.total_frames - 1) as f64;
-        let play_start = (params.play_start.clamp(0.0, 0.999) as f64) * max_frame;
-        let play_end = (params.play_end.clamp(params.play_start + 0.001, 1.0) as f64) * max_frame;
-
-        let loop_start = (params.loop_start.clamp(0.0, 0.998) as f64) * max_frame;
-        let loop_end = ((params.loop_start + params.loop_len).clamp(params.loop_start + 0.002, 1.0) as f64) * max_frame;
-
-        let base_gain = 10.0f32.powf((params.gain_db + params.output_db) / 20.0);
-        let pan_norm = params.pan.clamp(-1.0, 1.0);
-        let pan_l = if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
-        let pan_r = if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
-
-        let sr_ratio = (sample.sample_rate / host_sample_rate.max(1.0)) as f64;
         let glide_coeff = if params.glide_ms > 0.5 {
             1.0 - (-1.0 / (params.glide_ms * 0.001 * host_sample_rate.max(1.0))).exp()
         } else {
@@ -601,6 +680,56 @@ impl SamplerVoicePool {
             if !v.active || v.track_idx != ti {
                 continue;
             }
+            let zone_ref = v.zone_idx.and_then(|zi| sample.zones.get(zi));
+            let active_sample: &SamplerSampleData =
+                zone_ref.map(|z| z.sample.as_ref()).unwrap_or(sample);
+            if active_sample.total_frames == 0 {
+                continue;
+            }
+
+            let max_frame = (active_sample.total_frames - 1) as f64;
+            let (z_play_start, z_play_end, z_loop_mode, z_loop_start, z_loop_len, z_loop_xfade, z_reverse, z_root, z_tune, z_gain_db, z_pan) =
+                if let Some(z) = zone_ref {
+                    (
+                        z.play_start,
+                        z.play_end,
+                        z.loop_mode,
+                        z.loop_start,
+                        z.loop_len,
+                        z.loop_crossfade,
+                        z.reverse,
+                        z.root_note,
+                        z.tune_cents,
+                        z.gain_db,
+                        z.pan,
+                    )
+                } else {
+                    (
+                        params.play_start,
+                        params.play_end,
+                        params.loop_mode,
+                        params.loop_start,
+                        params.loop_len,
+                        params.loop_crossfade,
+                        params.reverse,
+                        params.root_note,
+                        0.0,
+                        0.0,
+                        0.0,
+                    )
+                };
+
+            let play_start = (z_play_start.clamp(0.0, 0.999) as f64) * max_frame;
+            let play_end = (z_play_end.clamp(z_play_start + 0.001, 1.0) as f64) * max_frame;
+            let loop_start = (z_loop_start.clamp(0.0, 0.998) as f64) * max_frame;
+            let loop_end = ((z_loop_start + z_loop_len).clamp(z_loop_start + 0.002, 1.0) as f64) * max_frame;
+
+            let base_gain = 10.0f32.powf((params.gain_db + params.output_db + z_gain_db) / 20.0);
+            let pan_norm = (params.pan + z_pan).clamp(-1.0, 1.0);
+            let pan_l = if pan_norm > 0.0 { 1.0 - pan_norm } else { 1.0 };
+            let pan_r = if pan_norm < 0.0 { 1.0 + pan_norm } else { 1.0 };
+            let sr_ratio = (active_sample.sample_rate / host_sample_rate.max(1.0)) as f64;
+
             let vel_gain = (1.0 - params.velocity_sens) + params.velocity_sens * v.velocity;
             let voice_gain_l = gain_l * base_gain * pan_l * vel_gain;
             let voice_gain_r = gain_r * base_gain * pan_r * vel_gain;
@@ -619,16 +748,12 @@ impl SamplerVoicePool {
                 }
 
                 let semitone_delta = match params.playback_mode {
-                    SamplerPlaybackMode::Repitch => {
-                        (v.current_pitch - params.root_note as f32)
+                    SamplerPlaybackMode::Repitch
+                    | SamplerPlaybackMode::Cycles
+                    | SamplerPlaybackMode::Textures => {
+                        (v.current_pitch - z_root as f32)
                             + params.pitch_semitones
-                            + params.fine_cents * 0.01
-                    }
-                    SamplerPlaybackMode::Cycles | SamplerPlaybackMode::Textures => {
-                        // Still track pitch, with speed decoupled
-                        (v.current_pitch - params.root_note as f32)
-                            + params.pitch_semitones
-                            + params.fine_cents * 0.01
+                            + (params.fine_cents + z_tune) * 0.01
                     }
                 };
                 let pitch_ratio = 2.0f64.powf(semitone_delta as f64 / 12.0);
@@ -638,16 +763,16 @@ impl SamplerVoicePool {
                     sr_ratio * pitch_ratio * (params.speed.clamp(0.05, 4.0) as f64) * v.direction
                 };
 
-                let (mut sl, mut sr_ch) = sample.sample_frame_lerp(v.frame_pos);
+                let (mut sl, mut sr_ch) = active_sample.sample_frame_lerp(v.frame_pos);
 
                 // Optional loop crossfade near loop_end
-                if params.loop_mode == SamplerLoopMode::Forward && params.loop_crossfade > 0.001 {
+                if z_loop_mode == SamplerLoopMode::Forward && z_loop_xfade > 0.001 {
                     let loop_span = (loop_end - loop_start).max(1.0);
-                    let xfade_frames = (params.loop_crossfade.clamp(0.0, 0.5) as f64) * loop_span;
+                    let xfade_frames = (z_loop_xfade.clamp(0.0, 0.5) as f64) * loop_span;
                     if xfade_frames > 1.0 && v.frame_pos > loop_end - xfade_frames && v.frame_pos <= loop_end {
                         let t = ((v.frame_pos - (loop_end - xfade_frames)) / xfade_frames).clamp(0.0, 1.0) as f32;
                         let wrap_pos = loop_start + (v.frame_pos - (loop_end - xfade_frames));
-                        let (wl, wr) = sample.sample_frame_lerp(wrap_pos);
+                        let (wl, wr) = active_sample.sample_frame_lerp(wrap_pos);
                         sl = sl * (1.0 - t) + wl * t;
                         sr_ch = sr_ch * (1.0 - t) + wr * t;
                     }
@@ -655,7 +780,7 @@ impl SamplerVoicePool {
 
                 // Filter with optional keytrack
                 let keytrack_mult = if params.filter_keytrack > 0.001 {
-                    2.0f32.powf(((v.current_pitch - params.root_note as f32) * params.filter_keytrack) / 12.0)
+                    2.0f32.powf(((v.current_pitch - z_root as f32) * params.filter_keytrack) / 12.0)
                 } else {
                     1.0
                 };
@@ -675,10 +800,10 @@ impl SamplerVoicePool {
                 // Advance playhead
                 v.frame_pos += step;
 
-                match params.loop_mode {
+                match z_loop_mode {
                     SamplerLoopMode::Off => {
-                        if (!params.reverse && v.frame_pos >= play_end)
-                            || (params.reverse && v.frame_pos <= play_start)
+                        if (!z_reverse && v.frame_pos >= play_end)
+                            || (z_reverse && v.frame_pos <= play_start)
                         {
                             v.active = false;
                             v.env_stage = SamplerEnvStage::Free;
@@ -687,7 +812,7 @@ impl SamplerVoicePool {
                     }
                     SamplerLoopMode::Forward => {
                         let span = (loop_end - loop_start).max(1.0);
-                        if !params.reverse {
+                        if !z_reverse {
                             if v.frame_pos >= loop_end {
                                 v.frame_pos = loop_start + (v.frame_pos - loop_end) % span;
                             }
@@ -789,5 +914,60 @@ mod tests {
         let pos = pool.active_playhead(0, data.total_frames).unwrap();
         // ~200 frames advanced out of 3999
         assert!(pos > 0.04 && pos < 0.06, "Expected ~2x playhead speed, got {pos}");
+    }
+
+    #[test]
+    fn sampler_selects_keyzone_and_velocity_layer() {
+        let low_sample = Arc::new(SamplerSampleData::new(vec![0.25; 512], 1, 44100.0));
+        let high_sample = Arc::new(SamplerSampleData::new(vec![-0.75; 512], 1, 44100.0));
+        let multi = SamplerSampleData::from_zones(vec![
+            SamplerZoneData {
+                sample: low_sample,
+                key_low: 0,
+                key_high: 59,
+                root_note: 48,
+                vel_low: 0,
+                vel_high: 64,
+                tune_cents: 0.0,
+                gain_db: 0.0,
+                pan: 0.0,
+                play_start: 0.0,
+                play_end: 1.0,
+                loop_mode: SamplerLoopMode::Forward,
+                loop_start: 0.1,
+                loop_len: 0.5,
+                loop_crossfade: 0.0,
+                reverse: false,
+            },
+            SamplerZoneData {
+                sample: high_sample,
+                key_low: 60,
+                key_high: 127,
+                root_note: 72,
+                vel_low: 65,
+                vel_high: 127,
+                tune_cents: 0.0,
+                gain_db: 0.0,
+                pan: 0.0,
+                play_start: 0.0,
+                play_end: 1.0,
+                loop_mode: SamplerLoopMode::Off,
+                loop_start: 0.0,
+                loop_len: 1.0,
+                loop_crossfade: 0.0,
+                reverse: false,
+            },
+        ]);
+
+        let mut params = SamplerDspParams::default();
+        params.filter_mode = SamplerFilterMode::Off;
+        params.attack_ms = 0.0;
+
+        let mut pool = SamplerVoicePool::new();
+        pool.trigger(72, 0.9, 0, &multi, &params);
+        let mut out = vec![0.0f32; 32 * 2];
+        pool.process_track(0, &multi, &params, &mut out, 1.0, 1.0, 32, 44100.0);
+        // Should play negative-valued high_sample
+        assert!(out[0] < -0.1, "Expected high velocity/key zone sample, got {}", out[0]);
     }
 }

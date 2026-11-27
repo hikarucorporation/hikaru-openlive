@@ -1387,6 +1387,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwclip" => Some(".bwclip"),
         "bwextension" => Some(".bwextension"),
         "bwmodule" => Some(".bwmodule"),
+        "multisample" => Some(".multisample"),
         _ => None,
     }
 }
@@ -1537,6 +1538,25 @@ fn scan_bitwig_preset_dir(
                 if !tags.contains(&"Grid".to_string()) {
                     tags.push("Grid".to_string());
                 }
+            }
+        } else if file_kind == ".multisample" {
+            device_name = "Sampler".to_string();
+            category = "Sampler".to_string();
+            if let Ok(ms_doc) = crate::project::multisample::load_multisample_file(&path) {
+                if !ms_doc.category.trim().is_empty() {
+                    category = format!("Sampler · {}", ms_doc.category);
+                }
+                if !ms_doc.creator.trim().is_empty() {
+                    creator = ms_doc.creator;
+                }
+                for kw in &ms_doc.keywords {
+                    if !tags.contains(kw) {
+                        tags.push(kw.clone());
+                    }
+                }
+            }
+            if !tags.contains(&"Sampler".to_string()) {
+                tags.push("Sampler".to_string());
             }
         }
 

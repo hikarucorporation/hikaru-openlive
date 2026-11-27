@@ -919,12 +919,19 @@ impl AppState {
                     let prev = self.synced_sampler_revs[eng_track];
                     let (prev_s, prev_p) = prev.unwrap_or((u64::MAX, u64::MAX));
                     if prev.is_none() || prev_s != smp.sample_rev {
-                        self.audio_proxy.send(GuiCommand::SetTrackSamplerSample {
-                            track_idx: eng_track,
-                            samples: smp.samples.clone(),
-                            channels: smp.channels,
-                            sample_rate: smp.sample_rate,
-                        });
+                        if !smp.zones.is_empty() {
+                            self.audio_proxy.send(GuiCommand::SetTrackSamplerZones {
+                                track_idx: eng_track,
+                                zones: smp.zones.clone(),
+                            });
+                        } else {
+                            self.audio_proxy.send(GuiCommand::SetTrackSamplerSample {
+                                track_idx: eng_track,
+                                samples: smp.samples.clone(),
+                                channels: smp.channels,
+                                sample_rate: smp.sample_rate,
+                            });
+                        }
                     }
                     if prev.is_none() || prev_p != smp.params_rev {
                         self.audio_proxy.send(GuiCommand::SetTrackSamplerParams {

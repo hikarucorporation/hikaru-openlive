@@ -1344,11 +1344,14 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
     ui.allocate_rect(well_rect, Sense::hover());
     ui.painter().rect_filled(well_rect, 0.0, theme::BW_DARK_WELL);
 
-    // Aceptar drag & drop desde el Explorador interno (`.hdp`, `.bwdevice`, `.bwpreset`)
+    // Aceptar drag & drop desde el Explorador interno (`.hdp`, `.bwdevice`, `.bwpreset`, `.multisample`)
     let is_dragging_preset = app
         .dragged_sample
         .as_ref()
-        .map(crate::views::explorer::is_preset_file)
+        .map(|p| {
+            crate::views::explorer::is_preset_file(p)
+                || crate::views::explorer::is_multisample_file(p)
+        })
         .unwrap_or(false);
     if is_dragging_preset {
         let pointer_pos = ui.input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()));
@@ -1362,7 +1365,22 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
             );
             if ui.input(|i| i.pointer.any_released()) {
                 if let Some(path) = app.dragged_sample.take() {
-                    load_device_preset_from_path(app, track_idx, &path);
+                    if crate::views::explorer::is_multisample_file(&path) {
+                        let mut smp = crate::views::hikaru_native_plugins::hikaru_sampler::HikaruSampler::default();
+                        if smp.load_multisample(&path).is_ok() {
+                            let mut slot = crate::views::mixer::DspSlot::default();
+                            slot.name = "Sampler".to_string();
+                            slot.has_gui = Some(false);
+                            slot.sampler_state = Some(smp);
+                            if let Some(track) = app.current_tracks_mut().get_mut(track_idx) {
+                                track.effects.push(slot);
+                                app.project_dirty = true;
+                            }
+                            let _ = hikaru_mcp_port::record_bitwig_drop(&path, "dsp-rack-drop");
+                        }
+                    } else {
+                        load_device_preset_from_path(app, track_idx, &path);
+                    }
                     app.show_dsp_rack = true;
                 }
             }

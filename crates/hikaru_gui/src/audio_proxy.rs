@@ -326,6 +326,10 @@ pub enum GuiCommand {
         channels: usize,
         sample_rate: f32,
     },
+    SetTrackSamplerZones {
+        track_idx: usize,
+        zones: Vec<hikaru_dsp::synth::sampler::SamplerZoneData>,
+    },
     SetTrackSamplerParams {
         track_idx: usize,
         params: hikaru_dsp::synth::sampler::SamplerDspParams,

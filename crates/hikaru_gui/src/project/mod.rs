@@ -77,6 +77,7 @@ pub mod bwproject;
 pub mod bwtemplate;
 pub mod common;
 pub mod dawproject;
+pub mod multisample;
 pub mod openlive;
 pub mod openstudio;
 

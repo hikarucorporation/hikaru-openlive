@@ -167,13 +167,13 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .bwremotecontrols | 3 | 3 | 0 | 0 | 0 |
 | .bwextension | 3 | 3 | 0 | 0 | 0 |
 | .bwpackage | 3 | 0 | 0 | 3 | 0 |
-| .multisample | 3 | 0 | 0 | 3 | 0 |
+| .multisample | 3 | 3 | 0 | 0 | 0 |
 | .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **725** | **360** | **15** | **350** | **1** |
+| **Total** | **725** | **363** | **15** | **347** | **1** |
 
-Paridad global: **360 / 725 = 50 %**.
+Paridad global: **363 / 725 = 50 %**.
 
 ### Bugs abiertos
 

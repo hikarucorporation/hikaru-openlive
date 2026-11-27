@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 360,
+    "done": 363,
     "in_progress": 15,
-    "planned": 350,
+    "planned": 347,
     "bugs": 1,
     "parity_percent": 50
   },
@@ -4180,17 +4180,20 @@
         {
           "id": "bms-01",
           "name": "Container & XML/metadata parser (.multisample)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/multisample.rs"
         },
         {
           "id": "bms-02",
           "name": "Key zones, velocity layers & loop points",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_dsp/src/synth/sampler.rs"
         },
         {
           "id": "bms-03",
           "name": "Hikaru Sampler direct loading & export",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_sampler/sampler_editor.rs"
         }
       ]
     },

@@ -583,6 +583,11 @@ fn run_gui(options: GuiOptions) -> ExitCode {
                         engine.set_track_sampler_sample(track_idx, samples, channels, sample_rate);
                     }
                 }
+                GuiCommand::SetTrackSamplerZones { track_idx, zones } => {
+                    if let Ok(mut engine) = engine_for_commands.lock() {
+                        engine.set_track_sampler_zones(track_idx, zones);
+                    }
+                }
                 GuiCommand::SetTrackSamplerParams { track_idx, params } => {
                     if let Ok(mut engine) = engine_for_commands.lock() {
                         engine.set_track_sampler_params(track_idx, params);

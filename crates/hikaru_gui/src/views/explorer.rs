@@ -29,6 +29,7 @@ pub struct ExplorerEntry {
     pub is_bwclip: bool,
     pub is_bwextension: bool,
     pub is_bwmodule: bool,
+    pub is_multisample: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +62,11 @@ pub fn is_supported_file(path: &PathBuf) -> bool {
         || is_bwclip_file(path)
         || is_bwextension_file(path)
         || is_bwmodule_file(path)
+        || is_multisample_file(path)
+}
+
+pub fn is_multisample_file(path: &PathBuf) -> bool {
+    crate::project::multisample::is_multisample_file(path)
 }
 
 pub fn is_bwclip_file(path: &PathBuf) -> bool {
@@ -205,6 +211,7 @@ impl FileExplorerState {
                         is_bwclip: false,
                         is_bwextension: false,
                         is_bwmodule: false,
+                        is_multisample: false,
                     });
                 } else if is_supported_file(&path) {
                     let is_midi = is_midi_file(&path);
@@ -212,6 +219,7 @@ impl FileExplorerState {
                     let is_bwclip = is_bwclip_file(&path);
                     let is_bwextension = is_bwextension_file(&path);
                     let is_bwmodule = is_bwmodule_file(&path);
+                    let is_multisample = is_multisample_file(&path);
                     files.push(ExplorerEntry {
                         name: name.to_string(),
                         path,
@@ -221,6 +229,7 @@ impl FileExplorerState {
                         is_bwclip,
                         is_bwextension,
                         is_bwmodule,
+                        is_multisample,
                     });
                 }
             }
@@ -735,6 +744,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                     BrowserBadgeKind::DeviceAudio,
                                     Color32::from_rgb(0x38, 0xBD, 0xF8),
                                 )
+                            } else if entry.is_multisample {
+                                (
+                                    BrowserBadgeKind::DeviceAudio,
+                                    Color32::from_rgb(0xD8, 0xC8, 0x22),
+                                )
                             } else if entry.is_midi {
                                 (
                                     BrowserBadgeKind::DeviceNote,
@@ -1022,6 +1036,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 state.explorer_state.cached_waveform.clear();
                 let _ = hikaru_mcp_port::record_bitwig_drop(&path, "explorer-select");
                 let _ = crate::project::bwmodule_shim::load_bwmodule_file(&path, None);
+            } else if is_multisample_file(&path) {
+                state.explorer_state.selected_file = Some(path.clone());
+                state.explorer_state.cached_waveform.clear();
+                let _ = hikaru_mcp_port::record_bitwig_drop(&path, "explorer-select");
+                let _ = crate::project::multisample::load_multisample_file(&path);
             } else if is_bwextension_file(&path) {
                 state.explorer_state.selected_file = Some(path.clone());
                 state.explorer_state.cached_waveform.clear();

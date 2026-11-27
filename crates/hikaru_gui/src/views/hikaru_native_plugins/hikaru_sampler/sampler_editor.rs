@@ -2,10 +2,12 @@
 // Hikaru Sampler — Bitwig Studio-style Polyphonic Sampler UI & State
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui::{pos2, vec2, Align2, Color32, CursorIcon, Rect, RichText, Sense, Stroke, Ui};
 use hikaru_dsp::synth::sampler::{
-    SamplerDspParams, SamplerFilterMode, SamplerLoopMode, SamplerPlaybackMode,
+    SamplerDspParams, SamplerFilterMode, SamplerLoopMode, SamplerPlaybackMode, SamplerSampleData,
+    SamplerZoneData,
 };
 use hikaru_project_file::SamplerParams;
 
@@ -44,6 +46,8 @@ pub struct HikaruSampler {
     /// Downsampled min/max peaks for waveform drawing (channel 0 & optional channel 1)
     pub peaks_l: Vec<(f32, f32)>,
     pub peaks_r: Vec<(f32, f32)>,
+    /// Multi-zone key/velocity layers loaded from `.multisample` (empty for single WAV).
+    pub zones: Vec<SamplerZoneData>,
 
     pub playback_mode: SamplerPlaybackMode,
     pub speed: f32,
@@ -102,6 +106,7 @@ impl Default for HikaruSampler {
             samples: Vec::new(),
             peaks_l: Vec::new(),
             peaks_r: Vec::new(),
+            zones: Vec::new(),
 
             playback_mode: SamplerPlaybackMode::Repitch,
             speed: 1.0,
@@ -287,35 +292,17 @@ impl HikaruSampler {
         if let Some(ref path_str) = p.sample_path {
             let path = PathBuf::from(path_str);
             if path.exists() {
-                let _ = self.load_wav(&path);
+                if crate::project::multisample::is_multisample_file(&path) {
+                    let _ = self.load_multisample(&path);
+                } else {
+                    let _ = self.load_wav(&path);
+                }
             }
         }
         self.params_rev = self.params_rev.wrapping_add(1);
     }
 
-    pub fn load_wav(&mut self, path: &Path) -> Result<(), String> {
-        let mut reader = crate::wav_io::open(path).map_err(|e| e.to_string())?;
-        let spec = reader.spec();
-        let ch = (spec.channels as usize).max(1);
-        let sr = spec.sample_rate as f32;
-
-        let raw: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
-            hound::SampleFormat::Int => {
-                let scale = crate::wav_io::int_scale(spec.bits_per_sample);
-                reader
-                    .samples::<i32>()
-                    .filter_map(Result::ok)
-                    .map(|s| s as f32 / scale.max(1.0))
-                    .collect()
-            }
-        };
-
-        let total_frames = raw.len() / ch;
-        if total_frames == 0 {
-            return Err("Empty WAV file".to_string());
-        }
-
+    fn compute_waveform_peaks(raw: &[f32], ch: usize, total_frames: usize) -> (Vec<(f32, f32)>, Vec<(f32, f32)>) {
         const BINS: usize = 180;
         let mut peaks_l = vec![(0.0f32, 0.0f32); BINS];
         let mut peaks_r = vec![(0.0f32, 0.0f32); BINS];
@@ -342,7 +329,35 @@ impl HikaruSampler {
             peaks_l[bin] = (min_l, max_l);
             peaks_r[bin] = (min_r, max_r);
         }
+        (peaks_l, peaks_r)
+    }
 
+    pub fn load_wav(&mut self, path: &Path) -> Result<(), String> {
+        let mut reader = crate::wav_io::open(path).map_err(|e| e.to_string())?;
+        let spec = reader.spec();
+        let ch = (spec.channels as usize).max(1);
+        let sr = spec.sample_rate as f32;
+
+        let raw: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
+            hound::SampleFormat::Int => {
+                let scale = crate::wav_io::int_scale(spec.bits_per_sample);
+                reader
+                    .samples::<i32>()
+                    .filter_map(Result::ok)
+                    .map(|s| s as f32 / scale.max(1.0))
+                    .collect()
+            }
+        };
+
+        let total_frames = raw.len() / ch;
+        if total_frames == 0 {
+            return Err("Empty WAV file".to_string());
+        }
+
+        let (peaks_l, peaks_r) = Self::compute_waveform_peaks(&raw, ch, total_frames);
+
+        self.zones.clear();
         self.sample_path = Some(path.to_path_buf());
         self.sample_name = path
             .file_name()
@@ -361,6 +376,211 @@ impl HikaruSampler {
         self.sample_rev = self.sample_rev.wrapping_add(1);
         self.params_rev = self.params_rev.wrapping_add(1);
         Ok(())
+    }
+
+    pub fn load_multisample(&mut self, path: &Path) -> Result<(), String> {
+        use crate::project::multisample::{load_multisample_file, MultisampleLoopMode};
+
+        let doc = load_multisample_file(path)?;
+        let mut built_zones: Vec<SamplerZoneData> = Vec::new();
+
+        for z in &doc.zones {
+            let Some(audio) = z.audio.as_ref() else {
+                continue;
+            };
+            if audio.total_frames == 0 {
+                continue;
+            }
+            let max_f = (audio.total_frames - 1).max(1) as f32;
+            let play_start = z
+                .sample_start
+                .map(|s| (s as f32 / max_f).clamp(0.0, 0.999))
+                .unwrap_or(0.0);
+            let play_end = z
+                .sample_stop
+                .map(|s| (s as f32 / max_f).clamp(play_start + 0.001, 1.0))
+                .unwrap_or(1.0);
+
+            let loop_mode = match z.loop_spec.mode {
+                MultisampleLoopMode::Off => SamplerLoopMode::Off,
+                MultisampleLoopMode::Forward => SamplerLoopMode::Forward,
+                MultisampleLoopMode::PingPong => SamplerLoopMode::PingPong,
+            };
+            let loop_start = (z.loop_spec.start_frame as f32 / max_f).clamp(0.0, 0.998);
+            let loop_end = z
+                .loop_spec
+                .stop_frame
+                .map(|s| (s as f32 / max_f).clamp(loop_start + 0.002, 1.0))
+                .unwrap_or(1.0);
+            let loop_len = (loop_end - loop_start).clamp(0.002, 1.0 - loop_start);
+
+            let sample_arc = Arc::new(SamplerSampleData::new(
+                audio.samples.clone(),
+                audio.channels,
+                audio.sample_rate,
+            ));
+
+            built_zones.push(SamplerZoneData {
+                sample: sample_arc,
+                key_low: z.key.low,
+                key_high: z.key.high,
+                root_note: z.key.root,
+                vel_low: z.velocity.low,
+                vel_high: z.velocity.high,
+                tune_cents: z.key.tune_cents,
+                gain_db: z.gain_db,
+                pan: z.pan,
+                play_start,
+                play_end,
+                loop_mode,
+                loop_start,
+                loop_len,
+                loop_crossfade: z.loop_spec.fade,
+                reverse: z.reverse,
+            });
+        }
+
+        if built_zones.is_empty() {
+            return Err("el archivo .multisample no contiene zonas con audio WAV válido".to_string());
+        }
+
+        let first = &built_zones[0];
+        let (peaks_l, peaks_r) = Self::compute_waveform_peaks(
+            &first.sample.samples,
+            first.sample.channels,
+            first.sample.total_frames,
+        );
+
+        self.sample_path = Some(path.to_path_buf());
+        self.sample_name = if doc.name.trim().is_empty() {
+            path.file_stem()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Multisample".to_string())
+        } else {
+            doc.name.clone()
+        };
+        self.sample_rate = first.sample.sample_rate;
+        self.channels = first.sample.channels;
+        self.total_frames = first.sample.total_frames;
+        self.samples = first.sample.samples.clone();
+        self.peaks_l = peaks_l;
+        self.peaks_r = peaks_r;
+        self.root_note = first.root_note;
+        self.play_start = first.play_start;
+        self.play_end = first.play_end;
+        self.loop_mode = first.loop_mode;
+        self.loop_start = first.loop_start;
+        self.loop_len = first.loop_len;
+        self.loop_crossfade = first.loop_crossfade;
+        self.reverse = first.reverse;
+        self.zones = built_zones;
+        self.sample_rev = self.sample_rev.wrapping_add(1);
+        self.params_rev = self.params_rev.wrapping_add(1);
+        Ok(())
+    }
+
+    pub fn export_multisample(&self, path: &Path) -> Result<(), String> {
+        use crate::project::multisample::{
+            export_multisample_file, MultisampleAudio, MultisampleDocument, MultisampleKeyZone,
+            MultisampleLoop, MultisampleLoopMode, MultisampleVelocityZone, MultisampleZone,
+        };
+
+        let to_ms_loop = |mode: SamplerLoopMode| match mode {
+            SamplerLoopMode::Off => MultisampleLoopMode::Off,
+            SamplerLoopMode::Forward => MultisampleLoopMode::Forward,
+            SamplerLoopMode::PingPong => MultisampleLoopMode::PingPong,
+        };
+
+        let zones: Vec<MultisampleZone> = if !self.zones.is_empty() {
+            self.zones
+                .iter()
+                .enumerate()
+                .map(|(idx, z)| {
+                    let max_f = z.sample.total_frames.saturating_sub(1) as f32;
+                    let loop_start_f = (z.loop_start * max_f).round() as usize;
+                    let loop_stop_f = ((z.loop_start + z.loop_len).min(1.0) * max_f).round() as usize;
+                    MultisampleZone {
+                        file: format!("samples/zone_{idx}.wav"),
+                        gain_db: z.gain_db,
+                        pan: z.pan,
+                        sample_start: Some((z.play_start * max_f).round() as usize),
+                        sample_stop: Some((z.play_end * max_f).round() as usize),
+                        reverse: z.reverse,
+                        key: MultisampleKeyZone {
+                            root: z.root_note,
+                            low: z.key_low,
+                            high: z.key_high,
+                            tune_cents: z.tune_cents,
+                            ..Default::default()
+                        },
+                        velocity: MultisampleVelocityZone {
+                            low: z.vel_low,
+                            high: z.vel_high,
+                            ..Default::default()
+                        },
+                        loop_spec: MultisampleLoop {
+                            mode: to_ms_loop(z.loop_mode),
+                            start_frame: loop_start_f,
+                            stop_frame: Some(loop_stop_f),
+                            fade: z.loop_crossfade,
+                        },
+                        audio: Some(MultisampleAudio::new(
+                            z.sample.samples.clone(),
+                            z.sample.channels,
+                            z.sample.sample_rate,
+                        )),
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        } else if !self.samples.is_empty() {
+            let max_f = self.total_frames.saturating_sub(1) as f32;
+            vec![MultisampleZone {
+                file: "samples/zone_0.wav".to_string(),
+                gain_db: self.gain_db,
+                pan: self.pan,
+                sample_start: Some((self.play_start * max_f).round() as usize),
+                sample_stop: Some((self.play_end * max_f).round() as usize),
+                reverse: self.reverse,
+                key: MultisampleKeyZone {
+                    root: self.root_note,
+                    low: 0,
+                    high: 127,
+                    tune_cents: self.fine_cents,
+                    ..Default::default()
+                },
+                velocity: MultisampleVelocityZone::default(),
+                loop_spec: MultisampleLoop {
+                    mode: to_ms_loop(self.loop_mode),
+                    start_frame: (self.loop_start * max_f).round() as usize,
+                    stop_frame: Some(((self.loop_start + self.loop_len).min(1.0) * max_f).round() as usize),
+                    fade: self.loop_crossfade,
+                },
+                audio: Some(MultisampleAudio::new(
+                    self.samples.clone(),
+                    self.channels,
+                    self.sample_rate,
+                )),
+                ..Default::default()
+            }]
+        } else {
+            return Err("no hay audio cargado en Sampler para exportar a .multisample".to_string());
+        };
+
+        let doc = MultisampleDocument {
+            name: if self.sample_name.trim().is_empty() {
+                "Hikaru Sampler".to_string()
+            } else {
+                self.sample_name.clone()
+            },
+            generator: "Hikaru OpenLive".to_string(),
+            category: "Sampler".to_string(),
+            creator: "Hikaru OpenLive".to_string(),
+            description: String::new(),
+            keywords: vec!["multisample".to_string()],
+            zones,
+        };
+        export_multisample_file(&doc, path)
     }
 
     pub fn duration_ms(&self) -> f32 {
@@ -1253,11 +1473,16 @@ pub fn render_sampler_state(ui: &mut Ui, sampler: &mut HikaruSampler, slot_idx: 
 
     if pick_file_requested {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Audio WAV", &["wav", "WAV"])
+            .add_filter("Audio / Multisample (*.wav, *.multisample)", &["wav", "WAV", "multisample"])
             .pick_file()
         {
-            if let Err(e) = sampler.load_wav(&path) {
-                eprintln!("[Hikaru Sampler] Error cargando WAV: {e}");
+            let res = if crate::project::multisample::is_multisample_file(&path) {
+                sampler.load_multisample(&path)
+            } else {
+                sampler.load_wav(&path)
+            };
+            if let Err(e) = res {
+                eprintln!("[Hikaru Sampler] Error cargando archivo: {e}");
             } else {
                 changed = true;
             }

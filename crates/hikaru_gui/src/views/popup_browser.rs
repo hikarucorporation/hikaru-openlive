@@ -374,6 +374,12 @@ fn build_bitwig_preset_items(
                     INST_YELLOW,
                     Some(QuickInstrumentFilter::Synth),
                 )
+            } else if p.file_kind == ".multisample" {
+                (
+                    BrowserRailTab::Instruments,
+                    INST_YELLOW,
+                    Some(QuickInstrumentFilter::Synth),
+                )
             } else if p.is_modulator {
                 (
                     BrowserRailTab::NoteFx,
@@ -901,6 +907,46 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
         if crate::project::bwextension_shim::is_bwextension_file(path) {
             if let Ok(report) = crate::project::bwextension_shim::inspect_bwextension_file(path) {
                 crate::project::bwextension_shim::apply_bwextension_to_app(state, &report);
+                let _ = hikaru_mcp_port::record_bitwig_drop(path, "popup-browser");
+            }
+            state.popup_browser.open = false;
+            return;
+        }
+        if crate::project::multisample::is_multisample_file(path) {
+            let target_track = match state.popup_browser.mode {
+                BrowserTargetMode::InsertDevice { track_idx }
+                | BrowserTargetMode::InsertModulator { track_idx, .. }
+                | BrowserTargetMode::InsertWetFx { track_idx, .. }
+                | BrowserTargetMode::SelectWavetable { track_idx, .. } => track_idx,
+                BrowserTargetMode::NewInstrumentTrack => {
+                    state.matrix_state.add_track();
+                    state.audio_proxy.send(GuiCommand::AddTrack);
+                    let new_idx = state.matrix_state.tracks.len();
+                    let mut tr = Track::new(new_idx, item.name.clone(), false);
+                    tr.matrix_idx = Some(new_idx - 1);
+                    if let Some(last) = state.matrix_state.tracks.last_mut() {
+                        last.name = item.name.clone();
+                    }
+                    state.live_tracks.push(tr.clone());
+                    state.studio_tracks.push(tr);
+                    let mixer_idx = state.current_tracks().len().saturating_sub(1);
+                    state.selected_track_index = mixer_idx;
+                    mixer_idx
+                }
+            };
+            let mut smp = crate::views::hikaru_native_plugins::hikaru_sampler::HikaruSampler::default();
+            if smp.load_multisample(path).is_ok() {
+                let mut slot = DspSlot::default();
+                slot.name = "Sampler".to_string();
+                slot.has_gui = Some(false);
+                slot.sampler_state = Some(smp);
+                let safe_t = target_track.min(state.current_tracks().len().saturating_sub(1));
+                if let Some(track) = state.current_tracks_mut().get_mut(safe_t) {
+                    track.effects.push(slot);
+                    state.selected_track_index = safe_t;
+                    state.show_dsp_rack = true;
+                    state.project_dirty = true;
+                }
                 let _ = hikaru_mcp_port::record_bitwig_drop(path, "popup-browser");
             }
             state.popup_browser.open = false;
