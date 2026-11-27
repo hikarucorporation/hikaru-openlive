@@ -161,7 +161,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .bwtemplate | 4 | 4 | 0 | 0 | 0 |
 | .bwdevice | 5 | 5 | 0 | 0 | 0 |
 | .bwpreset | 5 | 5 | 0 | 0 | 0 |
-| .bwclip | 4 | 0 | 0 | 4 | 0 |
+| .bwclip | 4 | 4 | 0 | 0 | 0 |
 | .bwmodulator | 3 | 3 | 0 | 0 | 0 |
 | .bwmodule | 3 | 0 | 0 | 3 | 0 |
 | .bwremotecontrols | 3 | 3 | 0 | 0 | 0 |
@@ -171,9 +171,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 0 | 0 | 3 | 0 |
-| **Total** | **725** | **350** | **15** | **360** | **1** |
+| **Total** | **725** | **354** | **15** | **356** | **1** |
 
-Paridad global: **350 / 725 = 48 %**.
+Paridad global: **354 / 725 = 49 %**.
 
 ### Bugs abiertos
 

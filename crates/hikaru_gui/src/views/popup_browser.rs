@@ -346,7 +346,17 @@ fn build_bitwig_preset_items(
         .iter()
         .filter(|p| if modulators_only { p.is_modulator } else { !p.is_modulator })
         .map(|p| {
-            let (rail, badge_color, quick) = if p.file_kind == ".bwremotecontrols" {
+            let (rail, badge_color, quick) = if p.file_kind == ".bwclip" {
+                (
+                    if p.category.to_ascii_lowercase().contains("audio") {
+                        BrowserRailTab::AudioFx
+                    } else {
+                        BrowserRailTab::NoteFx
+                    },
+                    NOTE_BLUE,
+                    None,
+                )
+            } else if p.file_kind == ".bwremotecontrols" {
                 (
                     BrowserRailTab::AudioFx,
                     MOD_ARROW_CYAN,
@@ -844,6 +854,22 @@ fn apply_browser_selection(state: &mut AppState, item: &BrowserItem) {
     };
 
     if let BrowserPayload::BitwigPreset(path) = &item.payload {
+        if crate::project::bwclip::is_bwclip_file(path) {
+            let (t_idx, s_idx) = state.matrix_state.selected_slot.unwrap_or((0, 0));
+            let safe_t = t_idx.min(state.matrix_state.tracks.len().saturating_sub(1));
+            let safe_s = s_idx.min(state.matrix_state.scenes.len().saturating_sub(1));
+            crate::views::matrix::load_clip_into_slot(
+                &mut state.matrix_state,
+                &state.audio_proxy,
+                safe_t,
+                safe_s,
+                path.clone(),
+                state.transport.bpm,
+            );
+            state.project_dirty = true;
+            state.popup_browser.open = false;
+            return;
+        }
         if crate::project::bwdevice_shim::is_bwremotecontrols_file(path) {
             let track_idx = match state.popup_browser.mode {
                 BrowserTargetMode::InsertDevice { track_idx } => track_idx,

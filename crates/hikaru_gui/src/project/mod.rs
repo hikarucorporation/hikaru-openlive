@@ -68,6 +68,7 @@ use crate::app::{AppMode, AppState};
 
 pub mod btwg;
 pub mod btwg_reader;
+pub mod bwclip;
 pub mod bwdevice_shim;
 pub mod bwmodulator_shim;
 pub mod bwproject;

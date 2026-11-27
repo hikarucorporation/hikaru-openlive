@@ -26,6 +26,7 @@ pub struct ExplorerEntry {
     pub is_dir: bool,
     pub is_midi: bool,
     pub is_preset: bool,
+    pub is_bwclip: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +53,11 @@ pub fn default_start_path() -> PathBuf {
 }
 
 pub fn is_supported_file(path: &PathBuf) -> bool {
-    is_audio_file(path) || is_midi_file(path) || is_preset_file(path)
+    is_audio_file(path) || is_midi_file(path) || is_preset_file(path) || is_bwclip_file(path)
+}
+
+pub fn is_bwclip_file(path: &PathBuf) -> bool {
+    crate::project::bwclip::is_bwclip_file(path)
 }
 
 pub fn is_preset_file(path: &PathBuf) -> bool {
@@ -182,16 +187,19 @@ impl FileExplorerState {
                         is_dir: true,
                         is_midi: false,
                         is_preset: false,
+                        is_bwclip: false,
                     });
                 } else if is_supported_file(&path) {
                     let is_midi = is_midi_file(&path);
                     let is_preset = is_preset_file(&path);
+                    let is_bwclip = is_bwclip_file(&path);
                     files.push(ExplorerEntry {
                         name: name.to_string(),
                         path,
                         is_dir: false,
                         is_midi,
                         is_preset,
+                        is_bwclip,
                     });
                 }
             }
@@ -691,6 +699,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                     BrowserBadgeKind::DeviceAudio,
                                     Color32::from_rgb(0x00, 0xE5, 0xFF),
                                 )
+                            } else if entry.is_bwclip {
+                                (
+                                    BrowserBadgeKind::DeviceNote,
+                                    Color32::from_rgb(0x4C, 0xC9, 0xF0),
+                                )
                             } else if entry.is_midi {
                                 (
                                     BrowserBadgeKind::DeviceNote,
@@ -953,6 +966,26 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     slot_idx,
                     &path,
                 );
+            } else if is_bwclip_file(&path) {
+                state.explorer_state.selected_file = Some(path.clone());
+                state.explorer_state.cached_waveform.clear();
+                let _ = hikaru_mcp_port::record_bitwig_drop(&path, "explorer-select");
+                if let Ok(clip_doc) = crate::project::bwclip::load_bwclip_file(&path) {
+                    if let Some(sample_path) =
+                        crate::project::bwclip::materialize_embedded_sample(&clip_doc)
+                    {
+                        state.explorer_state.load_waveform_peaks(&sample_path, 128);
+                        state.explorer_state.is_playing_preview = true;
+                        state
+                            .audio_proxy
+                            .send(GuiCommand::SetPreviewVolume(state.explorer_state.preview_volume));
+                        state.audio_proxy.send(GuiCommand::PreviewSample {
+                            path: sample_path.to_string_lossy().to_string(),
+                            volume: state.explorer_state.preview_volume,
+                            speed: state.explorer_state.current_speed(project_bpm),
+                        });
+                    }
+                }
             } else if hikaru_mcp_port::is_supported_bitwig_artifact(&path) {
                 state.explorer_state.selected_file = Some(path.clone());
                 state.explorer_state.cached_waveform.clear();

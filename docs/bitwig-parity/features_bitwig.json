@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 350,
+    "done": 354,
     "in_progress": 15,
-    "planned": 360,
+    "planned": 356,
     "bugs": 1,
-    "parity_percent": 48
+    "parity_percent": 49
   },
   "areas": [
     {
@@ -4024,22 +4024,26 @@
         {
           "id": "bcl-01",
           "name": "Binary clip container parser (.bwclip)",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwclip.rs"
         },
         {
           "id": "bcl-02",
           "name": "MIDI notes, micro-pitch & expression import",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwclip.rs"
         },
         {
           "id": "bcl-03",
           "name": "Audio clip, warp markers & embedded media",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwclip.rs"
         },
         {
           "id": "bcl-04",
           "name": "Clip automation envelopes & launch settings",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwclip.rs"
         }
       ]
     },

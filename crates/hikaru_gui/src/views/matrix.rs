@@ -1440,6 +1440,35 @@ pub fn load_clip_into_slot(
     let new_id = state.next_clip_id;
     state.next_clip_id += 1;
 
+    if crate::project::bwclip::is_bwclip_file(&path) {
+        if let Ok(clip_doc) = crate::project::bwclip::load_bwclip_file(&path) {
+            let mclip = crate::project::bwclip::bwclip_to_matrix_clip(&clip_doc, new_id, bpm);
+            let is_midi_clip = matches!(mclip.content, ClipData::Midi { .. });
+            let audio_path_str = mclip.path.to_string_lossy().to_string();
+            state.grid[track_idx][scene_idx] = MatrixSlot {
+                state: SlotState::Stopped,
+                has_stop_button: true,
+                clip: Some(mclip),
+            };
+            state.selected_slot = Some((track_idx, scene_idx));
+            if is_midi_clip {
+                sync_midi_clip(state, audio_proxy, track_idx, scene_idx);
+            } else if !audio_path_str.is_empty() {
+                audio_proxy.send(GuiCommand::LoadClip {
+                    clip_id: new_id,
+                    path: audio_path_str,
+                    position_secs: 0.0,
+                    duration_secs: 0.0,
+                    offset_secs: 0.0,
+                    track_index: track_idx,
+                    scene_index: scene_idx,
+                    speed_ratio: 1.0,
+                });
+            }
+            return;
+        }
+    }
+
     let path_str = path.to_string_lossy().to_string();
     let is_midi = crate::views::explorer::is_midi_file(&path);
 
@@ -5172,15 +5201,35 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if let Some((track_id, start_tick, path)) = drop_timeline_action {
         let new_id = state.playlist_state.next_clip_id;
         state.playlist_state.next_clip_id += 1;
-        let name = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
         let ppqn = state.playlist_state.ppqn.max(1);
         let bpm = state.transport.bpm;
-        let mut clip = build_audio_clip(new_id, name, start_tick, path.clone(), ppqn, bpm);
-        clip.color = track_color_for(track_id.saturating_sub(1));
+        let mut clip = if crate::project::bwclip::is_bwclip_file(&path) {
+            if let Ok(clip_doc) = crate::project::bwclip::load_bwclip_file(&path) {
+                crate::project::bwclip::bwclip_to_playlist_clip(
+                    &clip_doc,
+                    new_id,
+                    start_tick,
+                    ppqn as u64,
+                )
+            } else {
+                let name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                build_audio_clip(new_id, name, start_tick, path.clone(), ppqn, bpm)
+            }
+        } else {
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            build_audio_clip(new_id, name, start_tick, path.clone(), ppqn, bpm)
+        };
+        if !crate::project::bwclip::is_bwclip_file(&path) {
+            clip.color = track_color_for(track_id.saturating_sub(1));
+        }
         let duration_ticks = clip.duration_ticks;
         state.playlist_state.clips.push((track_id, clip));
         state.playlist_state.selected_clips = vec![new_id];

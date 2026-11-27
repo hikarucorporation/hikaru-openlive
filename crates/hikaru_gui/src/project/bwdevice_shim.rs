@@ -1384,6 +1384,7 @@ fn is_bitwig_catalog_ext(path: &Path) -> Option<&'static str> {
         "bwdevice" => Some(".bwdevice"),
         "bwmodulator" => Some(".bwmodulator"),
         "bwremotecontrols" => Some(".bwremotecontrols"),
+        "bwclip" => Some(".bwclip"),
         _ => None,
     }
 }
@@ -1477,6 +1478,18 @@ fn scan_bitwig_preset_dir(
             category = "Bitwig Device".to_string();
         } else if file_kind == ".bwmodulator" {
             category = "Modulator".to_string();
+        } else if file_kind == ".bwclip" {
+            category = "Clip".to_string();
+            if let Ok(clip_doc) = crate::project::bwclip::load_bwclip_file(&path) {
+                device_name = clip_doc.kind.label().to_string();
+                category = clip_doc.category.clone();
+                creator = clip_doc.creator.clone();
+                for t in &clip_doc.tags {
+                    if !tags.contains(t) {
+                        tags.push(t.clone());
+                    }
+                }
+            }
         } else if file_kind == ".bwremotecontrols" {
             category = "Remote Controls".to_string();
             if let Ok(rc_spec) = load_bwremotecontrols_file(&path) {
@@ -1542,6 +1555,7 @@ pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigP
         candidates.push((home.join("Bitwig Studio/Library/Presets"), "Bitwig Library"));
         candidates.push((home.join("Bitwig Studio/Library/Devices"), "Bitwig Library"));
         candidates.push((home.join("Bitwig Studio/Library/Modulators"), "Bitwig Library"));
+        candidates.push((home.join("Bitwig Studio/Library/Clips"), "Bitwig Library"));
         candidates.push((
             home.join("Bitwig Studio/Library/Remote Controls"),
             "Bitwig Library",
@@ -1551,14 +1565,21 @@ pub fn discover_bitwig_presets(extra_dir: Option<&Path>) -> Vec<AvailableBitwigP
             "User Presets",
         ));
         candidates.push((
+            home.join("Documents/Bitwig Studio/Library/Clips"),
+            "User Clips",
+        ));
+        candidates.push((
             home.join("Documents/Bitwig Studio/Library/Remote Controls"),
             "User Remote Controls",
         ));
         candidates.push((home.join("Music/Bitwig Studio/Presets"), "User Presets"));
+        candidates.push((home.join("Music/Bitwig Studio/Clips"), "User Clips"));
     }
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push((cwd.join("presets"), "Workspace Presets"));
         candidates.push((cwd.join("assets/presets"), "Workspace Presets"));
+        candidates.push((cwd.join("clips"), "Workspace Clips"));
+        candidates.push((cwd.join("assets/clips"), "Workspace Clips"));
     }
 
     let mut out = Vec::new();
@@ -1578,6 +1599,49 @@ pub fn inspect_bwpreset_preview(path: &Path) -> BwPresetPreview {
         .and_then(|s| s.to_str())
         .unwrap_or("Preset")
         .to_string();
+
+    if crate::project::bwclip::is_bwclip_file(path) {
+        return match crate::project::bwclip::load_bwclip_file(path) {
+            Ok(clip) => {
+                let mut sample_params = vec![
+                    ("Duration (beats)".to_string(), clip.duration_beats as f32),
+                    ("MIDI Notes".to_string(), clip.notes.len() as f32),
+                    (
+                        "Warp Markers".to_string(),
+                        clip.audio.as_ref().map_or(0, |a| a.warp_markers.len()) as f32,
+                    ),
+                    ("Automation Lanes".to_string(), clip.automation.len() as f32),
+                ];
+                if clip.launch.launch_legato {
+                    sample_params.push(("Launch Legato".to_string(), 1.0_f32));
+                }
+                BwPresetPreview {
+                    device_name: clip.kind.label().to_string(),
+                    preset_name: clip.name.clone(),
+                    creator: clip.creator.clone(),
+                    category: clip.category.clone(),
+                    container_kind: "Bitwig Clip (.bwclip)".to_string(),
+                    param_count: sample_params.len(),
+                    sample_params,
+                    modulator_count: clip.automation.len(),
+                    modulator_kinds: clip
+                        .automation
+                        .iter()
+                        .map(|a| a.target_param.clone())
+                        .collect(),
+                    grid_node_count: 0,
+                    grid_cable_count: 0,
+                    error: None,
+                }
+            }
+            Err(err) => BwPresetPreview {
+                preset_name: stem,
+                container_kind: "Bitwig Clip (.bwclip)".to_string(),
+                error: Some(err),
+                ..BwPresetPreview::default()
+            },
+        };
+    }
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(err) => {
