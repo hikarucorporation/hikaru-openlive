@@ -2531,10 +2531,12 @@ impl<'a> AudioEngine<'a> {
         (
             Box<dyn PluginInstance>,
             Option<std::sync::Arc<hikaru_dsp::effects::Bit8Telemetry>>,
+            Option<std::sync::Arc<hikaru_dsp::effects::EqPlusTelemetry>>,
         ),
         String,
     > {
         let mut bit8_telemetry = None;
+        let mut eq_plus_telemetry = None;
         let instance: Box<dyn PluginInstance> = match name {
             "Hikaru OpenComb"
             | "OpenComb"
@@ -2597,9 +2599,22 @@ impl<'a> AudioEngine<'a> {
             | "OpenFlanger"
             | "Flanger+"
             | "Hikaru Flanger+" => Box::new(hikaru_dsp::effects::FlangerPlusEffect::new(sample_rate)),
+            "Hikaru OpenEQ+"
+            | "Hikaru OpenEQ3"
+            | "OpenEQ+"
+            | "OpenEQ3"
+            | "EQ+"
+            | "Hikaru EQ+"
+            | "EQ-2"
+            | "EQ-5"
+            | "EQ-DJ" => {
+                let fx = hikaru_dsp::effects::EqPlusEffect::new(sample_rate);
+                eq_plus_telemetry = Some(fx.telemetry());
+                Box::new(fx)
+            }
             _ => return Err(format!("Efecto nativo desconocido: {name}")),
         };
-        Ok((instance, bit8_telemetry))
+        Ok((instance, bit8_telemetry, eq_plus_telemetry))
     }
 
     pub fn load_native_effect(
@@ -2616,6 +2631,7 @@ impl<'a> AudioEngine<'a> {
         ));
         hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
         hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, slot_idx));
+        hikaru_dsp::effects::eq_plus::telemetry::unregister((track_idx, slot_idx));
 
         let sample_rate = self.sample_rate;
         let chain = &mut self.track_effects[track_idx];
@@ -2625,7 +2641,8 @@ impl<'a> AudioEngine<'a> {
             return Ok(());
         }
 
-        let (instance, bit8_telemetry) = Self::instantiate_native_effect(sample_rate, name)?;
+        let (instance, bit8_telemetry, eq_plus_telemetry) =
+            Self::instantiate_native_effect(sample_rate, name)?;
 
         let mut node = hikaru_dsp::DspPluginNode::new(
             name.to_string(),
@@ -2639,6 +2656,13 @@ impl<'a> AudioEngine<'a> {
                 std::sync::Arc::clone(&telem),
             );
             node.set_bit8_telemetry(Some(telem));
+        }
+        if let Some(telem) = eq_plus_telemetry {
+            hikaru_dsp::effects::eq_plus::telemetry::register(
+                (track_idx, slot_idx),
+                std::sync::Arc::clone(&telem),
+            );
+            node.set_eq_plus_telemetry(Some(telem));
         }
         let insert_pos = chain
             .iter()
@@ -2687,7 +2711,8 @@ impl<'a> AudioEngine<'a> {
         if track_idx >= 16 {
             return Err(format!("Índice de pista fuera de rango: {track_idx}"));
         }
-        let (instance, bit8_telemetry) = Self::instantiate_native_effect(self.sample_rate, name)?;
+        let (instance, bit8_telemetry, _eq_plus_telemetry) =
+            Self::instantiate_native_effect(self.sample_rate, name)?;
         let mut node = hikaru_dsp::DspPluginNode::new(
             name.to_string(),
             hikaru_dsp::PluginCategory::Vst3Fx,
@@ -2870,12 +2895,14 @@ impl<'a> AudioEngine<'a> {
             ));
             hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, n.slot_idx);
             hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, n.slot_idx));
+            hikaru_dsp::effects::eq_plus::telemetry::unregister((track_idx, n.slot_idx));
         }
         hikaru_plugin_host::tap::unregister(hikaru_plugin_host::tap::TapKey::Slot(
             track_idx, slot_idx,
         ));
         hikaru_plugin_host::tap::unregister_wet_fx_parent(track_idx, slot_idx);
         hikaru_dsp::effects::bit8::telemetry::unregister((track_idx, slot_idx));
+        hikaru_dsp::effects::eq_plus::telemetry::unregister((track_idx, slot_idx));
 
         if let Some(pos) = chain.iter().position(|n| n.slot_idx == slot_idx) {
             chain.remove(pos);
@@ -2891,6 +2918,12 @@ impl<'a> AudioEngine<'a> {
             Self::register_node_taps(track_idx, n);
             if let Some(telem) = &n.bit8_telemetry {
                 hikaru_dsp::effects::bit8::telemetry::register(
+                    (track_idx, n.slot_idx),
+                    std::sync::Arc::clone(telem),
+                );
+            }
+            if let Some(telem) = &n.eq_plus_telemetry {
+                hikaru_dsp::effects::eq_plus::telemetry::register(
                     (track_idx, n.slot_idx),
                     std::sync::Arc::clone(telem),
                 );
@@ -2936,6 +2969,7 @@ impl<'a> AudioEngine<'a> {
             ));
             hikaru_plugin_host::tap::unregister_wet_fx_parent(from_track, n.slot_idx);
             hikaru_dsp::effects::bit8::telemetry::unregister((from_track, n.slot_idx));
+            hikaru_dsp::effects::eq_plus::telemetry::unregister((from_track, n.slot_idx));
         }
         let mut node = self.track_effects[from_track].remove(pos);
 
@@ -2951,6 +2985,12 @@ impl<'a> AudioEngine<'a> {
                     std::sync::Arc::clone(telem),
                 );
             }
+            if let Some(telem) = &n.eq_plus_telemetry {
+                hikaru_dsp::effects::eq_plus::telemetry::register(
+                    (from_track, n.slot_idx),
+                    std::sync::Arc::clone(telem),
+                );
+            }
         }
 
         // Desplazar slots en pista destino >= to_slot e insertar el nodo movido
@@ -2960,6 +3000,7 @@ impl<'a> AudioEngine<'a> {
             ));
             hikaru_plugin_host::tap::unregister_wet_fx_parent(to_track, n.slot_idx);
             hikaru_dsp::effects::bit8::telemetry::unregister((to_track, n.slot_idx));
+            hikaru_dsp::effects::eq_plus::telemetry::unregister((to_track, n.slot_idx));
         }
         for n in self.track_effects[to_track].iter_mut() {
             if n.slot_idx >= to_slot {
@@ -2977,6 +3018,12 @@ impl<'a> AudioEngine<'a> {
             Self::register_node_taps(to_track, n);
             if let Some(telem) = &n.bit8_telemetry {
                 hikaru_dsp::effects::bit8::telemetry::register(
+                    (to_track, n.slot_idx),
+                    std::sync::Arc::clone(telem),
+                );
+            }
+            if let Some(telem) = &n.eq_plus_telemetry {
+                hikaru_dsp::effects::eq_plus::telemetry::register(
                     (to_track, n.slot_idx),
                     std::sync::Arc::clone(telem),
                 );

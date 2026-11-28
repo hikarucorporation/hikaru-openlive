@@ -2,6 +2,7 @@
 pub mod bit8;
 pub mod dc_offset;
 pub mod dual_pan;
+pub mod eq_plus;
 pub mod filter;
 pub mod freq_shifter_plus;
 pub mod opencomb;
@@ -47,6 +48,17 @@ pub use bit8::{
 };
 pub use dc_offset::{DcOffsetEffect, DcOffsetParams};
 pub use dual_pan::{DualPanEffect, DualPanParams};
+pub use eq_plus::{
+    bitwig_freq_midi_to_hz, AnalyzerResolution, AnalyzerSpeed, EqPlusBandParams, EqPlusBandType,
+    EqPlusEffect, EqPlusParams, EqPlusRange, EqPlusTelemetry, EQ_PLUS_BAND_COUNT,
+    EQ_PLUS_BAND_PARAM_ENABLE, EQ_PLUS_BAND_PARAM_FREQ, EQ_PLUS_BAND_PARAM_GAIN,
+    EQ_PLUS_BAND_PARAM_Q, EQ_PLUS_BAND_PARAM_TYPE, EQ_PLUS_DEFAULT_BAND_FREQS_HZ,
+    EQ_PLUS_MAX_FREQ_HZ, EQ_PLUS_MAX_GAIN_DB, EQ_PLUS_MAX_OUT_GAIN_DB, EQ_PLUS_MAX_Q,
+    EQ_PLUS_MAX_SHIFT_ST, EQ_PLUS_MIN_FREQ_HZ, EQ_PLUS_MIN_GAIN_DB, EQ_PLUS_MIN_OUT_GAIN_DB,
+    EQ_PLUS_MIN_Q, EQ_PLUS_MIN_SHIFT_ST, EQ_PLUS_PARAMS_PER_BAND, EQ_PLUS_PARAM_ADAPTIVE_Q,
+    EQ_PLUS_PARAM_COUNT, EQ_PLUS_PARAM_DECIBEL_RANGE, EQ_PLUS_PARAM_OUTPUT_GAIN,
+    EQ_PLUS_PARAM_SELECTED_BAND, EQ_PLUS_PARAM_SHIFT, EQ_PLUS_PARAM_SOLO,
+};
 pub use filter::StateVariableFilter;
 pub use freq_shifter_plus::{
     FreqShiftPoles, FreqShiftQuality, FreqShiftUnit, FreqShifterPlusEffect, FreqShifterPlusParams,

@@ -548,6 +548,15 @@ pub fn compatibility_registry() -> &'static [BwCompatibilityEntry] {
             implementation_status: "adapter_ready",
         },
         BwCompatibilityEntry {
+            bitwig_name: "EQ+",
+            canonical_uuid: Some("e4815188-ba6f-4d14-bcfc-2dcb8f778ccb"),
+            category: "EQ",
+            topology: "audio_to_audio",
+            hikaru_crate: "hikaru_dsp",
+            hikaru_module: "crates/hikaru_dsp/src/effects/eq_plus.rs",
+            implementation_status: "builtin_ready",
+        },
+        BwCompatibilityEntry {
             bitwig_name: "Polymer",
             canonical_uuid: None,
             category: "Synth",

@@ -143,6 +143,12 @@ pub fn compatibility_targets() -> &'static [BwCompatTarget] {
             category: "EQ",
         },
         BwCompatTarget {
+            bitwig_name: "EQ+",
+            canonical_uuid: Some("e4815188-ba6f-4d14-bcfc-2dcb8f778ccb"),
+            hikaru_slot_name: "Hikaru OpenEQ+",
+            category: "EQ",
+        },
+        BwCompatTarget {
             bitwig_name: "Polymer",
             canonical_uuid: None,
             hikaru_slot_name: "OpenPoly",
@@ -384,6 +390,20 @@ pub fn translate_param_for_device(
         ("eq-2" | "eq-5", "LO_FREQ") => Some(("low_freq", ParamRange { min: 20.0, max: 2000.0 })),
         ("eq-2" | "eq-5", "HI_GAIN") => Some(("high_gain", ParamRange { min: -24.0, max: 24.0 })),
         ("eq-2" | "eq-5", "HI_FREQ") => Some(("high_freq", ParamRange { min: 500.0, max: 20000.0 })),
+
+        ("eq+", "OUTPUT_GAIN") => Some(("output_gain", ParamRange { min: -30.0, max: 30.0 })),
+        ("eq+", "GLOBAL_SHIFT") => Some(("shift", ParamRange { min: -36.0, max: 36.0 })),
+        ("eq+", "BAND") => Some(("selected_band", ParamRange { min: 0.0, max: 7.0 })),
+        ("eq+", "SOLO") => Some(("solo", ParamRange::UNIT)),
+        ("eq+", "ADAPTIVE_Q") => Some(("adaptive_q", ParamRange::UNIT)),
+        ("eq+", "DECIBEL_RANGE") => Some(("db_range", ParamRange { min: 0.0, max: 2.0 })),
+        ("eq+", "SHOW_PRE") => Some(("show_pre", ParamRange::UNIT)),
+        ("eq+", "SHOW_POST") => Some(("show_post", ParamRange::UNIT)),
+        ("eq+", p) if p.starts_with("GAIN") => Some((param_name, ParamRange { min: -30.0, max: 30.0 })),
+        ("eq+", p) if p.starts_with("FREQ") => Some((param_name, ParamRange { min: -5.0, max: 136.0 })),
+        ("eq+", p) if p.starts_with("Q") => Some((param_name, ParamRange { min: -3.0, max: 4.0 })),
+        ("eq+", p) if p.starts_with("TYPE") => Some((param_name, ParamRange { min: 0.0, max: 14.0 })),
+        ("eq+", p) if p.starts_with("ENABLE") => Some((param_name, ParamRange::UNIT)),
 
         ("tremolo", "RATE") => Some(("rate", ParamRange { min: 0.05, max: 40.0 })),
         ("tremolo", "DEPTH") => Some(("depth", ParamRange::UNIT)),

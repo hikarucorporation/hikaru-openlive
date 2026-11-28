@@ -36,6 +36,8 @@ pub struct DspPluginNode {
     pub tap: Option<Arc<PluginTap>>,
     /// Telemetría lock-free dedicada para `Hikaru Open8-Bit` (LEDs y display de 3 trazas).
     pub bit8_telemetry: Option<Arc<crate::effects::Bit8Telemetry>>,
+    /// Telemetría lock-free Pre/Post para el analizador de espectro de `Hikaru OpenEQ+`.
+    pub eq_plus_telemetry: Option<Arc<crate::effects::EqPlusTelemetry>>,
 }
 
 impl DspPluginNode {
@@ -48,6 +50,7 @@ impl DspPluginNode {
             slot_idx: 0,
             tap: None,
             bit8_telemetry: None,
+            eq_plus_telemetry: None,
         }
     }
 
@@ -64,6 +67,11 @@ impl DspPluginNode {
     /// Adjunta telemetría dedicada para `Hikaru Open8-Bit`.
     pub fn set_bit8_telemetry(&mut self, telemetry: Option<Arc<crate::effects::Bit8Telemetry>>) {
         self.bit8_telemetry = telemetry;
+    }
+
+    /// Adjunta telemetría Pre/Post dedicada para `Hikaru OpenEQ+`.
+    pub fn set_eq_plus_telemetry(&mut self, telemetry: Option<Arc<crate::effects::EqPlusTelemetry>>) {
+        self.eq_plus_telemetry = telemetry;
     }
 
     /// Latencia reportada por este nodo en samples (`0` cuando está en bypass).
