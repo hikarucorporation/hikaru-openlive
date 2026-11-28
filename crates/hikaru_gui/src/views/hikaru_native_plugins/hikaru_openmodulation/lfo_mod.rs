@@ -249,10 +249,10 @@ impl ModulationTarget {
             "OpenPoly" | "Hikaru OpenPoly" | "OpenWavetable" | "Hikaru OpenWavetable" => {
                 self.device_name() == "OpenPoly"
             }
-            "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
+            "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
                 self.device_name() == "OpenSpectral Phaser"
             }
-            "OpenEQ3" => self.device_name() == "OpenEQ3",
+            "Hikaru OpenEQ+" | "Hikaru OpenEQ3" | "OpenEQ3" => self.device_name() == "OpenEQ3",
             _ => device == self.device_name(),
         };
         let param_match = if *self == ModulationTarget::OpenWavetableWtPos {

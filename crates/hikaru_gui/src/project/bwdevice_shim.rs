@@ -133,13 +133,13 @@ pub fn compatibility_targets() -> &'static [BwCompatTarget] {
         BwCompatTarget {
             bitwig_name: "EQ-2",
             canonical_uuid: Some("01af068e-1e49-4777-a6e6-7f1dc679227a"),
-            hikaru_slot_name: "Hikaru OpenEQ3",
+            hikaru_slot_name: "Hikaru OpenEQ+",
             category: "EQ",
         },
         BwCompatTarget {
             bitwig_name: "EQ-5",
             canonical_uuid: None,
-            hikaru_slot_name: "Hikaru OpenEQ3",
+            hikaru_slot_name: "Hikaru OpenEQ+",
             category: "EQ",
         },
         BwCompatTarget {

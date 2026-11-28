@@ -146,7 +146,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Transport & Sync | 17 | 12 | 1 | 4 | 0 |
 | Group Tracks & Routing | 22 | 15 | 1 | 6 | 0 |
 | Time-stretching & Audio | 25 | 14 | 2 | 9 | 0 |
-| Built-in Devices & FX | 150 | 21 | 1 | 128 | 0 |
+| Built-in Devices & FX | 150 | 22 | 1 | 127 | 0 |
 | Modulators | 43 | 43 | 0 | 0 | 0 |
 | Grid Devices | 228 | 97 | 0 | 131 | 0 |
 | Mixer & I/O | 27 | 19 | 0 | 8 | 0 |
@@ -171,9 +171,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 3 | 0 | 0 | 0 |
-| **Total** | **725** | **371** | **15** | **339** | **1** |
+| **Total** | **725** | **372** | **15** | **338** | **1** |
 
-Paridad global: **371 / 725 = 51 %**.
+Paridad global: **372 / 725 = 51 %**.
 
 ### Bugs abiertos
 

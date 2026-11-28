@@ -482,7 +482,7 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 NOTE_BLUE,
                 "Bitwig-style dual LFO modulator (LFO1 + LFO2) with phase, depth, retrigger, sync, FX slot, and mix.",
             ),
-            "Hikaru OpenEQ3" | "OpenEQ3" => (
+            "Hikaru OpenEQ+" | "Hikaru OpenEQ3" | "OpenEQ3" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,

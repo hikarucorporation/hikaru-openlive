@@ -48,8 +48,8 @@ pub struct PluginEntry {
 pub const PLUGIN_CATALOG: [PluginEntry; 19] = [
     PluginEntry {
         category: "Audio FX",
-        name: "Hikaru OpenEQ3",
-        label: "Hikaru OpenEQ3",
+        name: "Hikaru OpenEQ+",
+        label: "Hikaru OpenEQ+",
     },
     PluginEntry {
         category: "Audio FX",
@@ -1235,7 +1235,10 @@ fn render_bit8_wet_fx_chain(
                 parent_slot_idx,
                 wet_idx,
             );
-        } else if wet_slot.name == "Hikaru OpenEQ3" || wet_slot.name == "OpenEQ3" {
+        } else if wet_slot.name == "Hikaru OpenEQ+"
+            || wet_slot.name == "Hikaru OpenEQ3"
+            || wet_slot.name == "OpenEQ3"
+        {
             hikaru_openeq3::render_module(&mut body_ui);
         } else {
             body_ui.vertical_centered(|ui| {
@@ -2314,7 +2317,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "Sampler" | "Hikaru Sampler" => {
                                     sampler_editor::render_module(&mut body_ui, app, track_idx, slot_idx);
                                 }
-                                "Hikaru OpenEQ3" | "OpenEQ3" => {
+                                "Hikaru OpenEQ+" | "Hikaru OpenEQ3" | "OpenEQ3" => {
                                     hikaru_openeq3::render_module(&mut body_ui);
                                 }
                                 "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" | "OpenSpectralPhaser" => {

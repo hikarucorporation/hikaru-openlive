@@ -667,7 +667,7 @@ pub fn resolve_hikaru_device_name(bitwig_name: &str) -> Option<&'static str> {
         "freq shifter+" => Some("Hikaru OpenFreqShifter+"),
         "flanger+" => Some("Hikaru OpenFlanger+"),
         "comb" => Some("Comb"),
-        "eq-2" | "eq-5" | "eq-dj" => Some("Hikaru OpenEQ3"),
+        "eq-2" | "eq-5" | "eq-dj" | "eq+" => Some("Hikaru OpenEQ+"),
         "polymer" | "polysynth" => Some("OpenPoly"),
         "sampler" => Some("Sampler"),
         "drum machine" => Some("OpenDMS"),
