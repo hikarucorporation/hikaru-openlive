@@ -204,7 +204,7 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
     right_ui.spacing_mut().item_spacing.y = 4.0;
 
     right_ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("OpenSpectral Phaser").size(10.5).strong().color(theme::ACCENT_PRIMARY));
+        ui.label(egui::RichText::new("Hikaru OpenSpectral Phaser").size(10.5).strong().color(theme::ACCENT_PRIMARY));
         let bypass = params[10] >= 0.5;
         if ui.selectable_label(bypass, "BYPASS").clicked() {
             params[10] = if bypass { 0.0 } else { 1.0 };
@@ -271,5 +271,5 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
 pub fn render_module_footer(_ui: &mut egui::Ui, _app: &mut AppState, _track_idx: usize, _slot_idx: usize) {}
 
 pub fn render_module_simple(ui: &mut egui::Ui) {
-    ui.label("OpenSpectral Phaser");
+    ui.label("Hikaru OpenSpectral Phaser");
 }

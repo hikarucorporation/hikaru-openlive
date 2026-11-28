@@ -67,43 +67,43 @@ pub fn compatibility_targets() -> &'static [BwCompatTarget] {
         BwCompatTarget {
             bitwig_name: "DC Offset",
             canonical_uuid: None,
-            hikaru_slot_name: "DC Offset",
+            hikaru_slot_name: "Hikaru OpenDC Offset",
             category: "Utility",
         },
         BwCompatTarget {
             bitwig_name: "Tool",
             canonical_uuid: None,
-            hikaru_slot_name: "Tool",
+            hikaru_slot_name: "Hikaru OpenTool",
             category: "Utility",
         },
         BwCompatTarget {
             bitwig_name: "Dual Pan",
             canonical_uuid: None,
-            hikaru_slot_name: "Dual Pan",
+            hikaru_slot_name: "Hikaru OpenDual Pan",
             category: "Utility",
         },
         BwCompatTarget {
             bitwig_name: "Test Tone",
             canonical_uuid: None,
-            hikaru_slot_name: "Test Tone",
+            hikaru_slot_name: "Hikaru OpenTest Tone",
             category: "Utility",
         },
         BwCompatTarget {
             bitwig_name: "Time Shift",
             canonical_uuid: None,
-            hikaru_slot_name: "Time Shift",
+            hikaru_slot_name: "Hikaru OpenTime Shift",
             category: "Utility",
         },
         BwCompatTarget {
             bitwig_name: "Tremolo",
             canonical_uuid: None,
-            hikaru_slot_name: "Tremolo",
+            hikaru_slot_name: "Hikaru OpenTremolo",
             category: "Audio FX",
         },
         BwCompatTarget {
             bitwig_name: "Ring-Mod",
             canonical_uuid: None,
-            hikaru_slot_name: "Ring-Mod",
+            hikaru_slot_name: "Hikaru OpenRingMod",
             category: "Audio FX",
         },
         BwCompatTarget {
@@ -133,13 +133,13 @@ pub fn compatibility_targets() -> &'static [BwCompatTarget] {
         BwCompatTarget {
             bitwig_name: "EQ-2",
             canonical_uuid: Some("01af068e-1e49-4777-a6e6-7f1dc679227a"),
-            hikaru_slot_name: "OpenEQ3",
+            hikaru_slot_name: "Hikaru OpenEQ3",
             category: "EQ",
         },
         BwCompatTarget {
             bitwig_name: "EQ-5",
             canonical_uuid: None,
-            hikaru_slot_name: "OpenEQ3",
+            hikaru_slot_name: "Hikaru OpenEQ3",
             category: "EQ",
         },
         BwCompatTarget {

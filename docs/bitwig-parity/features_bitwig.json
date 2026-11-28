@@ -37,9 +37,9 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 369,
+    "done": 371,
     "in_progress": 15,
-    "planned": 341,
+    "planned": 339,
     "bugs": 1,
     "parity_percent": 51
   },
@@ -924,8 +924,7 @@
         {
           "id": "dv-033",
           "name": "EQ+",
-          "status": "done",
-          "evidence": "crates/hikaru_gui/src/views/hikaru_native_plugins/hikaru_openeq3/mod.rs"
+          "status": "planned"
         },
         {
           "id": "dv-034",
@@ -3897,17 +3896,20 @@
         {
           "id": "bw-04",
           "name": "Native Bitwig devices & Grid mapping",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwproject.rs"
         },
         {
           "id": "bw-05",
           "name": "Automation & modulator state",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwproject.rs"
         },
         {
           "id": "bw-06",
           "name": "Embedded audio & VST3/CLAP state",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/bwproject.rs"
         }
       ]
     },

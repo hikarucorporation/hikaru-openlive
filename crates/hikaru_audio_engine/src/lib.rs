@@ -2543,25 +2543,26 @@ impl<'a> AudioEngine<'a> {
             | "Hikaru Ultracomb"
             | "Hikaru Ultracomb Filter"
             | "Ultracomb" => Box::new(hikaru_dsp::effects::OpenCombFilter::new(sample_rate)),
-            "Tool" | "Hikaru Tool" => {
+            "Hikaru OpenTool" | "Tool" | "Hikaru Tool" => {
                 Box::new(hikaru_dsp::effects::ToolEffect::new(sample_rate))
             }
-            "DC Offset" | "Hikaru DC Offset" => {
+            "Hikaru OpenDC Offset" | "DC Offset" | "Hikaru DC Offset" => {
                 Box::new(hikaru_dsp::effects::DcOffsetEffect::new(sample_rate))
             }
-            "Dual Pan" | "Hikaru Dual Pan" => {
+            "Hikaru OpenDual Pan" | "Dual Pan" | "Hikaru Dual Pan" => {
                 Box::new(hikaru_dsp::effects::DualPanEffect::new(sample_rate))
             }
-            "Test Tone" | "Hikaru Test Tone" => {
+            "Hikaru OpenTest Tone" | "Test Tone" | "Hikaru Test Tone" => {
                 Box::new(hikaru_dsp::effects::TestToneEffect::new(sample_rate))
             }
-            "Time Shift" | "Hikaru Time Shift" => {
+            "Hikaru OpenTime Shift" | "Time Shift" | "Hikaru Time Shift" => {
                 Box::new(hikaru_dsp::effects::TimeShiftEffect::new(sample_rate))
             }
-            "Tremolo" | "Hikaru Tremolo" => {
+            "Hikaru OpenTremolo" | "Tremolo" | "Hikaru Tremolo" => {
                 Box::new(hikaru_dsp::effects::TremoloEffect::new(sample_rate))
             }
-            "Ring-Mod" | "Ring Mod" | "Hikaru Ring-Mod" => {
+            "Hikaru OpenRingMod" | "Hikaru OpenRing-Mod" | "Ring-Mod" | "Ring Mod"
+            | "Hikaru Ring-Mod" => {
                 Box::new(hikaru_dsp::effects::RingModEffect::new(sample_rate))
             }
             "Hikaru Open8-Bit"

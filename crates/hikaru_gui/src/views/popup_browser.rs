@@ -482,13 +482,13 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 NOTE_BLUE,
                 "Bitwig-style dual LFO modulator (LFO1 + LFO2) with phase, depth, retrigger, sync, FX slot, and mix.",
             ),
-            "OpenEQ3" => (
+            "Hikaru OpenEQ3" | "OpenEQ3" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "3-band parametric equalizer for track and master tone shaping.",
             ),
-            "OpenSpectral Phaser" => (
+            "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
@@ -500,43 +500,43 @@ fn build_catalog_items(discovered_plugins: &[PluginDescriptor]) -> Vec<BrowserIt
                 FX_ORANGE,
                 "Clean stereo comb filter with bipolar feedback, XY frequency pad, and mix.",
             ),
-            "Tool" => (
+            "Hikaru OpenTool" | "Tool" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "Utility stereo processor: gain, pan, width, phase invert and L/R swap.",
             ),
-            "DC Offset" => (
+            "Hikaru OpenDC Offset" | "DC Offset" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "Adds constant DC offset or removes DC with a 5 Hz high-pass filter.",
             ),
-            "Dual Pan" => (
+            "Hikaru OpenDual Pan" | "Dual Pan" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "Independent stereo panning for Left and Right input channels.",
             ),
-            "Test Tone" => (
+            "Hikaru OpenTest Tone" | "Test Tone" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "Diagnostic sine, white noise and pink noise generator.",
             ),
-            "Time Shift" => (
+            "Hikaru OpenTime Shift" | "Time Shift" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "Precise millisecond and sub-sample delay utility.",
             ),
-            "Tremolo" => (
+            "Hikaru OpenTremolo" | "Tremolo" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,
                 "Stereo LFO amplitude modulator with stereo phase offset.",
             ),
-            "Ring-Mod" => (
+            "Hikaru OpenRingMod" | "Ring-Mod" => (
                 BrowserRailTab::AudioFx,
                 None,
                 FX_ORANGE,

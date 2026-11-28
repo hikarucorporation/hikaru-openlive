@@ -48,8 +48,8 @@ pub struct PluginEntry {
 pub const PLUGIN_CATALOG: [PluginEntry; 19] = [
     PluginEntry {
         category: "Audio FX",
-        name: "OpenEQ3",
-        label: "OpenEQ3",
+        name: "Hikaru OpenEQ3",
+        label: "Hikaru OpenEQ3",
     },
     PluginEntry {
         category: "Audio FX",
@@ -63,8 +63,8 @@ pub const PLUGIN_CATALOG: [PluginEntry; 19] = [
     },
     PluginEntry {
         category: "Audio FX",
-        name: "OpenSpectral Phaser",
-        label: "OpenSpectral Phaser",
+        name: "Hikaru OpenSpectral Phaser",
+        label: "Hikaru OpenSpectral Phaser",
     },
     PluginEntry {
         category: "Audio FX",
@@ -73,38 +73,38 @@ pub const PLUGIN_CATALOG: [PluginEntry; 19] = [
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Tool",
-        label: "Tool",
+        name: "Hikaru OpenTool",
+        label: "Hikaru OpenTool",
     },
     PluginEntry {
         category: "Audio FX",
-        name: "DC Offset",
-        label: "DC Offset",
+        name: "Hikaru OpenDC Offset",
+        label: "Hikaru OpenDC Offset",
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Dual Pan",
-        label: "Dual Pan",
+        name: "Hikaru OpenDual Pan",
+        label: "Hikaru OpenDual Pan",
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Test Tone",
-        label: "Test Tone",
+        name: "Hikaru OpenTest Tone",
+        label: "Hikaru OpenTest Tone",
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Time Shift",
-        label: "Time Shift",
+        name: "Hikaru OpenTime Shift",
+        label: "Hikaru OpenTime Shift",
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Tremolo",
-        label: "Tremolo",
+        name: "Hikaru OpenTremolo",
+        label: "Hikaru OpenTremolo",
     },
     PluginEntry {
         category: "Audio FX",
-        name: "Ring-Mod",
-        label: "Ring-Mod",
+        name: "Hikaru OpenRingMod",
+        label: "Hikaru OpenRingMod",
     },
     PluginEntry {
         category: "Audio FX",
@@ -1235,7 +1235,7 @@ fn render_bit8_wet_fx_chain(
                 parent_slot_idx,
                 wet_idx,
             );
-        } else if wet_slot.name == "OpenEQ3" {
+        } else if wet_slot.name == "Hikaru OpenEQ3" || wet_slot.name == "OpenEQ3" {
             hikaru_openeq3::render_module(&mut body_ui);
         } else {
             body_ui.vertical_centered(|ui| {
@@ -1474,7 +1474,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 }
                                 "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
                                 "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
-                                "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
+                                "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
                                 name if hikaru_opencomb::is_opencomb_name(name) => OPENCOMB_CARD_WIDTH,
                                 name if hikaru_bit8::is_bit8_name(name) => {
                                     hikaru_bit8::card_width_for_slot(track_idx, slot_idx)
@@ -2314,10 +2314,10 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "Sampler" | "Hikaru Sampler" => {
                                     sampler_editor::render_module(&mut body_ui, app, track_idx, slot_idx);
                                 }
-                                "OpenEQ3" => {
+                                "Hikaru OpenEQ3" | "OpenEQ3" => {
                                     hikaru_openeq3::render_module(&mut body_ui);
                                 }
-                                "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
+                                "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" | "OpenSpectralPhaser" => {
                                     openspectral_phaser::render_module(
                                         &mut body_ui,
                                         app,

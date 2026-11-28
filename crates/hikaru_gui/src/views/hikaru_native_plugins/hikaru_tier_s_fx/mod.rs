@@ -274,44 +274,45 @@ const RING_MOD_PARAMS: &[ParamDesc] = &[
 
 fn spec_for(name: &str) -> Option<DeviceSpec> {
     match name {
-        "Tool" | "Hikaru Tool" => Some(DeviceSpec {
-            canonical_name: "Tool",
+        "Hikaru OpenTool" | "Tool" | "Hikaru Tool" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenTool",
             card_width: 210.0,
             accent: theme::BW_LCD_CYAN,
             params: TOOL_PARAMS,
         }),
-        "DC Offset" | "Hikaru DC Offset" => Some(DeviceSpec {
-            canonical_name: "DC Offset",
+        "Hikaru OpenDC Offset" | "DC Offset" | "Hikaru DC Offset" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenDC Offset",
             card_width: 156.0,
             accent: theme::BW_LCD_CYAN,
             params: DC_OFFSET_PARAMS,
         }),
-        "Dual Pan" | "Hikaru Dual Pan" => Some(DeviceSpec {
-            canonical_name: "Dual Pan",
+        "Hikaru OpenDual Pan" | "Dual Pan" | "Hikaru Dual Pan" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenDual Pan",
             card_width: 196.0,
             accent: theme::BW_LCD_CYAN,
             params: DUAL_PAN_PARAMS,
         }),
-        "Test Tone" | "Hikaru Test Tone" => Some(DeviceSpec {
-            canonical_name: "Test Tone",
+        "Hikaru OpenTest Tone" | "Test Tone" | "Hikaru Test Tone" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenTest Tone",
             card_width: 204.0,
             accent: theme::ACCENT_ORANGE,
             params: TEST_TONE_PARAMS,
         }),
-        "Time Shift" | "Hikaru Time Shift" => Some(DeviceSpec {
-            canonical_name: "Time Shift",
+        "Hikaru OpenTime Shift" | "Time Shift" | "Hikaru Time Shift" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenTime Shift",
             card_width: 196.0,
             accent: theme::BW_LCD_CYAN,
             params: TIME_SHIFT_PARAMS,
         }),
-        "Tremolo" | "Hikaru Tremolo" => Some(DeviceSpec {
-            canonical_name: "Tremolo",
+        "Hikaru OpenTremolo" | "Tremolo" | "Hikaru Tremolo" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenTremolo",
             card_width: 204.0,
             accent: theme::ACCENT_ORANGE,
             params: TREMOLO_PARAMS,
         }),
-        "Ring-Mod" | "Ring Mod" | "Hikaru Ring-Mod" => Some(DeviceSpec {
-            canonical_name: "Ring-Mod",
+        "Hikaru OpenRingMod" | "Hikaru OpenRing-Mod" | "Ring-Mod" | "Ring Mod"
+        | "Hikaru Ring-Mod" => Some(DeviceSpec {
+            canonical_name: "Hikaru OpenRingMod",
             card_width: 196.0,
             accent: theme::ACCENT_ORANGE,
             params: RING_MOD_PARAMS,

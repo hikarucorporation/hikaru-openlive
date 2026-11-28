@@ -20,10 +20,14 @@ use serde_json::{json, Value};
 
 use crate::app::AppState;
 use crate::audio_proxy::GuiCommand;
-use crate::project::common::ProjectError;
+use crate::project::btwg_reader::{BtWgDocument, BtWgObject, BtWgReader, BtWgValue};
+use crate::project::bwdevice_shim::{
+    extract_modulators_to_bay, translate_device_document, BwDeviceTranslation,
+};
+use crate::project::common::{self, ProjectError};
+use crate::views::automation_editor::{AutomationLane, AutomationPoint, AutomationTarget};
 use crate::views::matrix::{ClipData, MatrixClip, MatrixSlot, SlotState, TrackMeta};
-use crate::views::mixer::Track;
-use crate::views::piano_roll::MidiNote;
+use crate::views::mixer::{DspSlot, ExternalParamState, Track};
 use crate::views::playlist::{ClipType, PlaylistClip, PlaylistState};
 use hikaru_transport::TransportPlaybackState;
 
@@ -85,10 +89,322 @@ pub struct BwClip {
 }
 
 #[derive(Debug, Clone)]
+pub struct BwTrackDevice {
+    pub track_id: String,
+    pub slot_index: usize,
+    pub name: String,
+    pub active: bool,
+    pub preset_name: String,
+    pub is_grid: bool,
+    pub dsp_slot: Option<hikaru_project_file::DspSlot>,
+    pub native_params: Vec<(String, f32)>,
+    pub wet_fx_chain: Vec<BwTrackDevice>,
+}
+
+impl BwTrackDevice {
+    fn to_json(&self) -> Value {
+        json!({
+            "track_id": self.track_id,
+            "slot_index": self.slot_index,
+            "name": self.name,
+            "active": self.active,
+            "preset_name": self.preset_name,
+            "is_grid": self.is_grid,
+            "dsp_slot": self.dsp_slot.as_ref().and_then(|s| serde_json::to_value(s).ok()),
+            "native_params": self.native_params.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
+            "wet_fx_chain": self.wet_fx_chain.iter().map(|w| w.to_json()).collect::<Vec<_>>(),
+        })
+    }
+
+    fn from_json(v: &Value) -> Option<Self> {
+        let dsp_slot = v
+            .get("dsp_slot")
+            .filter(|d| !d.is_null())
+            .and_then(|d| serde_json::from_value::<hikaru_project_file::DspSlot>(d.clone()).ok());
+        let native_params = v
+            .get("native_params")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        let pair = p.as_array()?;
+                        Some((pair.first()?.as_str()?.to_string(), pair.get(1)?.as_f64()? as f32))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let wet_fx_chain = v
+            .get("wet_fx_chain")
+            .and_then(|a| a.as_array())
+            .map(|arr| arr.iter().filter_map(Self::from_json).collect())
+            .unwrap_or_default();
+        Some(Self {
+            track_id: v.get("track_id")?.as_str()?.to_string(),
+            slot_index: v.get("slot_index").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
+            name: v.get("name")?.as_str()?.to_string(),
+            active: v.get("active").and_then(|x| x.as_bool()).unwrap_or(true),
+            preset_name: v
+                .get("preset_name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("init")
+                .to_string(),
+            is_grid: v.get("is_grid").and_then(|x| x.as_bool()).unwrap_or(false),
+            dsp_slot,
+            native_params,
+            wet_fx_chain,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BwAutomationLane {
+    pub target_kind: String,
+    pub track_id: Option<String>,
+    pub fx_idx: Option<usize>,
+    pub slot_idx: Option<usize>,
+    pub param_id: Option<u32>,
+    pub points: Vec<(u64, f32)>,
+}
+
+impl BwAutomationLane {
+    fn to_json(&self) -> Value {
+        json!({
+            "target_kind": self.target_kind,
+            "track_id": self.track_id,
+            "fx_idx": self.fx_idx,
+            "slot_idx": self.slot_idx,
+            "param_id": self.param_id,
+            "points": self.points.iter().map(|(t, v)| json!([t, v])).collect::<Vec<_>>(),
+        })
+    }
+
+    fn from_json(v: &Value) -> Option<Self> {
+        let points = v
+            .get("points")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        let pair = p.as_array()?;
+                        Some((pair.first()?.as_u64()?, pair.get(1)?.as_f64()? as f32))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            target_kind: v.get("target_kind")?.as_str()?.to_string(),
+            track_id: v.get("track_id").and_then(|x| x.as_str()).map(String::from),
+            fx_idx: v.get("fx_idx").and_then(|x| x.as_u64()).map(|u| u as usize),
+            slot_idx: v.get("slot_idx").and_then(|x| x.as_u64()).map(|u| u as usize),
+            param_id: v.get("param_id").and_then(|x| x.as_u64()).map(|u| u as u32),
+            points,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BwTrackModulatorBay {
+    pub track_id: String,
+    pub slot_idx: usize,
+    pub bay: hikaru_project_file::DeviceModulatorBayParams,
+}
+
+impl BwTrackModulatorBay {
+    fn to_json(&self) -> Value {
+        json!({
+            "track_id": self.track_id,
+            "slot_idx": self.slot_idx,
+            "bay": serde_json::to_value(&self.bay).unwrap_or(Value::Null),
+        })
+    }
+
+    fn from_json(v: &Value) -> Option<Self> {
+        let bay = serde_json::from_value::<hikaru_project_file::DeviceModulatorBayParams>(
+            v.get("bay")?.clone(),
+        )
+        .ok()?;
+        Some(Self {
+            track_id: v.get("track_id")?.as_str()?.to_string(),
+            slot_idx: v.get("slot_idx").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
+            bay,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BwEmbeddedAudio {
+    pub original_path: String,
+    pub filename: String,
+    pub data_b64: String,
+}
+
+impl BwEmbeddedAudio {
+    fn to_json(&self) -> Value {
+        json!({
+            "original_path": self.original_path,
+            "filename": self.filename,
+            "data_b64": self.data_b64,
+        })
+    }
+
+    fn from_json(v: &Value) -> Option<Self> {
+        Some(Self {
+            original_path: v.get("original_path")?.as_str()?.to_string(),
+            filename: v.get("filename")?.as_str()?.to_string(),
+            data_b64: v.get("data_b64")?.as_str()?.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BwPluginState {
+    pub track_id: String,
+    pub slot_index: usize,
+    pub name: String,
+    pub plugin_path: String,
+    pub plugin_format: String,
+    pub state_b64: Option<String>,
+    pub cached_params: Vec<(u32, String, f32)>,
+    pub rack_overrides: Vec<(u32, f32)>,
+}
+
+impl BwPluginState {
+    fn to_json(&self) -> Value {
+        json!({
+            "track_id": self.track_id,
+            "slot_index": self.slot_index,
+            "name": self.name,
+            "plugin_path": self.plugin_path,
+            "plugin_format": self.plugin_format,
+            "state_b64": self.state_b64,
+            "cached_params": self.cached_params.iter().map(|(id, n, v)| json!([id, n, v])).collect::<Vec<_>>(),
+            "rack_overrides": self.rack_overrides.iter().map(|(id, v)| json!([id, v])).collect::<Vec<_>>(),
+        })
+    }
+
+    fn from_json(v: &Value) -> Option<Self> {
+        let cached_params = v
+            .get("cached_params")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        let tup = p.as_array()?;
+                        Some((
+                            tup.first()?.as_u64()? as u32,
+                            tup.get(1)?.as_str()?.to_string(),
+                            tup.get(2)?.as_f64()? as f32,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let rack_overrides = v
+            .get("rack_overrides")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        let pair = p.as_array()?;
+                        Some((pair.first()?.as_u64()? as u32, pair.get(1)?.as_f64()? as f32))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            track_id: v.get("track_id")?.as_str()?.to_string(),
+            slot_index: v.get("slot_index").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
+            name: v.get("name")?.as_str()?.to_string(),
+            plugin_path: v
+                .get("plugin_path")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            plugin_format: v
+                .get("plugin_format")
+                .and_then(|x| x.as_str())
+                .unwrap_or("VST3")
+                .to_string(),
+            state_b64: v.get("state_b64").and_then(|x| x.as_str()).map(String::from),
+            cached_params,
+            rack_overrides,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ParsedBwProject {
     pub transport: BwTransport,
     pub tracks: Vec<BwTrack>,
     pub clips: Vec<BwClip>,
+    pub devices: Vec<BwTrackDevice>,
+    pub automation: Vec<BwAutomationLane>,
+    pub modulators: Vec<BwTrackModulatorBay>,
+    pub embedded_audio: Vec<BwEmbeddedAudio>,
+    pub plugin_states: Vec<BwPluginState>,
+}
+
+// =========================================================================
+// BASE64 HELPERS (sin dependencias externas)
+// =========================================================================
+
+const B64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn encode_base64(input: &[u8]) -> String {
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64_TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(B64_TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            B64_TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64_TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if bytes.len() % 4 != 0 {
+        return Err("longitud base64 inválida".to_string());
+    }
+    let mut out = Vec::with_capacity((bytes.len() / 4) * 3);
+    for chunk in bytes.chunks_exact(4) {
+        let mut vals = [0u32; 4];
+        let mut pad = 0usize;
+        for (i, &b) in chunk.iter().enumerate() {
+            if b == b'=' {
+                vals[i] = 0;
+                pad += 1;
+            } else if let Some(pos) = B64_TABLE.iter().position(|&c| c == b) {
+                vals[i] = pos as u32;
+            } else {
+                return Err(format!("carácter base64 inválido: {}", b as char));
+            }
+        }
+        let n = (vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) | vals[3];
+        out.push(((n >> 16) & 0xff) as u8);
+        if pad < 2 {
+            out.push(((n >> 8) & 0xff) as u8);
+        }
+        if pad == 0 {
+            out.push((n & 0xff) as u8);
+        }
+    }
+    Ok(out)
 }
 
 // =========================================================================
@@ -153,9 +469,15 @@ fn encode_bwproject(project: &ParsedBwProject) -> Result<Vec<u8>, String> {
             })
             .collect(),
     );
-    let devs_val = json!([]);
-    let auto_val = json!([]);
-    let medi_val = json!({ "embedded_audio": [], "plugin_states": [] });
+    let devs_val = Value::Array(project.devices.iter().map(|d| d.to_json()).collect());
+    let auto_val = json!({
+        "lanes": project.automation.iter().map(|a| a.to_json()).collect::<Vec<_>>(),
+        "modulators": project.modulators.iter().map(|m| m.to_json()).collect::<Vec<_>>(),
+    });
+    let medi_val = json!({
+        "embedded_audio": project.embedded_audio.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
+        "plugin_states": project.plugin_states.iter().map(|p| p.to_json()).collect::<Vec<_>>(),
+    });
 
     let trns = serde_json::to_vec(&trns_val).map_err(|e| e.to_string())?;
     let trks = serde_json::to_vec(&trks_val).map_err(|e| e.to_string())?;
@@ -199,6 +521,11 @@ pub fn parse_bwproject_bytes(bytes: &[u8]) -> Result<ParsedBwProject, String> {
     };
     let mut tracks: Vec<BwTrack> = Vec::new();
     let mut clips: Vec<BwClip> = Vec::new();
+    let mut devices: Vec<BwTrackDevice> = Vec::new();
+    let mut automation: Vec<BwAutomationLane> = Vec::new();
+    let mut modulators: Vec<BwTrackModulatorBay> = Vec::new();
+    let mut embedded_audio: Vec<BwEmbeddedAudio> = Vec::new();
+    let mut plugin_states: Vec<BwPluginState> = Vec::new();
 
     for _ in 0..chunk_count {
         if offset + 8 > bytes.len() {
@@ -352,6 +679,32 @@ pub fn parse_bwproject_bytes(bytes: &[u8]) -> Result<ParsedBwProject, String> {
                     content,
                 });
             }
+        } else if tag == TAG_DEVS {
+            if let Ok(arr) = serde_json::from_slice::<Vec<Value>>(payload) {
+                devices.extend(arr.iter().filter_map(BwTrackDevice::from_json));
+            }
+        } else if tag == TAG_AUTO {
+            if let Ok(v) = serde_json::from_slice::<Value>(payload) {
+                if let Some(arr) = v.as_array() {
+                    automation.extend(arr.iter().filter_map(BwAutomationLane::from_json));
+                } else if v.is_object() {
+                    if let Some(arr) = v.get("lanes").and_then(|x| x.as_array()) {
+                        automation.extend(arr.iter().filter_map(BwAutomationLane::from_json));
+                    }
+                    if let Some(arr) = v.get("modulators").and_then(|x| x.as_array()) {
+                        modulators.extend(arr.iter().filter_map(BwTrackModulatorBay::from_json));
+                    }
+                }
+            }
+        } else if tag == TAG_MEDI {
+            if let Ok(v) = serde_json::from_slice::<Value>(payload) {
+                if let Some(arr) = v.get("embedded_audio").and_then(|x| x.as_array()) {
+                    embedded_audio.extend(arr.iter().filter_map(BwEmbeddedAudio::from_json));
+                }
+                if let Some(arr) = v.get("plugin_states").and_then(|x| x.as_array()) {
+                    plugin_states.extend(arr.iter().filter_map(BwPluginState::from_json));
+                }
+            }
         }
     }
 
@@ -359,6 +712,11 @@ pub fn parse_bwproject_bytes(bytes: &[u8]) -> Result<ParsedBwProject, String> {
         transport,
         tracks,
         clips,
+        devices,
+        automation,
+        modulators,
+        embedded_audio,
+        plugin_states,
     })
 }
 
@@ -373,9 +731,14 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
     let ppqn = state.playlist_state.ppqn.max(1) as f64;
 
     let mut tracks = Vec::new();
+    let mut devices = Vec::new();
+    let mut modulators = Vec::new();
+    let mut plugin_states = Vec::new();
+
     for tr in &state.live_tracks {
+        let track_id = format!("trk_{}", tr.id);
         tracks.push(BwTrack {
-            id: format!("trk_{}", tr.id),
+            id: track_id.clone(),
             name: tr.name.clone(),
             is_master: tr.is_master,
             volume: tr.volume,
@@ -384,6 +747,58 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
             solo: tr.solo,
             color: Some(tr.color.to_array()),
         });
+
+        let captured = common::capture_track(tr);
+        for (slot_idx, (live_slot, file_slot)) in
+            tr.effects.iter().zip(captured.effects.iter()).enumerate()
+        {
+            if let Some(ref bay) = file_slot.modulator_bay {
+                if !bay.slots.is_empty() || bay.open {
+                    modulators.push(BwTrackModulatorBay {
+                        track_id: track_id.clone(),
+                        slot_idx,
+                        bay: bay.clone(),
+                    });
+                }
+            }
+            if live_slot.external.is_some() || live_slot.saved_state.is_some() {
+                let plugin_path = live_slot
+                    .external
+                    .as_ref()
+                    .map(|p| p.path.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let plugin_format = live_slot
+                    .external
+                    .as_ref()
+                    .map(|p| match p.format {
+                        hikaru_plugin_host::PluginFormat::VST3 => "VST3".to_string(),
+                        hikaru_plugin_host::PluginFormat::CLAP => "CLAP".to_string(),
+                    })
+                    .unwrap_or_else(|| "VST3".to_string());
+                plugin_states.push(BwPluginState {
+                    track_id: track_id.clone(),
+                    slot_index: slot_idx,
+                    name: live_slot.name.clone(),
+                    plugin_path,
+                    plugin_format,
+                    state_b64: live_slot.saved_state.as_deref().map(encode_base64),
+                    cached_params: live_slot
+                        .cached_params
+                        .iter()
+                        .map(|p| (p.info.id, p.info.name.clone(), p.value))
+                        .collect(),
+                    rack_overrides: live_slot.rack_overrides_since_state.clone(),
+                });
+            }
+            if live_slot.name != crate::views::mixer::EMPTY_SLOT_NAME {
+                devices.push(capture_bw_device(
+                    &track_id,
+                    slot_idx,
+                    live_slot,
+                    file_slot.clone(),
+                ));
+            }
+        }
     }
 
     let mut clips = Vec::new();
@@ -462,6 +877,83 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
         }
     }
 
+    let mut automation = Vec::new();
+    for lane in &state.automation.lanes {
+        let track_id_for = |idx: usize| -> String {
+            state
+                .live_tracks
+                .get(idx)
+                .map(|t| format!("trk_{}", t.id))
+                .unwrap_or_else(|| format!("trk_{}", idx))
+        };
+        let (target_kind, track_id, fx_idx, slot_idx, param_id) = match &lane.target {
+            AutomationTarget::TransportTempo => {
+                ("transport_tempo".to_string(), None, None, None, None)
+            }
+            AutomationTarget::MixerVolume { track_idx } => (
+                "mixer_volume".to_string(),
+                Some(track_id_for(*track_idx)),
+                None,
+                None,
+                None,
+            ),
+            AutomationTarget::MixerPan { track_idx } => (
+                "mixer_pan".to_string(),
+                Some(track_id_for(*track_idx)),
+                None,
+                None,
+                None,
+            ),
+            AutomationTarget::TrackSend { track_idx, fx_idx } => (
+                "track_send".to_string(),
+                Some(track_id_for(*track_idx)),
+                Some(*fx_idx),
+                None,
+                None,
+            ),
+            AutomationTarget::ExternalPluginParam {
+                track_idx,
+                slot_idx,
+                param_id,
+            } => (
+                "external_plugin_param".to_string(),
+                Some(track_id_for(*track_idx)),
+                None,
+                Some(*slot_idx),
+                Some(*param_id),
+            ),
+        };
+        automation.push(BwAutomationLane {
+            target_kind,
+            track_id,
+            fx_idx,
+            slot_idx,
+            param_id,
+            points: lane.points.iter().map(|p| (p.tick, p.value)).collect(),
+        });
+    }
+
+    let mut embedded_audio = Vec::new();
+    let mut seen_audio_paths = std::collections::HashSet::new();
+    for c in &clips {
+        if let BwClipContent::Audio { path } = &c.content {
+            if !path.is_empty() && seen_audio_paths.insert(path.clone()) {
+                let p = Path::new(path);
+                if let Ok(bytes) = std::fs::read(p) {
+                    let filename = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "audio.wav".to_string());
+                    embedded_audio.push(BwEmbeddedAudio {
+                        original_path: path.clone(),
+                        filename,
+                        data_b64: encode_base64(&bytes),
+                    });
+                }
+            }
+        }
+    }
+
     let project = ParsedBwProject {
         transport: BwTransport {
             bpm,
@@ -470,9 +962,62 @@ pub fn build_bwproject_bytes(state: &AppState) -> Result<Vec<u8>, String> {
         },
         tracks,
         clips,
+        devices,
+        automation,
+        modulators,
+        embedded_audio,
+        plugin_states,
     };
 
     encode_bwproject(&project)
+}
+
+fn capture_bw_device(
+    track_id: &str,
+    slot_index: usize,
+    live_slot: &DspSlot,
+    file_slot: hikaru_project_file::DspSlot,
+) -> BwTrackDevice {
+    let wet_fx_chain = live_slot
+        .wet_fx_chain
+        .iter()
+        .enumerate()
+        .map(|(w_idx, w_slot)| {
+            let mut dummy_track = Track::new(0, "Wet".to_string(), false);
+            dummy_track.effects.push(w_slot.clone());
+            let captured = common::capture_track(&dummy_track);
+            capture_bw_device(
+                track_id,
+                w_idx,
+                w_slot,
+                captured.effects.into_iter().next().unwrap_or(hikaru_project_file::DspSlot {
+                    id: w_slot.id,
+                    name: w_slot.name.clone(),
+                    active: w_slot.active,
+                    wavetable_path: None,
+                    plugin_path: None,
+                    plugin_format: None,
+                    open_wavetable: None,
+                    open_modulation: None,
+                    sampler: None,
+                    open_poly: None,
+                    open_grid: None,
+                    modulator_bay: None,
+                }),
+            )
+        })
+        .collect();
+    BwTrackDevice {
+        track_id: track_id.to_string(),
+        slot_index,
+        name: live_slot.name.clone(),
+        active: live_slot.active,
+        preset_name: live_slot.preset_name.clone(),
+        is_grid: live_slot.is_open_grid() || DspSlot::is_open_grid_name(&live_slot.name),
+        dsp_slot: Some(file_slot),
+        native_params: Vec::new(),
+        wet_fx_chain,
+    }
 }
 
 pub fn export_to_path(state: &AppState, path: &Path) -> Result<(), ProjectError> {
@@ -550,8 +1095,194 @@ pub(crate) fn apply_parsed_bwproject(
     all_tracks.push(master_track);
     all_tracks.extend(regular_tracks);
 
+    // bw-04: Restaurar dispositivos nativos y Grid por pista
+    let mut devs_by_track: HashMap<String, Vec<&BwTrackDevice>> = HashMap::new();
+    for dev in &parsed.devices {
+        devs_by_track
+            .entry(dev.track_id.clone())
+            .or_default()
+            .push(dev);
+    }
+    for (tid_str, &track_idx) in &id_to_track_idx {
+        if let Some(track) = all_tracks.get_mut(track_idx) {
+            if let Some(mut list) = devs_by_track.remove(tid_str) {
+                list.sort_by_key(|d| d.slot_index);
+                for dev in list {
+                    while track.effects.len() < dev.slot_index {
+                        let next_slot_id = track.effects.len() + 1;
+                        track.effects.push(DspSlot::new(
+                            next_slot_id,
+                            crate::views::mixer::EMPTY_SLOT_NAME.to_string(),
+                        ));
+                    }
+                    let slot = build_dsp_slot_from_bw_device(track.id, dev);
+                    if dev.slot_index < track.effects.len() {
+                        track.effects[dev.slot_index] = slot;
+                    } else {
+                        track.effects.push(slot);
+                    }
+                }
+            }
+        }
+    }
+
+    // bw-06: Restaurar estado de plugins externos VST3/CLAP
+    for pstate in &parsed.plugin_states {
+        let Some(&track_idx) = id_to_track_idx.get(&pstate.track_id) else {
+            continue;
+        };
+        let Some(track) = all_tracks.get_mut(track_idx) else {
+            continue;
+        };
+        while track.effects.len() <= pstate.slot_index {
+            let next_slot_id = track.effects.len() + 1;
+            track.effects.push(DspSlot::new(
+                next_slot_id,
+                crate::views::mixer::EMPTY_SLOT_NAME.to_string(),
+            ));
+        }
+        let slot = &mut track.effects[pstate.slot_index];
+        if slot.name == crate::views::mixer::EMPTY_SLOT_NAME {
+            slot.name = pstate.name.clone();
+        }
+        if !pstate.plugin_path.is_empty() {
+            let path = PathBuf::from(&pstate.plugin_path);
+            let format = match pstate.plugin_format.as_str() {
+                "CLAP" => hikaru_plugin_host::PluginFormat::CLAP,
+                _ => hikaru_plugin_host::PluginFormat::VST3,
+            };
+            slot.external = Some(hikaru_plugin_host::registry::PluginDescriptor {
+                id: format!("{format:?}:{}", path.display()).to_lowercase(),
+                name: pstate.name.clone(),
+                vendor: String::new(),
+                path,
+                format,
+                kind: hikaru_plugin_host::PluginKind::Effect,
+                has_gui: false,
+                input_channels: None,
+            });
+        }
+        if let Some(ref b64) = pstate.state_b64 {
+            if let Ok(raw) = decode_base64(b64) {
+                slot.saved_state = Some(raw);
+            }
+        }
+        slot.rack_overrides_since_state = pstate.rack_overrides.clone();
+        if !pstate.cached_params.is_empty() {
+            slot.cached_params = pstate
+                .cached_params
+                .iter()
+                .map(|(pid, pname, val)| ExternalParamState {
+                    info: hikaru_plugin_host::PluginParamInfo {
+                        id: *pid,
+                        name: pname.clone(),
+                        unit: String::new(),
+                        min: 0.0,
+                        max: 1.0,
+                        default_value: *val,
+                        step_count: 0,
+                        can_automate: true,
+                        is_modulatable: true,
+                    },
+                    value: *val,
+                    pending_to_engine: false,
+                    display_text: None,
+                    last_sent_effective: None,
+                    last_sent_mod: 0.0,
+                })
+                .collect();
+        }
+    }
+
+    // bw-05: Restaurar estado de moduladores acoplados a slots
+    for m in &parsed.modulators {
+        if let Some(&track_idx) = id_to_track_idx.get(&m.track_id) {
+            if let Some(track) = all_tracks.get_mut(track_idx) {
+                if let Some(slot) = track.effects.get_mut(m.slot_idx) {
+                    slot.modulators_open = m.bay.open;
+                }
+                crate::views::hikaru_native_plugins::hikaru_openmodulation::restore_bay_params(
+                    track.id,
+                    m.slot_idx,
+                    &m.bay,
+                );
+            }
+        }
+    }
+
     state.live_tracks = all_tracks.clone();
     state.studio_tracks = all_tracks;
+
+    // bw-05: Restaurar carriles de automatización
+    state.automation.lanes.clear();
+    for lane in &parsed.automation {
+        let resolve_tidx = |tid: &Option<String>| -> Option<usize> {
+            tid.as_ref().and_then(|s| id_to_track_idx.get(s).copied())
+        };
+        let target = match lane.target_kind.as_str() {
+            "transport_tempo" => Some(AutomationTarget::TransportTempo),
+            "mixer_volume" => resolve_tidx(&lane.track_id)
+                .map(|track_idx| AutomationTarget::MixerVolume { track_idx }),
+            "mixer_pan" => resolve_tidx(&lane.track_id)
+                .map(|track_idx| AutomationTarget::MixerPan { track_idx }),
+            "track_send" => resolve_tidx(&lane.track_id).map(|track_idx| {
+                AutomationTarget::TrackSend {
+                    track_idx,
+                    fx_idx: lane.fx_idx.unwrap_or(0),
+                }
+            }),
+            "external_plugin_param" => resolve_tidx(&lane.track_id).map(|track_idx| {
+                AutomationTarget::ExternalPluginParam {
+                    track_idx,
+                    slot_idx: lane.slot_idx.unwrap_or(0),
+                    param_id: lane.param_id.unwrap_or(0),
+                }
+            }),
+            _ => None,
+        };
+        if let Some(target) = target {
+            let mut restored = AutomationLane::new(target);
+            restored.points = lane
+                .points
+                .iter()
+                .map(|&(tick, value)| AutomationPoint {
+                    tick,
+                    value: if value.is_finite() {
+                        value.clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    },
+                })
+                .collect();
+            restored.sort_points();
+            state.automation.lanes.push(restored);
+        }
+    }
+
+    // bw-06: Extraer audio embebido a carpeta temporal para resolución de clips
+    let mut embedded_audio_map: HashMap<String, PathBuf> = HashMap::new();
+    if !parsed.embedded_audio.is_empty() {
+        let proj_hash = bwproject_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("project");
+        let media_dir = std::env::temp_dir()
+            .join("hikaru_bwproject_media")
+            .join(proj_hash);
+        let _ = std::fs::create_dir_all(&media_dir);
+        for (idx, aud) in parsed.embedded_audio.iter().enumerate() {
+            if let Ok(raw) = decode_base64(&aud.data_b64) {
+                let safe_name = Path::new(&aud.filename)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("sample.wav");
+                let out_path = media_dir.join(format!("{idx}_{safe_name}"));
+                if std::fs::write(&out_path, &raw).is_ok() {
+                    embedded_audio_map.insert(aud.original_path.clone(), out_path);
+                }
+            }
+        }
+    }
 
     let num_regular = state.live_tracks.len().saturating_sub(1).max(1);
     let max_clip_slot = parsed
@@ -624,7 +1355,16 @@ pub(crate) fn apply_parsed_bwproject(
                 BwClipContent::Empty => continue,
             };
             let path = match &pc.content {
-                BwClipContent::Audio { path } => resolve_path(base_dir, path),
+                BwClipContent::Audio { path } => {
+                    let resolved = resolve_path(base_dir, path);
+                    if resolved.exists() {
+                        resolved
+                    } else if let Some(emb) = embedded_audio_map.get(path) {
+                        emb.clone()
+                    } else {
+                        resolved
+                    }
+                }
                 _ => PathBuf::new(),
             };
             let initial_loop_end = match &content {
@@ -747,7 +1487,14 @@ pub(crate) fn apply_parsed_bwproject(
             let duration_ticks = (pc.duration_beats * ppqn).round().max(1.0) as u64;
             let clip_type = match &pc.content {
                 BwClipContent::Audio { path } => {
-                    let p = resolve_path(base_dir, path);
+                    let resolved = resolve_path(base_dir, path);
+                    let p = if resolved.exists() {
+                        resolved
+                    } else if let Some(emb) = embedded_audio_map.get(path) {
+                        emb.clone()
+                    } else {
+                        resolved
+                    };
                     let peaks = if !p.as_os_str().is_empty() {
                         crate::views::hikaru_native_plugins::hikaru_opendms::open_dms_sampler::load_peaks_from_wav(
                             &p.to_string_lossy(),
@@ -788,6 +1535,49 @@ pub(crate) fn apply_parsed_bwproject(
     pl.needs_full_sync = true;
     state.playlist_state = pl;
     state.matrix_state.next_clip_id = next_id;
+}
+
+fn build_dsp_slot_from_bw_device(track_num_id: usize, dev: &BwTrackDevice) -> DspSlot {
+    let mut slot = if let Some(ref file_slot) = dev.dsp_slot {
+        let mut dummy = common::Track {
+            id: track_num_id,
+            name: String::new(),
+            volume: 1.0,
+            pan: 0.0,
+            pan_mode: 0,
+            mute: false,
+            solo: false,
+            arm: false,
+            is_master: false,
+            route_destination_id: 0,
+            sends: Vec::new(),
+            effects: vec![file_slot.clone()],
+            matrix_idx: None,
+        };
+        dummy.effects[0].id = dev.slot_index + 1;
+        let built = common::build_track(&dummy);
+        built
+            .effects
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| DspSlot::new(dev.slot_index + 1, dev.name.clone()))
+    } else {
+        let mapped_name = if dev.is_grid && !DspSlot::is_open_grid_name(&dev.name) {
+            "Hikaru OpenGrid".to_string()
+        } else {
+            dev.name.clone()
+        };
+        let mut s = DspSlot::new(dev.slot_index + 1, mapped_name);
+        s.active = dev.active;
+        s
+    };
+    slot.preset_name = dev.preset_name.clone();
+    slot.wet_fx_chain = dev
+        .wet_fx_chain
+        .iter()
+        .map(|w| build_dsp_slot_from_bw_device(track_num_id, w))
+        .collect();
+    slot
 }
 
 /// Parser para el formato binario nativo de Bitwig Studio (`BtWg`).
@@ -1027,6 +1817,72 @@ fn parse_native_bitwig_btwg(bytes: &[u8]) -> Result<ParsedBwProject, String> {
         });
     }
 
+    // 4. Dispositivos nativos, Grid, moduladores y media desde el AST `BtWgDocument`
+    let mut devices: Vec<BwTrackDevice> = Vec::new();
+    let mut automation: Vec<BwAutomationLane> = Vec::new();
+    let mut modulators: Vec<BwTrackModulatorBay> = Vec::new();
+    let mut embedded_audio: Vec<BwEmbeddedAudio> = Vec::new();
+    let mut plugin_states: Vec<BwPluginState> = Vec::new();
+
+    if let Ok(doc) = BtWgReader::parse_document(bytes) {
+        let default_track_id = tracks
+            .iter()
+            .find(|t| !t.is_master)
+            .map(|t| t.id.clone())
+            .unwrap_or_else(|| "trk_0".to_string());
+
+        if let Some(root) = &doc.body {
+            let mut per_track_slot: HashMap<String, usize> = HashMap::new();
+            collect_btwg_devices_and_media(
+                root,
+                &doc,
+                &default_track_id,
+                &mut per_track_slot,
+                &mut devices,
+                &mut automation,
+                &mut modulators,
+                &mut embedded_audio,
+                &mut plugin_states,
+                0,
+            );
+        }
+
+        // Si el documento entero representa un dispositivo/preset raíz con moduladores
+        if devices.is_empty() {
+            let trans = translate_device_document(&doc, None);
+            let dev_name = match &trans {
+                BwDeviceTranslation::Builtin { bitwig_name, .. } => bitwig_name.clone(),
+                BwDeviceTranslation::Placeholder(p) => p.bitwig_name.clone(),
+            };
+            if !dev_name.is_empty() && dev_name != "Unknown Device" {
+                let bay = extract_modulators_to_bay(&doc, &dev_name);
+                if !bay.slots.is_empty() {
+                    modulators.push(BwTrackModulatorBay {
+                        track_id: default_track_id.clone(),
+                        slot_idx: 0,
+                        bay,
+                    });
+                }
+                let is_grid = dev_name.to_ascii_lowercase().contains("grid");
+                devices.push(BwTrackDevice {
+                    track_id: default_track_id,
+                    slot_index: 0,
+                    name: if is_grid {
+                        "Hikaru OpenGrid".to_string()
+                    } else {
+                        dev_name
+                    },
+                    active: true,
+                    preset_name: "init".to_string(),
+                    is_grid,
+                    dsp_slot: None,
+                    native_params: Vec::new(),
+                    wet_fx_chain: Vec::new(),
+                });
+            }
+        }
+    }
+
     Ok(ParsedBwProject {
         transport: BwTransport {
             bpm,
@@ -1035,7 +1891,160 @@ fn parse_native_bitwig_btwg(bytes: &[u8]) -> Result<ParsedBwProject, String> {
         },
         tracks,
         clips,
+        devices,
+        automation,
+        modulators,
+        embedded_audio,
+        plugin_states,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_btwg_devices_and_media(
+    obj: &BtWgObject,
+    doc: &BtWgDocument,
+    current_track_id: &str,
+    per_track_slot: &mut HashMap<String, usize>,
+    devices: &mut Vec<BwTrackDevice>,
+    automation: &mut Vec<BwAutomationLane>,
+    modulators: &mut Vec<BwTrackModulatorBay>,
+    embedded_audio: &mut Vec<BwEmbeddedAudio>,
+    plugin_states: &mut Vec<BwPluginState>,
+    depth: usize,
+) {
+    if depth > 24 {
+        return;
+    }
+
+    let active_track = current_track_id.to_string();
+    let mut device_name: Option<String> = None;
+    let mut is_plugin_blob: Option<Vec<u8>> = None;
+    let mut plugin_path: Option<String> = None;
+
+    for (_, val) in &obj.fields {
+        if let BtWgValue::Str(s) = val {
+            if s.eq_ignore_ascii_case("Poly Grid")
+                || s.eq_ignore_ascii_case("FX Grid")
+                || s.eq_ignore_ascii_case("Note Grid")
+                || s.eq_ignore_ascii_case("Polymer")
+                || s.eq_ignore_ascii_case("Polysynth")
+                || s.eq_ignore_ascii_case("Sampler")
+                || s.eq_ignore_ascii_case("EQ+")
+                || s.eq_ignore_ascii_case("Tool")
+                || s.eq_ignore_ascii_case("Delay-2")
+                || s.eq_ignore_ascii_case("Reverb")
+                || s.eq_ignore_ascii_case("Compressor")
+            {
+                device_name = Some(s.clone());
+            } else if s.ends_with(".vst3") || s.ends_with(".clap") {
+                plugin_path = Some(s.clone());
+            }
+        } else if let BtWgValue::Bytes(raw) = val {
+            if raw.len() > 16 && raw.len() <= 2 * 1024 * 1024 {
+                is_plugin_blob = Some(raw.clone());
+            }
+        }
+    }
+
+    if let Some(dname) = device_name {
+        let slot_entry = per_track_slot.entry(active_track.clone()).or_insert(0);
+        let slot_index = *slot_entry;
+        *slot_entry += 1;
+
+        let is_grid = dname.to_ascii_lowercase().contains("grid");
+        let mapped_name = if is_grid {
+            "Hikaru OpenGrid".to_string()
+        } else {
+            dname.clone()
+        };
+        devices.push(BwTrackDevice {
+            track_id: active_track.clone(),
+            slot_index,
+            name: mapped_name,
+            active: true,
+            preset_name: dname.clone(),
+            is_grid,
+            dsp_slot: None,
+            native_params: Vec::new(),
+            wet_fx_chain: Vec::new(),
+        });
+
+        let sub_doc = BtWgDocument {
+            header: doc.header.clone(),
+            kind: doc.kind,
+            meta: None,
+            body: Some(obj.clone()),
+            objects_by_id: doc.objects_by_id.clone(),
+        };
+        let bay = extract_modulators_to_bay(&sub_doc, &dname);
+        if !bay.slots.is_empty() {
+            modulators.push(BwTrackModulatorBay {
+                track_id: active_track.clone(),
+                slot_idx: slot_index,
+                bay,
+            });
+        }
+    }
+
+    if let (Some(ppath), Some(blob)) = (plugin_path, is_plugin_blob) {
+        let slot_index = per_track_slot.get(&active_track).copied().unwrap_or(0);
+        let format = if ppath.ends_with(".clap") {
+            "CLAP".to_string()
+        } else {
+            "VST3".to_string()
+        };
+        let pname = Path::new(&ppath)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("External Plugin")
+            .to_string();
+        plugin_states.push(BwPluginState {
+            track_id: active_track.clone(),
+            slot_index,
+            name: pname,
+            plugin_path: ppath,
+            plugin_format: format,
+            state_b64: Some(encode_base64(&blob)),
+            cached_params: Vec::new(),
+            rack_overrides: Vec::new(),
+        });
+    }
+
+    for (_, val) in &obj.fields {
+        match val {
+            BtWgValue::Obj(child) | BtWgValue::ObjKeyInline { obj: child } => {
+                collect_btwg_devices_and_media(
+                    child,
+                    doc,
+                    current_track_id,
+                    per_track_slot,
+                    devices,
+                    automation,
+                    modulators,
+                    embedded_audio,
+                    plugin_states,
+                    depth + 1,
+                );
+            }
+            BtWgValue::ObjList(list) => {
+                for child in list {
+                    collect_btwg_devices_and_media(
+                        child,
+                        doc,
+                        current_track_id,
+                        per_track_slot,
+                        devices,
+                        automation,
+                        modulators,
+                        embedded_audio,
+                        plugin_states,
+                        depth + 1,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn resolve_path(base_dir: Option<&Path>, raw: &str) -> PathBuf {
@@ -1097,6 +2106,11 @@ mod tests {
                     notes: vec![(0, 36, 100, 480), (480, 48, 90, 480)],
                 },
             }],
+            devices: Vec::new(),
+            automation: Vec::new(),
+            modulators: Vec::new(),
+            embedded_audio: Vec::new(),
+            plugin_states: Vec::new(),
         };
 
         let bytes = encode_bwproject(&project).expect("encode should succeed");
@@ -1111,5 +2125,185 @@ mod tests {
     fn rejects_invalid_magic() {
         let err = parse_bwproject_bytes(b"NOTABWPROJECT").unwrap_err();
         assert!(err.contains("cabecera"));
+    }
+
+    fn make_test_app_state() -> AppState {
+        use std::sync::atomic::{AtomicU32, AtomicU64};
+        use std::sync::mpsc::channel;
+        use std::sync::Arc;
+        use crate::audio_proxy::AudioProxy;
+
+        let (tx, _rx) = channel();
+        AppState::new(
+            AudioProxy::new(tx),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU32::new(0)),
+            None,
+        )
+    }
+
+    #[test]
+    fn bw_04_devices_and_grid_round_trip() {
+        let mut src = make_test_app_state();
+        let mut grid_slot = DspSlot::new(1, "Hikaru OpenGrid".to_string());
+        grid_slot.preset_name = "Poly Grid Patch".to_string();
+        let mut wet_fx = DspSlot::new(2, "Reverb".to_string());
+        wet_fx.active = false;
+        grid_slot.wet_fx_chain.push(wet_fx);
+
+        src.live_tracks[1].effects.push(grid_slot);
+
+        let bytes = build_bwproject_bytes(&src).expect("build bwproject");
+        let parsed = parse_bwproject_bytes(&bytes).expect("parse bwproject");
+        assert_eq!(parsed.devices.len(), 1);
+        assert!(parsed.devices[0].is_grid);
+        assert_eq!(parsed.devices[0].preset_name, "Poly Grid Patch");
+        assert_eq!(parsed.devices[0].wet_fx_chain.len(), 1);
+
+        let mut dst = make_test_app_state();
+        apply_parsed_bwproject(&mut dst, &parsed, Path::new("/tmp/test_bw04.bwproject"));
+        assert_eq!(dst.live_tracks[1].effects.len(), 1);
+        assert!(dst.live_tracks[1].effects[0].is_open_grid());
+        assert_eq!(dst.live_tracks[1].effects[0].preset_name, "Poly Grid Patch");
+        assert_eq!(dst.live_tracks[1].effects[0].wet_fx_chain.len(), 1);
+        assert!(!dst.live_tracks[1].effects[0].wet_fx_chain[0].active);
+    }
+
+    #[test]
+    fn bw_05_automation_and_modulators_round_trip() {
+        let mut src = make_test_app_state();
+        src.live_tracks[1]
+            .effects
+            .push(DspSlot::new(1, "Hikaru OpenPoly".to_string()));
+
+        let mut tempo_lane = AutomationLane::new(AutomationTarget::TransportTempo);
+        tempo_lane.insert_point(0, 0.25);
+        tempo_lane.insert_point(960, 0.75);
+        let mut vol_lane = AutomationLane::new(AutomationTarget::MixerVolume { track_idx: 1 });
+        vol_lane.insert_point(480, 0.6);
+        src.automation.lanes.push(tempo_lane);
+        src.automation.lanes.push(vol_lane);
+
+        let bay = hikaru_project_file::DeviceModulatorBayParams {
+            open: true,
+            slots: vec![hikaru_project_file::ModulatorSlotParams {
+                id: 1,
+                kind: "LFO".to_string(),
+                enabled: true,
+                params: vec![2.5],
+                bool_flags: vec![true],
+                mode_idx: 0,
+                routes: vec![hikaru_project_file::ModulatorRouteParams {
+                    out_idx: 0,
+                    target: "Filter Cutoff".to_string(),
+                    amount: 0.42,
+                }],
+            }],
+        };
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::restore_bay_params(
+            src.live_tracks[1].id,
+            0,
+            &bay,
+        );
+
+        let bytes = build_bwproject_bytes(&src).expect("build bwproject");
+        let parsed = parse_bwproject_bytes(&bytes).expect("parse bwproject");
+        assert_eq!(parsed.automation.len(), 2);
+        assert_eq!(parsed.modulators.len(), 1);
+        assert_eq!(parsed.modulators[0].bay.slots[0].kind, "Classic LFO");
+
+        let mut dst = make_test_app_state();
+        apply_parsed_bwproject(&mut dst, &parsed, Path::new("/tmp/test_bw05.bwproject"));
+        assert_eq!(dst.automation.lanes.len(), 2);
+        assert!(dst.automation.has_tempo_automation());
+        assert_eq!(
+            dst.automation
+                .lane_for(&AutomationTarget::MixerVolume { track_idx: 1 })
+                .map(|l| l.points.len()),
+            Some(1)
+        );
+        assert!(dst.live_tracks[1].effects[0].modulators_open);
+    }
+
+    #[test]
+    fn bw_06_embedded_audio_and_plugin_state_round_trip() {
+        let mut src = make_test_app_state();
+
+        // Crear un WAV temporal para probar audio embebido
+        let wav_path = std::env::temp_dir().join("hikaru_bw06_embed_test.wav");
+        {
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 44100,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&wav_path, spec).expect("create wav");
+            for _ in 0..441 {
+                writer.write_sample(1000i16).expect("write sample");
+            }
+            writer.finalize().expect("finalize wav");
+        }
+
+        src.playlist_state.clips.push((
+            1,
+            PlaylistClip {
+                id: 1,
+                name: "Embedded Kick".to_string(),
+                start_tick: 0,
+                duration_ticks: 960,
+                clip_type: ClipType::Audio {
+                    sample_path: wav_path.to_string_lossy().to_string(),
+                    peaks: Vec::new(),
+                    sample_offset_ticks: 0,
+                    total_sample_ticks: 960,
+                },
+                color: Color32::from_rgb(255, 85, 0),
+                muted: false,
+                loop_enabled: false,
+            },
+        ));
+
+        let mut vst_slot = DspSlot::new(1, "TestSynth".to_string());
+        vst_slot.external = Some(hikaru_plugin_host::registry::PluginDescriptor {
+            id: "vst3:/plugins/TestSynth.vst3".to_string(),
+            name: "TestSynth".to_string(),
+            vendor: "Hikaru".to_string(),
+            path: PathBuf::from("/plugins/TestSynth.vst3"),
+            format: hikaru_plugin_host::PluginFormat::VST3,
+            kind: hikaru_plugin_host::PluginKind::Effect,
+            has_gui: true,
+            input_channels: Some(2),
+        });
+        vst_slot.saved_state = Some(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02]);
+        vst_slot.rack_overrides_since_state = vec![(7, 0.65)];
+        src.live_tracks[1].effects.push(vst_slot);
+
+        let bytes = build_bwproject_bytes(&src).expect("build bwproject");
+        let _ = std::fs::remove_file(&wav_path);
+
+        let parsed = parse_bwproject_bytes(&bytes).expect("parse bwproject");
+        assert_eq!(parsed.embedded_audio.len(), 1);
+        assert_eq!(parsed.plugin_states.len(), 1);
+
+        let mut dst = make_test_app_state();
+        apply_parsed_bwproject(&mut dst, &parsed, Path::new("/tmp/test_bw06.bwproject"));
+
+        // El audio embebido debe haberse extraído y resuelto aunque el archivo original fue borrado
+        let (_, restored_clip) = &dst.playlist_state.clips[0];
+        if let ClipType::Audio { sample_path, .. } = &restored_clip.clip_type {
+            assert!(Path::new(sample_path).exists());
+            let _ = std::fs::remove_file(sample_path);
+        } else {
+            panic!("expected audio clip");
+        }
+
+        let restored_slot = &dst.live_tracks[1].effects[0];
+        assert!(restored_slot.external.is_some());
+        assert_eq!(
+            restored_slot.saved_state.as_deref(),
+            Some(&[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02][..])
+        );
+        assert_eq!(restored_slot.rack_overrides_since_state, vec![(7, 0.65)]);
     }
 }
