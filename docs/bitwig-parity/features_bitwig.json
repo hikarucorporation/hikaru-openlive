@@ -37,11 +37,11 @@
   "summary": {
     "areas": 29,
     "features": 725,
-    "done": 372,
+    "done": 376,
     "in_progress": 15,
-    "planned": 338,
+    "planned": 334,
     "bugs": 1,
-    "parity_percent": 51
+    "parity_percent": 52
   },
   "areas": [
     {
@@ -3851,22 +3851,26 @@
         {
           "id": "dp-07",
           "name": "Automation lanes & envelopes",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
         },
         {
           "id": "dp-08",
           "name": "Device & VST3/CLAP plugin state",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
         },
         {
           "id": "dp-09",
           "name": "Clip Launcher scenes & slots",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
         },
         {
           "id": "dp-10",
           "name": "Markers & arranger cue points",
-          "status": "planned"
+          "status": "done",
+          "evidence": "crates/hikaru_gui/src/project/dawproject.rs"
         }
       ]
     },

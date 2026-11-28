@@ -156,7 +156,7 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | Build & Platform | 13 | 8 | 2 | 3 | 1 |
 | Automation | 4 | 2 | 2 | 0 | 0 |
 | VST3 & CLAP | 12 | 5 | 2 | 5 | 0 |
-| .DAWproject | 10 | 6 | 0 | 4 | 0 |
+| .DAWproject | 10 | 10 | 0 | 0 | 0 |
 | .bwproject | 6 | 6 | 0 | 0 | 0 |
 | .bwtemplate | 4 | 4 | 0 | 0 | 0 |
 | .bwdevice | 5 | 5 | 0 | 0 | 0 |
@@ -171,9 +171,9 @@ implementadas o parciales incluyen `evidence` con la ruta del código.
 | .wt | 3 | 3 | 0 | 0 | 0 |
 | .nitro / .nitrobin | 3 | 0 | 0 | 3 | 0 |
 | .nitro | 3 | 3 | 0 | 0 | 0 |
-| **Total** | **725** | **372** | **15** | **338** | **1** |
+| **Total** | **725** | **376** | **15** | **334** | **1** |
 
-Paridad global: **372 / 725 = 51 %**.
+Paridad global: **376 / 725 = 52 %**.
 
 ### Bugs abiertos
 
