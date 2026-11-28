@@ -444,21 +444,20 @@ pub fn render_module(
         }
     }
 
-    let changed = render_params_ui(ui, &spec, &mut values);
+    let changed = render_params_ui(ui, &spec, &mut values, Some((track_idx, slot_idx)));
 
     if changed {
         state_map().lock().unwrap().insert(key, values.clone());
-        if let Some(et_idx) = engine_track_idx {
-            for (i, &v) in values.iter().enumerate() {
-                app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
-                    track_idx: et_idx,
-                    slot_idx,
-                    param_id: i as u32,
-                    value: v.clamp(0.0, 1.0),
-                });
-            }
-        }
+        app.project_dirty = true;
     }
+    crate::views::hikaru_native_plugins::hikaru_openmodulation::sync_slot_params_to_engine(
+        ui,
+        app,
+        track_idx,
+        slot_idx,
+        spec.params.len() as u32,
+        |id| values.get(id as usize).copied(),
+    );
 }
 
 pub fn render_wet_fx_module(
@@ -486,7 +485,7 @@ pub fn render_wet_fx_module(
             .clone()
     };
 
-    let changed = render_params_ui(ui, &spec, &mut values);
+    let changed = render_params_ui(ui, &spec, &mut values, None);
 
     if changed {
         wet_state_map().lock().unwrap().insert(key, values.clone());
@@ -504,7 +503,12 @@ pub fn render_wet_fx_module(
     }
 }
 
-fn render_params_ui(ui: &mut egui::Ui, spec: &DeviceSpec, values: &mut [f32]) -> bool {
+fn render_params_ui(
+    ui: &mut egui::Ui,
+    spec: &DeviceSpec,
+    values: &mut [f32],
+    mod_slot: Option<(usize, usize)>,
+) -> bool {
     let mut changed = false;
 
     ui.vertical_centered(|ui| {
@@ -546,15 +550,31 @@ fn render_params_ui(ui: &mut egui::Ui, spec: &DeviceSpec, values: &mut [f32]) ->
                 match desc.kind {
                     ParamKind::Knob { .. } => {
                         let mut pct = *val * 100.0;
-                        let (k_resp, k_changed) = crate::ui::bitwig_kit::rotary_knob(
-                            &mut cell_ui,
-                            30.0,
-                            &mut pct,
-                            0.0..=100.0,
-                            desc.default_norm * 100.0,
-                            spec.accent,
-                            false,
-                        );
+                        let (k_resp, k_changed) = if let Some((track_idx, slot_idx)) = mod_slot {
+                            crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+                                &mut cell_ui,
+                                30.0,
+                                &mut pct,
+                                0.0..=100.0,
+                                desc.default_norm * 100.0,
+                                spec.accent,
+                                false,
+                                track_idx,
+                                slot_idx,
+                                p_idx as u32,
+                                desc.name,
+                            )
+                        } else {
+                            crate::ui::bitwig_kit::rotary_knob(
+                                &mut cell_ui,
+                                30.0,
+                                &mut pct,
+                                0.0..=100.0,
+                                desc.default_norm * 100.0,
+                                spec.accent,
+                                false,
+                            )
+                        };
                         if k_changed {
                             *val = (pct / 100.0).clamp(0.0, 1.0);
                             changed = true;

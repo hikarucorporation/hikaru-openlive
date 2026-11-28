@@ -26,7 +26,9 @@ use std::sync::{Mutex, OnceLock};
 use egui::{pos2, vec2, Align2, Color32, CornerRadius, CursorIcon, Painter, Pos2, Rect, Sense, Stroke};
 use hikaru_dsp::effects::{
     FreqShiftPoles, FreqShiftQuality, FreqShiftUnit, FreqShifterPlusParams, DELAY_SYNC_LABELS,
-    FREQ_SHIFTER_MAX_FEEDBACK, FREQ_SHIFTER_PLUS_PARAM_COUNT,
+    FREQ_SHIFTER_MAX_FEEDBACK, FREQ_SHIFTER_PLUS_PARAM_COUNT, FSP_PARAM_DELAY_MS,
+    FSP_PARAM_DELAY_SYNC_DIV, FSP_PARAM_FB_HP_HZ, FSP_PARAM_FB_LP_HZ, FSP_PARAM_FB_SHIFT_NORM,
+    FSP_PARAM_FEEDBACK, FSP_PARAM_MIX, FSP_PARAM_SHIFT_NORM, FSP_PARAM_WIDTH,
 };
 
 use crate::app::AppState;
@@ -503,15 +505,38 @@ fn paint_knob_arc_segment(
 
 /// Perilla heroica central de aluminio claro (`#ADAFB4`) con ranura oscura, punto central
 /// esmeralda a las 12 en punto y arco bipolar desde `0.5`.
+#[allow(clippy::too_many_arguments)]
 fn draw_hero_shift_knob(
     ui: &mut egui::Ui,
     center: Pos2,
     diameter: f32,
     norm: &mut f32,
     tooltip: &str,
+    track_idx: usize,
+    slot_idx: usize,
 ) -> (egui::Response, bool) {
     let rect = Rect::from_center_size(center, vec2(diameter, diameter));
     let mut knob_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    if crate::views::hikaru_native_plugins::hikaru_openmodulation::active_mapping_source_for_external(
+        track_idx, slot_idx,
+    )
+    .is_some()
+    {
+        let mut pct = norm.clamp(0.0, 1.0) * 100.0;
+        return crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut knob_ui,
+            diameter,
+            &mut pct,
+            0.0..=100.0,
+            50.0,
+            COL_EMERALD,
+            true,
+            track_idx,
+            slot_idx,
+            FSP_PARAM_SHIFT_NORM,
+            "Shift",
+        );
+    }
     let (_, resp) = knob_ui.allocate_exact_size(rect.size(), Sense::click_and_drag());
     let mut changed = false;
 
@@ -591,6 +616,7 @@ fn draw_hero_shift_knob(
 /// Perilla de filtro para `FB Cuts` cuyo arco muestra la **banda pasante conservada**:
 /// - `is_highpass == true`: arco verde desde `norm` hasta `1.0` (altas frecuencias conservadas).
 /// - `is_highpass == false`: arco verde desde `0.0` hasta `norm` (bajas frecuencias conservadas).
+#[allow(clippy::too_many_arguments)]
 fn draw_passband_cut_knob(
     ui: &mut egui::Ui,
     center: Pos2,
@@ -599,9 +625,33 @@ fn draw_passband_cut_knob(
     default_norm: f32,
     is_highpass: bool,
     tooltip: &str,
+    track_idx: usize,
+    slot_idx: usize,
+    param_id: u32,
 ) -> bool {
     let rect = Rect::from_center_size(center, vec2(diameter, diameter));
     let mut knob_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    if crate::views::hikaru_native_plugins::hikaru_openmodulation::active_mapping_source_for_external(
+        track_idx, slot_idx,
+    )
+    .is_some()
+    {
+        let mut pct = norm.clamp(0.0, 1.0) * 100.0;
+        let _ = crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut knob_ui,
+            diameter,
+            &mut pct,
+            0.0..=100.0,
+            default_norm * 100.0,
+            COL_EMERALD,
+            false,
+            track_idx,
+            slot_idx,
+            param_id,
+            if is_highpass { "FB HP" } else { "FB LP" },
+        );
+        return false;
+    }
     let (_, resp) = knob_ui.allocate_exact_size(rect.size(), Sense::click_and_drag());
     let mut changed = false;
 
@@ -681,6 +731,9 @@ fn draw_std_knob(
     bipolar: bool,
     bottom_label: Option<&str>,
     tooltip: &str,
+    track_idx: usize,
+    slot_idx: usize,
+    param_id: u32,
 ) -> bool {
     let knob_rect = Rect::from_min_size(
         pos2(center_x - diameter * 0.5, top_y),
@@ -692,15 +745,20 @@ fn draw_std_knob(
             .layout(egui::Layout::top_down(egui::Align::Center)),
     );
     let mut pct = norm.clamp(0.0, 1.0) * 100.0;
-    let (resp, changed) = bitwig_kit::rotary_knob(
-        &mut knob_ui,
-        diameter,
-        &mut pct,
-        0.0..=100.0,
-        default_norm * 100.0,
-        COL_EMERALD,
-        bipolar,
-    );
+    let (resp, changed) =
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut knob_ui,
+            diameter,
+            &mut pct,
+            0.0..=100.0,
+            default_norm * 100.0,
+            COL_EMERALD,
+            bipolar,
+            track_idx,
+            slot_idx,
+            param_id,
+            bottom_label.unwrap_or("Param"),
+        );
     if changed {
         *norm = (pct / 100.0).clamp(0.0, 1.0);
     }
@@ -1008,6 +1066,8 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         hero_diam,
         &mut params.shift_norm,
         &shift_tooltip,
+        track_idx,
+        slot_idx,
     );
     if hero_changed {
         changed = true;
@@ -1161,6 +1221,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         FreqShifterPlusParams::cut_hz_to_norm(def.fb_hp_hz),
         true,
         &hp_tooltip,
+        track_idx,
+        slot_idx,
+        FSP_PARAM_FB_HP_HZ,
     ) {
         params.fb_hp_hz = FreqShifterPlusParams::cut_norm_to_hz(hp_norm);
         changed = true;
@@ -1182,6 +1245,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         FreqShifterPlusParams::cut_hz_to_norm(def.fb_lp_hz),
         false,
         &lp_tooltip,
+        track_idx,
+        slot_idx,
+        FSP_PARAM_FB_LP_HZ,
     ) {
         params.fb_lp_hz = FreqShifterPlusParams::cut_norm_to_hz(lp_norm);
         changed = true;
@@ -1224,6 +1290,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
             false,
             None,
             &dly_tip,
+            track_idx,
+            slot_idx,
+            FSP_PARAM_DELAY_SYNC_DIV,
         ) {
             params.delay_sync_div = (div_norm * max_idx).round() as u8;
             changed = true;
@@ -1241,6 +1310,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
             false,
             None,
             &dly_tip,
+            track_idx,
+            slot_idx,
+            FSP_PARAM_DELAY_MS,
         ) {
             params.delay_ms = FreqShifterPlusParams::delay_norm_to_ms(dly_norm);
             changed = true;
@@ -1310,6 +1382,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         true,
         Some("Feedback"),
         &fb_tip,
+        track_idx,
+        slot_idx,
+        FSP_PARAM_FEEDBACK,
     ) {
         params.feedback = (fb_norm * 2.0 - 1.0) * FREQ_SHIFTER_MAX_FEEDBACK;
         changed = true;
@@ -1331,6 +1406,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         true,
         None,
         &fbs_tip,
+        track_idx,
+        slot_idx,
+        FSP_PARAM_FB_SHIFT_NORM,
     ) {
         changed = true;
     }
@@ -1462,6 +1540,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         true,
         Some("Width"),
         &format!("Stereo Width: {:.1}%", params.width * 100.0),
+        track_idx,
+        slot_idx,
+        FSP_PARAM_WIDTH,
     ) {
         params.width = width_norm * 2.0;
         changed = true;
@@ -1478,6 +1559,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         false,
         Some("Mix"),
         &format!("Dry/Wet Mix: {:.1}%", params.mix * 100.0),
+        track_idx,
+        slot_idx,
+        FSP_PARAM_MIX,
     ) {
         params.mix = mix_norm;
         changed = true;
@@ -1492,10 +1576,13 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         st.shift_text_buf = shift_text_buf;
         st.editing_shift_text = editing_shift_text;
     }
-    if changed {
-        if let Some(et_idx) = engine_track_idx {
-            push_all_params(app, et_idx, slot_idx, &params);
-        }
-    }
+    crate::views::hikaru_native_plugins::hikaru_openmodulation::sync_slot_params_to_engine(
+        ui,
+        app,
+        track_idx,
+        slot_idx,
+        FREQ_SHIFTER_PLUS_PARAM_COUNT as u32,
+        |id| params.get_normalized(id),
+    );
     let _ = wet_toggle_changed;
 }

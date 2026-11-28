@@ -25,9 +25,12 @@ use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{
     pos2, vec2, Align2, Color32, CornerRadius, CursorIcon, Painter, Pos2, Rect, Sense, Stroke,
 };
+use hikaru_dsp::effects::bit8::BIT8_PARAM_SHAPE_DRIVE_DB;
 use hikaru_dsp::effects::{
     Bit8Params, Bit8QuantizeMode, Bit8Rectify, Bit8ShapeMode, Bit8TelemetrySnapshot,
-    BIT8_DISPLAY_HISTORY, BIT8_MAX_DRIVE_DB, BIT8_PARAM_COUNT,
+    BIT8_DISPLAY_HISTORY, BIT8_MAX_DRIVE_DB, BIT8_PARAM_CHANCE, BIT8_PARAM_CLOCK_HZ,
+    BIT8_PARAM_COUNT, BIT8_PARAM_DIFFUSION, BIT8_PARAM_GATE_DB, BIT8_PARAM_JITTER,
+    BIT8_PARAM_MIX, BIT8_PARAM_QUANTIZE_DB, BIT8_PARAM_WIDTH,
 };
 
 use crate::app::AppState;
@@ -711,6 +714,7 @@ fn paint_top_display(painter: &Painter, rect: Rect, snap: &Bit8TelemetrySnapshot
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_knob_cell(
     ui: &mut egui::Ui,
     center_x: f32,
@@ -721,6 +725,9 @@ fn draw_knob_cell(
     arc_color: Color32,
     bottom_label: Option<&str>,
     tooltip: &str,
+    track_idx: usize,
+    slot_idx: usize,
+    param_id: u32,
 ) -> bool {
     let knob_rect =
         Rect::from_min_size(pos2(center_x - diameter * 0.5, top_y), vec2(diameter, diameter));
@@ -730,15 +737,20 @@ fn draw_knob_cell(
             .layout(egui::Layout::top_down(egui::Align::Center)),
     );
     let mut pct = norm.clamp(0.0, 1.0) * 100.0;
-    let (resp, changed) = bitwig_kit::rotary_knob(
-        &mut knob_ui,
-        diameter,
-        &mut pct,
-        0.0..=100.0,
-        default_norm * 100.0,
-        arc_color,
-        false,
-    );
+    let (resp, changed) =
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut knob_ui,
+            diameter,
+            &mut pct,
+            0.0..=100.0,
+            default_norm * 100.0,
+            arc_color,
+            false,
+            track_idx,
+            slot_idx,
+            param_id,
+            bottom_label.unwrap_or("Param"),
+        );
     if changed {
         *norm = (pct / 100.0).clamp(0.0, 1.0);
     }
@@ -848,6 +860,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_CLOCK_YELLOW,
         Some(&clock_str),
         &format!("Clock Frequency: {clock_str} ({clock_note})"),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_CLOCK_HZ,
     ) {
         params.clock_hz = Bit8Params::clock_norm_to_hz(clock_norm);
         changed = true;
@@ -864,6 +879,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_CLOCK_YELLOW,
         Some("Jitter"),
         &format!("Clock Jitter: {:.1}%", params.jitter * 100.0),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_JITTER,
     ) {
         params.jitter = jitter_norm;
         changed = true;
@@ -880,6 +898,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_CLOCK_YELLOW,
         Some("Chance"),
         &format!("Clock Chance: {:.1}%", params.chance * 100.0),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_CHANCE,
     ) {
         params.chance = chance_norm;
         changed = true;
@@ -927,6 +948,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_GATE_WHITE,
         Some(&gate_str),
         &format!("Gate Threshold: {gate_str} (post-quantize, keyed by input)"),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_GATE_DB,
     ) {
         params.gate_db = Bit8Params::db_norm_to_val(gate_norm);
         changed = true;
@@ -1061,6 +1085,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
             COL_SHAPE_BLUE,
             Some(&drive_str),
             &format!("Clip Drive: {drive_str} (threshold ±0.5)"),
+            track_idx,
+            slot_idx,
+            BIT8_PARAM_SHAPE_DRIVE_DB,
         ) {
             params.shape_drive_db = drive_norm * BIT8_MAX_DRIVE_DB;
             changed = true;
@@ -1172,6 +1199,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
                 Color32::from_rgb(0xC8, 0xCC, 0xD4),
                 None,
                 &format!("Diffusion Brightness: {:.1}%", params.diffusion_brightness * 100.0),
+                track_idx,
+                slot_idx,
+                BIT8_PARAM_DIFFUSION,
             ) {
                 params.diffusion_brightness = diff_norm;
                 changed = true;
@@ -1233,6 +1263,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_QUANT_PURPLE,
         Some(&quant_str),
         &format!("Quantization Level: {quant_str}"),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_QUANTIZE_DB,
     ) {
         params.quantize_db = Bit8Params::db_norm_to_val(quant_norm);
         changed = true;
@@ -1375,6 +1408,9 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_OUT_ORANGE,
         Some("Width"),
         &format!("Stereo Width: {:.1}%", params.width * 100.0),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_WIDTH,
     ) {
         params.width = width_norm;
         changed = true;
@@ -1391,22 +1427,26 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         COL_OUT_ORANGE,
         Some("Mix"),
         &format!("Dry/Wet Mix: {:.1}%", params.mix * 100.0),
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_MIX,
     ) {
         params.mix = mix_norm;
         changed = true;
     }
 
     if changed || wet_toggle_changed {
-        {
-            let mut map = state_map().lock().unwrap();
-            let st = map.entry(key).or_default();
-            st.params = params;
-            st.wet_fx_open = wet_fx_open;
-        }
-        if changed {
-            if let Some(et_idx) = engine_track_idx {
-                push_all_params(app, et_idx, slot_idx, &params);
-            }
-        }
+        let mut map = state_map().lock().unwrap();
+        let st = map.entry(key).or_default();
+        st.params = params;
+        st.wet_fx_open = wet_fx_open;
     }
+    crate::views::hikaru_native_plugins::hikaru_openmodulation::sync_slot_params_to_engine(
+        ui,
+        app,
+        track_idx,
+        slot_idx,
+        BIT8_PARAM_COUNT as u32,
+        |id| params.get_normalized(id),
+    );
 }

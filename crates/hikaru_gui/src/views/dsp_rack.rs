@@ -744,6 +744,7 @@ fn render_bitwig_device_sidebar(
     title: &str,
     active: bool,
     is_selected: bool,
+    modulators_open: bool,
 ) -> DeviceSidebarOutcome {
     let bg = if is_selected {
         Color32::from_rgb(0x36, 0x39, 0x41)
@@ -837,7 +838,9 @@ fn render_bitwig_device_sidebar(
         ui.painter(),
         mod_r.shrink(1.0),
         icons::LINK,
-        if mod_resp.hovered() {
+        if modulators_open {
+            hikaru_openmodulation::MOD_ARROW_CYAN
+        } else if mod_resp.hovered() {
             theme::ACCENT_ORANGE
         } else {
             Color32::from_rgb(0x88, 0x8E, 0x98)
@@ -855,6 +858,44 @@ fn render_bitwig_device_sidebar(
         folder_resp: fld_resp,
         clicked_title,
         clicked_modulators,
+    }
+}
+
+fn toggle_slot_modulators(app: &mut AppState, track_idx: usize, slot_idx: usize) {
+    if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+        if let Some(s) = t.effects.get_mut(slot_idx) {
+            s.modulators_open = !s.modulators_open;
+            if s.modulators_open {
+                hikaru_openmodulation::ensure_empty_bay_for_slot(track_idx, slot_idx);
+            }
+        }
+    }
+}
+
+fn render_slot_modulator_bay(
+    ui: &mut egui::Ui,
+    app: &mut AppState,
+    track_idx: usize,
+    slot_idx: usize,
+    modulators_open: bool,
+    body_rect: &mut Rect,
+) {
+    if !modulators_open {
+        return;
+    }
+    hikaru_openmodulation::ensure_empty_bay_for_slot(track_idx, slot_idx);
+    let mut request_add_modulator = false;
+    let bay_w = hikaru_openmodulation::render_device_modulator_bay(
+        ui,
+        body_rect.min,
+        body_rect.height(),
+        track_idx,
+        slot_idx,
+        &mut request_add_modulator,
+    );
+    body_rect.min.x = (body_rect.min.x + bay_w).min(body_rect.max.x);
+    if request_add_modulator {
+        app.popup_browser.open_insert_modulator(track_idx, slot_idx);
     }
 }
 
@@ -1482,30 +1523,40 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         OPEN_GRID_COMPACT_CARD_WIDTH
                                     }
                                 }
-                                "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
-                                "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
-                                "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
-                                name if hikaru_opencomb::is_opencomb_name(name) => OPENCOMB_CARD_WIDTH,
-                                name if hikaru_bit8::is_bit8_name(name) => {
-                                    hikaru_bit8::card_width_for_slot(track_idx, slot_idx)
+                                _ => {
+                                    let base_w = match slot.name.as_str() {
+                                        "Hikaru OpenDMS" => OPEN_DMS_CARD_WIDTH,
+                                        "Sampler" | "Hikaru Sampler" => SAMPLER_CARD_WIDTH,
+                                        "Hikaru OpenSpectral Phaser" | "OpenSpectral Phaser" | "OpenSpectralPhaser" => PHASER_CARD_WIDTH,
+                                        name if hikaru_opencomb::is_opencomb_name(name) => OPENCOMB_CARD_WIDTH,
+                                        name if hikaru_bit8::is_bit8_name(name) => {
+                                            hikaru_bit8::card_width_for_slot(track_idx, slot_idx)
+                                        }
+                                        name if hikaru_freq_shifter_plus::is_freq_shifter_plus_name(name) => {
+                                            hikaru_freq_shifter_plus::card_width_for_slot(track_idx, slot_idx)
+                                        }
+                                        name if hikaru_openphaser_plus::is_openphaser_plus_name(name) => {
+                                            OPEN_PHASER_PLUS_CARD_WIDTH
+                                        }
+                                        name if hikaru_openflanger_plus::is_openflanger_plus_name(name) => {
+                                            OPEN_FLANGER_PLUS_CARD_WIDTH
+                                        }
+                                        name if hikaru_openeq3::is_openeq_plus_name(name) => {
+                                            hikaru_openeq3::OPEN_EQ_PLUS_CARD_WIDTH
+                                        }
+                                        "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
+                                        name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
+                                            crate::views::hikaru_native_plugins::hikaru_tier_s_fx::card_width(name).unwrap_or(CARD_WIDTH)
+                                        }
+                                        _ => CARD_WIDTH,
+                                    };
+                                    if slot.modulators_open {
+                                        hikaru_openmodulation::ensure_empty_bay_for_slot(track_idx, slot_idx);
+                                        base_w + hikaru_openmodulation::bay_width_for_slot(track_idx, slot_idx)
+                                    } else {
+                                        base_w
+                                    }
                                 }
-                                name if hikaru_freq_shifter_plus::is_freq_shifter_plus_name(name) => {
-                                    hikaru_freq_shifter_plus::card_width_for_slot(track_idx, slot_idx)
-                                }
-                                name if hikaru_openphaser_plus::is_openphaser_plus_name(name) => {
-                                    OPEN_PHASER_PLUS_CARD_WIDTH
-                                }
-                                name if hikaru_openflanger_plus::is_openflanger_plus_name(name) => {
-                                    OPEN_FLANGER_PLUS_CARD_WIDTH
-                                }
-                                name if hikaru_openeq3::is_openeq_plus_name(name) => {
-                                    hikaru_openeq3::OPEN_EQ_PLUS_CARD_WIDTH
-                                }
-                                "OpenLFO MOD" | "Hikaru OpenLFO MOD" | "LFO MOD" | "OpenModulation" | "Hikaru OpenModulation" => MODULATION_CARD_WIDTH,
-                                name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
-                                    crate::views::hikaru_native_plugins::hikaru_tier_s_fx::card_width(name).unwrap_or(CARD_WIDTH)
-                                }
-                                _ => CARD_WIDTH,
                             }
                         };
                         let card_h = pill_h;
@@ -1568,6 +1619,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             );
                         } else if slot.is_open_poly() {
                             let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let poly_mods_open = slot
+                                .open_poly
+                                .as_ref()
+                                .map(|p| p.modulators_open)
+                                .unwrap_or(true);
                             let sb_out = render_bitwig_device_sidebar(
                                 ui,
                                 sb_rect,
@@ -1575,6 +1631,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OPENPOLY",
                                 slot.active,
                                 is_selected,
+                                poly_mods_open,
                             );
                             if sb_out.toggled_power {
                                 if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
@@ -1649,6 +1706,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             }
                         } else if slot.is_open_grid() {
                             let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let grid_mods_open = slot
+                                .open_grid
+                                .as_ref()
+                                .map(|g| g.modulators_open)
+                                .unwrap_or(true);
                             let sb_out = render_bitwig_device_sidebar(
                                 ui,
                                 sb_rect,
@@ -1656,6 +1718,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OPENGRID",
                                 slot.active,
                                 is_selected,
+                                grid_mods_open,
                             );
                             if sb_out.toggled_power {
                                 if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
@@ -1745,6 +1808,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OPENLFO MOD",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
@@ -1756,6 +1820,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             if sb_out.clicked_title {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
+                            }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
                             }
                             let preset_popup_id =
                                 ui.id().with(("openlfo_mod_preset_popup", track_idx, slot_idx));
@@ -1774,9 +1841,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 },
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 3.0, card_rect.min.y + 4.0),
                                 pos2(card_rect.max.x - 4.0, card_rect.max.y - 4.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -1823,6 +1898,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "DRUM MACHINE",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
@@ -1835,10 +1911,21 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
                             }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 3.0, card_rect.min.y + 4.0),
                                 pos2(card_rect.max.x - 4.0, card_rect.max.y - 4.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -1880,6 +1967,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OPEN8-BIT",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 let mut new_active = None;
@@ -1901,6 +1989,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
                             }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
                             let preset_popup_id = ui.id().with(("bit8_preset_popup", track_idx, slot_idx));
                             if sb_out.clicked_folder {
                                 ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
@@ -1915,9 +2006,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 },
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
                                 pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -1959,6 +2058,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "FREQ SHIFTER+",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 let mut new_active = None;
@@ -1980,6 +2080,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
                             }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
                             let preset_popup_id = ui.id().with(("fsp_preset_popup", track_idx, slot_idx));
                             if sb_out.clicked_folder {
                                 ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
@@ -1994,9 +2097,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 },
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
                                 pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -2038,6 +2149,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "EQ+",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 let mut new_active = None;
@@ -2059,6 +2171,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
                             }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
                             let preset_popup_id = ui.id().with(("eqp_preset_popup", track_idx, slot_idx));
                             if sb_out.clicked_folder {
                                 ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
@@ -2073,9 +2188,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 },
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
                                 pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -2117,6 +2240,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OPENFLANGER+",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 let mut new_active = None;
@@ -2138,6 +2262,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
                             }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
                             let preset_popup_id = ui.id().with(("flp_preset_popup", track_idx, slot_idx));
                             if sb_out.clicked_folder {
                                 ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
@@ -2152,9 +2279,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 },
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
                                 pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -2196,6 +2331,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 "OPENPHASER+",
                                 slot.active,
                                 is_selected,
+                                slot.modulators_open,
                             );
                             if sb_out.toggled_power {
                                 let mut new_active = None;
@@ -2217,6 +2353,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 app.selected_slot_index = slot_idx;
                                 app.matrix_state.selected_scene = None;
                             }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
                             let preset_popup_id = ui.id().with(("php_preset_popup", track_idx, slot_idx));
                             if sb_out.clicked_folder {
                                 ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
@@ -2231,9 +2370,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 },
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
                                 pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = ui.new_child(
                                 egui::UiBuilder::new()
@@ -2242,6 +2389,97 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                             );
                             body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
                             hikaru_openphaser_plus::render_module(&mut body_ui, app, track_idx, slot_idx);
+
+                            let close_r = Rect::from_min_size(
+                                pos2(card_rect.max.x - 14.0, card_rect.min.y + 2.0),
+                                vec2(12.0, 12.0),
+                            );
+                            let close_resp = ui.interact(
+                                close_r,
+                                ui.id().with(("dsp_close", slot_idx)),
+                                Sense::click(),
+                            );
+                            icons::paint_icon(
+                                ui.painter(),
+                                close_r.shrink(2.0),
+                                icons::X_CLOSE,
+                                if close_resp.hovered() {
+                                    Color32::WHITE
+                                } else {
+                                    Color32::from_rgba_unmultiplied(0x8C, 0x90, 0x9A, 150)
+                                },
+                                1.4,
+                            );
+                            if close_resp.on_hover_text("Remove Device (Del)").clicked() {
+                                slot_to_remove = Some(slot_idx);
+                            }
+                        } else if hikaru_opencomb::is_opencomb_name(&slot.name) {
+                            let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
+                            let sb_out = render_bitwig_device_sidebar(
+                                ui,
+                                sb_rect,
+                                ("oc_sb", track_idx, slot_idx),
+                                "OPENCOMB",
+                                slot.active,
+                                is_selected,
+                                slot.modulators_open,
+                            );
+                            if sb_out.toggled_power {
+                                let mut new_active = None;
+                                if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
+                                    if let Some(s) = t.effects.get_mut(slot_idx) {
+                                        s.active = !s.active;
+                                        new_active = Some(s.active);
+                                    }
+                                }
+                                if let (Some(et_idx), Some(active)) = (track_idx.checked_sub(1), new_active) {
+                                    app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginActive {
+                                        track_idx: et_idx,
+                                        slot_idx,
+                                        active,
+                                    });
+                                }
+                            }
+                            if sb_out.clicked_title {
+                                app.selected_slot_index = slot_idx;
+                                app.matrix_state.selected_scene = None;
+                            }
+                            if sb_out.clicked_modulators {
+                                toggle_slot_modulators(app, track_idx, slot_idx);
+                            }
+                            let preset_popup_id = ui.id().with(("oc_preset_popup", track_idx, slot_idx));
+                            if sb_out.clicked_folder {
+                                ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
+                            }
+                            egui::popup_below_widget(
+                                ui,
+                                preset_popup_id,
+                                &sb_out.folder_resp,
+                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    hikaru_opencomb::render_preset_menu(ui, app, track_idx, slot_idx);
+                                },
+                            );
+
+                            let mut oc_body_rect = Rect::from_min_max(
+                                pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
+                                pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
+                            );
+                            render_slot_modulator_bay(
+                                ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut oc_body_rect,
+                            );
+                            let mut oc_body_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(oc_body_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+                            oc_body_ui.set_clip_rect(oc_body_rect.intersect(ui.clip_rect()));
+                            hikaru_opencomb::render_module(&mut oc_body_ui, app, track_idx, slot_idx);
 
                             let close_r = Rect::from_min_size(
                                 pos2(card_rect.max.x - 14.0, card_rect.min.y + 2.0),
@@ -2315,7 +2553,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
 
                                 let title_r = Rect::from_min_max(
                                     pos2(pwr_r.max.x + 5.0, hdr_rect.min.y),
-                                    pos2(hdr_rect.max.x - 22.0, hdr_rect.max.y),
+                                    pos2(hdr_rect.max.x - 42.0, hdr_rect.max.y),
                                 );
                                 let title_resp = card_ui.interact(
                                     title_r,
@@ -2347,6 +2585,33 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 if title_resp.clicked() {
                                     app.selected_slot_index = slot_idx;
                                     app.matrix_state.selected_scene = None;
+                                }
+
+                                let mod_r = Rect::from_min_size(
+                                    pos2(hdr_rect.max.x - 38.0, hdr_rect.center().y - 9.0),
+                                    vec2(18.0, 18.0),
+                                );
+                                let mod_resp = card_ui.interact(
+                                    mod_r,
+                                    card_ui.id().with(("dsp_mod", slot_idx)),
+                                    Sense::click(),
+                                );
+                                if mod_resp.hovered() {
+                                    card_ui.painter().rect_filled(
+                                        mod_r,
+                                        2.5,
+                                        Color32::from_rgb(0x48, 0x4A, 0x52),
+                                    );
+                                    card_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                crate::views::remote_controls::paint_mod_toggle_icon(
+                                    card_ui.painter(),
+                                    mod_r.center(),
+                                    slot.modulators_open,
+                                    mod_resp.hovered(),
+                                );
+                                if mod_resp.on_hover_text("Toggle Modulators Panel").clicked() {
+                                    toggle_slot_modulators(app, track_idx, slot_idx);
                                 }
 
                                 let close_r = Rect::from_min_size(
@@ -2390,9 +2655,17 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                 Stroke::new(1.0_f32, Color32::from_rgb(0x1E, 0x20, 0x25)),
                             );
 
-                            let body_rect = Rect::from_min_max(
+                            let mut body_rect = Rect::from_min_max(
                                 pos2(inner_rect.min.x, (sep_y + 3.0).min(inner_rect.max.y)),
                                 inner_rect.max,
+                            );
+                            render_slot_modulator_bay(
+                                &mut card_ui,
+                                app,
+                                track_idx,
+                                slot_idx,
+                                slot.modulators_open,
+                                &mut body_rect,
                             );
                             let mut body_ui = card_ui.new_child(
                                 egui::UiBuilder::new()
@@ -2413,62 +2686,6 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         track_idx,
                                         slot_idx,
                                     );
-                                }
-                                name if hikaru_opencomb::is_opencomb_name(name) => {
-                                    let sb_rect = Rect::from_min_size(card_rect.min, vec2(22.0, card_rect.height()));
-                                    let sb_out = render_bitwig_device_sidebar(
-                                        ui,
-                                        sb_rect,
-                                        ("oc_sb", track_idx, slot_idx),
-                                        "OPENCOMB",
-                                        slot.active,
-                                        is_selected,
-                                    );
-                                    if sb_out.toggled_power {
-                                        let mut new_active = None;
-                                        if let Some(t) = app.current_tracks_mut().get_mut(track_idx) {
-                                            if let Some(s) = t.effects.get_mut(slot_idx) {
-                                                s.active = !s.active;
-                                                new_active = Some(s.active);
-                                            }
-                                        }
-                                        if let (Some(et_idx), Some(active)) = (track_idx.checked_sub(1), new_active) {
-                                            app.audio_proxy.send(crate::audio_proxy::GuiCommand::SetExternalPluginActive {
-                                                track_idx: et_idx,
-                                                slot_idx,
-                                                active,
-                                            });
-                                        }
-                                    }
-                                    if sb_out.clicked_title {
-                                        app.selected_slot_index = slot_idx;
-                                        app.matrix_state.selected_scene = None;
-                                    }
-                                    let preset_popup_id = ui.id().with(("oc_preset_popup", track_idx, slot_idx));
-                                    if sb_out.clicked_folder {
-                                        ui.memory_mut(|m| m.toggle_popup(preset_popup_id));
-                                    }
-                                    egui::popup_below_widget(
-                                        ui,
-                                        preset_popup_id,
-                                        &sb_out.folder_resp,
-                                        egui::PopupCloseBehavior::CloseOnClickOutside,
-                                        |ui| {
-                                            hikaru_opencomb::render_preset_menu(ui, app, track_idx, slot_idx);
-                                        },
-                                    );
-
-                                    let oc_body_rect = Rect::from_min_max(
-                                        pos2(sb_rect.max.x + 2.0, card_rect.min.y + 2.0),
-                                        pos2(card_rect.max.x - 2.0, card_rect.max.y - 2.0),
-                                    );
-                                    let mut oc_body_ui = ui.new_child(
-                                        egui::UiBuilder::new()
-                                            .max_rect(oc_body_rect)
-                                            .layout(egui::Layout::top_down(egui::Align::Min)),
-                                    );
-                                    oc_body_ui.set_clip_rect(oc_body_rect.intersect(ui.clip_rect()));
-                                    hikaru_opencomb::render_module(&mut oc_body_ui, app, track_idx, slot_idx);
                                 }
                                 name if crate::views::hikaru_native_plugins::hikaru_tier_s_fx::is_tier_s_fx(name) => {
                                     crate::views::hikaru_native_plugins::hikaru_tier_s_fx::render_module(
@@ -2641,6 +2858,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut AppState) {
                                         &smp_title,
                                         true,
                                         true,
+                                        false,
                                     );
                                     if smp_sb.clicked_folder {
                                         if let Some(path) = rfd::FileDialog::new()

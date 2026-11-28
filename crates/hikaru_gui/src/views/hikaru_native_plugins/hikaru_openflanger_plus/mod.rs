@@ -30,6 +30,8 @@ use std::sync::{Mutex, OnceLock};
 use egui::{pos2, vec2, Align2, Color32, CornerRadius, CursorIcon, Rect, Sense, Stroke};
 use hikaru_dsp::effects::{
     FlangerPlusMode, FlangerPlusParams, FLANGER_PLUS_PARAM_COUNT, FLANGER_SYNC_LABELS,
+    FLP_PARAM_COLOR, FLP_PARAM_DEPTH, FLP_PARAM_FEEDBACK, FLP_PARAM_MIX, FLP_PARAM_SPEED,
+    FLP_PARAM_SYNC_DIV,
 };
 
 use crate::app::AppState;
@@ -305,6 +307,8 @@ fn draw_flanger_knob(
     label: &str,
     label_font_sz: f32,
     tooltip: &str,
+    mod_slot: Option<(usize, usize)>,
+    param_id: u32,
 ) -> (egui::Response, bool) {
     let knob_rect = Rect::from_min_size(
         pos2(center_x - diameter * 0.5, top_y),
@@ -316,15 +320,31 @@ fn draw_flanger_knob(
             .layout(egui::Layout::top_down(egui::Align::Center)),
     );
     let mut pct = norm.clamp(0.0, 1.0) * 100.0;
-    let (resp, changed) = bitwig_kit::rotary_knob(
-        &mut knob_ui,
-        diameter,
-        &mut pct,
-        0.0..=100.0,
-        default_norm.clamp(0.0, 1.0) * 100.0,
-        FLANGER_TEAL,
-        false,
-    );
+    let (resp, changed) = if let Some((track_idx, slot_idx)) = mod_slot {
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut knob_ui,
+            diameter,
+            &mut pct,
+            0.0..=100.0,
+            default_norm.clamp(0.0, 1.0) * 100.0,
+            FLANGER_TEAL,
+            false,
+            track_idx,
+            slot_idx,
+            param_id,
+            label,
+        )
+    } else {
+        bitwig_kit::rotary_knob(
+            &mut knob_ui,
+            diameter,
+            &mut pct,
+            0.0..=100.0,
+            default_norm.clamp(0.0, 1.0) * 100.0,
+            FLANGER_TEAL,
+            false,
+        )
+    };
     if changed {
         *norm = (pct / 100.0).clamp(0.0, 1.0);
     }
@@ -343,6 +363,7 @@ fn render_flanger_plus_surface(
     ui: &mut egui::Ui,
     params: &mut FlangerPlusParams,
     tempo_bpm: f64,
+    mod_slot: Option<(usize, usize)>,
     id_salt: impl std::hash::Hash + Copy,
 ) -> bool {
     let full_rect = ui.available_rect_before_wrap();
@@ -466,6 +487,8 @@ fn render_flanger_plus_surface(
         "Color",
         lbl_font,
         &color_tip,
+        mod_slot,
+        FLP_PARAM_COLOR,
     );
     changed |= c_chg;
 
@@ -480,6 +503,8 @@ fn render_flanger_plus_surface(
         "FB",
         lbl_font,
         &fb_tip,
+        mod_slot,
+        FLP_PARAM_FEEDBACK,
     );
     changed |= fb_chg;
 
@@ -502,6 +527,8 @@ fn render_flanger_plus_surface(
             speed_lbl,
             lbl_font,
             &speed_tip,
+            mod_slot,
+            FLP_PARAM_SYNC_DIV,
         );
         if s_chg {
             params.sync_div = (div_norm * max_idx).round() as u8;
@@ -519,6 +546,8 @@ fn render_flanger_plus_surface(
             speed_lbl,
             lbl_font,
             &speed_tip,
+            mod_slot,
+            FLP_PARAM_SPEED,
         );
         changed |= s_chg;
         resp
@@ -572,6 +601,8 @@ fn render_flanger_plus_surface(
         "Depth",
         lbl_font,
         &depth_tip,
+        mod_slot,
+        FLP_PARAM_DEPTH,
     );
     changed |= d_chg;
 
@@ -587,6 +618,8 @@ fn render_flanger_plus_surface(
         "Mix",
         lbl_font,
         &mix_tip,
+        mod_slot,
+        FLP_PARAM_MIX,
     );
     changed |= m_chg;
 
@@ -666,13 +699,24 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         }
     }
 
-    if render_flanger_plus_surface(ui, &mut params, tempo_bpm, ("flp_slot", track_idx, slot_idx)) {
+    if render_flanger_plus_surface(
+        ui,
+        &mut params,
+        tempo_bpm,
+        Some((track_idx, slot_idx)),
+        ("flp_slot", track_idx, slot_idx),
+    ) {
         state_map().lock().unwrap().insert(key, params);
-        if let Some(et_idx) = engine_track_idx {
-            push_all_params(app, et_idx, slot_idx, &params);
-        }
         app.project_dirty = true;
     }
+    crate::views::hikaru_native_plugins::hikaru_openmodulation::sync_slot_params_to_engine(
+        ui,
+        app,
+        track_idx,
+        slot_idx,
+        FLANGER_PLUS_PARAM_COUNT as u32,
+        |id| params.get_normalized(id),
+    );
 }
 
 pub fn render_wet_fx_module(
@@ -693,6 +737,7 @@ pub fn render_wet_fx_module(
         ui,
         &mut params,
         tempo_bpm,
+        None,
         ("flp_wet", track_idx, parent_slot_idx, wet_idx),
     ) {
         wet_state_map().lock().unwrap().insert(key, params);

@@ -234,19 +234,42 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         let max_v = param_max(i);
         let bipolar = min_v < 0.0;
         let mut val = params[i];
-        let (k_resp, k_changed) = crate::ui::bitwig_kit::rotary_knob(
-            &mut cell_ui,
-            26.0,
-            &mut val,
-            min_v..=max_v,
-            DEFAULTS[i],
-            if bipolar {
-                theme::BW_LCD_CYAN
-            } else {
-                theme::ACCENT_ORANGE
-            },
-            bipolar,
-        );
+        let (k_resp, k_changed) = if i < 3 {
+            crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_rotary_knob(
+                &mut cell_ui,
+                26.0,
+                &mut val,
+                min_v..=max_v,
+                DEFAULTS[i],
+                if bipolar {
+                    theme::BW_LCD_CYAN
+                } else {
+                    theme::ACCENT_ORANGE
+                },
+                bipolar,
+                track_idx,
+                "OpenSpectral Phaser",
+                name,
+            )
+        } else {
+            crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+                &mut cell_ui,
+                26.0,
+                &mut val,
+                min_v..=max_v,
+                DEFAULTS[i],
+                if bipolar {
+                    theme::BW_LCD_CYAN
+                } else {
+                    theme::ACCENT_ORANGE
+                },
+                bipolar,
+                track_idx,
+                slot_idx,
+                i as u32,
+                name,
+            )
+        };
         k_resp.on_hover_text(format!("{name}: {val:.1}"));
         if k_changed {
             params[i] = val;

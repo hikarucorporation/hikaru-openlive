@@ -245,6 +245,8 @@ fn draw_comb_knob(
     label: &str,
     label_font_sz: f32,
     tooltip: &str,
+    mod_slot: Option<(usize, usize)>,
+    param_id: u32,
 ) -> bool {
     let knob_rect = Rect::from_min_size(
         pos2(center_x - diameter * 0.5, top_y),
@@ -266,15 +268,31 @@ fn draw_comb_knob(
     } else {
         default_norm * 100.0
     };
-    let (resp, changed) = bitwig_kit::rotary_knob(
-        &mut knob_ui,
-        diameter,
-        &mut val,
-        range,
-        def_val,
-        COMB_ORANGE,
-        bipolar,
-    );
+    let (resp, changed) = if let Some((track_idx, slot_idx)) = mod_slot {
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut knob_ui,
+            diameter,
+            &mut val,
+            range,
+            def_val,
+            COMB_ORANGE,
+            bipolar,
+            track_idx,
+            slot_idx,
+            param_id,
+            label,
+        )
+    } else {
+        bitwig_kit::rotary_knob(
+            &mut knob_ui,
+            diameter,
+            &mut val,
+            range,
+            def_val,
+            COMB_ORANGE,
+            bipolar,
+        )
+    };
     if changed {
         *norm = if bipolar {
             ((val + 100.0) / 200.0).clamp(0.0, 1.0)
@@ -310,6 +328,7 @@ fn xy_x_to_freq(x: f32, pad_rect: Rect) -> f32 {
 fn render_opencomb_surface(
     ui: &mut egui::Ui,
     params: &mut OpenCombParams,
+    mod_slot: Option<(usize, usize)>,
     id_salt: impl std::hash::Hash + Copy,
 ) -> bool {
     let full_rect = ui.available_rect_before_wrap();
@@ -525,6 +544,8 @@ fn render_opencomb_surface(
         &freq_lbl,
         lbl_font,
         &freq_tip,
+        mod_slot,
+        0,
     ) {
         params.freq_hz = OpenCombParams::norm_to_freq_hz(freq_norm);
         changed = true;
@@ -543,6 +564,8 @@ fn render_opencomb_surface(
         "FB",
         lbl_font,
         &fb_tip,
+        mod_slot,
+        1,
     ) {
         params.feedback_pct = OpenCombParams::norm_to_feedback_pct(fb_norm);
         changed = true;
@@ -561,6 +584,8 @@ fn render_opencomb_surface(
         "Mix",
         lbl_font,
         &mix_tip,
+        mod_slot,
+        2,
     ) {
         params.mix_pct = OpenCombParams::norm_to_mix_pct(mix_norm);
         changed = true;
@@ -588,16 +613,26 @@ pub fn render_module(ui: &mut egui::Ui, app: &mut AppState, track_idx: usize, sl
         }
     }
 
-    if render_opencomb_surface(ui, &mut params, ("oc", track_idx, slot_idx)) {
+    if render_opencomb_surface(ui, &mut params, Some((track_idx, slot_idx)), ("oc", track_idx, slot_idx)) {
         state_map()
             .lock()
             .unwrap()
             .insert((track_idx, slot_idx), params);
-        if let Some(et_idx) = engine_track_idx {
-            push_all_params(app, et_idx, slot_idx, &params);
-        }
         app.project_dirty = true;
     }
+    crate::views::hikaru_native_plugins::hikaru_openmodulation::sync_slot_params_to_engine(
+        ui,
+        app,
+        track_idx,
+        slot_idx,
+        OPENCOMB_PARAM_COUNT as u32,
+        |id| match id {
+            0 => Some(OpenCombParams::freq_hz_to_norm(params.freq_hz)),
+            1 => Some(OpenCombParams::feedback_pct_to_norm(params.feedback_pct)),
+            2 => Some(OpenCombParams::mix_pct_to_norm(params.mix_pct)),
+            _ => None,
+        },
+    );
 }
 
 pub fn render_wet_fx_module(
@@ -613,7 +648,7 @@ pub fn render_wet_fx_module(
         *map.entry(key).or_insert_with(OpenCombParams::default)
     };
 
-    if render_opencomb_surface(ui, &mut params, ("oc_wet", track_idx, parent_slot_idx, wet_idx)) {
+    if render_opencomb_surface(ui, &mut params, None, ("oc_wet", track_idx, parent_slot_idx, wet_idx)) {
         wet_state_map().lock().unwrap().insert(key, params);
         if let Some(et_idx) = track_idx.checked_sub(1) {
             push_all_wet_params(app, et_idx, parent_slot_idx, wet_idx, &params);

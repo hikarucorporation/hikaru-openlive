@@ -2742,6 +2742,7 @@ pub fn remove_bay_modulator(track_idx: usize, slot_idx: usize, mod_id: u32) {
 pub fn clear_bay_for_slot(track_idx: usize, slot_idx: usize) {
     let mut map = bay_state_map().lock().unwrap();
     map.remove(&(track_idx, slot_idx));
+    super::lfo_mod::clear_slot_param_sent_cache(track_idx, slot_idx);
 }
 
 /// Inicializa el Device Modulator Bay de `(track_idx, slot_idx)` vacío (3 celdas `+`

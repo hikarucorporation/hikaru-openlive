@@ -1327,8 +1327,20 @@ fn paint_knob_mod_arc(
 ///   - Behaves as a normal `bitwig_kit::rotary_knob`.
 ///   - If modulated by LFO1/LFO2, paints the cyan configured modulation range arc AND a live
 ///     animated cyan modulation indicator arc moving in real time!
+enum KnobModTarget<'a> {
+    DeviceParam {
+        device: &'a str,
+        param: &'a str,
+    },
+    SlotParam {
+        slot_idx: usize,
+        param_id: u32,
+        label: &'a str,
+    },
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn modulatable_rotary_knob(
+fn render_modulatable_knob_impl(
     ui: &mut egui::Ui,
     diameter: f32,
     value: &mut f32,
@@ -1337,13 +1349,16 @@ pub fn modulatable_rotary_knob(
     arc_color: Color32,
     bipolar: bool,
     track_idx: usize,
-    device: &str,
-    param: &str,
+    target: KnobModTarget<'_>,
 ) -> (egui::Response, bool) {
     let lo = *range.start();
     let hi = *range.end();
     let span = (hi - lo).max(1.0e-6);
     let base_norm = ((*value - lo) / span).clamp(0.0, 1.0);
+    let param_label = match target {
+        KnobModTarget::DeviceParam { param, .. } => param,
+        KnobModTarget::SlotParam { label, .. } => label,
+    };
 
     // Check if Remote Control Mapping Mode is active
     if crate::views::remote_controls::is_global_remote_mapping_active() {
@@ -1360,28 +1375,41 @@ pub fn modulatable_rotary_knob(
         );
         crate::views::remote_controls::paint_mappable_overlay(ui, rect);
         if response.clicked() {
-            crate::views::remote_controls::request_global_knob_remote_map(track_idx, param);
+            crate::views::remote_controls::request_global_knob_remote_map(track_idx, param_label);
         }
         return (response, false);
     }
 
-    // Check if Bitwig modulation mapping mode is active on this track
-    if let Some(mod_src) = active_mapping_source_for_track(track_idx) {
+    // Check if Bitwig modulation mapping mode is active
+    let active_src = match target {
+        KnobModTarget::DeviceParam { .. } => active_mapping_source_for_track(track_idx),
+        KnobModTarget::SlotParam { slot_idx, .. } => {
+            active_mapping_source_for_external(track_idx, slot_idx)
+        }
+    };
+    if let Some(mod_src) = active_src {
         let (rect, response) =
             ui.allocate_exact_size(vec2(diameter, diameter), Sense::click_and_drag());
 
-        let mut route_amt = match mod_src {
-            ModSourceId::LfoMod {
-                track_idx: map_tr,
-                slot_idx: map_slot,
-                channel_idx: ch_idx,
-            } => get_channel_route_amount(map_tr, map_slot, ch_idx, device, param),
-            ModSourceId::DeviceBay {
-                track_idx: map_tr,
-                slot_idx: map_slot,
-                mod_id,
-                out_idx,
-            } => super::bay::get_bay_route_amount(map_tr, map_slot, mod_id, out_idx, device, param),
+        let mut route_amt = match target {
+            KnobModTarget::DeviceParam { device, param } => match mod_src {
+                ModSourceId::LfoMod {
+                    track_idx: map_tr,
+                    slot_idx: map_slot,
+                    channel_idx: ch_idx,
+                } => get_channel_route_amount(map_tr, map_slot, ch_idx, device, param),
+                ModSourceId::DeviceBay {
+                    track_idx: map_tr,
+                    slot_idx: map_slot,
+                    mod_id,
+                    out_idx,
+                } => super::bay::get_bay_route_amount(
+                    map_tr, map_slot, mod_id, out_idx, device, param,
+                ),
+            },
+            KnobModTarget::SlotParam {
+                slot_idx, param_id, ..
+            } => get_external_route_amount(mod_src, slot_idx, param_id),
         };
         let mut amt_changed = false;
 
@@ -1404,20 +1432,27 @@ pub fn modulatable_rotary_knob(
             amt_changed = true;
         }
         if amt_changed {
-            match mod_src {
-                ModSourceId::LfoMod {
-                    track_idx: map_tr,
-                    slot_idx: map_slot,
-                    channel_idx: ch_idx,
-                } => set_channel_route_amount(map_tr, map_slot, ch_idx, device, param, route_amt),
-                ModSourceId::DeviceBay {
-                    track_idx: map_tr,
-                    slot_idx: map_slot,
-                    mod_id,
-                    out_idx,
-                } => super::bay::set_bay_route_amount(
-                    map_tr, map_slot, mod_id, out_idx, device, param, route_amt,
-                ),
+            match target {
+                KnobModTarget::DeviceParam { device, param } => match mod_src {
+                    ModSourceId::LfoMod {
+                        track_idx: map_tr,
+                        slot_idx: map_slot,
+                        channel_idx: ch_idx,
+                    } => set_channel_route_amount(
+                        map_tr, map_slot, ch_idx, device, param, route_amt,
+                    ),
+                    ModSourceId::DeviceBay {
+                        track_idx: map_tr,
+                        slot_idx: map_slot,
+                        mod_id,
+                        out_idx,
+                    } => super::bay::set_bay_route_amount(
+                        map_tr, map_slot, mod_id, out_idx, device, param, route_amt,
+                    ),
+                },
+                KnobModTarget::SlotParam {
+                    slot_idx, param_id, ..
+                } => set_external_route_amount(mod_src, slot_idx, param_id, route_amt),
             }
         }
 
@@ -1484,12 +1519,12 @@ pub fn modulatable_rotary_knob(
         };
         let tip = if route_amt.abs() > 0.004 {
             format!(
-                "{ch_lbl} → {param}: {:+.0}% (Drag up/down to adjust • Double-click to clear • Esc to finish)",
+                "{ch_lbl} → {param_label}: {:+.0}% (Drag up/down to adjust • Double-click to clear • Esc to finish)",
                 route_amt * 100.0
             )
         } else {
             format!(
-                "{ch_lbl} → {param}: Drag up/down to modulate (Esc or click {ch_lbl} arrow to finish)"
+                "{ch_lbl} → {param_label}: Drag up/down to modulate (Esc or click {ch_lbl} arrow to finish)"
             )
         };
         let response = response.on_hover_text(tip);
@@ -1501,7 +1536,16 @@ pub fn modulatable_rotary_knob(
         bitwig_kit::rotary_knob(ui, diameter, value, range, default_value, arc_color, bipolar);
 
     if ui.is_rect_visible(response.rect) {
-        if let Some(m) = get_modulation(track_idx, device, param) {
+        let active_mod = match target {
+            KnobModTarget::DeviceParam { device, param } => {
+                get_modulation(track_idx, device, param)
+            }
+            KnobModTarget::SlotParam {
+                slot_idx, param_id, ..
+            } => get_external_param_modulation(track_idx, slot_idx, param_id),
+        };
+        if let Some(m) = active_mod {
+            ui.ctx().request_repaint();
             let p = ui.painter();
             let c = response.rect.center();
             let r = diameter * 0.5 - 1.5;
@@ -1528,6 +1572,123 @@ pub fn modulatable_rotary_knob(
     }
 
     (response, changed)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn modulatable_rotary_knob(
+    ui: &mut egui::Ui,
+    diameter: f32,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default_value: f32,
+    arc_color: Color32,
+    bipolar: bool,
+    track_idx: usize,
+    device: &str,
+    param: &str,
+) -> (egui::Response, bool) {
+    render_modulatable_knob_impl(
+        ui,
+        diameter,
+        value,
+        range,
+        default_value,
+        arc_color,
+        bipolar,
+        track_idx,
+        KnobModTarget::DeviceParam { device, param },
+    )
+}
+
+/// Knob rotatorio modulable para dispositivos nativos/externos que usan `(slot_idx, param_id)`.
+#[allow(clippy::too_many_arguments)]
+pub fn modulatable_slot_knob(
+    ui: &mut egui::Ui,
+    diameter: f32,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default_value: f32,
+    arc_color: Color32,
+    bipolar: bool,
+    track_idx: usize,
+    slot_idx: usize,
+    param_id: u32,
+    param_label: &str,
+) -> (egui::Response, bool) {
+    render_modulatable_knob_impl(
+        ui,
+        diameter,
+        value,
+        range,
+        default_value,
+        arc_color,
+        bipolar,
+        track_idx,
+        KnobModTarget::SlotParam {
+            slot_idx,
+            param_id,
+            label: param_label,
+        },
+    )
+}
+
+type SlotParamSentCache = Mutex<HashMap<(usize, usize, u32), f32>>;
+
+fn slot_param_sent_cache() -> &'static SlotParamSentCache {
+    static CELL: OnceLock<SlotParamSentCache> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn clear_slot_param_sent_cache(track_idx: usize, slot_idx: usize) {
+    slot_param_sent_cache()
+        .lock()
+        .unwrap()
+        .retain(|&(t, s, _), _| !(t == track_idx && s == slot_idx));
+}
+
+/// Sincroniza al motor de audio los parámetros normalizados (base + modulación) de un
+/// dispositivo nativo con `param_id = 0..param_count` cuando cambian o están modulados.
+pub fn sync_slot_params_to_engine(
+    ui: &egui::Ui,
+    app: &crate::app::AppState,
+    track_idx: usize,
+    slot_idx: usize,
+    param_count: u32,
+    mut get_base_norm: impl FnMut(u32) -> Option<f32>,
+) {
+    let Some(et_idx) = track_idx.checked_sub(1) else {
+        return;
+    };
+    let mut any_mod = false;
+    let mut cache = slot_param_sent_cache().lock().unwrap();
+    for id in 0..param_count {
+        let Some(base) = get_base_norm(id) else {
+            continue;
+        };
+        let (eff, is_mod) =
+            if let Some(m) = get_external_param_modulation(track_idx, slot_idx, id) {
+                any_mod = true;
+                ((base + m.delta).clamp(0.0, 1.0), true)
+            } else {
+                (base.clamp(0.0, 1.0), false)
+            };
+        let _ = is_mod;
+        let key = (track_idx, slot_idx, id);
+        let prev = cache.get(&key).copied();
+        if prev.is_none_or(|p| (p - eff).abs() > 1e-4) {
+            cache.insert(key, eff);
+            app.audio_proxy
+                .send(crate::audio_proxy::GuiCommand::SetExternalPluginParam {
+                    track_idx: et_idx,
+                    slot_idx,
+                    param_id: id,
+                    value: eff,
+                });
+        }
+    }
+    if any_mod {
+        ui.ctx().request_repaint();
+    }
 }
 
 /// Renders the Bitwig-style Hikaru OpenLFO MOD body inside the DSP rack card

@@ -314,15 +314,20 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
     // Pitch knob
     let pit_r = Rect::from_center_size(pos2(footer_rect.min.x + 22.0, ky), vec2(26.0, 26.0));
     let mut pit_ui = ui.new_child(egui::UiBuilder::new().max_rect(pit_r));
-    let (pit_resp, pit_chg) = rotary_knob(
-        &mut pit_ui,
-        26.0,
-        &mut grid.patch.global_pitch_st,
-        -24.0..=24.0,
-        0.0,
-        KNOB_WHITE,
-        true,
-    );
+    let (pit_resp, pit_chg) =
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut pit_ui,
+            26.0,
+            &mut grid.patch.global_pitch_st,
+            -24.0..=24.0,
+            0.0,
+            KNOB_WHITE,
+            true,
+            track_idx,
+            slot_idx,
+            0,
+            "Pitch",
+        );
     if pit_chg {
         grid.patch.global_pitch_st = (grid.patch.global_pitch_st * 2.0).round() * 0.5;
         dirty = true;
@@ -333,15 +338,20 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
     // Glide knob + L button
     let gld_r = Rect::from_center_size(pos2(footer_rect.min.x + 56.0, ky), vec2(26.0, 26.0));
     let mut gld_ui = ui.new_child(egui::UiBuilder::new().max_rect(gld_r));
-    let (gld_resp, gld_chg) = rotary_knob(
-        &mut gld_ui,
-        26.0,
-        &mut grid.patch.glide_ms,
-        0.0..=1500.0,
-        0.0,
-        KNOB_WHITE,
-        false,
-    );
+    let (gld_resp, gld_chg) =
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut gld_ui,
+            26.0,
+            &mut grid.patch.glide_ms,
+            0.0..=1500.0,
+            0.0,
+            KNOB_WHITE,
+            false,
+            track_idx,
+            slot_idx,
+            1,
+            "Glide",
+        );
     if gld_chg {
         dirty = true;
     }
@@ -395,15 +405,20 @@ pub fn render_rack_card(ui: &mut Ui, app: &mut AppState, track_idx: usize, slot_
     // Out knob (red/coral ring) + vertical stereo meter
     let out_r = Rect::from_center_size(pos2(footer_rect.max.x - 32.0, ky), vec2(28.0, 28.0));
     let mut out_ui = ui.new_child(egui::UiBuilder::new().max_rect(out_r));
-    let (out_resp, out_chg) = rotary_knob(
-        &mut out_ui,
-        28.0,
-        &mut grid.patch.output_gain,
-        0.0..=2.0,
-        0.85,
-        VOICE_CORAL,
-        false,
-    );
+    let (out_resp, out_chg) =
+        crate::views::hikaru_native_plugins::hikaru_openmodulation::modulatable_slot_knob(
+            &mut out_ui,
+            28.0,
+            &mut grid.patch.output_gain,
+            0.0..=2.0,
+            0.85,
+            VOICE_CORAL,
+            false,
+            track_idx,
+            slot_idx,
+            2,
+            "Out",
+        );
     if out_chg {
         dirty = true;
     }

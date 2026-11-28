@@ -19,12 +19,13 @@ pub use bay::{
 pub use bay_ui::render_device_modulator_bay;
 pub use lfo_mod::{
     active_mapping_for_track, active_mapping_source_for_external, active_mapping_source_for_track,
-    clear_external_param_routes, clear_mapping_mode, get_channel_route_amount,
-    get_external_param_modulation, get_external_route_amount, get_global_transport, get_lfo_state,
-    get_modulation, handle_knob_mapping_click, is_any_mapping_active_for_track,
-    is_bay_mapping_active, is_mapping_target, modulatable_rotary_knob, on_transport_pause_or_stop,
-    on_transport_play, render_module, render_preset_menu, set_channel_route_amount,
-    set_external_route_amount, toggle_bay_mapping_mode, update_global_transport, update_lfo_state,
+    clear_external_param_routes, clear_mapping_mode, clear_slot_param_sent_cache,
+    get_channel_route_amount, get_external_param_modulation, get_external_route_amount,
+    get_global_transport, get_lfo_state, get_modulation, handle_knob_mapping_click,
+    is_any_mapping_active_for_track, is_bay_mapping_active, is_mapping_target,
+    modulatable_rotary_knob, modulatable_slot_knob, on_transport_pause_or_stop, on_transport_play,
+    render_module, render_preset_menu, set_channel_route_amount, set_external_route_amount,
+    sync_slot_params_to_engine, toggle_bay_mapping_mode, update_global_transport, update_lfo_state,
     ActiveModulation, LfoChannelState, LfoModState, LfoTransportState, ModSourceId,
     ModulationTarget, MODULATION_CARD_WIDTH, MOD_ARROW_CYAN,
 };
